@@ -18,3 +18,4 @@ serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = "1.0.142"
 serde_yaml = "0.9.34"
 dashmap = "5.5.3"
+config = "0.15.19"

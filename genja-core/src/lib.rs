@@ -1,12 +1,13 @@
 pub mod inventory;
 pub mod types;
+mod settings;
 
 // Re-export commonly used types
 use inventory::{Host, Inventory};
 use std::sync::Arc;
 pub use types::{CustomTreeMap, NatString};
-
-/// Represents a Nornir inventory and runtime environment.
+use settings::Settings;
+/// Represents a Genja inventory and runtime environment.
 ///
 /// `host_ids` is equal to a Vec of NatString's due to the wrapper used
 /// to store the CustomTreeMap's keys.
@@ -14,7 +15,7 @@ pub use types::{CustomTreeMap, NatString};
 pub struct Genja {
     inventory: Arc<Inventory>,
     host_ids: Arc<Vec<NatString>>,
-    // config: Arc<Config>,
+    config: Arc<Settings>,
     // data: Arc<GlobalState>,
     // processors: Arc<Processors>,
     // runner: Option<Arc<dyn RunnerPlugin>>,
@@ -28,7 +29,7 @@ impl Genja {
         Self {
             inventory: Arc::new(inventory),
             host_ids: Arc::new(host_ids),
-            // config: Arc::new(Config::default()),
+            config: Arc::new(Settings::default()),
             // data: Arc::new(GlobalState::default()),
             // processors: Arc::new(Processors::default()),
             // runner: None,
@@ -47,7 +48,7 @@ impl Genja {
         Self {
             inventory: Arc::clone(&self.inventory),
             host_ids: Arc::new(host_ids),
-            // config: Arc::clone(&self.config),
+            config: Arc::clone(&self.config),
             // data: Arc::clone(&self.data),
             // processors: Arc::clone(&self.processors),
             // runner: self.runner.as_ref().map(Arc::clone),
