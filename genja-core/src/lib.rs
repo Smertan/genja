@@ -1,12 +1,12 @@
 pub mod inventory;
-pub mod types;
 mod settings;
+pub mod types;
 
 // Re-export commonly used types
 use inventory::{Host, Inventory};
+use settings::Settings;
 use std::sync::Arc;
 pub use types::{CustomTreeMap, NatString};
-use settings::Settings;
 /// Represents a Genja inventory and runtime environment.
 ///
 /// `host_ids` is equal to a Vec of NatString's due to the wrapper used

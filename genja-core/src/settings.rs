@@ -1,6 +1,17 @@
 use config::{Config as ConfigBuilder, ConfigError, File, FileFormat};
 use serde::{Deserialize, Serialize};
+use ssh2_config::{ParseRule, SshConfig};
+use std::fs::File as StdFile;
+use std::io::BufReader;
+use std::path::Path;
 
+fn raise_on_error() -> bool {
+    true
+}
+
+fn get_runner_config() -> String {
+    String::from("threaded")
+}
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct OptionsConfig {
@@ -51,20 +62,104 @@ impl Default for CoreConfig {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
+pub struct SSHConfig {
+    config_file: Option<String>,
+}
+
+impl SSHConfig {
+    fn new() -> Self {
+        SSHConfig { config_file: None }
+    }
+    /// Validates the SSH config file syntax if a path is provided.
+    /// Returns Ok(()) if the file exists and can be parsed or
+    /// Err(e) if the file does not exist or cannot be parsed.
+    ///
+    /// If the SSH config file is not specified, this method returns Ok(()).
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(ref path) = self.config_file {
+            let path = Path::new(path);
+
+            path.try_exists()
+                .expect(format!("SSH config file not found: {:?}", path).as_str());
+
+            let inner = match StdFile::open(path) {
+                Ok(file) => file,
+                Err(e) => return Err(format!("Failed to open SSH config file {:?}: {}", path, e)),
+            };
+            let mut reader = BufReader::new(inner);
+            // .expect("Could not open configuration file");
+
+            match SshConfig::default().parse(&mut reader, ParseRule::STRICT) {
+                Ok(_) => return Ok(()),
+                Err(e) => return Err(format!("Failed to parse SSH config file {:?}: {}", path, e)),
+            };
+            // Ok(())
+        } else {
+            Ok(()) // No config file specified, nothing to validate
+        }
+    }
+
+    /// Parses and returns the SSH config if a path is provided
+    pub fn parse(&self) -> Result<Option<SshConfig>, String> {
+        if let Some(ref path) = self.config_file {
+            let path = Path::new(path);
+
+            if !path.exists() {
+                return Err(format!("SSH config file not found: {:?}", path));
+            }
+
+            let file = match StdFile::open(path) {
+                Ok(file) => file,
+                Err(e) => return Err(format!("Failed to open SSH config file {:?}: {}", path, e)),
+            };
+            let mut reader = BufReader::new(file);
+
+            match SshConfig::default().parse(&mut reader, ParseRule::STRICT) {
+                Ok(config) => Ok(Some(config)),
+                Err(e) => Err(format!("Failed to parse SSH config file {:?}: {}", path, e)),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl Default for SSHConfig {
+    fn default() -> Self {
+        SSHConfig::new()
+    }
+}
+
+// #[derive(Deserialize, Serialize, Clone, Debug)]
+// #[serde(default)]
+// pub struct SSHConfig {
+//     config_file: Option<String>,
+// }
+
+// impl SSHConfig {
+//     fn new() -> Self {
+//         SSHConfig {
+//             config_file: None,
+//         }
+//     }
+// }
+
+// impl Default for SSHConfig {
+//     fn default() -> Self {
+//         SSHConfig::new()
+//     }
+// }
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
 pub struct Settings {
     // #[serde(default = "CoreConfig::default")]
     core: CoreConfig,
     inventory: InventoryConfig,
+    ssh: SSHConfig,
+    // logging: LoggingConfig,
+    // runner: RunnerConfig
 }
-
-fn raise_on_error() -> bool {
-    true
-}
-
-fn get_runner_config() -> String {
-    String::from("threaded")
-}
-
 
 // #[derive(Deserialize, Serialize, Clone, Debug)]
 // #[serde(default)]
@@ -83,9 +178,9 @@ impl Settings {
         Self {
             core: CoreConfig::default(),
             inventory: InventoryConfig::default(),
-        //     logging: LoggingConfig::default(),
-        //     ssh: SSHConfig::default(),
-        //     runner: RunnerConfig::default(),
+            ssh: SSHConfig::default(),
+            // logging: LoggingConfig::default(),
+            //     runner: RunnerConfig::default(),
         }
     }
 
@@ -104,7 +199,13 @@ impl Settings {
             // .add_source(File::new(file_path, FileFormat::Yaml).required(false))
             .build()
             .unwrap();
-        config.try_deserialize()
+        let parsed_config: Settings = config.try_deserialize()?;
+
+        // Validate SSH config syntax if provided
+        if let Err(e) = parsed_config.ssh.validate() {
+            return Err(ConfigError::Message(e));
+        }
+        Ok(parsed_config)
     }
 }
 
