@@ -20,4 +20,7 @@ serde_yaml = "0.9.34"
 dashmap = "5.5.3"
 config = "0.15.19"
 ssh2-config = "0.6.5"
+
+[dev-dependencies]
 regex = "1.12.2"
+tempfile = "3.24.0"

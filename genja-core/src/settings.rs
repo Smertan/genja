@@ -212,18 +212,6 @@ pub struct Settings {
     // runner: RunnerConfig
 }
 
-// #[derive(Deserialize, Serialize, Clone, Debug)]
-// #[serde(default)]
-// pub struct Config {
-
-//     core_config: CoreConfig,
-//     inventory_config: InventoryConfig,
-//     // pub inventory: InventoryConfig,
-//     // pub logging: LoggingConfig,
-//     // pub ssh: SSHConfig,
-//     // pub runner: RunnerConfig
-// }
-
 impl Settings {
     fn new() -> Self {
         Self {
@@ -247,7 +235,6 @@ impl Settings {
         };
         let config = ConfigBuilder::builder()
             .add_source(File::new(file_path, format).required(false))
-            // .add_source(File::new(file_path, FileFormat::Yaml).required(false))
             .build()
             .unwrap();
         let parsed_config: Settings = config.try_deserialize()?;
@@ -269,14 +256,18 @@ impl Default for Settings {
 #[cfg(test)]
 mod tests {
     use super::SSHConfig;
-    use std::fs::remove_file;
-    use std::io::Write;
-    use std::path::Path;
-    use std::time::{SystemTime, UNIX_EPOCH};
     use regex::Regex;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn write_temp_ssh_config(contents: &str) -> std::path::PathBuf {
-        let mut path = std::env::temp_dir();
+    struct Context {
+        _tempdir: tempfile::TempDir,
+        filename: PathBuf,
+    }
+
+    fn write_temp_ssh_config(contents: &str) -> Context {
+        let tempdir = tempfile::tempdir().unwrap();
         let unique = format!(
             "sshconfig_test_{}_{}",
             std::process::id(),
@@ -285,22 +276,23 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        path.push(unique);
-        let mut file = std::fs::File::create(&path).unwrap();
+        let filename = tempdir.path().join(unique);
+        let mut file = std::fs::File::create(&filename).unwrap();
         file.write_all(contents.as_bytes()).unwrap();
-        path
+        Context {
+            _tempdir: tempdir,
+            filename,
+        }
     }
 
     #[test]
     fn validate_ok_with_valid_config() {
-        let path = write_temp_ssh_config("Host example\n  HostName example.com\n");
+        let context = write_temp_ssh_config("Host example\n  HostName example.com\n");
         let ssh_config = SSHConfig {
-            config_file: Some(path.to_string_lossy().to_string()),
+            config_file: Some(context.filename.to_string_lossy().to_string()),
         };
 
         let result = ssh_config.validate();
-        let _ = remove_file(&path);
-
         assert!(result.is_ok());
         assert!(matches!(result, Ok(_)));
     }
@@ -313,27 +305,25 @@ mod tests {
 
     #[test]
     fn validate_err_with_invalid_config() {
-        let path = write_temp_ssh_config("Contents that are not valid ssh config contents\n");
+        let context = write_temp_ssh_config("Contents that are not valid ssh config contents\n");
         let ssh_config = SSHConfig {
-            config_file: Some(path.to_string_lossy().to_string()),
+            config_file: Some(context.filename.to_string_lossy().to_string()),
         };
         let result = ssh_config.validate();
-        let _ = remove_file(&path);
         assert!(matches!(result, Err(_)));
-        let pattern = Regex::new(r"Failed to parse SSH config file \S+: unknown field: Contents").unwrap();
+        let pattern =
+            Regex::new(r"Failed to parse SSH config file \S+: unknown field: Contents").unwrap();
         assert!(pattern.is_match(&result.unwrap_err().to_string()));
     }
 
     #[test]
     fn parse_returns_config_when_present() {
-        let path = write_temp_ssh_config("Host example\n  HostName example.com\n");
+        let context = write_temp_ssh_config("Host example\n  HostName example.com\n");
         let ssh_config = SSHConfig {
-            config_file: Some(path.to_string_lossy().to_string()),
+            config_file: Some(context.filename.to_string_lossy().to_string()),
         };
 
         let result = ssh_config.parse();
-        let _ = remove_file(&path);
-
         assert!(matches!(result, Ok(Some(_))));
     }
 
@@ -345,13 +335,12 @@ mod tests {
 
     #[test]
     fn ensure_exists_returns_ok_when_present() {
-        let path = write_temp_ssh_config("Host example\n  HostName example.com\n");
+        let context = write_temp_ssh_config("Host example\n  HostName example.com\n");
         let ssh_config = SSHConfig {
-            config_file: Some(path.to_string_lossy().to_string()),
+            config_file: Some(context.filename.to_string_lossy().to_string()),
         };
 
-        let result = ssh_config.ensure_exists(&path);
-        let _ = remove_file(&path);
+        let result = ssh_config.ensure_exists(&context.filename);
         assert!(result.is_ok());
     }
 
