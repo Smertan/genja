@@ -2,7 +2,7 @@ use config::{Config as ConfigBuilder, ConfigError, File, FileFormat};
 use serde::{Deserialize, Serialize};
 use ssh2_config::{ParseRule, SshConfig};
 use std::fs::File as StdFile;
-use std::io::BufReader;
+use std::io::{BufReader, ErrorKind};
 use std::path::Path;
 
 fn raise_on_error() -> bool {
@@ -79,19 +79,36 @@ impl SSHConfig {
         if let Some(ref path) = self.config_file {
             let path = Path::new(path);
 
-            path.try_exists()
-                .expect(format!("SSH config file not found: {:?}", path).as_str());
+            // TODO: Improve the error handling in case there is an error due to permissions or other issues.
+            match self.ensure_exists(path) {
+                Ok(()) => (),
+                Err(e) => return Err(format!("{e}")),
+            }
+            // path.try_exists()
+            //     .expect(format!("SSH config file not found: {:?}", path).as_str());
 
-            let inner = match StdFile::open(path) {
+            let file = match StdFile::open(path) {
                 Ok(file) => file,
-                Err(e) => return Err(format!("Failed to open SSH config file {:?}: {}", path, e)),
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to open SSH config file {}: {}",
+                        path.display(),
+                        e
+                    ))
+                }
             };
-            let mut reader = BufReader::new(inner);
+            let mut reader = BufReader::new(file);
             // .expect("Could not open configuration file");
 
             match SshConfig::default().parse(&mut reader, ParseRule::STRICT) {
                 Ok(_) => return Ok(()),
-                Err(e) => return Err(format!("Failed to parse SSH config file {:?}: {}", path, e)),
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to parse SSH config file {}: {}",
+                        path.display(),
+                        e
+                    ))
+                }
             };
             // Ok(())
         } else {
@@ -110,16 +127,50 @@ impl SSHConfig {
 
             let file = match StdFile::open(path) {
                 Ok(file) => file,
-                Err(e) => return Err(format!("Failed to open SSH config file {:?}: {}", path, e)),
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to open SSH config file {:?}: {}",
+                        path.display(),
+                        e
+                    ))
+                }
             };
             let mut reader = BufReader::new(file);
 
             match SshConfig::default().parse(&mut reader, ParseRule::STRICT) {
                 Ok(config) => Ok(Some(config)),
-                Err(e) => Err(format!("Failed to parse SSH config file {:?}: {}", path, e)),
+                Err(e) => Err(format!(
+                    "Failed to parse SSH config file {}: {}",
+                    path.display(),
+                    e
+                )),
             }
         } else {
             Ok(None)
+        }
+    }
+
+    fn ensure_exists(&self, path: &Path) -> Result<(), String> {
+        match path.try_exists() {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(format!("SSH config file not found: {}", path.display())),
+            Err(e) => match e.kind() {
+                ErrorKind::PermissionDenied => Err(format!(
+                    "SSH config file exists but permission denied: {}: {}",
+                    path.display(),
+                    e
+                )),
+                ErrorKind::NotFound => Err(format!(
+                    "SSH config file not found (I/O error): {}: {}",
+                    path.display(),
+                    e
+                )),
+                _ => Err(format!(
+                    "Failed to check SSH config file {}: {}",
+                    path.display(),
+                    e
+                )),
+            },
         }
     }
 }
@@ -212,5 +263,106 @@ impl Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SSHConfig;
+    use std::fs::remove_file;
+    use std::io::Write;
+    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use regex::Regex;
+
+    fn write_temp_ssh_config(contents: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        let unique = format!(
+            "sshconfig_test_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        path.push(unique);
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(contents.as_bytes()).unwrap();
+        path
+    }
+
+    #[test]
+    fn validate_ok_with_valid_config() {
+        let path = write_temp_ssh_config("Host example\n  HostName example.com\n");
+        let ssh_config = SSHConfig {
+            config_file: Some(path.to_string_lossy().to_string()),
+        };
+
+        let result = ssh_config.validate();
+        let _ = remove_file(&path);
+
+        assert!(result.is_ok());
+        assert!(matches!(result, Ok(_)));
+    }
+
+    #[test]
+    fn validate_ok_with_no_config_file() {
+        let ssh_config = SSHConfig { config_file: None };
+        assert!(ssh_config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_err_with_invalid_config() {
+        let path = write_temp_ssh_config("Contents that are not valid ssh config contents\n");
+        let ssh_config = SSHConfig {
+            config_file: Some(path.to_string_lossy().to_string()),
+        };
+        let result = ssh_config.validate();
+        let _ = remove_file(&path);
+        assert!(matches!(result, Err(_)));
+        let pattern = Regex::new(r"Failed to parse SSH config file \S+: unknown field: Contents").unwrap();
+        assert!(pattern.is_match(&result.unwrap_err().to_string()));
+    }
+
+    #[test]
+    fn parse_returns_config_when_present() {
+        let path = write_temp_ssh_config("Host example\n  HostName example.com\n");
+        let ssh_config = SSHConfig {
+            config_file: Some(path.to_string_lossy().to_string()),
+        };
+
+        let result = ssh_config.parse();
+        let _ = remove_file(&path);
+
+        assert!(matches!(result, Ok(Some(_))));
+    }
+
+    #[test]
+    fn parse_returns_none_when_missing() {
+        let ssh_config = SSHConfig { config_file: None };
+        assert!(matches!(ssh_config.parse(), Ok(None)));
+    }
+
+    #[test]
+    fn ensure_exists_returns_ok_when_present() {
+        let path = write_temp_ssh_config("Host example\n  HostName example.com\n");
+        let ssh_config = SSHConfig {
+            config_file: Some(path.to_string_lossy().to_string()),
+        };
+
+        let result = ssh_config.ensure_exists(&path);
+        let _ = remove_file(&path);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn ensure_exists_returns_err_when_missing() {
+        let ssh_config = SSHConfig { config_file: None };
+        let result = ssh_config.ensure_exists(&Path::new("nonexistent_file.txt"));
+        assert!(matches!(result, Err(_)));
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "SSH config file not found: nonexistent_file.txt"
+        );
     }
 }
