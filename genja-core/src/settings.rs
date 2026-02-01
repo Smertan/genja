@@ -1,9 +1,12 @@
 use config::{Config as ConfigBuilder, ConfigError, File, FileFormat};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use ssh2_config::{ParseRule, SshConfig};
 use std::fs::File as StdFile;
 use std::io::{BufReader, ErrorKind};
 use std::path::Path;
+
+use crate::inventory::{Defaults, Groups, Hosts};
 
 fn raise_on_error() -> bool {
     true
@@ -35,6 +38,8 @@ pub struct InventoryConfig {
     #[serde(default = "get_runner_config")]
     plugin: String,
     options: OptionsConfig,
+    transform_function: Option<String>,
+    transform_function_options: Option<serde_json::Value>,
 }
 
 impl Default for InventoryConfig {
@@ -42,6 +47,52 @@ impl Default for InventoryConfig {
         InventoryConfig {
             plugin: get_runner_config(),
             options: OptionsConfig::default(),
+            transform_function: None,
+            transform_function_options: None,
+        }
+    }
+}
+
+impl InventoryConfig {
+    pub fn load_inventory_files(
+        &self,
+    ) -> Result<(Hosts, Option<Groups>, Option<Defaults>), String> {
+        let hosts = match self.options.hosts_file.as_deref() {
+            Some(path) => Self::load_from_file::<Hosts>(path)?,
+            None => Hosts::new(),
+        };
+
+        let groups = match self.options.groups_file.as_deref() {
+            Some(path) => Some(Self::load_from_file::<Groups>(path)?),
+            None => None,
+        };
+
+        let defaults = match self.options.defaults_file.as_deref() {
+            Some(path) => Some(Self::load_from_file::<Defaults>(path)?),
+            None => None,
+        };
+
+        Ok((hosts, groups, defaults))
+    }
+
+    fn load_from_file<T>(path: &str) -> Result<T, String>
+    where
+        T: DeserializeOwned,
+    {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read file {}: {}", path, e))?;
+
+        if path.ends_with(".json") {
+            serde_json::from_str(&contents)
+                .map_err(|e| format!("Failed to parse JSON file {}: {}", path, e))
+        } else if path.ends_with(".yaml") || path.ends_with(".yml") {
+            serde_yaml::from_str(&contents)
+                .map_err(|e| format!("Failed to parse YAML file {}: {}", path, e))
+        } else {
+            Err(format!(
+                "Unsupported file format for {}. Use .json, .yaml, or .yml",
+                path
+            ))
         }
     }
 }
@@ -205,9 +256,9 @@ impl Default for SSHConfig {
 #[serde(default)]
 pub struct Settings {
     // #[serde(default = "CoreConfig::default")]
-    core: CoreConfig,
-    inventory: InventoryConfig,
-    ssh: SSHConfig,
+    pub core: CoreConfig,
+    pub inventory: InventoryConfig,
+    pub ssh: SSHConfig,
     // logging: LoggingConfig,
     // runner: RunnerConfig
 }

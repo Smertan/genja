@@ -1,10 +1,10 @@
 pub mod inventory;
-mod settings;
+pub mod settings;
 pub mod types;
 
 // Re-export commonly used types
 use inventory::{Host, Inventory};
-use settings::Settings;
+pub use settings::Settings;
 use std::sync::Arc;
 pub use types::{CustomTreeMap, NatString};
 /// Represents a Genja inventory and runtime environment.

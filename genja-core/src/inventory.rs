@@ -197,6 +197,17 @@ impl DerefTarget for Data {
     type Target = serde_json::Value;
 }
 
+impl Defaults {
+    pub fn new(defaults: serde_json::Value) -> Self {
+        Self(defaults)
+    }
+}
+
+impl Default for Defaults {
+    fn default() -> Self {
+        Self::new(serde_json::Value::Object(Default::default()))
+    }
+}
 /// The Data struct is a wrapper for serde_json::Value, any json data is accepted.
 #[derive(
     Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, DerefMacro, DerefMutMacro,
@@ -563,6 +574,18 @@ pub struct Groups(CustomTreeMap<Group>);
 
 impl DerefTarget for Groups {
     type Target = CustomTreeMap<Group>;
+}
+
+impl Groups {
+    pub fn new() -> Self {
+        Groups(CustomTreeMap::new())
+    }
+}
+
+impl Default for Groups {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 type TransformFunctionType =
