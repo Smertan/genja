@@ -255,7 +255,7 @@ impl Default for Settings {
 
 #[cfg(test)]
 mod tests {
-    use super::SSHConfig;
+    use super::{OptionsConfig, SSHConfig};
     use regex::Regex;
     use std::io::Write;
     use std::path::{Path, PathBuf};
@@ -353,5 +353,34 @@ mod tests {
             result.unwrap_err().to_string(),
             "SSH config file not found: nonexistent_file.txt"
         );
+    }
+
+    #[test]
+    fn options_config_default_is_all_none() {
+        let options = OptionsConfig::default();
+        assert!(options.hosts_file.is_none());
+        assert!(options.groups_file.is_none());
+        assert!(options.defaults_file.is_none());
+    }
+
+    #[test]
+    fn options_config_deserializes_empty_object_to_none() {
+        let options: OptionsConfig = serde_json::from_str("{}").unwrap();
+        assert!(options.hosts_file.is_none());
+        assert!(options.groups_file.is_none());
+        assert!(options.defaults_file.is_none());
+    }
+
+    #[test]
+    fn options_config_deserializes_with_values() {
+        let json = r#"{
+            "hosts_file": "/tmp/hosts.yaml",
+            "groups_file": "/tmp/groups.yaml",
+            "defaults_file": "/tmp/defaults.yaml"
+        }"#;
+        let options: OptionsConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(options.hosts_file.as_deref(), Some("/tmp/hosts.yaml"));
+        assert_eq!(options.groups_file.as_deref(), Some("/tmp/groups.yaml"));
+        assert_eq!(options.defaults_file.as_deref(), Some("/tmp/defaults.yaml"));
     }
 }
