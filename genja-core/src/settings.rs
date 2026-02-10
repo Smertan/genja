@@ -12,8 +12,18 @@ fn raise_on_error() -> bool {
     true
 }
 
-fn get_runner_config() -> String {
+fn get_inventory_plugin_config() -> String {
+    String::from("FileInventoryPlugin")
+}
+
+fn get_runner_plugin_default() -> String {
     String::from("threaded")
+}
+
+fn get_runner_options_default() -> serde_json::Value {
+    serde_json::json!({
+        "num_of_workers": 10
+    })
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -35,7 +45,7 @@ impl Default for OptionsConfig {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct InventoryConfig {
-    #[serde(default = "get_runner_config")]
+    #[serde(default = "get_inventory_plugin_config")]
     plugin: String,
     options: OptionsConfig,
     transform_function: Option<String>,
@@ -45,7 +55,7 @@ pub struct InventoryConfig {
 impl Default for InventoryConfig {
     fn default() -> Self {
         InventoryConfig {
-            plugin: get_runner_config(),
+            plugin: get_inventory_plugin_config(),
             options: OptionsConfig::default(),
             transform_function: None,
             transform_function_options: None,
@@ -232,25 +242,22 @@ impl Default for SSHConfig {
     }
 }
 
-// #[derive(Deserialize, Serialize, Clone, Debug)]
-// #[serde(default)]
-// pub struct SSHConfig {
-//     config_file: Option<String>,
-// }
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct RunnerConfig {
+    #[serde(default = "get_runner_plugin_default")]
+    pub plugin: String,
+    #[serde(default = "get_runner_options_default")]
+    pub options: serde_json::Value,
+}
 
-// impl SSHConfig {
-//     fn new() -> Self {
-//         SSHConfig {
-//             config_file: None,
-//         }
-//     }
-// }
-
-// impl Default for SSHConfig {
-//     fn default() -> Self {
-//         SSHConfig::new()
-//     }
-// }
+impl Default for RunnerConfig {
+    fn default() -> Self {
+        Self {
+            plugin: get_runner_plugin_default(),
+            options: get_runner_options_default(),
+        }
+    }
+}
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
@@ -259,8 +266,8 @@ pub struct Settings {
     pub core: CoreConfig,
     pub inventory: InventoryConfig,
     pub ssh: SSHConfig,
+    runner: RunnerConfig
     // logging: LoggingConfig,
-    // runner: RunnerConfig
 }
 
 impl Settings {
@@ -269,8 +276,8 @@ impl Settings {
             core: CoreConfig::default(),
             inventory: InventoryConfig::default(),
             ssh: SSHConfig::default(),
+            runner: RunnerConfig::default(),
             // logging: LoggingConfig::default(),
-            //     runner: RunnerConfig::default(),
         }
     }
 
