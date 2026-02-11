@@ -1,3 +1,4 @@
+use crate::inventory::{Defaults, Groups, Hosts};
 use config::{Config as ConfigBuilder, ConfigError, File, FileFormat};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -5,8 +6,6 @@ use ssh2_config::{ParseRule, SshConfig};
 use std::fs::File as StdFile;
 use std::io::{BufReader, ErrorKind};
 use std::path::{Path, PathBuf};
-
-use crate::inventory::{Defaults, Groups, Hosts};
 
 fn raise_on_error() -> bool {
     true
@@ -281,15 +280,24 @@ impl Default for RunnerConfig {
     }
 }
 
+/// Stores the logging configuration for Genja.
+///
+/// If the user does not specify a logging configuration in their config file,
+/// the default values will be used.
+///
+/// **Note:** Genja does not initialize logging itself. The user must configure
+/// the logging subscriber in their application code. See the documentation in
+/// `lib.rs` for examples of how to set up logging using these configuration values.
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct LoggingConfig {
     pub enabled: bool,
     pub level: String,
     pub log_file: String,
-    pub to_console: bool
+    pub to_console: bool,
+    pub file_size: u64,
+    pub max_file_count: usize,
 }
-
 
 impl Default for LoggingConfig {
     fn default() -> Self {
@@ -297,11 +305,12 @@ impl Default for LoggingConfig {
             enabled: true,
             level: log::Level::Info.to_string(),
             log_file: get_default_log_file(),
-            to_console: false
+            to_console: false,
+            file_size: 1024 * 1024 * 10, // 10 MB
+            max_file_count: 10,
         }
     }
 }
-
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
@@ -509,6 +518,9 @@ mod tests {
         }"#;
         let runner: RunnerConfig = serde_json::from_str(json).unwrap();
         assert_eq!(runner.plugin, "custom");
-        assert_eq!(runner.options, json!({"num_of_workers": 3, "queue": "fast"}));
+        assert_eq!(
+            runner.options,
+            json!({"num_of_workers": 3, "queue": "fast"})
+        );
     }
 }
