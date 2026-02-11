@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use ssh2_config::{ParseRule, SshConfig};
 use std::fs::File as StdFile;
 use std::io::{BufReader, ErrorKind};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::inventory::{Defaults, Groups, Hosts};
 
@@ -24,6 +24,27 @@ fn get_runner_options_default() -> serde_json::Value {
     serde_json::json!({
         "num_of_workers": 10
     })
+}
+
+fn get_default_log_file() -> String {
+    if let Ok(output) = std::process::Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                if let Some(root) = value.get("workspace_root").and_then(|v| v.as_str()) {
+                    return PathBuf::from(root)
+                        .join("genja.log")
+                        .to_string_lossy()
+                        .to_string();
+                }
+            }
+        }
+    }
+
+    let start_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    start_dir.join("genja.log").to_string_lossy().to_string()
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -243,10 +264,11 @@ impl Default for SSHConfig {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
 pub struct RunnerConfig {
-    #[serde(default = "get_runner_plugin_default")]
+    // #[serde(default = "get_runner_plugin_default")]
     pub plugin: String,
-    #[serde(default = "get_runner_options_default")]
+    // #[serde(default = "get_runner_options_default")]_runner_options_default")]
     pub options: serde_json::Value,
 }
 
@@ -261,13 +283,35 @@ impl Default for RunnerConfig {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
+pub struct LoggingConfig {
+    pub enabled: bool,
+    pub level: String,
+    pub log_file: String,
+    pub to_console: bool
+}
+
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            level: log::Level::Info.to_string(),
+            log_file: get_default_log_file(),
+            to_console: false
+        }
+    }
+}
+
+
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(default)]
 pub struct Settings {
     // #[serde(default = "CoreConfig::default")]
     pub core: CoreConfig,
     pub inventory: InventoryConfig,
     pub ssh: SSHConfig,
-    runner: RunnerConfig
-    // logging: LoggingConfig,
+    pub runner: RunnerConfig,
+    pub logging: LoggingConfig,
 }
 
 impl Settings {
@@ -277,7 +321,7 @@ impl Settings {
             inventory: InventoryConfig::default(),
             ssh: SSHConfig::default(),
             runner: RunnerConfig::default(),
-            // logging: LoggingConfig::default(),
+            logging: LoggingConfig::default(),
         }
     }
 
@@ -313,8 +357,9 @@ impl Default for Settings {
 
 #[cfg(test)]
 mod tests {
-    use super::{OptionsConfig, SSHConfig};
+    use super::{OptionsConfig, RunnerConfig, SSHConfig};
     use regex::Regex;
+    use serde_json::json;
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -440,5 +485,30 @@ mod tests {
         assert_eq!(options.hosts_file.as_deref(), Some("/tmp/hosts.yaml"));
         assert_eq!(options.groups_file.as_deref(), Some("/tmp/groups.yaml"));
         assert_eq!(options.defaults_file.as_deref(), Some("/tmp/defaults.yaml"));
+    }
+
+    #[test]
+    fn runner_config_default_values() {
+        let runner = RunnerConfig::default();
+        assert_eq!(runner.plugin, "threaded");
+        assert_eq!(runner.options, json!({"num_of_workers": 10}));
+    }
+
+    #[test]
+    fn runner_config_deserializes_empty_object_to_defaults() {
+        let runner: RunnerConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(runner.plugin, "threaded");
+        assert_eq!(runner.options, json!({"num_of_workers": 10}));
+    }
+
+    #[test]
+    fn runner_config_deserializes_with_values() {
+        let json = r#"{
+            "plugin": "custom",
+            "options": {"num_of_workers": 3, "queue": "fast"}
+        }"#;
+        let runner: RunnerConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(runner.plugin, "custom");
+        assert_eq!(runner.options, json!({"num_of_workers": 3, "queue": "fast"}));
     }
 }
