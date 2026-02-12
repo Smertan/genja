@@ -3,20 +3,76 @@ use config::{Config as ConfigBuilder, ConfigError, File, FileFormat};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use ssh2_config::{ParseRule, SshConfig};
+use std::env;
 use std::fs::File as StdFile;
 use std::io::{BufReader, ErrorKind};
 use std::path::{Path, PathBuf};
 
+// Environment variable names
+const ENV_RAISE_ON_ERROR: &str = "GENJA_CORE_RAISE_ON_ERROR";
+const ENV_INVENTORY_PLUGIN: &str = "GENJA_INVENTORY_PLUGIN";
+const ENV_RUNNER_PLUGIN: &str = "GENJA_RUNNER_PLUGIN";
+const ENV_LOG_LEVEL: &str = "GENJA_LOGGING_LEVEL";
+const ENV_LOG_FILE: &str = "GENJA_LOGGING_LOG_FILE";
+const ENV_LOG_TO_CONSOLE: &str = "GENJA_LOGGING_TO_CONSOLE";
+
+// /// Generic helper to get value from env var or use default
+// fn from_env_or_default<T>(env_var: &str, default: T) -> T
+// where
+//     T: FromStr,
+// {
+//     env::var(env_var)
+//         .ok()
+//         .and_then(|s| s.parse().ok())
+//         .unwrap_or(default)
+// }
+
+// // For String fields
+// fn deserialize_string_with_env<'de, D>(
+//     deserializer: D,
+//     env_var: &str,
+//     default: String,
+// ) -> Result<String, D::Error>
+// where
+//     D: serde::Deserializer<'de>,
+// {
+//     println!("Using default for {} from env var: {}", env_var, default);
+//     Ok(Option::<String>::deserialize(deserializer)?
+//         .unwrap_or_else(|| env::var(env_var).unwrap_or(default)))
+// }
+
+// fn deserialize_runner_plugin<'de, D>(deserializer: D) -> Result<String, D::Error>
+// where
+//     D: serde::Deserializer<'de>,
+// {
+//     deserialize_string_with_env(
+//         deserializer,
+//         ENV_RUNNER_PLUGIN,
+//         get_runner_plugin_default(),
+//     )
+// }
+
+// TODO: Create a function to get parse a bool
+
 fn raise_on_error() -> bool {
-    true
+    match std::env::var(ENV_RAISE_ON_ERROR) {
+        Ok(s) => s.parse::<bool>().unwrap_or_else(|_| {
+            eprintln!(
+                "Invalid {} value: {:?}, using default false",
+                ENV_RAISE_ON_ERROR, s
+            );
+            false
+        }),
+        Err(_) => false,
+    }
 }
 
 fn get_inventory_plugin_config() -> String {
-    String::from("FileInventoryPlugin")
+    env::var(ENV_INVENTORY_PLUGIN).unwrap_or_else(|_err| String::from("FileInventoryPlugin"))
 }
 
 fn get_runner_plugin_default() -> String {
-    String::from("threaded")
+    env::var(ENV_RUNNER_PLUGIN).unwrap_or_else(|_err| String::from("threaded"))
 }
 
 fn get_runner_options_default() -> serde_json::Value {
@@ -25,25 +81,40 @@ fn get_runner_options_default() -> serde_json::Value {
     })
 }
 
+fn get_log_level_default() -> String {
+    env::var(ENV_LOG_LEVEL).unwrap_or_else(|_err| String::from("info"))
+}
+
+fn get_log_to_console_default() -> bool {
+    match env::var(ENV_LOG_TO_CONSOLE) {
+        Ok(val) => val.parse().unwrap_or(false),
+        Err(_) => false,
+    }
+}
 fn get_default_log_file() -> String {
-    if let Ok(output) = std::process::Command::new("cargo")
-        .args(["metadata", "--format-version", "1", "--no-deps"])
-        .output()
-    {
-        if output.status.success() {
-            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                if let Some(root) = value.get("workspace_root").and_then(|v| v.as_str()) {
-                    return PathBuf::from(root)
-                        .join("genja.log")
-                        .to_string_lossy()
-                        .to_string();
+    match env::var(ENV_LOG_FILE) {
+        Ok(val) => val,
+        Err(_) => {
+            if let Ok(output) = std::process::Command::new("cargo")
+                .args(["metadata", "--format-version", "1", "--no-deps"])
+                .output()
+            {
+                if output.status.success() {
+                    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                        if let Some(root) = value.get("workspace_root").and_then(|v| v.as_str()) {
+                            return PathBuf::from(root)
+                                .join("genja.log")
+                                .to_string_lossy()
+                                .to_string();
+                        }
+                    }
                 }
             }
+
+            let start_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            start_dir.join("genja.log").to_string_lossy().to_string()
         }
     }
-
-    let start_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    start_dir.join("genja.log").to_string_lossy().to_string()
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -265,7 +336,6 @@ impl Default for SSHConfig {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct RunnerConfig {
-    // #[serde(default = "get_runner_plugin_default")]
     pub plugin: String,
     // #[serde(default = "get_runner_options_default")]_runner_options_default")]
     pub options: serde_json::Value,
@@ -303,9 +373,9 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            level: log::Level::Info.to_string(),
+            level: get_log_level_default(),
             log_file: get_default_log_file(),
-            to_console: false,
+            to_console: get_log_to_console_default(),
             file_size: 1024 * 1024 * 10, // 10 MB
             max_file_count: 10,
         }
