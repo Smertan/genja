@@ -38,7 +38,7 @@
 //!     // Set up logging based on settings
 //!     if settings.logging.enabled {
 //!         let appender = RollingFileAppender::builder()
-//!             .filename(&settings.logging.log_file)
+//!             .filename(settings.logging.log_file)
 //!             .condition_max_file_size(settings.logging.file_size)
 //!             .max_filecount(settings.logging.max_file_count)
 //!             .build()?;

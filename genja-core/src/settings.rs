@@ -459,9 +459,54 @@ mod tests {
     use super::{OptionsConfig, RunnerConfig, SSHConfig};
     use regex::Regex;
     use serde_json::json;
+    use std::env;
     use std::io::Write;
     use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Returns a static reference to a mutex used for synchronizing environment variable access in tests.
+    ///
+    /// This function ensures that tests modifying environment variables do not run concurrently,
+    /// preventing race conditions and test interference. The mutex is initialized once and reused
+    /// across all test invocations.
+    ///
+    /// # Returns
+    ///
+    /// A static reference to a `Mutex<()>` that can be locked to serialize environment variable operations.
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// Temporarily sets or removes an environment variable for the duration of a test function.
+    ///
+    /// This function provides a safe way to test code that depends on environment variables by:
+    /// 1. Acquiring an exclusive lock to prevent concurrent environment modifications
+    /// 2. Saving the current value of the environment variable
+    /// 3. Setting or removing the environment variable as specified
+    /// 4. Executing the provided test function
+    /// 5. Restoring the original environment variable state
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - The name of the environment variable to modify
+    /// * `val` - The value to set for the environment variable. If `Some(value)`, the variable
+    ///   is set to that value. If `None`, the variable is removed from the environment.
+    /// * `f` - A closure containing the test code to execute with the modified environment variable
+    fn with_env_var(key: &str, val: Option<&str>, f: impl FnOnce()) {
+        let _guard = env_lock().lock().unwrap();
+        let prev = env::var(key).ok();
+        match val {
+            Some(v) => env::set_var(key, v),
+            None => env::remove_var(key), // tests when the variable is not set
+        }
+        f();
+        match prev {
+            Some(v) => env::set_var(key, v),
+            None => env::remove_var(key),
+        }
+    }
 
     struct Context {
         _tempdir: tempfile::TempDir,
@@ -612,5 +657,99 @@ mod tests {
             runner.options,
             json!({"num_of_workers": 3, "queue": "fast"})
         );
+    }
+
+    #[test]
+    fn parse_bool_loose_accepts_common_values() {
+        assert_eq!(super::parse_bool_loose("true"), Some(true));
+        assert_eq!(super::parse_bool_loose("TrUe"), Some(true));
+        assert_eq!(super::parse_bool_loose("1"), Some(true));
+        assert_eq!(super::parse_bool_loose("yes"), Some(true));
+        assert_eq!(super::parse_bool_loose("on"), Some(true));
+        assert_eq!(super::parse_bool_loose("false"), Some(false));
+        assert_eq!(super::parse_bool_loose("0"), Some(false));
+        assert_eq!(super::parse_bool_loose("no"), Some(false));
+        assert_eq!(super::parse_bool_loose("off"), Some(false));
+        assert_eq!(super::parse_bool_loose("maybe"), None);
+    }
+
+    #[test]
+    fn deserialize_bool_loose_from_string_and_bool() {
+        #[derive(serde::Deserialize)]
+        struct T {
+            #[serde(deserialize_with = "super::deserialize_bool_loose")]
+            v: bool,
+        }
+
+        let t: T = serde_json::from_str(r#"{ "v": "yes" }"#).unwrap();
+        assert!(t.v);
+        let t: T = serde_json::from_str(r#"{ "v": false }"#).unwrap();
+        assert!(!t.v);
+    }
+
+    #[test]
+    fn deserialize_bool_loose_rejects_invalid_string() {
+        #[derive(serde::Deserialize, Debug)]
+        struct T {
+            #[serde(deserialize_with = "super::deserialize_bool_loose")]
+            _v: bool,
+        }
+
+        let err = serde_json::from_str::<T>(r#"{ "_v": "maybe" }"#).unwrap_err();
+        assert!(err.to_string().contains("invalid boolean value"));
+    }
+
+    #[test]
+    fn raise_on_error_uses_env_and_fallbacks() {
+        with_env_var(super::ENV_RAISE_ON_ERROR, Some("true"), || {
+            assert!(super::raise_on_error());
+        });
+        with_env_var(super::ENV_RAISE_ON_ERROR, Some("not_a_bool"), || {
+            assert!(!super::raise_on_error());
+        });
+        with_env_var(super::ENV_RAISE_ON_ERROR, None, || {
+            assert!(!super::raise_on_error());
+        });
+    }
+
+    #[test]
+    fn get_log_to_console_default_parses_env() {
+        with_env_var(super::ENV_LOG_TO_CONSOLE, Some("yes"), || {
+            assert!(super::get_log_to_console_default());
+        });
+        with_env_var(super::ENV_LOG_TO_CONSOLE, Some("no"), || {
+            assert!(!super::get_log_to_console_default());
+        });
+    }
+
+    #[test]
+    fn env_string_defaults_respect_env_and_fallbacks() {
+        with_env_var(super::ENV_INVENTORY_PLUGIN, Some("CustomInv"), || {
+            assert_eq!(super::get_inventory_plugin_config(), "CustomInv");
+        });
+        with_env_var(super::ENV_INVENTORY_PLUGIN, None, || {
+            assert_eq!(super::get_inventory_plugin_config(), "FileInventoryPlugin");
+        });
+
+        with_env_var(super::ENV_RUNNER_PLUGIN, Some("CustomRunner"), || {
+            assert_eq!(super::get_runner_plugin_default(), "CustomRunner");
+        });
+        with_env_var(super::ENV_RUNNER_PLUGIN, None, || {
+            assert_eq!(super::get_runner_plugin_default(), "threaded");
+        });
+
+        with_env_var(super::ENV_LOG_LEVEL, Some("debug"), || {
+            assert_eq!(super::get_log_level_default(), "debug");
+        });
+        with_env_var(super::ENV_LOG_LEVEL, None, || {
+            assert_eq!(super::get_log_level_default(), "info");
+        });
+    }
+
+    #[test]
+    fn get_default_log_file_prefers_env() {
+        with_env_var(super::ENV_LOG_FILE, Some("/tmp/genja-test.log"), || {
+            assert_eq!(super::get_default_log_file(), "/tmp/genja-test.log");
+        });
     }
 }
