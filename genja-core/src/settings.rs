@@ -16,54 +16,69 @@ const ENV_LOG_LEVEL: &str = "GENJA_LOGGING_LEVEL";
 const ENV_LOG_FILE: &str = "GENJA_LOGGING_LOG_FILE";
 const ENV_LOG_TO_CONSOLE: &str = "GENJA_LOGGING_TO_CONSOLE";
 
-// /// Generic helper to get value from env var or use default
-// fn from_env_or_default<T>(env_var: &str, default: T) -> T
-// where
-//     T: FromStr,
-// {
-//     env::var(env_var)
-//         .ok()
-//         .and_then(|s| s.parse().ok())
-//         .unwrap_or(default)
-// }
+/// Parses a string into a boolean value using loose matching rules.
+///
+/// This function accepts various common string representations of boolean values,
+/// performing case-insensitive matching after trimming whitespace. It recognizes
+/// multiple formats for both true and false values.
+///
+/// # Parameters
+///
+/// * `s` - A string slice containing the value to parse. Leading and trailing
+///   whitespace will be trimmed before parsing.
+///
+/// # Returns
+///
+/// * `Some(true)` - If the string matches any of: "true", "t", "1", "yes", "y", "on"
+///   (case-insensitive)
+/// * `Some(false)` - If the string matches any of: "false", "f", "0", "no", "n", "off"
+///   (case-insensitive)
+/// * `None` - If the string does not match any recognized boolean representation
+fn parse_bool_loose(s: &str) -> Option<bool> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "true" | "t" | "1" | "yes" | "y" | "on" => Some(true),
+        "false" | "f" | "0" | "no" | "n" | "off" => Some(false),
+        _ => None,
+    }
+}
 
-// // For String fields
-// fn deserialize_string_with_env<'de, D>(
-//     deserializer: D,
-//     env_var: &str,
-//     default: String,
-// ) -> Result<String, D::Error>
-// where
-//     D: serde::Deserializer<'de>,
-// {
-//     println!("Using default for {} from env var: {}", env_var, default);
-//     Ok(Option::<String>::deserialize(deserializer)?
-//         .unwrap_or_else(|| env::var(env_var).unwrap_or(default)))
-// }
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum BoolLike {
+    Bool(bool),
+    String(String),
+}
 
-// fn deserialize_runner_plugin<'de, D>(deserializer: D) -> Result<String, D::Error>
-// where
-//     D: serde::Deserializer<'de>,
-// {
-//     deserialize_string_with_env(
-//         deserializer,
-//         ENV_RUNNER_PLUGIN,
-//         get_runner_plugin_default(),
-//     )
-// }
-
-// TODO: Create a function to get parse a bool
+fn deserialize_bool_loose<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<BoolLike>::deserialize(deserializer)?;
+    match value {
+        Some(BoolLike::Bool(val)) => Ok(val),
+        Some(BoolLike::String(val)) => parse_bool_loose(val.as_str())
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid boolean value: {val:?}"))),
+        None => Ok(false),
+    }
+}
 
 fn raise_on_error() -> bool {
     match std::env::var(ENV_RAISE_ON_ERROR) {
-        Ok(s) => s.parse::<bool>().unwrap_or_else(|_| {
-            eprintln!(
-                "Invalid {} value: {:?}, using default false",
-                ENV_RAISE_ON_ERROR, s
-            );
+        Ok(s) => match parse_bool_loose(s.as_str()) {
+            Some(true) => true,
+            Some(false) => false,
+            _ => {
+                eprintln!(
+                    "Invalid {} value: {:?}, using default false",
+                    ENV_RAISE_ON_ERROR, s
+                );
+                false
+            }
+        },
+        Err(_) => {
+            eprintln!("{} not found, using default false", ENV_RAISE_ON_ERROR);
             false
-        }),
-        Err(_) => false,
+        }
     }
 }
 
@@ -87,7 +102,7 @@ fn get_log_level_default() -> String {
 
 fn get_log_to_console_default() -> bool {
     match env::var(ENV_LOG_TO_CONSOLE) {
-        Ok(val) => val.parse().unwrap_or(false),
+        Ok(val) => parse_bool_loose(val.as_str()).unwrap_or(false),
         Err(_) => false,
     }
 }
@@ -200,7 +215,10 @@ impl InventoryConfig {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct CoreConfig {
-    #[serde(default = "raise_on_error")]
+    #[serde(
+        default = "raise_on_error",
+        deserialize_with = "deserialize_bool_loose"
+    )]
     raise_on_error: bool,
 }
 
@@ -361,9 +379,11 @@ impl Default for RunnerConfig {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct LoggingConfig {
+    #[serde(deserialize_with = "deserialize_bool_loose")]
     pub enabled: bool,
     pub level: String,
     pub log_file: String,
+    #[serde(deserialize_with = "deserialize_bool_loose")]
     pub to_console: bool,
     pub file_size: u64,
     pub max_file_count: usize,
