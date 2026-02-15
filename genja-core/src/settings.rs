@@ -150,10 +150,10 @@ fn get_default_log_file() -> String {
 /// # Examples
 ///
 /// ```
-/// use genja_core::settings::{OptionsConfig, OptionsConfigBuilder};
+/// use genja_core::settings::OptionsConfig;
 ///
 /// // Create with default values (all None)
-///
+/// let options = OptionsConfig::default();
 ///
 /// // Create with specific file paths
 /// let options = OptionsConfig::builder()
@@ -472,6 +472,37 @@ impl InventoryConfig {
     }
 }
 
+/// Configuration for core Genja behavior.
+///
+/// This struct controls fundamental aspects of how Genja operates, particularly
+/// error handling behavior. The configuration can be loaded from files or
+/// environment variables, with flexible boolean parsing support.
+///
+/// # Fields
+///
+/// * `raise_on_error` - Controls whether Genja should raise (panic/abort) on errors
+///   or handle them gracefully. When `true`, errors will cause the application to
+///   terminate immediately. When `false`, errors are handled and reported without
+///   terminating execution. Defaults to the value from the `GENJA_CORE_RAISE_ON_ERROR`
+///   environment variable, or `false` if not set. Supports loose boolean parsing,
+///   accepting values like "true", "yes", "1", "on" for true, and "false", "no",
+///   "0", "off" for false (case-insensitive).
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::CoreConfig;
+///
+/// // Create with default values
+/// let config = CoreConfig::default();
+///
+/// // Check error handling behavior
+/// if config.raise_on_error() {
+///     println!("Errors will cause immediate termination");
+/// } else {
+///     println!("Errors will be handled gracefully");
+/// }
+/// ```
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct CoreConfig {
     #[serde(
@@ -526,12 +557,42 @@ impl Default for CoreConfigBuilder {
     }
 }
 
+/// Configuration for SSH client settings.
+///
+/// This struct holds optional SSH configuration settings that can be used to customize
+/// SSH client behavior. It supports loading SSH configuration from a file, which can
+/// contain standard SSH client configuration directives.
+///
+/// # Fields
+///
+/// * `config_file` - Optional path to an SSH configuration file. When provided, this file
+///   should contain valid SSH client configuration directives (e.g., Host entries, connection
+///   settings, authentication options). The file format should follow the standard SSH config
+///   file syntax as defined by OpenSSH. If `None`, no SSH configuration file will be used.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::SSHConfig;
+///
+/// // Create with default values (no config file)
+/// let config = SSHConfig::default();
+///
+/// // Create with a specific SSH config file
+/// let config = SSHConfig::builder()
+///     .config_file("/home/user/.ssh/config")
+///     .build();
+///
+/// // Validate the SSH config file syntax
+/// if let Err(e) = config.validate() {
+///     eprintln!("Invalid SSH config: {}", e);
+/// }
+/// ```
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct SSHConfig {
     config_file: Option<String>,
 }
-
 impl SSHConfig {
     fn new() -> Self {
         SSHConfig { config_file: None }
@@ -684,6 +745,40 @@ impl Default for SSHConfigBuilder {
     }
 }
 
+/// Configuration for the task runner plugin system.
+///
+/// This struct defines how tasks should be executed in Genja, specifying which
+/// runner plugin to use and its configuration options. The runner plugin controls
+/// the execution strategy (e.g., sequential, threaded, async) and behavior for
+/// running tasks across hosts.
+///
+/// # Fields
+///
+/// * `plugin` - The name of the runner plugin to use for task execution.
+///   Defaults to the value from the `GENJA_RUNNER_PLUGIN` environment variable,
+///   or "threaded" if not set. Common values include "threaded" for concurrent
+///   execution or "sequential" for one-at-a-time execution.
+/// * `options` - A JSON object containing plugin-specific configuration options.
+///   The structure and available options depend on the selected plugin. For the
+///   default "threaded" plugin, this typically includes `num_of_workers` to control
+///   the thread pool size. Defaults to `{"num_of_workers": 10}`.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::RunnerConfig;
+///
+/// // Create with default values
+/// let config = RunnerConfig::default();
+///
+/// // Create with custom configuration
+/// let config = RunnerConfig::builder()
+///     .plugin("threaded")
+///     .options(serde_json::json!({"num_of_workers": 5}))
+///     .build();
+///
+/// println!("Using runner plugin: {}", config.plugin());
+/// ```
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct RunnerConfig {
@@ -757,9 +852,51 @@ impl Default for RunnerConfigBuilder {
 /// If the user does not specify a logging configuration in their config file,
 /// the default values will be used.
 ///
+/// This struct defines how logging should be configured, including log levels,
+/// output destinations, and log file rotation settings. The configuration supports
+/// flexible boolean parsing for enabled and console output flags.
+///
 /// **Note:** Genja does not initialize logging itself. The user must configure
 /// the logging subscriber in their application code. See the documentation in
 /// `lib.rs` for examples of how to set up logging using these configuration values.
+///
+/// # Fields
+///
+/// * `enabled` - Controls whether logging is enabled. When `false`, logging should
+///   be disabled entirely. Supports loose boolean parsing (e.g., "true", "yes", "1").
+///   Defaults to `true`.
+/// * `level` - The logging level to use (e.g., "trace", "debug", "info", "warn", "error").
+///   Defaults to the value from the `GENJA_LOGGING_LEVEL` environment variable,
+///   or "info" if not set.
+/// * `log_file` - The file path where logs should be written. Defaults to the value
+///   from the `GENJA_LOGGING_LOG_FILE` environment variable, or a project-relative
+///   "genja.log" file if not set.
+/// * `to_console` - Controls whether logs should be written to the console in addition
+///   to the log file. Supports loose boolean parsing. Defaults to the value from the
+///   `GENJA_LOGGING_TO_CONSOLE` environment variable, or `false` if not set.
+/// * `file_size` - The maximum size in bytes for a single log file before rotation
+///   occurs. Defaults to 10 MB (10485760 bytes).
+/// * `max_file_count` - The maximum number of rotated log files to keep. Older files
+///   are deleted when this limit is exceeded. Defaults to 10.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::LoggingConfig;
+///
+/// // Create with default values
+/// let config = LoggingConfig::default();
+///
+/// // Create with custom configuration
+/// let config = LoggingConfig::builder()
+///     .enabled(true)
+///     .level("debug")
+///     .log_file("/var/log/genja.log")
+///     .to_console(true)
+///     .file_size(1024 * 1024 * 5) // 5 MB
+///     .max_file_count(5)
+///     .build();
+/// ```
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct LoggingConfig {
