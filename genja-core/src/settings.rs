@@ -181,7 +181,7 @@ impl Default for OptionsConfig {
 
 impl OptionsConfig {
     pub fn builder() -> OptionsConfigBuilder {
-        OptionsConfigBuilder::new()
+        OptionsConfigBuilder::default()
     }
 
     pub fn hosts_file(&self) -> Option<&str> {
@@ -204,14 +204,6 @@ pub struct OptionsConfigBuilder {
 }
 
 impl OptionsConfigBuilder {
-    pub fn new() -> Self {
-        Self {
-            hosts_file: None,
-            groups_file: None,
-            defaults_file: None,
-        }
-    }
-
     pub fn hosts_file(mut self, path: impl Into<String>) -> Self {
         self.hosts_file = Some(path.into());
         self
@@ -238,7 +230,11 @@ impl OptionsConfigBuilder {
 
 impl Default for OptionsConfigBuilder {
     fn default() -> Self {
-        Self::new()
+        Self {
+            hosts_file: None,
+            groups_file: None,
+            defaults_file: None,
+        }
     }
 }
 
@@ -293,7 +289,7 @@ impl Default for InventoryConfig {
 
 impl InventoryConfig {
     pub fn builder() -> InventoryConfigBuilder {
-        InventoryConfigBuilder::new()
+        InventoryConfigBuilder::default()
     }
 
     pub fn plugin(&self) -> &str {
@@ -321,15 +317,6 @@ pub struct InventoryConfigBuilder {
 }
 
 impl InventoryConfigBuilder {
-    pub fn new() -> Self {
-        Self {
-            plugin: None,
-            options: None,
-            transform_function: None,
-            transform_function_options: None,
-        }
-    }
-
     pub fn plugin(mut self, plugin: impl Into<String>) -> Self {
         self.plugin = Some(plugin.into());
         self
@@ -362,7 +349,12 @@ impl InventoryConfigBuilder {
 
 impl Default for InventoryConfigBuilder {
     fn default() -> Self {
-        Self::new()
+        Self {
+            plugin: None,
+            options: None,
+            transform_function: None,
+            transform_function_options: None,
+        }
     }
 }
 
@@ -522,7 +514,7 @@ impl Default for CoreConfig {
 
 impl CoreConfig {
     pub fn builder() -> CoreConfigBuilder {
-        CoreConfigBuilder::new()
+        CoreConfigBuilder::default()
     }
 
     pub fn raise_on_error(&self) -> bool {
@@ -535,10 +527,6 @@ pub struct CoreConfigBuilder {
 }
 
 impl CoreConfigBuilder {
-    pub fn new() -> Self {
-        Self { raise_on_error: None }
-    }
-
     pub fn raise_on_error(mut self, raise_on_error: bool) -> Self {
         self.raise_on_error = Some(raise_on_error);
         self
@@ -553,7 +541,7 @@ impl CoreConfigBuilder {
 
 impl Default for CoreConfigBuilder {
     fn default() -> Self {
-        Self::new()
+        Self { raise_on_error: None }
     }
 }
 
@@ -594,9 +582,6 @@ pub struct SSHConfig {
     config_file: Option<String>,
 }
 impl SSHConfig {
-    fn new() -> Self {
-        SSHConfig { config_file: None }
-    }
     /// Validates the SSH config file syntax if a path is provided.
     /// Returns Ok(()) if the file exists and can be parsed or
     /// Err(e) if the file does not exist or cannot be parsed.
@@ -704,13 +689,13 @@ impl SSHConfig {
 
 impl Default for SSHConfig {
     fn default() -> Self {
-        SSHConfig::new()
+        SSHConfig { config_file: None }
     }
 }
 
 impl SSHConfig {
     pub fn builder() -> SSHConfigBuilder {
-        SSHConfigBuilder::new()
+        SSHConfigBuilder::default()
     }
 
     pub fn config_file(&self) -> Option<&str> {
@@ -723,10 +708,6 @@ pub struct SSHConfigBuilder {
 }
 
 impl SSHConfigBuilder {
-    pub fn new() -> Self {
-        Self { config_file: None }
-    }
-
     pub fn config_file(mut self, path: impl Into<String>) -> Self {
         self.config_file = Some(path.into());
         self
@@ -741,7 +722,7 @@ impl SSHConfigBuilder {
 
 impl Default for SSHConfigBuilder {
     fn default() -> Self {
-        Self::new()
+        Self { config_file: None }
     }
 }
 
@@ -798,7 +779,7 @@ impl Default for RunnerConfig {
 
 impl RunnerConfig {
     pub fn builder() -> RunnerConfigBuilder {
-        RunnerConfigBuilder::new()
+        RunnerConfigBuilder::default()
     }
 
     pub fn plugin(&self) -> &str {
@@ -816,13 +797,6 @@ pub struct RunnerConfigBuilder {
 }
 
 impl RunnerConfigBuilder {
-    pub fn new() -> Self {
-        Self {
-            plugin: None,
-            options: None,
-        }
-    }
-
     pub fn plugin(mut self, plugin: impl Into<String>) -> Self {
         self.plugin = Some(plugin.into());
         self
@@ -843,7 +817,10 @@ impl RunnerConfigBuilder {
 
 impl Default for RunnerConfigBuilder {
     fn default() -> Self {
-        Self::new()
+        Self {
+            plugin: None,
+            options: None,
+        }
     }
 }
 
@@ -925,7 +902,7 @@ impl Default for LoggingConfig {
 
 impl LoggingConfig {
     pub fn builder() -> LoggingConfigBuilder {
-        LoggingConfigBuilder::new()
+        LoggingConfigBuilder::default()
     }
 
     pub fn enabled(&self) -> bool {
@@ -963,17 +940,6 @@ pub struct LoggingConfigBuilder {
 }
 
 impl LoggingConfigBuilder {
-    pub fn new() -> Self {
-        Self {
-            enabled: None,
-            level: None,
-            log_file: None,
-            to_console: None,
-            file_size: None,
-            max_file_count: None,
-        }
-    }
-
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = Some(enabled);
         self
@@ -1018,10 +984,36 @@ impl LoggingConfigBuilder {
 
 impl Default for LoggingConfigBuilder {
     fn default() -> Self {
-        Self::new()
+        Self {
+            enabled: None,
+            level: None,
+            log_file: None,
+            to_console: None,
+            file_size: None,
+            max_file_count: None,
+        }
     }
 }
 
+/// Top-level configuration for Genja.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::Settings;
+///
+/// // Create with default values
+/// let settings = Settings::default();
+///
+/// // Create with custom values using builders
+/// let settings = Settings::builder()
+///     .logging(
+///         genja_core::settings::LoggingConfig::builder()
+///             .level("debug")
+///             .build(),
+///     )
+///     .build();
+/// ```
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct Settings {
@@ -1034,16 +1026,6 @@ pub struct Settings {
 }
 
 impl Settings {
-    fn new() -> Self {
-        Self {
-            core: CoreConfig::default(),
-            inventory: InventoryConfig::default(),
-            ssh: SSHConfig::default(),
-            runner: RunnerConfig::default(),
-            logging: LoggingConfig::default(),
-        }
-    }
-
     pub fn from_file(file_path: &str) -> Result<Self, ConfigError> {
         let format = if file_path.ends_with(".json") {
             FileFormat::Json
@@ -1090,13 +1072,19 @@ impl Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self::new()
+        Self {
+            core: CoreConfig::default(),
+            inventory: InventoryConfig::default(),
+            ssh: SSHConfig::default(),
+            runner: RunnerConfig::default(),
+            logging: LoggingConfig::default(),
+        }
     }
 }
 
 impl Settings {
     pub fn builder() -> SettingsBuilder {
-        SettingsBuilder::new()
+        SettingsBuilder::default()
     }
 }
 
@@ -1109,16 +1097,6 @@ pub struct SettingsBuilder {
 }
 
 impl SettingsBuilder {
-    pub fn new() -> Self {
-        Self {
-            core: None,
-            inventory: None,
-            ssh: None,
-            runner: None,
-            logging: None,
-        }
-    }
-
     pub fn core(mut self, core: CoreConfig) -> Self {
         self.core = Some(core);
         self
@@ -1157,7 +1135,13 @@ impl SettingsBuilder {
 
 impl Default for SettingsBuilder {
     fn default() -> Self {
-        Self::new()
+        Self {
+            core: None,
+            inventory: None,
+            ssh: None,
+            runner: None,
+            logging: None,
+        }
     }
 }
 
