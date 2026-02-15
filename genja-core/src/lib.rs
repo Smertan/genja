@@ -36,11 +36,11 @@
 //!     let settings = Settings::from_file("config.yaml")?;
 //!
 //!     // Set up logging based on settings
-//!     if settings.logging.enabled {
+//!     if settings.logging().enabled() {
 //!         let appender = RollingFileAppender::builder()
-//!             .filename(settings.logging.log_file)
-//!             .condition_max_file_size(settings.logging.file_size)
-//!             .max_filecount(settings.logging.max_file_count)
+//!             .filename(settings.logging().log_file().to_string())
+//!             .condition_max_file_size(settings.logging().file_size())
+//!             .max_filecount(settings.logging().max_file_count())
 //!             .build()?;
 //!
 //!         let (non_blocking, _guard) = appender.get_non_blocking_appender();

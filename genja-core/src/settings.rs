@@ -183,6 +183,18 @@ impl OptionsConfig {
     pub fn builder() -> OptionsConfigBuilder {
         OptionsConfigBuilder::new()
     }
+
+    pub fn hosts_file(&self) -> Option<&str> {
+        self.hosts_file.as_deref()
+    }
+
+    pub fn groups_file(&self) -> Option<&str> {
+        self.groups_file.as_deref()
+    }
+
+    pub fn defaults_file(&self) -> Option<&str> {
+        self.defaults_file.as_deref()
+    }
 }
 
 pub struct OptionsConfigBuilder {
@@ -282,6 +294,22 @@ impl Default for InventoryConfig {
 impl InventoryConfig {
     pub fn builder() -> InventoryConfigBuilder {
         InventoryConfigBuilder::new()
+    }
+
+    pub fn plugin(&self) -> &str {
+        &self.plugin
+    }
+
+    pub fn options(&self) -> &OptionsConfig {
+        &self.options
+    }
+
+    pub fn transform_function(&self) -> Option<&str> {
+        self.transform_function.as_deref()
+    }
+
+    pub fn transform_function_options(&self) -> Option<&serde_json::Value> {
+        self.transform_function_options.as_ref()
     }
 }
 
@@ -465,6 +493,10 @@ impl CoreConfig {
     pub fn builder() -> CoreConfigBuilder {
         CoreConfigBuilder::new()
     }
+
+    pub fn raise_on_error(&self) -> bool {
+        self.raise_on_error
+    }
 }
 
 pub struct CoreConfigBuilder {
@@ -619,6 +651,10 @@ impl SSHConfig {
     pub fn builder() -> SSHConfigBuilder {
         SSHConfigBuilder::new()
     }
+
+    pub fn config_file(&self) -> Option<&str> {
+        self.config_file.as_deref()
+    }
 }
 
 pub struct SSHConfigBuilder {
@@ -651,9 +687,9 @@ impl Default for SSHConfigBuilder {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct RunnerConfig {
-    pub plugin: String,
+    plugin: String,
     // #[serde(default = "get_runner_options_default")]_runner_options_default")]
-    pub options: serde_json::Value,
+    options: serde_json::Value,
 }
 
 impl Default for RunnerConfig {
@@ -668,6 +704,14 @@ impl Default for RunnerConfig {
 impl RunnerConfig {
     pub fn builder() -> RunnerConfigBuilder {
         RunnerConfigBuilder::new()
+    }
+
+    pub fn plugin(&self) -> &str {
+        &self.plugin
+    }
+
+    pub fn options(&self) -> &serde_json::Value {
+        &self.options
     }
 }
 
@@ -720,13 +764,13 @@ impl Default for RunnerConfigBuilder {
 #[serde(default)]
 pub struct LoggingConfig {
     #[serde(deserialize_with = "deserialize_bool_loose")]
-    pub enabled: bool,
-    pub level: String,
-    pub log_file: String,
+    enabled: bool,
+    level: String,
+    log_file: String,
     #[serde(deserialize_with = "deserialize_bool_loose")]
-    pub to_console: bool,
-    pub file_size: u64,
-    pub max_file_count: usize,
+    to_console: bool,
+    file_size: u64,
+    max_file_count: usize,
 }
 
 impl Default for LoggingConfig {
@@ -745,6 +789,30 @@ impl Default for LoggingConfig {
 impl LoggingConfig {
     pub fn builder() -> LoggingConfigBuilder {
         LoggingConfigBuilder::new()
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn level(&self) -> &str {
+        &self.level
+    }
+
+    pub fn log_file(&self) -> &str {
+        &self.log_file
+    }
+
+    pub fn to_console(&self) -> bool {
+        self.to_console
+    }
+
+    pub fn file_size(&self) -> u64 {
+        self.file_size
+    }
+
+    pub fn max_file_count(&self) -> usize {
+        self.max_file_count
     }
 }
 
@@ -821,11 +889,11 @@ impl Default for LoggingConfigBuilder {
 #[serde(default)]
 pub struct Settings {
     // #[serde(default = "CoreConfig::default")]
-    pub core: CoreConfig,
-    pub inventory: InventoryConfig,
-    pub ssh: SSHConfig,
-    pub runner: RunnerConfig,
-    pub logging: LoggingConfig,
+    core: CoreConfig,
+    inventory: InventoryConfig,
+    ssh: SSHConfig,
+    runner: RunnerConfig,
+    logging: LoggingConfig,
 }
 
 impl Settings {
@@ -860,6 +928,26 @@ impl Settings {
             return Err(ConfigError::Message(e));
         }
         Ok(parsed_config)
+    }
+
+    pub fn core(&self) -> &CoreConfig {
+        &self.core
+    }
+
+    pub fn inventory(&self) -> &InventoryConfig {
+        &self.inventory
+    }
+
+    pub fn ssh(&self) -> &SSHConfig {
+        &self.ssh
+    }
+
+    pub fn runner(&self) -> &RunnerConfig {
+        &self.runner
+    }
+
+    pub fn logging(&self) -> &LoggingConfig {
+        &self.logging
     }
 }
 
