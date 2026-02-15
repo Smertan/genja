@@ -132,6 +132,36 @@ fn get_default_log_file() -> String {
     }
 }
 
+/// Configuration options for inventory file paths.
+///
+/// This struct holds optional file paths for the three main inventory components:
+/// hosts, groups, and defaults. Each field can be `None` if the corresponding
+/// inventory file is not specified or not needed.
+///
+/// # Fields
+///
+/// * `hosts_file` - Optional path to the hosts inventory file. This file typically
+///   contains the list of hosts that can be managed by Genja.
+/// * `groups_file` - Optional path to the groups inventory file. This file typically
+///   defines groups of hosts for easier management and organization.
+/// * `defaults_file` - Optional path to the defaults inventory file. This file typically
+///   contains default configuration values that apply across hosts or groups.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::{OptionsConfig, OptionsConfigBuilder};
+///
+/// // Create with default values (all None)
+///
+///
+/// // Create with specific file paths
+/// let options = OptionsConfig::builder()
+///     .hosts_file("/path/to/hosts.yaml")
+///     .groups_file("/path/to/groups.yaml")
+///     .defaults_file("/path/to/defaults.yaml")
+///     .build();
+/// ```
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct OptionsConfig {
     hosts_file: Option<String>,
@@ -149,6 +179,86 @@ impl Default for OptionsConfig {
     }
 }
 
+impl OptionsConfig {
+    pub fn builder() -> OptionsConfigBuilder {
+        OptionsConfigBuilder::new()
+    }
+}
+
+pub struct OptionsConfigBuilder {
+    hosts_file: Option<String>,
+    groups_file: Option<String>,
+    defaults_file: Option<String>,
+}
+
+impl OptionsConfigBuilder {
+    pub fn new() -> Self {
+        Self {
+            hosts_file: None,
+            groups_file: None,
+            defaults_file: None,
+        }
+    }
+
+    pub fn hosts_file(mut self, path: impl Into<String>) -> Self {
+        self.hosts_file = Some(path.into());
+        self
+    }
+
+    pub fn groups_file(mut self, path: impl Into<String>) -> Self {
+        self.groups_file = Some(path.into());
+        self
+    }
+
+    pub fn defaults_file(mut self, path: impl Into<String>) -> Self {
+        self.defaults_file = Some(path.into());
+        self
+    }
+
+    pub fn build(self) -> OptionsConfig {
+        OptionsConfig {
+            hosts_file: self.hosts_file,
+            groups_file: self.groups_file,
+            defaults_file: self.defaults_file,
+        }
+    }
+}
+
+impl Default for OptionsConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Configuration for inventory management in Genja.
+///
+/// This struct defines how inventory data (hosts, groups, and defaults) should be loaded
+/// and processed. It specifies the inventory plugin to use, file paths for inventory
+/// components, and optional transformation functions to modify the loaded inventory data.
+///
+/// # Fields
+///
+/// * `plugin` - The name of the inventory plugin to use for loading inventory data.
+///   Defaults to the value from the `GENJA_INVENTORY_PLUGIN` environment variable,
+///   or "FileInventoryPlugin" if not set.
+/// * `options` - Configuration options specifying the file paths for hosts, groups,
+///   and defaults inventory files.
+/// * `transform_function` - Optional name of a transformation function to apply to
+///   the loaded inventory data. This allows custom processing of inventory before use.
+/// * `transform_function_options` - Optional JSON configuration passed to the
+///   transformation function, allowing parameterized transformations.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::InventoryConfig;
+///
+/// // Create with default values
+/// let config = InventoryConfig::default();
+///
+/// // Load inventory files
+/// let (hosts, groups, defaults) = config.load_inventory_files().unwrap();
+/// ```
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct InventoryConfig {
     #[serde(default = "get_inventory_plugin_config")]
@@ -170,6 +280,103 @@ impl Default for InventoryConfig {
 }
 
 impl InventoryConfig {
+    pub fn builder() -> InventoryConfigBuilder {
+        InventoryConfigBuilder::new()
+    }
+}
+
+pub struct InventoryConfigBuilder {
+    plugin: Option<String>,
+    options: Option<OptionsConfig>,
+    transform_function: Option<String>,
+    transform_function_options: Option<serde_json::Value>,
+}
+
+impl InventoryConfigBuilder {
+    pub fn new() -> Self {
+        Self {
+            plugin: None,
+            options: None,
+            transform_function: None,
+            transform_function_options: None,
+        }
+    }
+
+    pub fn plugin(mut self, plugin: impl Into<String>) -> Self {
+        self.plugin = Some(plugin.into());
+        self
+    }
+
+    pub fn options(mut self, options: OptionsConfig) -> Self {
+        self.options = Some(options);
+        self
+    }
+
+    pub fn transform_function(mut self, transform: impl Into<String>) -> Self {
+        self.transform_function = Some(transform.into());
+        self
+    }
+
+    pub fn transform_function_options(mut self, options: serde_json::Value) -> Self {
+        self.transform_function_options = Some(options);
+        self
+    }
+
+    pub fn build(self) -> InventoryConfig {
+        InventoryConfig {
+            plugin: self.plugin.unwrap_or_else(get_inventory_plugin_config),
+            options: self.options.unwrap_or_default(),
+            transform_function: self.transform_function,
+            transform_function_options: self.transform_function_options,
+        }
+    }
+}
+
+impl Default for InventoryConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InventoryConfig {
+    /// Loads inventory data from configured file paths.
+    ///
+    /// This method reads and deserializes inventory files (hosts, groups, and defaults)
+    /// based on the paths specified in the `options` field. If a file path is not
+    /// provided for a particular inventory component, a default or empty value is used.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing a tuple of:
+    /// * `Hosts` - The loaded hosts inventory. If no hosts file is specified, returns
+    ///   an empty `Hosts` instance.
+    /// * `Option<Groups>` - The loaded groups inventory, or `None` if no groups file
+    ///   is specified.
+    /// * `Option<Defaults>` - The loaded defaults inventory, or `None` if no defaults
+    ///   file is specified.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if:
+    /// * Any specified file cannot be read
+    /// * Any file contains invalid JSON or YAML syntax
+    /// * A file has an unsupported format (not .json, .yaml, or .yml)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use genja_core::settings::InventoryConfig;
+    ///
+    /// let config = InventoryConfig::default();
+    /// match config.load_inventory_files() {
+    ///     Ok((hosts, groups, defaults)) => {
+    ///         println!("Loaded {} hosts", hosts.len());
+    ///     }
+    ///     Err(e) => eprintln!("Failed to load inventory: {}", e),
+    /// }
+    /// ```
+    // FIXME: Fix the error handling for the inventory loading process.
+    // TODO: Check last tabnine session
     pub fn load_inventory_files(
         &self,
     ) -> Result<(Hosts, Option<Groups>, Option<Defaults>), String> {
@@ -191,6 +398,30 @@ impl InventoryConfig {
         Ok((hosts, groups, defaults))
     }
 
+    /// Loads and deserializes data from a file.
+    ///
+    /// This helper method reads a file from the filesystem and deserializes its contents
+    /// based on the file extension. Supports JSON (.json) and YAML (.yaml, .yml) formats.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - The type to deserialize the file contents into. Must implement `DeserializeOwned`.
+    ///
+    /// # Parameters
+    ///
+    /// * `path` - The file path to read and deserialize. The file extension determines
+    ///   the deserialization format.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing the deserialized data of type `T`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if:
+    /// * The file cannot be read (e.g., doesn't exist, permission denied)
+    /// * The file contents cannot be parsed as valid JSON or YAML
+    /// * The file has an unsupported extension (not .json, .yaml, or .yml)
     fn load_from_file<T>(path: &str) -> Result<T, String>
     where
         T: DeserializeOwned,
@@ -227,6 +458,39 @@ impl Default for CoreConfig {
         CoreConfig {
             raise_on_error: raise_on_error(),
         }
+    }
+}
+
+impl CoreConfig {
+    pub fn builder() -> CoreConfigBuilder {
+        CoreConfigBuilder::new()
+    }
+}
+
+pub struct CoreConfigBuilder {
+    raise_on_error: Option<bool>,
+}
+
+impl CoreConfigBuilder {
+    pub fn new() -> Self {
+        Self { raise_on_error: None }
+    }
+
+    pub fn raise_on_error(mut self, raise_on_error: bool) -> Self {
+        self.raise_on_error = Some(raise_on_error);
+        self
+    }
+
+    pub fn build(self) -> CoreConfig {
+        CoreConfig {
+            raise_on_error: self.raise_on_error.unwrap_or_else(raise_on_error),
+        }
+    }
+}
+
+impl Default for CoreConfigBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -351,6 +615,39 @@ impl Default for SSHConfig {
     }
 }
 
+impl SSHConfig {
+    pub fn builder() -> SSHConfigBuilder {
+        SSHConfigBuilder::new()
+    }
+}
+
+pub struct SSHConfigBuilder {
+    config_file: Option<String>,
+}
+
+impl SSHConfigBuilder {
+    pub fn new() -> Self {
+        Self { config_file: None }
+    }
+
+    pub fn config_file(mut self, path: impl Into<String>) -> Self {
+        self.config_file = Some(path.into());
+        self
+    }
+
+    pub fn build(self) -> SSHConfig {
+        SSHConfig {
+            config_file: self.config_file,
+        }
+    }
+}
+
+impl Default for SSHConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct RunnerConfig {
@@ -365,6 +662,49 @@ impl Default for RunnerConfig {
             plugin: get_runner_plugin_default(),
             options: get_runner_options_default(),
         }
+    }
+}
+
+impl RunnerConfig {
+    pub fn builder() -> RunnerConfigBuilder {
+        RunnerConfigBuilder::new()
+    }
+}
+
+pub struct RunnerConfigBuilder {
+    plugin: Option<String>,
+    options: Option<serde_json::Value>,
+}
+
+impl RunnerConfigBuilder {
+    pub fn new() -> Self {
+        Self {
+            plugin: None,
+            options: None,
+        }
+    }
+
+    pub fn plugin(mut self, plugin: impl Into<String>) -> Self {
+        self.plugin = Some(plugin.into());
+        self
+    }
+
+    pub fn options(mut self, options: serde_json::Value) -> Self {
+        self.options = Some(options);
+        self
+    }
+
+    pub fn build(self) -> RunnerConfig {
+        RunnerConfig {
+            plugin: self.plugin.unwrap_or_else(get_runner_plugin_default),
+            options: self.options.unwrap_or_else(get_runner_options_default),
+        }
+    }
+}
+
+impl Default for RunnerConfigBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -399,6 +739,81 @@ impl Default for LoggingConfig {
             file_size: 1024 * 1024 * 10, // 10 MB
             max_file_count: 10,
         }
+    }
+}
+
+impl LoggingConfig {
+    pub fn builder() -> LoggingConfigBuilder {
+        LoggingConfigBuilder::new()
+    }
+}
+
+pub struct LoggingConfigBuilder {
+    enabled: Option<bool>,
+    level: Option<String>,
+    log_file: Option<String>,
+    to_console: Option<bool>,
+    file_size: Option<u64>,
+    max_file_count: Option<usize>,
+}
+
+impl LoggingConfigBuilder {
+    pub fn new() -> Self {
+        Self {
+            enabled: None,
+            level: None,
+            log_file: None,
+            to_console: None,
+            file_size: None,
+            max_file_count: None,
+        }
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = Some(enabled);
+        self
+    }
+
+    pub fn level(mut self, level: impl Into<String>) -> Self {
+        self.level = Some(level.into());
+        self
+    }
+
+    pub fn log_file(mut self, log_file: impl Into<String>) -> Self {
+        self.log_file = Some(log_file.into());
+        self
+    }
+
+    pub fn to_console(mut self, to_console: bool) -> Self {
+        self.to_console = Some(to_console);
+        self
+    }
+
+    pub fn file_size(mut self, file_size: u64) -> Self {
+        self.file_size = Some(file_size);
+        self
+    }
+
+    pub fn max_file_count(mut self, max_file_count: usize) -> Self {
+        self.max_file_count = Some(max_file_count);
+        self
+    }
+
+    pub fn build(self) -> LoggingConfig {
+        LoggingConfig {
+            enabled: self.enabled.unwrap_or(true),
+            level: self.level.unwrap_or_else(get_log_level_default),
+            log_file: self.log_file.unwrap_or_else(get_default_log_file),
+            to_console: self.to_console.unwrap_or_else(get_log_to_console_default),
+            file_size: self.file_size.unwrap_or(1024 * 1024 * 10),
+            max_file_count: self.max_file_count.unwrap_or(10),
+        }
+    }
+}
+
+impl Default for LoggingConfigBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -449,6 +864,73 @@ impl Settings {
 }
 
 impl Default for Settings {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Settings {
+    pub fn builder() -> SettingsBuilder {
+        SettingsBuilder::new()
+    }
+}
+
+pub struct SettingsBuilder {
+    core: Option<CoreConfig>,
+    inventory: Option<InventoryConfig>,
+    ssh: Option<SSHConfig>,
+    runner: Option<RunnerConfig>,
+    logging: Option<LoggingConfig>,
+}
+
+impl SettingsBuilder {
+    pub fn new() -> Self {
+        Self {
+            core: None,
+            inventory: None,
+            ssh: None,
+            runner: None,
+            logging: None,
+        }
+    }
+
+    pub fn core(mut self, core: CoreConfig) -> Self {
+        self.core = Some(core);
+        self
+    }
+
+    pub fn inventory(mut self, inventory: InventoryConfig) -> Self {
+        self.inventory = Some(inventory);
+        self
+    }
+
+    pub fn ssh(mut self, ssh: SSHConfig) -> Self {
+        self.ssh = Some(ssh);
+        self
+    }
+
+    pub fn runner(mut self, runner: RunnerConfig) -> Self {
+        self.runner = Some(runner);
+        self
+    }
+
+    pub fn logging(mut self, logging: LoggingConfig) -> Self {
+        self.logging = Some(logging);
+        self
+    }
+
+    pub fn build(self) -> Settings {
+        Settings {
+            core: self.core.unwrap_or_default(),
+            inventory: self.inventory.unwrap_or_default(),
+            ssh: self.ssh.unwrap_or_default(),
+            runner: self.runner.unwrap_or_default(),
+            logging: self.logging.unwrap_or_default(),
+        }
+    }
+}
+
+impl Default for SettingsBuilder {
     fn default() -> Self {
         Self::new()
     }
