@@ -1,3 +1,44 @@
+//! Configuration and settings for Genja Core.
+//!
+//! This module defines the configuration structs that drive Genja behavior,
+//! plus helpers for loading from config files and environment variables.
+//!
+//! **Key points**
+//! - All configs implement `Default` and can be created with `::default()`.
+//! - Builders allow partial configuration; missing fields are filled with defaults.
+//! - `Settings::from_file` loads JSON or YAML and validates SSH config when present.
+//!
+//! # Examples
+//!
+//! ## Defaults
+//! ```
+//! use genja_core::Settings;
+//!
+//! let settings = Settings::default();
+//! ```
+//!
+//! ## Builders
+//! ```
+//! use genja_core::Settings;
+//! use genja_core::settings::{LoggingConfig, RunnerConfig};
+//!
+//! let settings = Settings::builder()
+//!     .logging(LoggingConfig::builder().level("debug").build())
+//!     .runner(RunnerConfig::builder().plugin("threaded").build())
+//!     .build();
+//! ```
+//!
+//! ## Load From File
+//! ```no_run
+//! use genja_core::Settings;
+//!
+//! let settings = Settings::from_file("config.yaml")?;
+//! # Ok::<(), config::ConfigError>(())
+//! ```
+//!
+//! ## SSH Validation
+//! SSH config is validated automatically when calling `Settings::from_file`.
+//! For manual validation, use `SSHConfig::validate`.
 use crate::inventory::{Defaults, Groups, Hosts};
 use config::{Config as ConfigBuilder, ConfigError, File, FileFormat};
 use serde::de::DeserializeOwned;
@@ -9,11 +50,54 @@ use std::io::{BufReader, ErrorKind};
 use std::path::{Path, PathBuf};
 
 // Environment variable names
+/// Environment variable name for controlling error handling behavior.
+///
+/// When set, this variable determines whether Genja should raise (panic/abort) on errors
+/// or handle them gracefully. Accepts boolean-like values such as "true", "false", "yes",
+/// "no", "1", "0", "on", "off" (case-insensitive).
+///
+/// Default: `false` (errors are handled gracefully)
 const ENV_RAISE_ON_ERROR: &str = "GENJA_CORE_RAISE_ON_ERROR";
+
+/// Environment variable name for specifying the inventory plugin.
+///
+/// This variable determines which inventory plugin implementation should be used
+/// for loading and managing host inventory data.
+///
+/// Default: `"FileInventoryPlugin"`
 const ENV_INVENTORY_PLUGIN: &str = "GENJA_INVENTORY_PLUGIN";
+
+/// Environment variable name for specifying the runner plugin.
+///
+/// This variable determines which runner plugin implementation should be used
+/// for executing tasks across hosts (e.g., "threaded", "sequential").
+///
+/// Default: `"threaded"`
 const ENV_RUNNER_PLUGIN: &str = "GENJA_RUNNER_PLUGIN";
+
+/// Environment variable name for setting the logging level.
+///
+/// This variable controls the verbosity of log output. Valid values include
+/// "trace", "debug", "info", "warn", and "error".
+///
+/// Default: `"info"`
 const ENV_LOG_LEVEL: &str = "GENJA_LOGGING_LEVEL";
+
+/// Environment variable name for specifying the log file path.
+///
+/// This variable determines where log output should be written. If not set,
+/// logs are written to "genja.log" in the workspace root or current directory.
+///
+/// Default: `"genja.log"` in workspace root or current directory
 const ENV_LOG_FILE: &str = "GENJA_LOGGING_LOG_FILE";
+
+/// Environment variable name for enabling console logging.
+///
+/// When set, this variable determines whether logs should be written to the console
+/// in addition to the log file. Accepts boolean-like values such as "true", "false",
+/// "yes", "no", "1", "0", "on", "off" (case-insensitive).
+///
+/// Default: `false` (console logging disabled)
 const ENV_LOG_TO_CONSOLE: &str = "GENJA_LOGGING_TO_CONSOLE";
 
 /// Parses a string into a boolean value using loose matching rules.
@@ -82,30 +166,59 @@ fn raise_on_error() -> bool {
     }
 }
 
+/// Retrieves the inventory plugin configuration from environment variables.
+///
+/// This function checks the `GENJA_INVENTORY_PLUGIN` environment variable to determine
+/// which inventory plugin implementation should be used. If the environment variable is
+/// not set or cannot be read, it returns a default value.
+///
+/// # Returns
+///
+/// Returns a `String` containing the name of the inventory plugin to use. If the
+/// `GENJA_INVENTORY_PLUGIN` environment variable is set, returns its value. Otherwise,
+/// returns `"FileInventoryPlugin"` as the default.
+///
+/// See tests in this module for behavioral verification.
 fn get_inventory_plugin_config() -> String {
     env::var(ENV_INVENTORY_PLUGIN).unwrap_or_else(|_err| String::from("FileInventoryPlugin"))
 }
 
+/// Returns the default runner plugin from `GENJA_RUNNER_PLUGIN`, or "threaded".
+///
+/// See tests in this module for behavioral verification.
 fn get_runner_plugin_default() -> String {
     env::var(ENV_RUNNER_PLUGIN).unwrap_or_else(|_err| String::from("threaded"))
 }
 
+/// Returns the default runner options JSON.
+///
+/// See tests in this module for behavioral verification.
 fn get_runner_options_default() -> serde_json::Value {
     serde_json::json!({
         "num_of_workers": 10
     })
 }
 
+/// Returns the default log level from `GENJA_LOGGING_LEVEL`, or "info".
+///
+/// See tests in this module for behavioral verification.
 fn get_log_level_default() -> String {
     env::var(ENV_LOG_LEVEL).unwrap_or_else(|_err| String::from("info"))
 }
 
+/// Returns the default console logging flag from `GENJA_LOGGING_TO_CONSOLE`.
+///
+/// See tests in this module for behavioral verification.
 fn get_log_to_console_default() -> bool {
     match env::var(ENV_LOG_TO_CONSOLE) {
         Ok(val) => parse_bool_loose(val.as_str()).unwrap_or(false),
         Err(_) => false,
     }
 }
+
+/// Returns the default log file path, preferring `GENJA_LOGGING_LOG_FILE` when set.
+///
+/// See tests in this module for behavioral verification.
 fn get_default_log_file() -> String {
     match env::var(ENV_LOG_FILE) {
         Ok(val) => val,
