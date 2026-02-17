@@ -260,6 +260,11 @@ fn get_default_log_file() -> String {
 /// * `defaults_file` - Optional path to the defaults inventory file. This file typically
 ///   contains default configuration values that apply across hosts or groups.
 ///
+/// # Deserialization
+///
+/// - Missing fields default to `None`
+/// - Invalid field values cause deserialization to fail
+///
 /// # Examples
 ///
 /// ```
@@ -361,13 +366,19 @@ impl Default for OptionsConfigBuilder {
 ///
 /// * `plugin` - The name of the inventory plugin to use for loading inventory data.
 ///   Defaults to the value from the `GENJA_INVENTORY_PLUGIN` environment variable,
-///   or "FileInventoryPlugin" if not set.
+///   or **FileInventoryPlugin** if not set.
 /// * `options` - Configuration options specifying the file paths for hosts, groups,
 ///   and defaults inventory files.
 /// * `transform_function` - Optional name of a transformation function to apply to
 ///   the loaded inventory data. This allows custom processing of inventory before use.
 /// * `transform_function_options` - Optional JSON configuration passed to the
 ///   transformation function, allowing parameterized transformations.
+///
+/// # Deserialization
+///
+/// - Missing fields use their default values (see `Default` impl)
+/// - The `plugin` field defaults to `GENJA_INVENTORY_PLUGIN` env var or "FileInventoryPlugin"
+/// - Invalid field values cause deserialization to fail
 ///
 /// # Examples
 ///
@@ -593,6 +604,12 @@ impl InventoryConfig {
 ///   accepting values like "true", "yes", "1", "on" for true, and "false", "no",
 ///   "0", "off" for false (case-insensitive).
 ///
+/// # Deserialization
+///
+/// - Missing fields use their default values (see `Default` impl)
+/// - The `raise_on_error` field defaults to `GENJA_CORE_RAISE_ON_ERROR` env var or `false`
+/// - Invalid field values cause deserialization to fail
+///
 /// # Examples
 ///
 /// ```
@@ -654,7 +671,9 @@ impl CoreConfigBuilder {
 
 impl Default for CoreConfigBuilder {
     fn default() -> Self {
-        Self { raise_on_error: None }
+        Self {
+            raise_on_error: None,
+        }
     }
 }
 
@@ -670,6 +689,11 @@ impl Default for CoreConfigBuilder {
 ///   should contain valid SSH client configuration directives (e.g., Host entries, connection
 ///   settings, authentication options). The file format should follow the standard SSH config
 ///   file syntax as defined by OpenSSH. If `None`, no SSH configuration file will be used.
+///
+/// # Deserialization
+///
+/// - Missing fields default to `None`
+/// - Invalid field values cause deserialization to fail
 ///
 /// # Examples
 ///
@@ -857,6 +881,13 @@ impl Default for SSHConfigBuilder {
 ///   default "threaded" plugin, this typically includes `num_of_workers` to control
 ///   the thread pool size. Defaults to `{"num_of_workers": 10}`.
 ///
+/// # Deserialization
+///
+/// - Missing fields use their default values (see `Default` impl)
+/// - The `plugin` field defaults to `GENJA_RUNNER_PLUGIN` env var or "threaded"
+/// - The `options` field defaults to `{"num_of_workers": 10}`
+/// - Invalid field values cause deserialization to fail
+///
 /// # Examples
 ///
 /// ```
@@ -968,6 +999,14 @@ impl Default for RunnerConfigBuilder {
 ///   occurs. Defaults to 10 MB (10485760 bytes).
 /// * `max_file_count` - The maximum number of rotated log files to keep. Older files
 ///   are deleted when this limit is exceeded. Defaults to 10.
+///
+/// # Deserialization
+///
+/// - Missing fields use their default values (see `Default` impl)
+/// - The `level` field defaults to `GENJA_LOGGING_LEVEL` env var or "info"
+/// - The `log_file` field defaults to `GENJA_LOGGING_LOG_FILE` env var or "genja.log"
+/// - The `to_console` field defaults to `GENJA_LOGGING_TO_CONSOLE` env var or `false`
+/// - Invalid field values cause deserialization to fail
 ///
 /// # Examples
 ///
@@ -1108,7 +1147,15 @@ impl Default for LoggingConfigBuilder {
     }
 }
 
-/// Top-level configuration for Genja.
+/// Main configuration container for Genja.
+///
+/// Aggregates all configuration sections (core, inventory, runner, logging, SSH)
+/// and provides methods for loading from files and accessing subsections.
+///
+/// # Deserialization
+///
+/// - Missing fields use their default values (see `Default` impl)
+/// - Invalid field values cause deserialization to fail
 ///
 /// # Examples
 ///
@@ -1126,6 +1173,10 @@ impl Default for LoggingConfigBuilder {
 ///             .build(),
 ///     )
 ///     .build();
+///
+/// // Access subsections
+/// println!("Log level: {}", settings.logging().level());
+/// # Ok<(), config::ConfigError>(())
 /// ```
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
