@@ -315,6 +315,44 @@ impl OptionsConfig {
     }
 }
 
+/// Builder for constructing `OptionsConfig` instances with custom file paths.
+///
+/// This builder provides a fluent interface for creating `OptionsConfig` objects,
+/// allowing selective configuration of inventory file paths. Fields that are not
+/// explicitly set will remain `None` when `build()` is called.
+///
+/// # Fields
+///
+/// * `hosts_file` - Optional path to the hosts inventory file. When set to `Some(path)`,
+///   the specified file will be used for loading host inventory data. When set to `None`,
+///   no hosts file will be configured.
+/// * `groups_file` - Optional path to the groups inventory file. When set to `Some(path)`,
+///   the specified file will be used for loading group definitions. When set to `None`,
+///   no groups file will be configured.
+/// * `defaults_file` - Optional path to the defaults inventory file. When set to
+///   `Some(path)`, the specified file will be used for loading default configuration
+///   values. When set to `None`, no defaults file will be configured.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::OptionsConfig;
+///
+/// // Build with all file paths specified
+/// let options = OptionsConfig::builder()
+///     .hosts_file("/path/to/hosts.yaml")
+///     .groups_file("/path/to/groups.yaml")
+///     .defaults_file("/path/to/defaults.yaml")
+///     .build();
+///
+/// // Build with only hosts file
+/// let options = OptionsConfig::builder()
+///     .hosts_file("/path/to/hosts.yaml")
+///     .build();
+///
+/// // Build with defaults (all None)
+/// let options = OptionsConfig::builder().build();
+/// ```
 pub struct OptionsConfigBuilder {
     hosts_file: Option<String>,
     groups_file: Option<String>,
@@ -433,6 +471,48 @@ impl InventoryConfig {
     }
 }
 
+/// Builder for constructing `InventoryConfig` instances with custom settings.
+///
+/// This builder provides a fluent interface for creating `InventoryConfig` objects,
+/// allowing selective configuration of inventory management settings. Fields that are
+/// not explicitly set will use their default values when `build()` is called.
+///
+/// # Fields
+///
+/// * `plugin` - Optional name of the inventory plugin to use. When set to `Some(name)`,
+///   the specified plugin will be used for loading inventory data. When set to `None`,
+///   the default value from the `GENJA_INVENTORY_PLUGIN` environment variable or
+///   "FileInventoryPlugin" will be used.
+/// * `options` - Optional configuration for inventory file paths. When set to
+///   `Some(options)`, the specified paths for hosts, groups, and defaults files will
+///   be used. When set to `None`, default `OptionsConfig` values (all `None`) will be used.
+/// * `transform_function` - Optional name of a transformation function to apply to
+///   the loaded inventory data. When set to `Some(name)`, the specified function will
+///   be invoked to transform the inventory. When set to `None`, no transformation
+///   will be applied.
+/// * `transform_function_options` - Optional JSON configuration passed to the
+///   transformation function. When set to `Some(value)`, the specified JSON object
+///   will be provided as parameters to the transformation function. When set to `None`,
+///   no options will be passed to the transformation function.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::{InventoryConfig, OptionsConfig};
+///
+/// // Build with custom plugin and options
+/// let config = InventoryConfig::builder()
+///     .plugin("CustomInventoryPlugin")
+///     .options(OptionsConfig::builder()
+///         .hosts_file("/path/to/hosts.yaml")
+///         .build())
+///     .transform_function("my_transform")
+///     .transform_function_options(serde_json::json!({"key": "value"}))
+///     .build();
+///
+/// // Build with defaults
+/// let config = InventoryConfig::builder().build();
+/// ```
 pub struct InventoryConfigBuilder {
     plugin: Option<String>,
     options: Option<OptionsConfig>,
@@ -520,7 +600,7 @@ impl InventoryConfig {
     /// }
     /// ```
     // FIXME: Fix the error handling for the inventory loading process.
-    // TODO: Check last tabnine session
+
     pub fn load_inventory_files(
         &self,
     ) -> Result<(Hosts, Option<Groups>, Option<Defaults>), String> {
@@ -652,6 +732,32 @@ impl CoreConfig {
     }
 }
 
+/// Builder for constructing `CoreConfig` instances with custom settings.
+///
+/// This builder provides a fluent interface for creating `CoreConfig` objects,
+/// allowing selective configuration of core behavior settings. Fields that are
+/// not explicitly set will use their default values when `build()` is called.
+///
+/// # Fields
+///
+/// * `raise_on_error` - Optional flag controlling error handling behavior. When set to
+///   `Some(true)`, errors will cause immediate termination. When set to `Some(false)`,
+///   errors will be handled gracefully. If `None`, the default value from the
+///   `GENJA_CORE_RAISE_ON_ERROR` environment variable or `false` will be used.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::CoreConfig;
+///
+/// // Build with custom error handling
+/// let config = CoreConfig::builder()
+///     .raise_on_error(true)
+///     .build();
+///
+/// // Build with defaults
+/// let config = CoreConfig::builder().build();
+/// ```
 pub struct CoreConfigBuilder {
     raise_on_error: Option<bool>,
 }
@@ -719,11 +825,49 @@ pub struct SSHConfig {
     config_file: Option<String>,
 }
 impl SSHConfig {
-    /// Validates the SSH config file syntax if a path is provided.
-    /// Returns Ok(()) if the file exists and can be parsed or
-    /// Err(e) if the file does not exist or cannot be parsed.
+    
+    /// Validates the SSH configuration file syntax if a path is provided.
     ///
-    /// If the SSH config file is not specified, this method returns Ok(()).
+    /// This method performs comprehensive validation of an SSH configuration file by:
+    /// 1. Verifying that the file exists and is accessible
+    /// 2. Opening the file for reading
+    /// 3. Parsing the file contents using strict SSH config syntax rules
+    ///
+    /// If no SSH configuration file is specified (the `config_file` field is `None`),
+    /// this method returns `Ok(())` without performing any validation.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if:
+    /// * No config file is specified (nothing to validate)
+    /// * The config file exists, can be opened, and contains valid SSH configuration syntax
+    ///
+    /// Returns `Err(String)` with a descriptive error message if:
+    /// * The specified file does not exist or cannot be accessed
+    /// * The file cannot be opened due to permission issues or other I/O errors
+    /// * The file contents cannot be parsed as valid SSH configuration syntax
+    ///
+    /// # Errors
+    ///
+    /// This method returns an error in the following cases:
+    /// * File existence check fails (see `ensure_exists` for details)
+    /// * `"Failed to open SSH config file {path}: {error}"` - The file exists but cannot be opened
+    /// * `"Failed to parse SSH config file {path}: {error}"` - The file contains invalid SSH config syntax
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use genja_core::settings::SSHConfig;
+    ///
+    /// let config = SSHConfig::builder()
+    ///     .config_file("/home/user/.ssh/config")
+    ///     .build();
+    ///
+    /// match config.validate() {
+    ///     Ok(()) => println!("SSH config is valid"),
+    ///     Err(e) => eprintln!("Invalid SSH config: {}", e),
+    /// }
+    /// ```
     pub fn validate(&self) -> Result<(), String> {
         if let Some(ref path) = self.config_file {
             let path = Path::new(path);
@@ -759,13 +903,56 @@ impl SSHConfig {
                     ))
                 }
             };
-            // Ok(())
         } else {
             Ok(()) // No config file specified, nothing to validate
         }
     }
 
-    /// Parses and returns the SSH config if a path is provided
+
+    /// Parses the SSH configuration file and returns the parsed configuration.
+    ///
+    /// This method reads and parses an SSH configuration file if one is specified in the
+    /// `config_file` field. The parsing follows strict SSH config file syntax rules as
+    /// defined by OpenSSH. If no configuration file is specified, the method returns
+    /// `Ok(None)` without performing any parsing.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing:
+    /// * `Ok(Some(SshConfig))` - If a config file is specified and successfully parsed,
+    ///   containing the parsed SSH configuration with all host entries and settings.
+    /// * `Ok(None)` - If no config file is specified (the `config_file` field is `None`).
+    /// * `Err(String)` - If an error occurs during parsing, with a descriptive error message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if:
+    /// * The specified SSH config file does not exist at the given path
+    /// * The file cannot be opened due to permission issues or other I/O errors
+    /// * The file contents cannot be parsed as valid SSH configuration syntax
+    /// * The file contains syntax errors or invalid SSH configuration directives
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use genja_core::settings::SSHConfig;
+    ///
+    /// let config = SSHConfig::builder()
+    ///     .config_file("/home/user/.ssh/config")
+    ///     .build();
+    ///
+    /// match config.parse() {
+    ///     Ok(Some(ssh_config)) => {
+    ///         println!("Successfully parsed SSH config");
+    ///     }
+    ///     Ok(None) => {
+    ///         println!("No SSH config file specified");
+    ///     }
+    ///     Err(e) => {
+    ///         eprintln!("Failed to parse SSH config: {}", e);
+    ///     }
+    /// }
+    /// ```
     pub fn parse(&self) -> Result<Option<SshConfig>, String> {
         if let Some(ref path) = self.config_file {
             let path = Path::new(path);
@@ -799,6 +986,36 @@ impl SSHConfig {
         }
     }
 
+    /// Verifies that an SSH configuration file exists and is accessible.
+    ///
+    /// This method checks whether the specified file path exists and can be accessed.
+    /// It provides detailed error messages for different failure scenarios, including
+    /// permission issues and I/O errors.
+    ///
+    /// # Parameters
+    ///
+    /// * `path` - A reference to the file path to check. This should point to an SSH
+    ///   configuration file that needs to be validated for existence and accessibility.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the file exists and is accessible. Returns `Err(String)` with
+    /// a descriptive error message if:
+    /// * The file does not exist
+    /// * Permission is denied when attempting to access the file
+    /// * An I/O error occurs during the existence check
+    /// * Any other filesystem error prevents verification
+    ///
+    /// # Errors
+    ///
+    /// This method returns an error in the following cases:
+    /// * `"SSH config file not found: {path}"` - The file does not exist at the specified path
+    /// * `"SSH config file exists but permission denied: {path}: {error}"` - The file exists
+    ///   but cannot be accessed due to insufficient permissions
+    /// * `"SSH config file not found (I/O error): {path}: {error}"` - An I/O error occurred
+    ///   indicating the file was not found
+    /// * `"Failed to check SSH config file {path}: {error}"` - Any other filesystem error
+    ///   occurred during the check
     fn ensure_exists(&self, path: &Path) -> Result<(), String> {
         match path.try_exists() {
             Ok(true) => Ok(()),
@@ -840,6 +1057,33 @@ impl SSHConfig {
     }
 }
 
+/// Builder for constructing `SSHConfig` instances with custom settings.
+///
+/// This builder provides a fluent interface for creating `SSHConfig` objects,
+/// allowing selective configuration of SSH client settings. Fields that are
+/// not explicitly set will use their default values when `build()` is called.
+///
+/// # Fields
+///
+/// * `config_file` - Optional path to an SSH configuration file. When set to
+///   `Some(path)`, the SSH configuration will be loaded from the specified file.
+///   When set to `None`, no SSH configuration file will be used. The file should
+///   contain valid SSH client configuration directives following the standard
+///   SSH config file syntax as defined by OpenSSH.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::SSHConfig;
+///
+/// // Build with custom SSH config file
+/// let config = SSHConfig::builder()
+///     .config_file("/home/user/.ssh/config")
+///     .build();
+///
+/// // Build with defaults (no config file)
+/// let config = SSHConfig::builder().build();
+/// ```
 pub struct SSHConfigBuilder {
     config_file: Option<String>,
 }
@@ -935,6 +1179,36 @@ impl RunnerConfig {
     }
 }
 
+/// Builder for constructing `RunnerConfig` instances with custom settings.
+///
+/// This builder provides a fluent interface for creating `RunnerConfig` objects,
+/// allowing selective configuration of task runner settings. Fields that are not
+/// explicitly set will use their default values when `build()` is called.
+///
+/// # Fields
+///
+/// * `plugin` - Optional name of the runner plugin to use for task execution. When set to
+///   `Some(name)`, the specified plugin will be used. If `None`, the default value from
+///   the `GENJA_RUNNER_PLUGIN` environment variable or "threaded" will be used.
+/// * `options` - Optional JSON object containing plugin-specific configuration options.
+///   When set to `Some(value)`, the specified options will be used. If `None`, the default
+///   value of `{"num_of_workers": 10}` will be used. The structure and available options
+///   depend on the selected plugin.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::RunnerConfig;
+///
+/// // Build with custom plugin and options
+/// let config = RunnerConfig::builder()
+///     .plugin("threaded")
+///     .options(serde_json::json!({"num_of_workers": 5}))
+///     .build();
+///
+/// // Build with defaults
+/// let config = RunnerConfig::builder().build();
+/// ```
 pub struct RunnerConfigBuilder {
     plugin: Option<String>,
     options: Option<serde_json::Value>,
@@ -1082,6 +1356,54 @@ impl LoggingConfig {
     }
 }
 
+/// Builder for constructing `LoggingConfig` instances with custom settings.
+///
+/// This builder provides a fluent interface for creating `LoggingConfig` objects,
+/// allowing selective configuration of logging behavior. Fields that are not
+/// explicitly set will use their default values when `build()` is called.
+///
+/// # Fields
+///
+/// * `enabled` - Optional flag controlling whether logging is enabled. When set to
+///   `Some(true)`, logging will be enabled. When set to `Some(false)`, logging will
+///   be disabled. If `None`, the default value of `true` will be used.
+/// * `level` - Optional logging level (e.g., "trace", "debug", "info", "warn", "error").
+///   When set to `Some(level)`, the specified level will be used. If `None`, the default
+///   value from the `GENJA_LOGGING_LEVEL` environment variable or "info" will be used.
+/// * `log_file` - Optional file path where logs should be written. When set to
+///   `Some(path)`, logs will be written to the specified file. If `None`, the default
+///   value from the `GENJA_LOGGING_LOG_FILE` environment variable or a project-relative
+///   "genja.log" file will be used.
+/// * `to_console` - Optional flag controlling whether logs should be written to the
+///   console in addition to the log file. When set to `Some(true)`, console logging
+///   will be enabled. When set to `Some(false)`, console logging will be disabled.
+///   If `None`, the default value from the `GENJA_LOGGING_TO_CONSOLE` environment
+///   variable or `false` will be used.
+/// * `file_size` - Optional maximum size in bytes for a single log file before rotation
+///   occurs. When set to `Some(size)`, the specified size limit will be used. If `None`,
+///   the default value of 10 MB (10485760 bytes) will be used.
+/// * `max_file_count` - Optional maximum number of rotated log files to keep. When set
+///   to `Some(count)`, the specified limit will be used. If `None`, the default value
+///   of 10 will be used.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::settings::LoggingConfig;
+///
+/// // Build with custom settings
+/// let config = LoggingConfig::builder()
+///     .enabled(true)
+///     .level("debug")
+///     .log_file("/var/log/genja.log")
+///     .to_console(true)
+///     .file_size(1024 * 1024 * 5) // 5 MB
+///     .max_file_count(5)
+///     .build();
+///
+/// // Build with defaults
+/// let config = LoggingConfig::builder().build();
+/// ```
 pub struct LoggingConfigBuilder {
     enabled: Option<bool>,
     level: Option<String>,
@@ -1252,6 +1574,55 @@ impl Settings {
     }
 }
 
+/// Builder for constructing `Settings` instances with custom configuration sections.
+///
+/// This builder provides a fluent interface for creating `Settings` objects,
+/// allowing selective configuration of different subsystems (core, inventory, SSH,
+/// runner, and logging). Fields that are not explicitly set will use their default
+/// values when `build()` is called.
+///
+/// # Fields
+///
+/// * `core` - Optional core configuration controlling fundamental Genja behavior
+///   such as error handling. When set to `Some(config)`, the specified core
+///   configuration will be used. If `None`, the default `CoreConfig` will be used.
+/// * `inventory` - Optional inventory configuration specifying how inventory data
+///   (hosts, groups, defaults) should be loaded and processed. When set to
+///   `Some(config)`, the specified inventory configuration will be used. If `None`,
+///   the default `InventoryConfig` will be used.
+/// * `ssh` - Optional SSH configuration for SSH client settings. When set to
+///   `Some(config)`, the specified SSH configuration will be used. If `None`,
+///   the default `SSHConfig` will be used.
+/// * `runner` - Optional runner configuration specifying which task execution
+///   plugin to use and its options. When set to `Some(config)`, the specified
+///   runner configuration will be used. If `None`, the default `RunnerConfig`
+///   will be used.
+/// * `logging` - Optional logging configuration controlling log levels, output
+///   destinations, and rotation settings. When set to `Some(config)`, the
+///   specified logging configuration will be used. If `None`, the default
+///   `LoggingConfig` will be used.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::Settings;
+/// use genja_core::settings::{LoggingConfig, RunnerConfig};
+///
+/// // Build with custom logging and runner configurations
+/// let settings = Settings::builder()
+///     .logging(LoggingConfig::builder()
+///         .level("debug")
+///         .to_console(true)
+///         .build())
+///     .runner(RunnerConfig::builder()
+///         .plugin("threaded")
+///         .options(serde_json::json!({"num_of_workers": 5}))
+///         .build())
+///     .build();
+///
+/// // Build with defaults
+/// let settings = Settings::builder().build();
+/// ```
 pub struct SettingsBuilder {
     core: Option<CoreConfig>,
     inventory: Option<InventoryConfig>,
