@@ -1523,9 +1523,8 @@ impl Settings {
             ));
         };
         let config = ConfigBuilder::builder()
-            .add_source(File::new(file_path, format).required(false))
-            .build()
-            .unwrap();
+            .add_source(File::new(file_path, format).required(true))
+            .build()?;
         let parsed_config: Settings = config.try_deserialize()?;
 
         // Validate SSH config syntax if provided
