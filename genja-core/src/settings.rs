@@ -86,9 +86,9 @@ const ENV_LOG_LEVEL: &str = "GENJA_LOGGING_LEVEL";
 /// Environment variable name for specifying the log file path.
 ///
 /// This variable determines where log output should be written. If not set,
-/// logs are written to "genja.log" in the workspace root or current directory.
+/// logs are written to `genja.log` in the current working directory.
 ///
-/// Default: `"genja.log"` in workspace root or current directory
+/// Default: `genja.log` in the current working directory
 const ENV_LOG_FILE: &str = "GENJA_LOGGING_LOG_FILE";
 
 /// Environment variable name for enabling console logging.
@@ -218,27 +218,14 @@ fn get_log_to_console_default() -> bool {
 
 /// Returns the default log file path, preferring `GENJA_LOGGING_LOG_FILE` when set.
 ///
+/// When the environment variable is not set, defaults to `genja.log` in the
+/// current working directory.
+///
 /// See tests in this module for behavioral verification.
 fn get_default_log_file() -> String {
     match env::var(ENV_LOG_FILE) {
         Ok(val) => val,
         Err(_) => {
-            if let Ok(output) = std::process::Command::new("cargo")
-                .args(["metadata", "--format-version", "1", "--no-deps"])
-                .output()
-            {
-                if output.status.success() {
-                    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                        if let Some(root) = value.get("workspace_root").and_then(|v| v.as_str()) {
-                            return PathBuf::from(root)
-                                .join("genja.log")
-                                .to_string_lossy()
-                                .to_string();
-                        }
-                    }
-                }
-            }
-
             let start_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             start_dir.join("genja.log").to_string_lossy().to_string()
         }
@@ -1264,8 +1251,8 @@ impl Default for RunnerConfigBuilder {
 ///   Defaults to the value from the `GENJA_LOGGING_LEVEL` environment variable,
 ///   or "info" if not set.
 /// * `log_file` - The file path where logs should be written. Defaults to the value
-///   from the `GENJA_LOGGING_LOG_FILE` environment variable, or a project-relative
-///   "genja.log" file if not set.
+///   from the `GENJA_LOGGING_LOG_FILE` environment variable, or `genja.log` in the
+///   current working directory if not set.
 /// * `to_console` - Controls whether logs should be written to the console in addition
 ///   to the log file. Supports loose boolean parsing. Defaults to the value from the
 ///   `GENJA_LOGGING_TO_CONSOLE` environment variable, or `false` if not set.
@@ -1278,7 +1265,8 @@ impl Default for RunnerConfigBuilder {
 ///
 /// - Missing fields use their default values (see `Default` impl)
 /// - The `level` field defaults to `GENJA_LOGGING_LEVEL` env var or "info"
-/// - The `log_file` field defaults to `GENJA_LOGGING_LOG_FILE` env var or "genja.log"
+/// - The `log_file` field defaults to `GENJA_LOGGING_LOG_FILE` env var or `genja.log`
+///   in the current working directory
 /// - The `to_console` field defaults to `GENJA_LOGGING_TO_CONSOLE` env var or `false`
 /// - Invalid field values cause deserialization to fail
 ///
@@ -1372,8 +1360,9 @@ impl LoggingConfig {
 ///   value from the `GENJA_LOGGING_LEVEL` environment variable or "info" will be used.
 /// * `log_file` - Optional file path where logs should be written. When set to
 ///   `Some(path)`, logs will be written to the specified file. If `None`, the default
-///   value from the `GENJA_LOGGING_LOG_FILE` environment variable or a project-relative
-///   "genja.log" file will be used.
+///   value from the `GENJA_LOGGING_LOG_FILE` environment variable or `genja.log` in
+///   the current working directory
+///   `genja.log` file will be used in the current working directory.
 /// * `to_console` - Optional flag controlling whether logs should be written to the
 ///   console in addition to the log file. When set to `Some(true)`, console logging
 ///   will be enabled. When set to `Some(false)`, console logging will be disabled.
@@ -1498,7 +1487,6 @@ impl Default for LoggingConfigBuilder {
 ///
 /// // Access subsections
 /// println!("Log level: {}", settings.logging().level());
-/// # Ok<(), config::ConfigError>(())
 /// ```
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
@@ -1976,5 +1964,28 @@ mod tests {
         with_env_var(super::ENV_LOG_FILE, Some("/tmp/genja-test.log"), || {
             assert_eq!(super::get_default_log_file(), "/tmp/genja-test.log");
         });
+    }
+
+    #[test]
+    fn get_default_log_file_uses_cwd_when_env_missing() {
+        let _guard = env_lock().lock().unwrap();
+        let prev = env::var(super::ENV_LOG_FILE).ok();
+        env::remove_var(super::ENV_LOG_FILE);
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let prev_dir = env::current_dir().unwrap();
+        env::set_current_dir(tempdir.path()).unwrap();
+
+        let expected = tempdir.path().join("genja.log");
+        assert_eq!(
+            super::get_default_log_file(),
+            expected.to_string_lossy().to_string()
+        );
+
+        env::set_current_dir(prev_dir).unwrap();
+        match prev {
+            Some(v) => env::set_var(super::ENV_LOG_FILE, v),
+            None => env::remove_var(super::ENV_LOG_FILE),
+        }
     }
 }
