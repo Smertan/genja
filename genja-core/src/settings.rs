@@ -8,6 +8,23 @@
 //! - Builders allow partial configuration; missing fields are filled with defaults.
 //! - `Settings::from_file` loads JSON or YAML and validates SSH config when present.
 //!
+//! # Configuration Precedence
+//!
+//! 1. Configuration files (JSON/YAML) are loaded first
+//! 2. Environment variables provide defaults for missing fields
+//! 3. Hard-coded defaults are used as final fallback
+//!
+//! # Environment Variables
+//!
+//! The following environment variables are supported:
+//!
+//! - `GENJA_CORE_RAISE_ON_ERROR` - Controls error handling behavior (default: false)
+//! - `GENJA_INVENTORY_PLUGIN` - Inventory plugin name (default: "FileInventoryPlugin")
+//! - `GENJA_RUNNER_PLUGIN` - Runner plugin name (default: "threaded")
+//! - `GENJA_LOGGING_LEVEL` - Log level (default: "info")
+//! - `GENJA_LOGGING_LOG_FILE` - Log file path (default: "./genja.log")
+//! - `GENJA_LOGGING_TO_CONSOLE` - Enable console logging (default: false)
+//!
 //! # Examples
 //!
 //! ## Defaults
@@ -812,7 +829,6 @@ pub struct SSHConfig {
     config_file: Option<String>,
 }
 impl SSHConfig {
-    
     /// Validates the SSH configuration file syntax if a path is provided.
     ///
     /// This method performs comprehensive validation of an SSH configuration file by:
@@ -894,7 +910,6 @@ impl SSHConfig {
             Ok(()) // No config file specified, nothing to validate
         }
     }
-
 
     /// Parses the SSH configuration file and returns the parsed configuration.
     ///
@@ -1500,6 +1515,53 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Loads Genja settings from a configuration file.
+    ///
+    /// This method reads and deserializes a configuration file into a `Settings` instance.
+    /// The file format is automatically determined based on the file extension. After
+    /// loading, the method validates any SSH configuration that was specified to ensure
+    /// it contains valid SSH config syntax.
+    ///
+    /// # Parameters
+    ///
+    /// * `file_path` - The path to the configuration file to load. The file extension
+    ///   determines the deserialization format: `.json` for JSON, `.yaml` or `.yml` for YAML.
+    ///   The file must exist and be readable.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing:
+    /// * `Ok(Settings)` - If the file was successfully loaded, parsed, and validated.
+    ///   The returned `Settings` instance contains all configuration sections with values
+    ///   from the file merged with defaults for any missing fields.
+    /// * `Err(ConfigError)` - If an error occurred during loading, parsing, or validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ConfigError` if:
+    /// * The file has an unsupported extension (not `.json`, `.yaml`, or `.yml`)
+    /// * The file cannot be read (e.g., doesn't exist, permission denied)
+    /// * The file contents cannot be parsed as valid JSON or YAML
+    /// * The file structure doesn't match the expected `Settings` schema
+    /// * The SSH configuration file (if specified) fails validation
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use genja_core::Settings;
+    ///
+    /// // Load from a JSON file
+    /// let settings = Settings::from_file("config.json").unwrap();
+    ///
+    /// // Load from a YAML file
+    /// let settings = Settings::from_file("config.yaml").unwrap();
+    ///
+    /// // Handle errors
+    /// match Settings::from_file("config.yml") {
+    ///     Ok(settings) => println!("Loaded settings successfully"),
+    ///     Err(e) => eprintln!("Failed to load settings: {}", e),
+    /// }
+    /// ```
     pub fn from_file(file_path: &str) -> Result<Self, ConfigError> {
         let format = if file_path.ends_with(".json") {
             FileFormat::Json
@@ -1987,5 +2049,123 @@ mod tests {
             Some(v) => env::set_var(super::ENV_LOG_FILE, v),
             None => env::remove_var(super::ENV_LOG_FILE),
         }
+    }
+
+    #[test]
+    fn settings_from_file_errors_when_missing() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let missing = tempdir.path().join("missing.yaml");
+        let err = super::Settings::from_file(missing.to_string_lossy().as_ref()).unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("not found"));
+    }
+
+    #[test]
+    fn settings_from_file_errors_on_unsupported_extension() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let file_path = tempdir.path().join("config.txt");
+        std::fs::write(&file_path, "{}").unwrap();
+        let err = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap_err();
+        assert!(err.to_string().contains("Unsupported file format"));
+    }
+
+    #[test]
+    fn settings_from_file_errors_on_invalid_json() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let file_path = tempdir.path().join("config.json");
+        std::fs::write(&file_path, "{ not valid json").unwrap();
+        let err = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn settings_from_file_uses_defaults_for_empty_file() {
+        let _guard = env_lock().lock().unwrap();
+        let keys = [
+            super::ENV_RAISE_ON_ERROR,
+            super::ENV_INVENTORY_PLUGIN,
+            super::ENV_RUNNER_PLUGIN,
+            super::ENV_LOG_LEVEL,
+            super::ENV_LOG_FILE,
+            super::ENV_LOG_TO_CONSOLE,
+        ];
+
+        let prev: Vec<(String, Option<String>)> = keys
+            .iter()
+            .map(|key| (key.to_string(), env::var(key).ok()))
+            .collect();
+
+        for key in keys {
+            env::remove_var(key);
+        }
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let file_path = tempdir.path().join("config.yaml");
+        std::fs::write(&file_path, "{}").unwrap();
+        let settings = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap();
+
+        assert!(!settings.core().raise_on_error());
+        assert_eq!(settings.inventory().plugin(), "FileInventoryPlugin");
+        assert_eq!(settings.runner().plugin(), "threaded");
+        assert_eq!(settings.logging().level(), "info");
+        assert!(settings.logging().enabled());
+
+        for (key, val) in prev {
+            match val {
+                Some(v) => env::set_var(&key, v),
+                None => env::remove_var(&key),
+            }
+        }
+    }
+
+    #[test]
+    fn inventory_loads_empty_files() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let hosts_path = tempdir.path().join("hosts.json");
+        let groups_path = tempdir.path().join("groups.json");
+        let defaults_path = tempdir.path().join("defaults.json");
+        std::fs::write(&hosts_path, "{}").unwrap();
+        std::fs::write(&groups_path, "{}").unwrap();
+        std::fs::write(&defaults_path, "{}").unwrap();
+
+        let options = super::OptionsConfig::builder()
+            .hosts_file(hosts_path.to_string_lossy().as_ref())
+            .groups_file(groups_path.to_string_lossy().as_ref())
+            .defaults_file(defaults_path.to_string_lossy().as_ref())
+            .build();
+        let config = super::InventoryConfig::builder().options(options).build();
+
+        let (hosts, groups, defaults) = config.load_inventory_files().unwrap();
+        assert!(hosts.is_empty());
+        assert!(groups.unwrap().is_empty());
+        let defaults = defaults.unwrap();
+        assert!(defaults
+            .as_object()
+            .map(|map| map.is_empty())
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn inventory_load_errors_on_missing_file() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let missing = tempdir.path().join("missing.json");
+        let options = super::OptionsConfig::builder()
+            .hosts_file(missing.to_string_lossy().as_ref())
+            .build();
+        let config = super::InventoryConfig::builder().options(options).build();
+        let err = config.load_inventory_files().unwrap_err();
+        assert!(err.contains("Failed to read file"));
+    }
+
+    #[test]
+    fn inventory_load_errors_on_unsupported_extension() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let file_path = tempdir.path().join("hosts.txt");
+        std::fs::write(&file_path, "{}").unwrap();
+        let options = super::OptionsConfig::builder()
+            .hosts_file(file_path.to_string_lossy().as_ref())
+            .build();
+        let config = super::InventoryConfig::builder().options(options).build();
+        let err = config.load_inventory_files().unwrap_err();
+        assert!(err.contains("Unsupported file format"));
     }
 }
