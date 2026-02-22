@@ -184,28 +184,53 @@ impl<'de> Visitor<'de> for ParentGroupsVisitor {
     }
 }
 
-impl DerefTarget for Defaults {
-    type Target = serde_json::Value;
+/// Defaults configuration for inventory.
+///
+/// Schema: same fields as `Group`, minus `groups` and `defaults`.
+/// This allows defaults to define connection details and data that apply broadly
+/// without nesting or self-references.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct Defaults {
+    pub hostname: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub platform: Option<String>,
+    pub data: Option<Data>,
+    pub connection_options: Option<CustomTreeMap<ConnectionOptions>>,
 }
-
-#[derive(
-    Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, DerefMacro, DerefMutMacro,
-)]
-pub struct Defaults(serde_json::Value);
 
 impl DerefTarget for Data {
     type Target = serde_json::Value;
 }
 
 impl Defaults {
-    pub fn new(defaults: serde_json::Value) -> Self {
-        Self(defaults)
+    pub fn new() -> Self {
+        Defaults {
+            hostname: None,
+            port: None,
+            username: None,
+            password: None,
+            platform: None,
+            data: None,
+            connection_options: None,
+        }
+    }
+    /// Returns true if all fields are None or empty
+    pub fn is_empty(&self) -> bool {
+        self.hostname.is_none()
+            && self.port.is_none()
+            && self.username.is_none()
+            && self.password.is_none()
+            && self.platform.is_none()
+            && self.data.is_none()
+            && self.connection_options.is_none()
     }
 }
 
 impl Default for Defaults {
     fn default() -> Self {
-        Self::new(serde_json::Value::Object(Default::default()))
+        Self::new()
     }
 }
 /// The Data struct is a wrapper for serde_json::Value, any json data is accepted.
