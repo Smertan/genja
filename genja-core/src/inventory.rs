@@ -1120,5 +1120,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_inventory_builder_defaults() {
+        let inventory = Inventory::builder().build();
+        assert_eq!(inventory.hosts().len(), 0);
+        assert!(inventory.groups().is_none());
+        assert!(inventory.defaults().is_none());
+        assert!(inventory.transform_function_options().is_none());
+    }
+
     // TODO: Create a test to verify the Host defaults deserialization
 }
