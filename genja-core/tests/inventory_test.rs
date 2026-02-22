@@ -91,19 +91,17 @@ fn inventory_can_model_mock_network_devices() {
         .build();
     hosts.add_host(switch);
 
-    let inventory = Inventory {
-        hosts,
-        groups: None,
-        defaults: Some(defaults.clone()),
-        transform_function: None,
-        transform_function_options: Some(transform_options.clone()),
-        connections: Arc::new(ConnectionManager::default()),
-    };
+    let inventory = Inventory::builder()
+        .hosts(hosts)
+        .defaults(defaults.clone())
+        .transform_function_options(transform_options.clone())
+        .connections(ConnectionManager::default())
+        .build();
 
-    assert_eq!(inventory.hosts.len(), 2);
+    assert_eq!(inventory.hosts().len(), 2);
 
     let router = inventory
-        .hosts
+        .hosts()
         .get("router1.lab")
         .expect("router host should exist");
     assert_eq!(router.hostname.as_deref(), Some("router1.lab"));
@@ -123,7 +121,7 @@ fn inventory_can_model_mock_network_devices() {
     );
 
     let switch = inventory
-        .hosts
+        .hosts()
         .get("switch1.lab")
         .expect("switch host should exist");
     assert_eq!(switch.hostname.as_deref(), Some("switch1.lab"));
@@ -137,9 +135,9 @@ fn inventory_can_model_mock_network_devices() {
         Some(&switch_connection_snapshot)
     );
 
-    assert_eq!(inventory.defaults.as_ref(), Some(&defaults));
+    assert_eq!(inventory.defaults(), Some(&defaults));
     assert_eq!(
-        inventory.transform_function_options.as_ref(),
+        inventory.transform_function_options(),
         Some(&transform_options)
     );
 }
@@ -150,7 +148,7 @@ fn inventory_transform_translates_obfuscated_ips() {
     inventory.apply_transform();
 
     let router = inventory
-        .hosts
+        .hosts()
         .get("router1.lab")
         .expect("router should exist");
     assert_eq!(router.hostname.as_deref(), Some("10.0.0.1"));
@@ -164,7 +162,7 @@ fn inventory_transform_translates_obfuscated_ips() {
     );
 
     let switch = inventory
-        .hosts
+        .hosts()
         .get("switch1.lab")
         .expect("switch should exist");
     assert_eq!(switch.hostname.as_deref(), Some("10.0.0.2"));

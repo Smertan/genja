@@ -23,7 +23,7 @@ pub fn inventory_setup() -> Result<Inventory, Box<dyn std::error::Error>> {
                 return;
             };
 
-            for host in inventory.hosts.values_mut() {
+            for host in inventory.hosts_mut().values_mut() {
                 if let Some(hostname) = host.hostname.as_mut() {
                     if let Some(mapped) = mapping.get(hostname).and_then(|value| value.as_str()) {
                         *hostname = mapped.to_string();
@@ -60,13 +60,11 @@ pub fn inventory_setup() -> Result<Inventory, Box<dyn std::error::Error>> {
     hosts.add_host(host1);
     hosts.add_host(host2);
 
-    let inventory = Inventory {
-        hosts,
-        groups: None,
-        defaults: None,
-        transform_function: Some(transform_function),
-        transform_function_options: Some(transform_options),
-        connections: Arc::new(ConnectionManager::default()),
-    };
+    let inventory = Inventory::builder()
+        .hosts(hosts)
+        .transform_function(transform_function)
+        .transform_function_options(transform_options)
+        .connections(ConnectionManager::default())
+        .build();
     Ok(inventory)
 }

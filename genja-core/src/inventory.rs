@@ -1,3 +1,38 @@
+//! Inventory models and helpers for Genja Core.
+//!
+//! This module defines the in-memory inventory model (hosts, groups, defaults),
+//! plus helpers for building inventories and applying optional transforms.
+//!
+//! **Key points**
+//! - Inventory is immutable from the public API. Use builders to construct it.
+//! - Hosts and groups are stored in `CustomTreeMap` keyed by name.
+//! - Defaults share the same fields as groups, minus `groups` and `defaults`.
+//! - `Inventory::apply_transform` runs an optional transform over the inventory.
+//!
+//! # Examples
+//!
+//! ## Build a minimal inventory
+//! ```
+//! use genja_core::inventory::{Host, Hosts, Inventory, BaseBuilderHost};
+//!
+//! let mut hosts = Hosts::new();
+//! let host = Host::builder("router1").hostname("10.0.0.1").build();
+//! hosts.add_host(host);
+//!
+//! let inventory = Inventory::builder().hosts(hosts).build();
+//! assert_eq!(inventory.hosts().len(), 1);
+//! ```
+//!
+//! ## Apply a transform
+//! ```
+//! use genja_core::inventory::{Inventory, TransformFunction};
+//!
+//! let transform = TransformFunction::new(|_inventory, _options| {
+//!     // mutate inventory in place
+//! });
+//! let mut inventory = Inventory::builder().transform_function(transform).build();
+//! inventory.apply_transform();
+//! ```
 use crate::CustomTreeMap;
 use dashmap::DashMap;
 use genja_core_derive::{DerefMacro, DerefMutMacro};
@@ -476,15 +511,15 @@ impl Group {
 }
 
 pub struct GroupBuilder {
-    pub hostname: Option<String>,
-    pub port: Option<u16>,
-    pub username: Option<String>,
-    pub password: Option<String>,
-    pub platform: Option<String>,
-    pub groups: Option<ParentGroups>,
-    pub data: Option<Data>,
-    pub connection_options: Option<CustomTreeMap<ConnectionOptions>>,
-    pub defaults: Option<Arc<Defaults>>,
+    hostname: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    password: Option<String>,
+    platform: Option<String>,
+    groups: Option<ParentGroups>,
+    data: Option<Data>,
+    connection_options: Option<CustomTreeMap<ConnectionOptions>>,
+    defaults: Option<Arc<Defaults>>,
 }
 
 impl BaseBuilderHost for GroupBuilder {
@@ -653,19 +688,6 @@ impl DerefTarget for TransformFunctionOptions {
     type Target = serde_json::Value;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct Inventory {
-    pub hosts: Hosts,
-    pub groups: Option<Groups>,
-    pub defaults: Option<Defaults>,
-    // TODO: add transform_function
-    #[serde(skip)]
-    pub transform_function: Option<TransformFunction>,
-    pub transform_function_options: Option<TransformFunctionOptions>,
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub connections: Arc<ConnectionManager>,
-}
 
 pub trait Connection
 where
@@ -753,6 +775,43 @@ impl ConnectionManager {
     }
 }
 
+/// In-memory inventory container.
+///
+/// Aggregates hosts, groups, defaults, and optional transform settings.
+/// This struct is deserializable and is the primary shape used by the
+/// inventory loader and runtime.
+///
+/// # Deserialization
+///
+/// - Missing fields use their default values (see `Default` impl)
+/// - Unknown fields are rejected for nested host/group items (see `Hosts` and `Groups`)
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::inventory::{Inventory, Hosts, Host};
+/// use genja_core::inventory::BaseBuilderHost;
+///
+/// let mut hosts = Hosts::new();
+/// hosts.add_host(Host::builder("router1").hostname("10.0.0.1").build());
+///
+/// let inventory = Inventory::builder().hosts(hosts).build();
+/// assert_eq!(inventory.hosts().len(), 1);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Inventory {
+    hosts: Hosts,
+    groups: Option<Groups>,
+    defaults: Option<Defaults>,
+    // TODO: add transform_function
+    #[serde(skip)]
+    transform_function: Option<TransformFunction>,
+    transform_function_options: Option<TransformFunctionOptions>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    connections: Arc<ConnectionManager>,
+}
+
 impl BaseMethods for Inventory {}
 
 impl Inventory {
@@ -769,6 +828,30 @@ impl Inventory {
 
     pub fn builder() -> InventoryBuilder {
         InventoryBuilder::new()
+    }
+
+    pub fn hosts(&self) -> &Hosts {
+        &self.hosts
+    }
+
+    pub fn groups(&self) -> Option<&Groups> {
+        self.groups.as_ref()
+    }
+
+    pub fn defaults(&self) -> Option<&Defaults> {
+        self.defaults.as_ref()
+    }
+
+    pub fn transform_function_options(&self) -> Option<&TransformFunctionOptions> {
+        self.transform_function_options.as_ref()
+    }
+
+    pub fn connections(&self) -> &ConnectionManager {
+        &self.connections
+    }
+
+    pub fn hosts_mut(&mut self) -> &mut Hosts {
+        &mut self.hosts
     }
 
     /// Apply the transform function if one is set, passing the transform options
