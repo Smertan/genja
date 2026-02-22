@@ -1,0 +1,44 @@
+# Example Genja configuration
+#
+# All sections are optional. Missing fields use defaults; env vars are used
+# as defaults for some fields. See README.md and genja-core/src/settings.rs.
+
+core:
+  # Whether to raise (panic/abort) on errors. Defaults to false.
+  raise_on_error: false
+
+inventory:
+  # Inventory plugin name. Defaults to GENJA_INVENTORY_PLUGIN or "FileInventoryPlugin".
+  plugin: FileInventoryPlugin
+  # Optional file paths for inventory data.
+  options:
+    hosts_file: ./inventory/hosts.yaml
+    groups_file: ./inventory/groups.yaml
+    defaults_file: ./inventory/defaults.yaml
+  # Optional transform applied after loading inventory.
+  transform_function: null
+  transform_function_options: null
+
+ssh:
+  # Optional SSH config file path. When set, it is validated on load.
+  config_file: /home/user/.ssh/config
+
+runner:
+  # Runner plugin name. Defaults to GENJA_RUNNER_PLUGIN or "threaded".
+  plugin: threaded
+  # Plugin-specific options (JSON object). For "threaded", use num_of_workers.
+  options:
+    num_of_workers: 10
+
+logging:
+  # Enable/disable logging. Defaults to true.
+  enabled: true
+  # Log level: trace|debug|info|warn|error. Defaults to GENJA_LOGGING_LEVEL or "info".
+  level: info
+  # Log file path. Defaults to GENJA_LOGGING_LOG_FILE or ./genja.log.
+  log_file: ./genja.log
+  # Log to console as well as file. Defaults to GENJA_LOGGING_TO_CONSOLE or false.
+  to_console: false
+  # Log rotation settings.
+  file_size: 10485760
+  max_file_count: 10
