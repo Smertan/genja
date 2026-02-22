@@ -23,6 +23,14 @@
 //! assert_eq!(inventory.hosts().len(), 1);
 //! ```
 //!
+//! ## Defaults
+//! ```
+//! use genja_core::inventory::Inventory;
+//!
+//! let inventory = Inventory::default();
+//! assert_eq!(inventory.hosts().len(), 0);
+//! ```
+//!
 //! ## Apply a transform
 //! ```
 //! use genja_core::inventory::{Inventory, TransformFunction};
@@ -803,7 +811,6 @@ pub struct Inventory {
     hosts: Hosts,
     groups: Option<Groups>,
     defaults: Option<Defaults>,
-    // TODO: add transform_function
     #[serde(skip)]
     transform_function: Option<TransformFunction>,
     transform_function_options: Option<TransformFunctionOptions>,
@@ -815,17 +822,6 @@ pub struct Inventory {
 impl BaseMethods for Inventory {}
 
 impl Inventory {
-    pub fn new() -> Inventory {
-        Inventory {
-            hosts: Hosts::new(),
-            groups: None,
-            defaults: None,
-            transform_function: None,
-            transform_function_options: None,
-            connections: Arc::new(ConnectionManager::default()),
-        }
-    }
-
     pub fn builder() -> InventoryBuilder {
         InventoryBuilder::new()
     }
@@ -865,9 +861,47 @@ impl Inventory {
 
 impl Default for Inventory {
     fn default() -> Self {
-        Inventory::new()
+        Inventory {
+            hosts: Hosts::new(),
+            groups: None,
+            defaults: None,
+            transform_function: None,
+            transform_function_options: None,
+            connections: Arc::new(ConnectionManager::default()),
+        }
     }
 }
+/// Builder for constructing `Inventory` instances with custom configuration.
+///
+/// This builder provides a fluent interface for creating `Inventory` objects
+/// with optional hosts, groups, defaults, and transform settings. Fields that
+/// are not explicitly set will use their default values when `build()` is called.
+///
+/// # Fields
+///
+/// * `hosts` - Optional hosts map. When set to `Some(hosts)`, the provided hosts
+///   are used. When `None`, an empty `Hosts` map is used.
+/// * `groups` - Optional groups map. When set, the provided groups are used.
+/// * `defaults` - Optional defaults object. When set, the provided defaults are used.
+/// * `transform_function` - Optional transform function applied via
+///   `Inventory::apply_transform`.
+/// * `transform_function_options` - Optional JSON options passed to the transform.
+/// * `connections` - Optional connection manager. When `None`, a default
+///   `ConnectionManager` is created.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::inventory::{Host, Hosts, Inventory, BaseBuilderHost};
+///
+/// let mut hosts = Hosts::new();
+/// let host = Host::builder("router1").hostname("10.0.0.1").build();
+/// hosts.add_host(host);
+///
+/// let inventory = Inventory::builder()
+///     .hosts(hosts)
+///     .build();
+/// ```
 pub struct InventoryBuilder {
     pub hosts: Option<Hosts>,
     pub groups: Option<Groups>,
