@@ -1,5 +1,24 @@
 # Genja
 
+## Quick Start
+
+Use a JSON or YAML config file and load it with `Settings::from_file`:
+
+```rust
+use genja_core::Settings;
+
+let settings = Settings::from_file("config.yaml")?;
+```
+
+Example configuration files:
+
+- `examples/config.example.yaml`
+- `examples/config.example.json`
+
+Settings reference:
+
+- `docs/settings.md`
+
 ## Configuration Precedence And Error Handling
 
 Configuration is loaded from two sources in this order:

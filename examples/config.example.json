@@ -1,0 +1,32 @@
+{
+  "core": {
+    "raise_on_error": false
+  },
+  "inventory": {
+    "plugin": "FileInventoryPlugin",
+    "options": {
+      "hosts_file": "./inventory/hosts.json",
+      "groups_file": "./inventory/groups.json",
+      "defaults_file": "./inventory/defaults.json"
+    },
+    "transform_function": null,
+    "transform_function_options": null
+  },
+  "ssh": {
+    "config_file": "/home/user/.ssh/config"
+  },
+  "runner": {
+    "plugin": "threaded",
+    "options": {
+      "num_of_workers": 10
+    }
+  },
+  "logging": {
+    "enabled": true,
+    "level": "info",
+    "log_file": "./genja.log",
+    "to_console": false,
+    "file_size": 10485760,
+    "max_file_count": 10
+  }
+}

@@ -25,6 +25,10 @@
 //! - `GENJA_LOGGING_LOG_FILE` - Log file path (default: "./genja.log")
 //! - `GENJA_LOGGING_TO_CONSOLE` - Enable console logging (default: false)
 //!
+//! # Settings Reference
+//!
+//! See `docs/settings.md` for a complete schema summary and example config files.
+//!
 //! # Examples
 //!
 //! ## Defaults
@@ -2137,11 +2141,12 @@ mod tests {
         let (hosts, groups, defaults) = config.load_inventory_files().unwrap();
         assert!(hosts.is_empty());
         assert!(groups.unwrap().is_empty());
-        let defaults = defaults.unwrap();
-        assert!(defaults
-            .as_object()
-            .map(|map| map.is_empty())
-            .unwrap_or(false));
+        // let defaults = defaults.unwrap();
+        assert!(defaults.unwrap().is_empty());
+        // assert!(defaults
+        //     .as_object()
+        //     .map(|map| map.is_empty())
+        //     .unwrap_or(false));
     }
 
     #[test]
