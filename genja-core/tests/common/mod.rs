@@ -3,7 +3,7 @@ use genja_core::inventory::{
     TransformFunctionOptions,
 };
 use serde_json::json;
-use std::sync::Arc;
+// use std::sync::Arc;
 
 pub fn inventory_setup() -> Result<Inventory, Box<dyn std::error::Error>> {
     let transform_options: TransformFunctionOptions = serde_json::from_value(json!({

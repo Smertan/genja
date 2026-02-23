@@ -608,14 +608,34 @@ impl GroupBuilder {
     }
 }
 
+/// Internal storage type for `Hosts` (maps host name -> `Host`).
 pub type HostsTarget = CustomTreeMap<Host>;
 
 impl DerefTarget for Hosts {
     type Target = CustomTreeMap<Host>;
 }
 
+/// Collection of hosts keyed by name.
+///
+/// This type wraps a `CustomTreeMap<Host>` and is the primary container used
+/// for host inventory data. The map keys are host names.
+///
+/// # Deserialization
+///
+/// - Unknown fields in individual `Host` entries are rejected (via `#[serde(deny_unknown_fields)]` on `Host`)
+/// - The `Hosts` wrapper itself accepts any valid map structure
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::inventory::{Host, Hosts, BaseBuilderHost};
+///
+/// let mut hosts = Hosts::new();
+/// let host = Host::builder("router1").hostname("10.0.0.1").build();
+/// hosts.add_host(host);
+/// assert_eq!(hosts.len(), 1);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, DerefMacro, DerefMutMacro)]
-#[serde(deny_unknown_fields)]
 pub struct Hosts(HostsTarget);
 
 impl Default for Hosts {
@@ -625,10 +645,16 @@ impl Default for Hosts {
 }
 
 impl Hosts {
+    /// Creates an empty host collection.
+    ///
+    /// Use `add_host` or map insertion methods to populate it.
     pub fn new() -> Self {
         Hosts(CustomTreeMap::new())
     }
 
+    /// Inserts a host into the collection, using the host's name as the key.
+    ///
+    /// If a host with the same name already exists, it will be replaced.
     pub fn add_host(&mut self, host: Host) {
         let name = host.name.clone();
         self.insert(name, host);
