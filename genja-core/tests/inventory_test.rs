@@ -60,7 +60,7 @@ fn inventory_can_model_mock_network_devices() {
         .platform("cisco_ios")
         .groups(router_groups)
         .data(router_data)
-        .connection_options("netconf".into(), router_connection)
+        .connection_options("netconf", router_connection)
         .defaults(&defaults_arc)
         .build();
     hosts.add_host(router);
@@ -86,7 +86,7 @@ fn inventory_can_model_mock_network_devices() {
         .platform("nxos")
         .groups(switch_groups)
         .data(switch_data)
-        .connection_options("netconf".into(), switch_connection)
+        .connection_options("netconf", switch_connection)
         .defaults(&defaults_arc)
         .build();
     hosts.add_host(switch);

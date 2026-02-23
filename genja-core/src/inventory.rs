@@ -65,19 +65,27 @@ pub trait BaseBuilderHost {
     type Output;
 
     // Updates the hostname and returns the updated builder.
-    fn hostname(self, hostname: &str) -> Self;
+    fn hostname<S>(self, hostname: S) -> Self
+    where
+        S: Into<String>;
 
     /// Updates the port and returns the updated builder.
     fn port(self, port: u16) -> Self;
 
     /// Updates the username and returns the updated builder.
-    fn username(self, username: &str) -> Self;
+    fn username<S>(self, username: S) -> Self
+    where
+        S: Into<String>;
 
     /// Updates the password and returns the updated builder.
-    fn password(self, password: &str) -> Self;
+    fn password<S>(self, password: S) -> Self
+    where
+        S: Into<String>;
 
     /// Updates the platform and returns the updated builder.
-    fn platform(self, platform: &str) -> Self;
+    fn platform<S>(self, platform: S) -> Self
+    where
+        S: Into<String>;
 
     /// Updates the groups and returns the updated builder.
     fn groups(self, groups: ParentGroups) -> Self;
@@ -86,7 +94,9 @@ pub trait BaseBuilderHost {
     fn data(self, data: Data) -> Self;
 
     /// Updates the connection options and returns the updated builder.
-    fn connection_options(self, name: String, options: ConnectionOptions) -> Self;
+    fn connection_options<S>(self, name: S, options: ConnectionOptions) -> Self
+    where
+        S: Into<String>;
 
     /// Updates the defaults and returns the updated builder.
     fn defaults(self, defaults: &Arc<Defaults>) -> Self;
@@ -412,8 +422,11 @@ impl HostBuilder {
 impl BaseBuilderHost for HostBuilder {
     type Output = Host;
 
-    fn hostname(mut self, hostname: &str) -> Self {
-        self.hostname = Some(hostname.to_string());
+    fn hostname<S>(mut self, hostname: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.hostname = Some(hostname.into());
         self
     }
 
@@ -422,18 +435,27 @@ impl BaseBuilderHost for HostBuilder {
         self
     }
 
-    fn username(mut self, username: &str) -> Self {
-        self.username = Some(username.to_string());
+    fn username<S>(mut self, username: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.username = Some(username.into());
         self
     }
 
-    fn password(mut self, password: &str) -> Self {
-        self.password = Some(password.to_string());
+    fn password<S>(mut self, password: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.password = Some(password.into());
         self
     }
 
-    fn platform(mut self, platform: &str) -> Self {
-        self.platform = Some(platform.to_string());
+    fn platform<S>(mut self, platform: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.platform = Some(platform.into());
         self
     }
 
@@ -447,14 +469,17 @@ impl BaseBuilderHost for HostBuilder {
         self
     }
 
-    fn connection_options(mut self, name: String, options: ConnectionOptions) -> Self {
+    fn connection_options<S>(mut self, name: S, options: ConnectionOptions) -> Self
+    where
+        S: Into<String>,
+    {
         if self.connection_options.is_none() {
             self.connection_options = Some(CustomTreeMap::new());
         }
         self.connection_options
             .as_mut()
             .unwrap()
-            .insert(name, options);
+            .insert(name.into(), options);
         self
     }
 
@@ -480,44 +505,104 @@ impl BaseBuilderHost for HostBuilder {
     }
 }
 
+/// Group-level inventory entry that applies defaults to member hosts.
+///
+/// # Fields
+///
+/// Group fields mirror host fields and are merged during resolution.
+/// Groups are stored in the `Groups` collection keyed by name. Use
+/// `Groups::add_group(name, group)` to add a group entry under a name.
+///
+/// * `hostname` - Optional hostname or address applied to member hosts.
+/// * `port` - Optional connection port applied to member hosts.
+/// * `username` - Optional username applied to member hosts.
+/// * `password` - Optional password applied to member hosts.
+/// * `platform` - Optional platform identifier applied to member hosts.
+/// * `groups` - Optional parent group names for group inheritance.
+/// * `data` - Optional arbitrary data merged into member hosts.
+/// * `connection_options` - Optional per-connection overrides.
+/// * `defaults` - Optional defaults applied to member hosts.
+///
+/// # Deserialization
+///
+/// - Unknown fields are rejected (via `#[serde(deny_unknown_fields)]`).
+/// - Connection options accept arbitrary map keys.
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::inventory::{Group, Groups, BaseBuilderHost};
+///
+/// let mut groups = Groups::new();
+/// let core_group = Group::builder()
+///     .platform("linux")
+///     .build();
+///
+/// groups.add_group("core", core_group);
+/// assert_eq!(groups.len(), 1);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Group {
-    pub hostname: Option<String>,
-    pub port: Option<u16>,
-    pub username: Option<String>,
-    pub password: Option<String>,
-    pub platform: Option<String>,
-    pub groups: Option<ParentGroups>,
-    pub data: Option<Data>,
-    pub connection_options: Option<CustomTreeMap<ConnectionOptions>>,
-    pub defaults: Option<Arc<Defaults>>,
-}
-
-impl Default for Group {
-    fn default() -> Group {
-        Group::new()
-    }
+    hostname: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    password: Option<String>,
+    platform: Option<String>,
+    groups: Option<ParentGroups>,
+    data: Option<Data>,
+    connection_options: Option<CustomTreeMap<ConnectionOptions>>,
+    defaults: Option<Arc<Defaults>>,
 }
 
 impl Group {
-    pub fn new() -> Group {
-        Group {
-            hostname: None,
-            port: None,
-            username: None,
-            password: None,
-            platform: None,
-            groups: None,
-            data: None,
-            connection_options: None,
-            defaults: None,
-        }
+    /// Returns a builder for creating group entries.
+    ///
+    /// Use the builder to set optional fields before calling `build()`.
+    pub fn builder() -> GroupBuilder {
+        GroupBuilder::new()
     }
-    pub fn builder(hostname: &str) -> GroupBuilder {
-        GroupBuilder::new(hostname)
+
+    pub fn hostname(&self) -> Option<&str> {
+        self.hostname.as_deref()
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    pub fn username(&self) -> Option<&str> {
+        self.username.as_deref()
+    }
+
+    pub fn password(&self) -> Option<&str> {
+        self.password.as_deref()
+    }
+
+    pub fn platform(&self) -> Option<&str> {
+        self.platform.as_deref()
+    }
+
+    pub fn groups(&self) -> Option<&ParentGroups> {
+        self.groups.as_ref()
+    }
+
+    pub fn data(&self) -> Option<&Data> {
+        self.data.as_ref()
+    }
+
+    pub fn connection_options(&self) -> Option<&CustomTreeMap<ConnectionOptions>> {
+        self.connection_options.as_ref()
+    }
+
+    pub fn defaults(&self) -> Option<&Defaults> {
+        self.defaults.as_deref()
     }
 }
 
+/// Builder for constructing `Group` entries.
+///
+/// Use the `BaseBuilderHost` methods to populate optional fields, then call `build()`.
 pub struct GroupBuilder {
     hostname: Option<String>,
     port: Option<u16>,
@@ -533,46 +618,151 @@ pub struct GroupBuilder {
 impl BaseBuilderHost for GroupBuilder {
     type Output = Group;
 
-    fn hostname(mut self, hostname: &str) -> Self {
-        self.hostname = Some(hostname.to_string());
+    /// Sets the hostname for the group.
+    ///
+    /// # Parameters
+    ///
+    /// * `hostname` - A string-like value containing the hostname or IP address to assign to the group.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the hostname field updated, allowing for method chaining.
+    fn hostname<S>(mut self, hostname: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.hostname = Some(hostname.into());
         self
     }
+
+    /// Sets the connection port for the group.
+    ///
+    /// # Parameters
+    ///
+    /// * `port` - A 16-bit unsigned integer representing the port number to use for connections.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the port field updated, allowing for method chaining.
     fn port(mut self, port: u16) -> Self {
         self.port = Some(port);
         self
     }
 
-    fn username(mut self, username: &str) -> Self {
-        self.username = Some(username.to_string());
+    /// Sets the username for authentication.
+    ///
+    /// # Parameters
+    ///
+    /// * `username` - A string-like value containing the username to use for authentication.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the username field updated, allowing for method chaining.
+    fn username<S>(mut self, username: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.username = Some(username.into());
         self
     }
 
-    fn password(mut self, password: &str) -> Self {
-        self.password = Some(password.to_string());
+    /// Sets the password for authentication.
+    ///
+    /// # Parameters
+    ///
+    /// * `password` - A string-like value containing the password to use for authentication.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the password field updated, allowing for method chaining.
+    fn password<S>(mut self, password: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.password = Some(password.into());
         self
     }
-    fn platform(mut self, platform: &str) -> Self {
-        self.platform = Some(platform.to_string());
+
+    /// Sets the platform identifier for the group.
+    ///
+    /// # Parameters
+    ///
+    /// * `platform` - A string-like value identifying the platform type (e.g., "linux", "windows", "cisco_ios").
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the platform field updated, allowing for method chaining.
+    fn platform<S>(mut self, platform: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.platform = Some(platform.into());
         self
     }
+
+    /// Sets the parent groups for this group.
+    ///
+    /// # Parameters
+    ///
+    /// * `groups` - A `ParentGroups` instance containing the names of parent groups this group belongs to.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the groups field updated, allowing for method chaining.
     fn groups(mut self, groups: ParentGroups) -> Self {
         self.groups = Some(groups);
         self
     }
+
+    /// Sets arbitrary data for the group.
+    ///
+    /// # Parameters
+    ///
+    /// * `data` - A `Data` instance containing arbitrary JSON data to associate with the group.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the data field updated, allowing for method chaining.
     fn data(mut self, data: Data) -> Self {
         self.data = Some(data);
         self
     }
-    fn connection_options(mut self, name: String, options: ConnectionOptions) -> Self {
+
+    /// Adds or updates connection-specific options for the group.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - A string-like value identifying the connection type (e.g., "ssh", "netconf").
+    /// * `options` - A `ConnectionOptions` instance containing connection-specific configuration.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the connection options updated, allowing for method chaining.
+    /// If no connection options map exists, one is created before inserting the new options.
+    fn connection_options<S>(mut self, name: S, options: ConnectionOptions) -> Self
+    where
+        S: Into<String>,
+    {
         if self.connection_options.is_none() {
             self.connection_options = Some(CustomTreeMap::new());
         }
         self.connection_options
             .as_mut()
             .unwrap()
-            .insert(name, options);
+            .insert(name.into(), options);
         self
     }
+
+    /// Sets the defaults to apply to this group.
+    ///
+    /// # Parameters
+    ///
+    /// * `defaults` - A reference to an `Arc<Defaults>` containing default values to apply.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the defaults field updated, allowing for method chaining.
+    /// The `Arc` is cloned to share ownership of the defaults.
     fn defaults(mut self, defaults: &Arc<Defaults>) -> Self {
         self.defaults = Some(Arc::clone(defaults));
         self
@@ -593,9 +783,9 @@ impl BaseBuilderHost for GroupBuilder {
 }
 
 impl GroupBuilder {
-    pub fn new(hostname: &str) -> Self {
+    pub fn new() -> Self {
         GroupBuilder {
-            hostname: Some(hostname.to_string()),
+            hostname: None,
             port: None,
             username: None,
             password: None,
@@ -674,6 +864,16 @@ impl Groups {
     pub fn new() -> Self {
         Groups(CustomTreeMap::new())
     }
+
+    /// Inserts a group into the collection under the provided name.
+    ///
+    /// If a group with the same name already exists, it will be replaced.
+    pub fn add_group<N>(&mut self, name: N, group: Group)
+    where
+        N: Into<String>,
+    {
+        self.insert(name.into(), group);
+    }
 }
 
 impl Default for Groups {
@@ -721,7 +921,6 @@ pub struct TransformFunctionOptions(serde_json::Value);
 impl DerefTarget for TransformFunctionOptions {
     type Target = serde_json::Value;
 }
-
 
 pub trait Connection
 where
