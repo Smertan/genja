@@ -55,7 +55,7 @@ fn inventory_can_model_mock_network_devices() {
         build_connection_options("192.0.2.1", 22, "automation", "router_pass", "cisco_ios");
     let router_connection_snapshot = router_connection.clone();
 
-    let router = Host::builder("router1.lab")
+    let router = Host::builder()
         .hostname("router1.lab")
         .platform("cisco_ios")
         .groups(router_groups)
@@ -63,7 +63,7 @@ fn inventory_can_model_mock_network_devices() {
         .connection_options("netconf", router_connection)
         .defaults(&defaults_arc)
         .build();
-    hosts.add_host(router);
+    hosts.add_host("router1.lab", router);
 
     // Switch mock device
     let mut switch_groups = ParentGroups::new();
@@ -81,7 +81,7 @@ fn inventory_can_model_mock_network_devices() {
         build_connection_options("192.0.2.10", 2222, "netops", "switch_pass", "nxos");
     let switch_connection_snapshot = switch_connection.clone();
 
-    let switch = Host::builder("switch1.lab")
+    let switch = Host::builder()
         .hostname("switch1.lab")
         .platform("nxos")
         .groups(switch_groups)
@@ -89,7 +89,7 @@ fn inventory_can_model_mock_network_devices() {
         .connection_options("netconf", switch_connection)
         .defaults(&defaults_arc)
         .build();
-    hosts.add_host(switch);
+    hosts.add_host("switch1.lab", switch);
 
     let inventory = Inventory::builder()
         .hosts(hosts)

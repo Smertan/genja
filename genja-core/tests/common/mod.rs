@@ -48,17 +48,17 @@ pub fn inventory_setup() -> Result<Inventory, Box<dyn std::error::Error>> {
     );
 
     let mut hosts = Hosts::new();
-    let host1 = Host::builder("router1.lab")
+    let host1 = Host::builder()
         .hostname("10-0-0-1")
         .data(Data::new(json!({ "mgmt_ip": "10-0-0-1" })))
         .build();
-    let host2 = Host::builder("switch1.lab")
+    let host2 = Host::builder()
         .hostname("10-0-0-2")
         .data(Data::new(json!({ "mgmt_ip": "10-0-0-2" })))
         .build();
 
-    hosts.add_host(host1);
-    hosts.add_host(host2);
+    hosts.add_host("router1.lab", host1);
+    hosts.add_host("switch1.lab", host2);
 
     let inventory = Inventory::builder()
         .hosts(hosts)

@@ -16,8 +16,8 @@
 //! use genja_core::inventory::{Host, Hosts, Inventory, BaseBuilderHost};
 //!
 //! let mut hosts = Hosts::new();
-//! let host = Host::builder("router1").hostname("10.0.0.1").build();
-//! hosts.add_host(host);
+//! let host = Host::builder().hostname("10.0.0.1").build();
+//! hosts.add_host("router1", host);
 //!
 //! let inventory = Inventory::builder().hosts(hosts).build();
 //! assert_eq!(inventory.hosts().len(), 1);
@@ -301,7 +301,6 @@ impl Data {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Host {
-    pub name: String,
     pub hostname: Option<String>,
     pub port: Option<u16>,
     pub username: Option<String>,
@@ -317,9 +316,8 @@ pub struct Host {
 }
 
 impl Host {
-    pub fn new(name: &str) -> Host {
+    pub fn new() -> Host {
         Host {
-            name: name.to_string(),
             hostname: None,
             port: None,
             username: None,
@@ -332,8 +330,8 @@ impl Host {
             resolved_connection_params: CustomTreeMap::new(),
         }
     }
-    pub fn builder(name: &str) -> HostBuilder {
-        HostBuilder::new(name)
+    pub fn builder() -> HostBuilder {
+        HostBuilder::new()
     }
 
     pub fn resolve_connection_params(
@@ -346,7 +344,7 @@ impl Host {
             .is_none()
         {
             let mut resolved = ResolvedConnectionParams {
-                hostname: self.hostname.clone().unwrap_or_else(|| self.name.clone()),
+                hostname: self.hostname.clone().unwrap_or_default(),
                 port: self.port,
                 username: self.username.clone(),
                 password: self.password.clone(),
@@ -390,7 +388,6 @@ impl Host {
 impl BaseMethods for Host {}
 
 pub struct HostBuilder {
-    name: String,
     hostname: Option<String>,
     port: Option<u16>,
     username: Option<String>,
@@ -403,9 +400,8 @@ pub struct HostBuilder {
 }
 
 impl HostBuilder {
-    pub fn new(name: &str) -> Self {
+    pub fn new() -> Self {
         HostBuilder {
-            name: name.to_string(),
             hostname: None,
             port: None,
             username: None,
@@ -490,7 +486,6 @@ impl BaseBuilderHost for HostBuilder {
 
     fn build(self) -> Host {
         Host {
-            name: self.name,
             hostname: self.hostname,
             port: self.port,
             username: self.username,
@@ -808,7 +803,7 @@ impl DerefTarget for Hosts {
 /// Collection of hosts keyed by name.
 ///
 /// This type wraps a `CustomTreeMap<Host>` and is the primary container used
-/// for host inventory data. The map keys are host names.
+/// for host inventory data. The map keys are host names used for logging/output.
 ///
 /// # Deserialization
 ///
@@ -821,8 +816,8 @@ impl DerefTarget for Hosts {
 /// use genja_core::inventory::{Host, Hosts, BaseBuilderHost};
 ///
 /// let mut hosts = Hosts::new();
-/// let host = Host::builder("router1").hostname("10.0.0.1").build();
-/// hosts.add_host(host);
+/// let host = Host::builder().hostname("10.0.0.1").build();
+/// hosts.add_host("router1", host);
 /// assert_eq!(hosts.len(), 1);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, DerefMacro, DerefMutMacro)]
@@ -842,17 +837,52 @@ impl Hosts {
         Hosts(CustomTreeMap::new())
     }
 
-    /// Inserts a host into the collection, using the host's name as the key.
+    /// # Parameters
     ///
-    /// If a host with the same name already exists, it will be replaced.
-    pub fn add_host(&mut self, host: Host) {
-        let name = host.name.clone();
-        self.insert(name, host);
+    /// * `name` - A string-like value that will be used as the unique identifier for the host.
+    ///   This name is used in logs and output to reference the host.
+    /// * `host` - The `Host` instance to insert into the collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use genja_core::inventory::{Host, Hosts, BaseBuilderHost};
+    ///
+    /// let mut hosts = Hosts::new();
+    /// let host = Host::builder().hostname("10.0.0.1").build();
+    /// hosts.add_host("router1", host);
+    /// assert_eq!(hosts.len(), 1);
+    /// ```
+    pub fn add_host<N>(&mut self, name: N, host: Host)
+    where
+        N: Into<String>,
+    {
+        self.insert(name.into(), host);
     }
 }
 
 impl BaseMethods for Hosts {}
 
+/// Collection of groups keyed by name.
+///
+/// This type wraps a `CustomTreeMap<Group>` and is the primary container used
+/// for group inventory data. The map keys are group names.
+///
+/// # Deserialization
+///
+/// - Unknown fields in individual `Group` entries are rejected (via `#[serde(deny_unknown_fields)]` on `Group`)
+/// - The `Groups` wrapper itself accepts any valid map structure
+///
+/// # Examples
+///
+/// ```
+/// use genja_core::inventory::{Group, Groups, BaseBuilderHost};
+///
+/// let mut groups = Groups::new();
+/// let core_group = Group::builder().platform("linux").build();
+/// groups.add_group("core", core_group);
+/// assert_eq!(groups.len(), 1);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, DerefMacro, DerefMutMacro)]
 pub struct Groups(CustomTreeMap<Group>);
 
@@ -861,6 +891,9 @@ impl DerefTarget for Groups {
 }
 
 impl Groups {
+    /// Creates an empty group collection.
+    ///
+    /// Use `add_group` or map insertion methods to populate it.
     pub fn new() -> Self {
         Groups(CustomTreeMap::new())
     }
@@ -1026,7 +1059,7 @@ impl ConnectionManager {
 /// use genja_core::inventory::BaseBuilderHost;
 ///
 /// let mut hosts = Hosts::new();
-/// hosts.add_host(Host::builder("router1").hostname("10.0.0.1").build());
+/// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
 ///
 /// let inventory = Inventory::builder().hosts(hosts).build();
 /// assert_eq!(inventory.hosts().len(), 1);
@@ -1120,8 +1153,8 @@ impl Default for Inventory {
 /// use genja_core::inventory::{Host, Hosts, Inventory, BaseBuilderHost};
 ///
 /// let mut hosts = Hosts::new();
-/// let host = Host::builder("router1").hostname("10.0.0.1").build();
-/// hosts.add_host(host);
+/// let host = Host::builder().hostname("10.0.0.1").build();
+/// hosts.add_host("router1", host);
 ///
 /// let inventory = Inventory::builder()
 ///     .hosts(hosts)
@@ -1206,9 +1239,11 @@ mod tests {
         let mut hosts = Hosts(CustomTreeMap::new());
         // hosts.insert("hosts".to_string(), CustomTreeMap::new());
         for i in 1..=10 {
+            let name = format!("host{}.example.com", i);
             let mut groups = ParentGroups::new();
             groups.push("cisco".to_string());
-            let host = Host::builder(&format!("host{}.example.com", i))
+            let host = Host::builder()
+                .hostname(&name)
                 .port(2200 + i as u16)
                 .username(&format!("user{}", i))
                 .password(&format!("password{}", i))
@@ -1220,10 +1255,7 @@ mod tests {
                 .groups(groups)
                 .connection_options(String::from("Cisco"), ConnectionOptions::new())
                 .build();
-
-            let hostname = host.name.clone();
-
-            hosts.insert(hostname, host);
+            hosts.insert(name, host);
         }
 
         Ok(hosts)
@@ -1231,7 +1263,7 @@ mod tests {
 
     #[test]
     fn test_host_new() {
-        let host = Host::new("example.com");
+        let host = Host::new();
         assert_eq!(host.hostname, None);
         assert_eq!(host.port, None);
         assert_eq!(host.username, None);
@@ -1249,7 +1281,9 @@ mod tests {
 
         // Add 10 hosts to the hosts map with dummy data
         for i in 1..=10 {
-            let host = Host::builder(&format!("host{}.example.com", i))
+            let name = format!("host{}.example.com", i);
+            let host = Host::builder()
+                .hostname(&name)
                 .port(2200 + i as u16)
                 .username(&format!("user{}", i))
                 .password(&format!("password{}", i))
@@ -1261,7 +1295,7 @@ mod tests {
                 .connection_options(String::from("Juniper"), ConnectionOptions::new())
                 .build();
 
-            hosts.add_host(host);
+            hosts.add_host(name, host);
         }
         assert_eq!(hosts.len(), 10);
     }

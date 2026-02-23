@@ -160,7 +160,7 @@ impl<V> CustomTreeMap<V> {
     /// Inserts a key-value pair into the map.
     ///
     /// The where statement allows for string-like types
-    /// (&str, String, Cow<str>, etc.) including `numbers` that
+    /// (&str, String, `Cow<str>`, etc.) including `numbers` that
     /// can be turned into strings using the `ToString` trait. It
     /// makes the insertion process more flexible and easier to use.
     pub fn insert<K>(&mut self, key: K, value: V)
