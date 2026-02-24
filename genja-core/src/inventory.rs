@@ -7,7 +7,7 @@
 //! - Inventory is immutable from the public API. Use builders to construct it.
 //! - Hosts and groups are stored in `CustomTreeMap` keyed by name.
 //! - Defaults share the same fields as groups, minus `groups` and `defaults`.
-//! - `Inventory::apply_transform` runs an optional transform over the inventory.
+//! - Transforms are applied lazily when accessing hosts, groups, or defaults.
 //!
 //! # Examples
 //!
@@ -35,13 +35,11 @@
 //! ```
 //! use genja_core::inventory::{Inventory, TransformFunction};
 //!
-//! let transform = TransformFunction::new(|_inventory, _options| {
-//!     // mutate inventory in place
-//! });
-//! let mut inventory = Inventory::builder().transform_function(transform).build();
-//! inventory.apply_transform();
+//! let transform = TransformFunction::new(|host, _options| host.clone());
+//! let inventory = Inventory::builder().transform_function(transform).build();
+//! let _ = inventory.hosts();
 //! ```
-use crate::CustomTreeMap;
+use crate::{CustomTreeMap, NatString};
 use dashmap::DashMap;
 use genja_core_derive::{DerefMacro, DerefMutMacro};
 use schemars::{schema_for, JsonSchema};
@@ -244,13 +242,13 @@ impl<'de> Visitor<'de> for ParentGroupsVisitor {
 /// without nesting or self-references.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Defaults {
-    pub hostname: Option<String>,
-    pub port: Option<u16>,
-    pub username: Option<String>,
-    pub password: Option<String>,
-    pub platform: Option<String>,
-    pub data: Option<Data>,
-    pub connection_options: Option<CustomTreeMap<ConnectionOptions>>,
+    pub(crate) hostname: Option<String>,
+    pub(crate) port: Option<u16>,
+    pub(crate) username: Option<String>,
+    pub(crate) password: Option<String>,
+    pub(crate) platform: Option<String>,
+    pub(crate) data: Option<Data>,
+    pub(crate) connection_options: Option<CustomTreeMap<ConnectionOptions>>,
 }
 
 impl DerefTarget for Data {
@@ -258,6 +256,36 @@ impl DerefTarget for Data {
 }
 
 impl Defaults {
+    pub fn builder() -> DefaultsBuilder {
+        DefaultsBuilder::new()
+    }
+
+    pub fn to_builder(&self) -> DefaultsBuilder {
+        let mut builder = Defaults::builder();
+        if let Some(hostname) = self.hostname.as_deref() {
+            builder = builder.hostname(hostname);
+        }
+        if let Some(port) = self.port {
+            builder = builder.port(port);
+        }
+        if let Some(username) = self.username.as_deref() {
+            builder = builder.username(username);
+        }
+        if let Some(password) = self.password.as_deref() {
+            builder = builder.password(password);
+        }
+        if let Some(platform) = self.platform.as_deref() {
+            builder = builder.platform(platform);
+        }
+        if let Some(data) = self.data.as_ref() {
+            builder = builder.data(data.clone());
+        }
+        if let Some(options) = self.connection_options.as_ref() {
+            builder = builder.connection_options(options.clone());
+        }
+        builder
+    }
+
     pub fn new() -> Self {
         Defaults {
             hostname: None,
@@ -278,6 +306,120 @@ impl Defaults {
             && self.platform.is_none()
             && self.data.is_none()
             && self.connection_options.is_none()
+    }
+
+    pub fn hostname(&self) -> Option<&str> {
+        self.hostname.as_deref()
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    pub fn username(&self) -> Option<&str> {
+        self.username.as_deref()
+    }
+
+    pub fn password(&self) -> Option<&str> {
+        self.password.as_deref()
+    }
+
+    pub fn platform(&self) -> Option<&str> {
+        self.platform.as_deref()
+    }
+
+    pub fn data(&self) -> Option<&Data> {
+        self.data.as_ref()
+    }
+
+    pub fn connection_options(&self) -> Option<&CustomTreeMap<ConnectionOptions>> {
+        self.connection_options.as_ref()
+    }
+}
+
+pub struct DefaultsBuilder {
+    hostname: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    password: Option<String>,
+    platform: Option<String>,
+    data: Option<Data>,
+    connection_options: Option<CustomTreeMap<ConnectionOptions>>,
+}
+
+impl DefaultsBuilder {
+    pub fn new() -> Self {
+        Self {
+            hostname: None,
+            port: None,
+            username: None,
+            password: None,
+            platform: None,
+            data: None,
+            connection_options: None,
+        }
+    }
+
+    pub fn hostname<S>(mut self, hostname: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.hostname = Some(hostname.into());
+        self
+    }
+
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = Some(port);
+        self
+    }
+
+    pub fn username<S>(mut self, username: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.username = Some(username.into());
+        self
+    }
+
+    pub fn password<S>(mut self, password: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.password = Some(password.into());
+        self
+    }
+
+    pub fn platform<S>(mut self, platform: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.platform = Some(platform.into());
+        self
+    }
+
+    pub fn data(mut self, data: Data) -> Self {
+        self.data = Some(data);
+        self
+    }
+
+    pub fn connection_options(
+        mut self,
+        options: CustomTreeMap<ConnectionOptions>,
+    ) -> Self {
+        self.connection_options = Some(options);
+        self
+    }
+
+    pub fn build(self) -> Defaults {
+        Defaults {
+            hostname: self.hostname,
+            port: self.port,
+            username: self.username,
+            password: self.password,
+            platform: self.platform,
+            data: self.data,
+            connection_options: self.connection_options,
+        }
     }
 }
 
@@ -301,18 +443,18 @@ impl Data {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Host {
-    pub hostname: Option<String>,
-    pub port: Option<u16>,
-    pub username: Option<String>,
-    pub password: Option<String>,
-    pub platform: Option<String>,
-    pub groups: Option<ParentGroups>,
-    pub data: Option<Data>,
-    pub connection_options: Option<CustomTreeMap<ConnectionOptions>>,
-    pub defaults: Option<Arc<Defaults>>,
+    pub(crate) hostname: Option<String>,
+    pub(crate) port: Option<u16>,
+    pub(crate) username: Option<String>,
+    pub(crate) password: Option<String>,
+    pub(crate) platform: Option<String>,
+    pub(crate) groups: Option<ParentGroups>,
+    pub(crate) data: Option<Data>,
+    pub(crate) connection_options: Option<CustomTreeMap<ConnectionOptions>>,
+    pub(crate) defaults: Option<Arc<Defaults>>,
     #[serde(skip)]
     #[schemars(skip)]
-    pub resolved_connection_params: CustomTreeMap<ResolvedConnectionParams>,
+    resolved_connection_params: CustomTreeMap<ResolvedConnectionParams>,
 }
 
 impl Host {
@@ -332,6 +474,80 @@ impl Host {
     }
     pub fn builder() -> HostBuilder {
         HostBuilder::new()
+    }
+
+    pub fn to_builder(&self) -> HostBuilder {
+        let mut builder = Host::builder();
+        if let Some(hostname) = self.hostname() {
+            builder = builder.hostname(hostname);
+        }
+        if let Some(port) = self.port() {
+            builder = builder.port(port);
+        }
+        if let Some(username) = self.username() {
+            builder = builder.username(username);
+        }
+        if let Some(password) = self.password() {
+            builder = builder.password(password);
+        }
+        if let Some(platform) = self.platform() {
+            builder = builder.platform(platform);
+        }
+        if let Some(groups) = self.groups() {
+            builder = builder.groups(groups.clone());
+        }
+        if let Some(data) = self.data() {
+            builder = builder.data(data.clone());
+        }
+        if let Some(options_map) = self.connection_options() {
+            for (name, options) in options_map.iter() {
+                builder = builder.connection_options(name.to_string(), options.clone());
+            }
+        }
+        if let Some(defaults) = self.defaults_arc() {
+            builder = builder.defaults(defaults);
+        }
+        builder
+    }
+
+    pub fn hostname(&self) -> Option<&str> {
+        self.hostname.as_deref()
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    pub fn username(&self) -> Option<&str> {
+        self.username.as_deref()
+    }
+
+    pub fn password(&self) -> Option<&str> {
+        self.password.as_deref()
+    }
+
+    pub fn platform(&self) -> Option<&str> {
+        self.platform.as_deref()
+    }
+
+    pub fn groups(&self) -> Option<&ParentGroups> {
+        self.groups.as_ref()
+    }
+
+    pub fn data(&self) -> Option<&Data> {
+        self.data.as_ref()
+    }
+
+    pub fn connection_options(&self) -> Option<&CustomTreeMap<ConnectionOptions>> {
+        self.connection_options.as_ref()
+    }
+
+    pub fn defaults(&self) -> Option<&Defaults> {
+        self.defaults.as_deref()
+    }
+
+    pub fn defaults_arc(&self) -> Option<&Arc<Defaults>> {
+        self.defaults.as_ref()
     }
 
     pub fn resolve_connection_params(
@@ -539,15 +755,15 @@ impl BaseBuilderHost for HostBuilder {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Group {
-    hostname: Option<String>,
-    port: Option<u16>,
-    username: Option<String>,
-    password: Option<String>,
-    platform: Option<String>,
-    groups: Option<ParentGroups>,
-    data: Option<Data>,
-    connection_options: Option<CustomTreeMap<ConnectionOptions>>,
-    defaults: Option<Arc<Defaults>>,
+    pub(crate) hostname: Option<String>,
+    pub(crate) port: Option<u16>,
+    pub(crate) username: Option<String>,
+    pub(crate) password: Option<String>,
+    pub(crate) platform: Option<String>,
+    pub(crate) groups: Option<ParentGroups>,
+    pub(crate) data: Option<Data>,
+    pub(crate) connection_options: Option<CustomTreeMap<ConnectionOptions>>,
+    pub(crate) defaults: Option<Arc<Defaults>>,
 }
 
 impl Group {
@@ -556,6 +772,40 @@ impl Group {
     /// Use the builder to set optional fields before calling `build()`.
     pub fn builder() -> GroupBuilder {
         GroupBuilder::new()
+    }
+
+    pub fn to_builder(&self) -> GroupBuilder {
+        let mut builder = Group::builder();
+        if let Some(hostname) = self.hostname() {
+            builder = builder.hostname(hostname);
+        }
+        if let Some(port) = self.port() {
+            builder = builder.port(port);
+        }
+        if let Some(username) = self.username() {
+            builder = builder.username(username);
+        }
+        if let Some(password) = self.password() {
+            builder = builder.password(password);
+        }
+        if let Some(platform) = self.platform() {
+            builder = builder.platform(platform);
+        }
+        if let Some(groups) = self.groups() {
+            builder = builder.groups(groups.clone());
+        }
+        if let Some(data) = self.data() {
+            builder = builder.data(data.clone());
+        }
+        if let Some(options_map) = self.connection_options() {
+            for (name, options) in options_map.iter() {
+                builder = builder.connection_options(name.to_string(), options.clone());
+            }
+        }
+        if let Some(defaults) = self.defaults.as_ref() {
+            builder = builder.defaults(defaults);
+        }
+        builder
     }
 
     pub fn hostname(&self) -> Option<&str> {
@@ -915,27 +1165,85 @@ impl Default for Groups {
     }
 }
 
-type TransformFunctionType =
-    Arc<dyn Fn(&mut Inventory, Option<&TransformFunctionOptions>) + Send + Sync>;
+pub trait Transform: Send + Sync {
+    fn transform_host(
+        &self,
+        host: &Host,
+        _options: Option<&TransformFunctionOptions>,
+    ) -> Host {
+        host.clone()
+    }
+
+    fn transform_group(
+        &self,
+        group: &Group,
+        _options: Option<&TransformFunctionOptions>,
+    ) -> Group {
+        group.clone()
+    }
+
+    fn transform_defaults(
+        &self,
+        defaults: &Defaults,
+        _options: Option<&TransformFunctionOptions>,
+    ) -> Defaults {
+        defaults.clone()
+    }
+}
 
 #[derive(Clone)]
-pub struct TransformFunction(TransformFunctionType);
+pub struct TransformFunction(Arc<dyn Transform>);
 
 impl TransformFunction {
     pub fn new<F>(func: F) -> Self
     where
-        F: Fn(&mut Inventory, Option<&TransformFunctionOptions>) + Send + Sync + 'static,
+        F: Fn(&Host, Option<&TransformFunctionOptions>) -> Host + Send + Sync + 'static,
     {
-        TransformFunction(Arc::new(func))
+        struct HostOnlyTransform<F> {
+            func: F,
+        }
+
+        impl<F> Transform for HostOnlyTransform<F>
+        where
+            F: Fn(&Host, Option<&TransformFunctionOptions>) -> Host + Send + Sync,
+        {
+            fn transform_host(
+                &self,
+                host: &Host,
+                options: Option<&TransformFunctionOptions>,
+            ) -> Host {
+                (self.func)(host, options)
+            }
+        }
+
+        TransformFunction(Arc::new(HostOnlyTransform { func }))
     }
 
-    /// `(self.0)(...)` - The parentheses around self.0 explicitly
-    /// call the function pointer. gives us the Arc<dyn Fn(...)>
-    /// stored inside.
-    ///
-    /// `self.0(...)` could also be used.
-    pub fn call(&self, inventory: &mut Inventory, options: Option<&TransformFunctionOptions>) {
-        (self.0)(inventory, options);
+    pub fn new_full<T>(transform: T) -> Self
+    where
+        T: Transform + 'static,
+    {
+        TransformFunction(Arc::new(transform))
+    }
+
+    pub fn transform_host(&self, host: &Host, options: Option<&TransformFunctionOptions>) -> Host {
+        self.0.transform_host(host, options)
+    }
+
+    pub fn transform_group(
+        &self,
+        group: &Group,
+        options: Option<&TransformFunctionOptions>,
+    ) -> Group {
+        self.0.transform_group(group, options)
+    }
+
+    pub fn transform_defaults(
+        &self,
+        defaults: &Defaults,
+        options: Option<&TransformFunctionOptions>,
+    ) -> Defaults {
+        self.0.transform_defaults(defaults, options)
     }
 }
 
@@ -1047,6 +1355,9 @@ impl ConnectionManager {
 /// This struct is deserializable and is the primary shape used by the
 /// inventory loader and runtime.
 ///
+/// Transforms are applied lazily when accessing hosts, groups, or defaults
+/// via the view accessors (e.g., `hosts()`).
+///
 /// # Deserialization
 ///
 /// - Missing fields use their default values (see `Default` impl)
@@ -1066,9 +1377,9 @@ impl ConnectionManager {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Inventory {
-    hosts: Hosts,
-    groups: Option<Groups>,
-    defaults: Option<Defaults>,
+    pub(crate) hosts: Hosts,
+    pub(crate) groups: Option<Groups>,
+    pub(crate) defaults: Option<Defaults>,
     #[serde(skip)]
     transform_function: Option<TransformFunction>,
     transform_function_options: Option<TransformFunctionOptions>,
@@ -1084,16 +1395,20 @@ impl Inventory {
         InventoryBuilder::new()
     }
 
-    pub fn hosts(&self) -> &Hosts {
-        &self.hosts
+    pub fn hosts(&self) -> HostsView<'_> {
+        HostsView { inventory: self }
     }
 
-    pub fn groups(&self) -> Option<&Groups> {
-        self.groups.as_ref()
+    pub fn groups(&self) -> Option<GroupsView<'_>> {
+        self.groups
+            .as_ref()
+            .map(|groups| GroupsView { inventory: self, groups })
     }
 
-    pub fn defaults(&self) -> Option<&Defaults> {
-        self.defaults.as_ref()
+    pub fn defaults(&self) -> Option<Defaults> {
+        self.defaults
+            .as_ref()
+            .map(|defaults| self.transform_defaults_value(defaults))
     }
 
     pub fn transform_function_options(&self) -> Option<&TransformFunctionOptions> {
@@ -1104,18 +1419,109 @@ impl Inventory {
         &self.connections
     }
 
-    pub fn hosts_mut(&mut self) -> &mut Hosts {
-        &mut self.hosts
+    fn transform_host_value(&self, host: &Host) -> Host {
+        let mut transformed = match &self.transform_function {
+            Some(transform) => transform.transform_host(host, self.transform_function_options.as_ref()),
+            None => host.clone(),
+        };
+
+        if let Some(defaults) = transformed.defaults.as_ref() {
+            let transformed_defaults = self.transform_defaults_value(defaults);
+            transformed.defaults = Some(Arc::new(transformed_defaults));
+        }
+
+        transformed
     }
 
-    /// Apply the transform function if one is set, passing the transform options
-    pub fn apply_transform(&mut self) {
-        if let Some(transform) = self.transform_function.clone() {
-            let options = self.transform_function_options.clone();
-            transform.call(self, options.as_ref());
+    fn transform_group_value(&self, group: &Group) -> Group {
+        let mut transformed = match &self.transform_function {
+            Some(transform) => {
+                transform.transform_group(group, self.transform_function_options.as_ref())
+            }
+            None => group.clone(),
+        };
+
+        if let Some(defaults) = transformed.defaults.as_ref() {
+            let transformed_defaults = self.transform_defaults_value(defaults);
+            transformed.defaults = Some(Arc::new(transformed_defaults));
+        }
+
+        transformed
+    }
+
+    fn transform_defaults_value(&self, defaults: &Defaults) -> Defaults {
+        match &self.transform_function {
+            Some(transform) => {
+                transform.transform_defaults(defaults, self.transform_function_options.as_ref())
+            }
+            None => defaults.clone(),
         }
     }
 }
+
+pub struct HostsView<'a> {
+    inventory: &'a Inventory,
+}
+
+impl<'a> HostsView<'a> {
+    pub fn len(&self) -> usize {
+        self.inventory.hosts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inventory.hosts.is_empty()
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &'a NatString> {
+        self.inventory.hosts.keys()
+    }
+
+    pub fn get(&self, name: &str) -> Option<Host> {
+        self.inventory
+            .hosts
+            .get(name)
+            .map(|host| self.inventory.transform_host_value(host))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&'a NatString, Host)> {
+        self.inventory
+            .hosts
+            .iter()
+            .map(|(id, host)| (id, self.inventory.transform_host_value(host)))
+    }
+}
+
+pub struct GroupsView<'a> {
+    inventory: &'a Inventory,
+    groups: &'a Groups,
+}
+
+impl<'a> GroupsView<'a> {
+    pub fn len(&self) -> usize {
+        self.groups.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &'a NatString> {
+        self.groups.keys()
+    }
+
+    pub fn get(&self, name: &str) -> Option<Group> {
+        self.groups
+            .get(name)
+            .map(|group| self.inventory.transform_group_value(group))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&'a NatString, Group)> {
+        self.groups
+            .iter()
+            .map(|(id, group)| (id, self.inventory.transform_group_value(group)))
+    }
+}
+
 
 impl Default for Inventory {
     fn default() -> Self {
@@ -1141,8 +1547,7 @@ impl Default for Inventory {
 ///   are used. When `None`, an empty `Hosts` map is used.
 /// * `groups` - Optional groups map. When set, the provided groups are used.
 /// * `defaults` - Optional defaults object. When set, the provided defaults are used.
-/// * `transform_function` - Optional transform function applied via
-///   `Inventory::apply_transform`.
+/// * `transform_function` - Optional transform function applied lazily on access.
 /// * `transform_function_options` - Optional JSON options passed to the transform.
 /// * `connections` - Optional connection manager. When `None`, a default
 ///   `ConnectionManager` is created.

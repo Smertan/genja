@@ -15,36 +15,36 @@ pub fn inventory_setup() -> Result<Inventory, Box<dyn std::error::Error>> {
     .expect("transform options should deserialize");
 
     let transform_function = TransformFunction::new(
-        |inventory: &mut Inventory, options: Option<&TransformFunctionOptions>| {
-            let mapping = options
-                .and_then(|opts| opts.get("obfuscated_ip_map"))
-                .and_then(|value| value.as_object());
-            let Some(mapping) = mapping else {
-                return;
-            };
+        |host: &Host, options: Option<&TransformFunctionOptions>| -> Host {
+        let mapping = options
+            .and_then(|opts| opts.get("obfuscated_ip_map"))
+            .and_then(|value| value.as_object());
+        let Some(mapping) = mapping else {
+            return host.clone();
+        };
 
-            for host in inventory.hosts_mut().values_mut() {
-                if let Some(hostname) = host.hostname.as_mut() {
-                    if let Some(mapped) = mapping.get(hostname).and_then(|value| value.as_str()) {
-                        *hostname = mapped.to_string();
-                    }
-                }
+        let mut builder = host.to_builder();
+        if let Some(existing) = host.hostname() {
+            if let Some(mapped) = mapping.get(existing).and_then(|value| value.as_str()) {
+                builder = builder.hostname(mapped);
+            }
+        }
 
-                if let Some(data) = host.data.as_mut() {
-                    if let Some(object) = data.as_object_mut() {
-                        if let Some(mgmt_ip) = object.get_mut("mgmt_ip") {
-                            if let Some(ip) = mgmt_ip.as_str() {
-                                if let Some(mapped) =
-                                    mapping.get(ip).and_then(|value| value.as_str())
-                                {
-                                    *mgmt_ip = serde_json::Value::String(mapped.to_string());
-                                }
-                            }
+        if let Some(mut data) = host.data().cloned() {
+            if let Some(object) = data.as_object_mut() {
+                if let Some(mgmt_ip) = object.get_mut("mgmt_ip") {
+                    if let Some(ip) = mgmt_ip.as_str() {
+                        if let Some(mapped) = mapping.get(ip).and_then(|value| value.as_str()) {
+                            *mgmt_ip = serde_json::Value::String(mapped.to_string());
                         }
                     }
                 }
             }
-        },
+            builder = builder.data(data);
+        }
+
+        builder.build()
+    },
     );
 
     let mut hosts = Hosts::new();

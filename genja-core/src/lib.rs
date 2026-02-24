@@ -102,7 +102,7 @@ impl Genja {
             .inventory
             .hosts()
             .iter()
-            .filter_map(|(id, host)| if pred(host) { Some(id.clone()) } else { None })
+            .filter_map(|(id, host)| if pred(&host) { Some(id.clone()) } else { None })
             .collect();
 
         Self {
@@ -115,13 +115,13 @@ impl Genja {
         }
     }
 
-    pub fn iter_hosts(&self) -> impl Iterator<Item = &Host> {
+    pub fn iter_hosts(&self) -> impl Iterator<Item = Host> + use<'_>{
         self.host_ids
             .iter()
             .filter_map(|id| self.inventory.hosts().get(id))
     }
 
-    pub fn iter_all_hosts(&self) -> impl Iterator<Item = (&NatString, &Host)> {
+    pub fn iter_all_hosts(&self) -> impl Iterator<Item = (&NatString, Host)> {
         self.inventory.hosts().iter()
     }
 

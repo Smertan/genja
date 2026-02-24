@@ -104,18 +104,17 @@ fn inventory_can_model_mock_network_devices() {
         .hosts()
         .get("router1.lab")
         .expect("router host should exist");
-    assert_eq!(router.hostname.as_deref(), Some("router1.lab"));
-    assert_eq!(router.groups.as_ref(), Some(&router_groups_snapshot));
-    assert_eq!(router.data.as_ref(), Some(&router_data_snapshot));
+    assert_eq!(router.hostname(), Some("router1.lab"));
+    assert_eq!(router.groups(), Some(&router_groups_snapshot));
+    assert_eq!(router.data(), Some(&router_data_snapshot));
     assert_eq!(
-        router.defaults.as_ref(),
-        Some(&defaults_arc),
+        router.defaults(),
+        Some(defaults_arc.as_ref()),
         "router should inherit defaults"
     );
     assert_eq!(
         router
-            .connection_options
-            .as_ref()
+            .connection_options()
             .and_then(|options| options.get("netconf")),
         Some(&router_connection_snapshot)
     );
@@ -124,18 +123,17 @@ fn inventory_can_model_mock_network_devices() {
         .hosts()
         .get("switch1.lab")
         .expect("switch host should exist");
-    assert_eq!(switch.hostname.as_deref(), Some("switch1.lab"));
-    assert_eq!(switch.groups.as_ref(), Some(&switch_groups_snapshot));
-    assert_eq!(switch.data.as_ref(), Some(&switch_data_snapshot));
+    assert_eq!(switch.hostname(), Some("switch1.lab"));
+    assert_eq!(switch.groups(), Some(&switch_groups_snapshot));
+    assert_eq!(switch.data(), Some(&switch_data_snapshot));
     assert_eq!(
         switch
-            .connection_options
-            .as_ref()
+            .connection_options()
             .and_then(|options| options.get("netconf")),
         Some(&switch_connection_snapshot)
     );
 
-    assert_eq!(inventory.defaults(), Some(&defaults));
+    assert_eq!(inventory.defaults(), Some(defaults.clone()));
     assert_eq!(
         inventory.transform_function_options(),
         Some(&transform_options)
@@ -144,18 +142,16 @@ fn inventory_can_model_mock_network_devices() {
 
 #[test]
 fn inventory_transform_translates_obfuscated_ips() {
-    let mut inventory = common::inventory_setup().expect("inventory setup failed");
-    inventory.apply_transform();
+    let inventory = common::inventory_setup().expect("inventory setup failed");
 
     let router = inventory
         .hosts()
         .get("router1.lab")
         .expect("router should exist");
-    assert_eq!(router.hostname.as_deref(), Some("10.0.0.1"));
+    assert_eq!(router.hostname(), Some("10.0.0.1"));
     assert_eq!(
         router
-            .data
-            .as_ref()
+            .data()
             .and_then(|data| data.get("mgmt_ip"))
             .and_then(|value| value.as_str()),
         Some("10.0.0.1")
@@ -165,11 +161,10 @@ fn inventory_transform_translates_obfuscated_ips() {
         .hosts()
         .get("switch1.lab")
         .expect("switch should exist");
-    assert_eq!(switch.hostname.as_deref(), Some("10.0.0.2"));
+    assert_eq!(switch.hostname(), Some("10.0.0.2"));
     assert_eq!(
         switch
-            .data
-            .as_ref()
+            .data()
             .and_then(|data| data.get("mgmt_ip"))
             .and_then(|value| value.as_str()),
         Some("10.0.0.2")
