@@ -96,9 +96,6 @@ pub trait BaseBuilderHost {
     where
         S: Into<String>;
 
-    /// Updates the defaults and returns the updated builder.
-    fn defaults(self, defaults: &Arc<Defaults>) -> Self;
-
     /// Builds the struct from the updated builder and returns final struct object.
     fn build(self) -> Self::Output;
 }
@@ -451,7 +448,6 @@ pub struct Host {
     pub(crate) groups: Option<ParentGroups>,
     pub(crate) data: Option<Data>,
     pub(crate) connection_options: Option<CustomTreeMap<ConnectionOptions>>,
-    pub(crate) defaults: Option<Arc<Defaults>>,
     #[serde(skip)]
     #[schemars(skip)]
     resolved_connection_params: CustomTreeMap<ResolvedConnectionParams>,
@@ -468,7 +464,6 @@ impl Host {
             groups: None,
             data: None,
             connection_options: None,
-            defaults: None,
             resolved_connection_params: CustomTreeMap::new(),
         }
     }
@@ -504,9 +499,6 @@ impl Host {
                 builder = builder.connection_options(name.to_string(), options.clone());
             }
         }
-        if let Some(defaults) = self.defaults_arc() {
-            builder = builder.defaults(defaults);
-        }
         builder
     }
 
@@ -540,14 +532,6 @@ impl Host {
 
     pub fn connection_options(&self) -> Option<&CustomTreeMap<ConnectionOptions>> {
         self.connection_options.as_ref()
-    }
-
-    pub fn defaults(&self) -> Option<&Defaults> {
-        self.defaults.as_deref()
-    }
-
-    pub fn defaults_arc(&self) -> Option<&Arc<Defaults>> {
-        self.defaults.as_ref()
     }
 
     pub fn resolve_connection_params(
@@ -612,7 +596,6 @@ pub struct HostBuilder {
     groups: Option<ParentGroups>,
     data: Option<Data>,
     connection_options: Option<CustomTreeMap<ConnectionOptions>>,
-    defaults: Option<Arc<Defaults>>,
 }
 
 impl HostBuilder {
@@ -626,7 +609,6 @@ impl HostBuilder {
             groups: None,
             data: None,
             connection_options: None,
-            defaults: None,
         }
     }
 }
@@ -695,11 +677,6 @@ impl BaseBuilderHost for HostBuilder {
         self
     }
 
-    fn defaults(mut self, defaults: &Arc<Defaults>) -> Self {
-        self.defaults = Some(Arc::clone(defaults));
-        self
-    }
-
     fn build(self) -> Host {
         Host {
             hostname: self.hostname,
@@ -710,13 +687,12 @@ impl BaseBuilderHost for HostBuilder {
             groups: self.groups,
             data: self.data,
             connection_options: self.connection_options,
-            defaults: self.defaults,
             resolved_connection_params: CustomTreeMap::new(),
         }
     }
 }
 
-/// Group-level inventory entry that applies defaults to member hosts.
+/// Group-level inventory entry that applies values to member hosts.
 ///
 /// # Fields
 ///
@@ -732,7 +708,7 @@ impl BaseBuilderHost for HostBuilder {
 /// * `groups` - Optional parent group names for group inheritance.
 /// * `data` - Optional arbitrary data merged into member hosts.
 /// * `connection_options` - Optional per-connection overrides.
-/// * `defaults` - Optional defaults applied to member hosts.
+/// * Defaults are applied globally via `Inventory`.
 ///
 /// # Deserialization
 ///
@@ -763,7 +739,6 @@ pub struct Group {
     pub(crate) groups: Option<ParentGroups>,
     pub(crate) data: Option<Data>,
     pub(crate) connection_options: Option<CustomTreeMap<ConnectionOptions>>,
-    pub(crate) defaults: Option<Arc<Defaults>>,
 }
 
 impl Group {
@@ -802,9 +777,6 @@ impl Group {
                 builder = builder.connection_options(name.to_string(), options.clone());
             }
         }
-        if let Some(defaults) = self.defaults.as_ref() {
-            builder = builder.defaults(defaults);
-        }
         builder
     }
 
@@ -840,9 +812,6 @@ impl Group {
         self.connection_options.as_ref()
     }
 
-    pub fn defaults(&self) -> Option<&Defaults> {
-        self.defaults.as_deref()
-    }
 }
 
 /// Builder for constructing `Group` entries.
@@ -857,7 +826,6 @@ pub struct GroupBuilder {
     groups: Option<ParentGroups>,
     data: Option<Data>,
     connection_options: Option<CustomTreeMap<ConnectionOptions>>,
-    defaults: Option<Arc<Defaults>>,
 }
 
 impl BaseBuilderHost for GroupBuilder {
@@ -998,20 +966,6 @@ impl BaseBuilderHost for GroupBuilder {
         self
     }
 
-    /// Sets the defaults to apply to this group.
-    ///
-    /// # Parameters
-    ///
-    /// * `defaults` - A reference to an `Arc<Defaults>` containing default values to apply.
-    ///
-    /// # Returns
-    ///
-    /// Returns `Self` with the defaults field updated, allowing for method chaining.
-    /// The `Arc` is cloned to share ownership of the defaults.
-    fn defaults(mut self, defaults: &Arc<Defaults>) -> Self {
-        self.defaults = Some(Arc::clone(defaults));
-        self
-    }
     fn build(self) -> Group {
         Group {
             hostname: self.hostname,
@@ -1022,7 +976,6 @@ impl BaseBuilderHost for GroupBuilder {
             groups: self.groups,
             data: self.data,
             connection_options: self.connection_options,
-            defaults: self.defaults,
         }
     }
 }
@@ -1038,7 +991,6 @@ impl GroupBuilder {
             groups: None,
             data: None,
             connection_options: None,
-            defaults: None,
         }
     }
 }
@@ -1431,11 +1383,6 @@ impl Inventory {
             None => host.clone(),
         };
 
-        if let Some(defaults) = transformed.defaults.as_ref() {
-            let transformed_defaults = self.transform_defaults_value(defaults);
-            transformed.defaults = Some(Arc::new(transformed_defaults));
-        }
-
         transformed
     }
 
@@ -1446,11 +1393,6 @@ impl Inventory {
             }
             None => group.clone(),
         };
-
-        if let Some(defaults) = transformed.defaults.as_ref() {
-            let transformed_defaults = self.transform_defaults_value(defaults);
-            transformed.defaults = Some(Arc::new(transformed_defaults));
-        }
 
         transformed
     }
@@ -1717,7 +1659,6 @@ mod tests {
         assert_eq!(host.groups, None);
         assert_eq!(host.data, None);
         assert_eq!(host.connection_options, None);
-        assert_eq!(host.defaults.as_ref(), None);
     }
 
     #[test]

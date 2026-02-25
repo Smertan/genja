@@ -31,7 +31,6 @@ fn inventory_can_model_mock_network_devices() {
         "global_retries": 2
     }))
     .expect("defaults should deserialize");
-    let defaults_arc = Arc::new(defaults.clone());
 
     let transform_options: TransformFunctionOptions =
         serde_json::from_value(json!({ "strip_domain": true, "sanitize_credentials": true }))
@@ -61,7 +60,6 @@ fn inventory_can_model_mock_network_devices() {
         .groups(router_groups)
         .data(router_data)
         .connection_options("netconf", router_connection)
-        .defaults(&defaults_arc)
         .build();
     hosts.add_host("router1.lab", router);
 
@@ -87,7 +85,6 @@ fn inventory_can_model_mock_network_devices() {
         .groups(switch_groups)
         .data(switch_data)
         .connection_options("netconf", switch_connection)
-        .defaults(&defaults_arc)
         .build();
     hosts.add_host("switch1.lab", switch);
 
@@ -107,11 +104,6 @@ fn inventory_can_model_mock_network_devices() {
     assert_eq!(router.hostname(), Some("router1.lab"));
     assert_eq!(router.groups(), Some(&router_groups_snapshot));
     assert_eq!(router.data(), Some(&router_data_snapshot));
-    assert_eq!(
-        router.defaults(),
-        Some(defaults_arc.as_ref()),
-        "router should inherit defaults"
-    );
     assert_eq!(
         router
             .connection_options()
