@@ -1,7 +1,8 @@
 use genja_core::inventory::{
-    BaseBuilderHost, ConnectionKey, ConnectionManager, ConnectionOptions, Data, Defaults, Host,
-    Hosts, Inventory, ParentGroups, TransformFunctionOptions,
+    BaseBuilderHost, ConnectionKey, ConnectionManager, ConnectionOptions, Data, Defaults, Extras,
+    Group, Groups, Host, Hosts, Inventory, ParentGroups, TransformFunctionOptions,
 };
+// use genja_core::CustomTreeMap;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -130,6 +131,12 @@ fn inventory_can_model_mock_network_devices() {
         inventory.transform_function_options(),
         Some(&transform_options)
     );
+
+    let resolved = inventory
+        .resolve_connection_params("router1.lab", "netconf")
+        .expect("resolved params should exist");
+    assert_eq!(resolved.hostname, "192.0.2.1");
+    assert_eq!(resolved.port, Some(22));
 }
 
 #[test]
@@ -161,6 +168,74 @@ fn inventory_transform_translates_obfuscated_ips() {
             .and_then(|value| value.as_str()),
         Some("10.0.0.2")
     );
+}
+
+#[test]
+fn connection_options_precedence_defaults_groups_hosts() {
+    let defaults: Defaults = serde_json::from_value(json!({
+        "hostname": "default-host",
+        "port": 1001,
+        "connection_options": {
+            "netconf": {
+                "hostname": "default-netconf",
+                "port": 2001,
+                "username": "default-user",
+                "extras": { "tier": "defaults" }
+            }
+        }
+    }))
+    .expect("defaults should deserialize");
+
+    let mut group_netconf = ConnectionOptions::new();
+    group_netconf.hostname = Some("group-netconf".into());
+    group_netconf.username = Some("group-user".into());
+    group_netconf.extras = Some(Extras::new(json!({ "tier": "group" })));
+
+    let group = Group::builder()
+        .hostname("group-host")
+        .port(1002)
+        .connection_options("netconf", group_netconf)
+        .build();
+
+    let mut groups = Groups::new();
+    groups.add_group("core", group);
+
+    let mut host_netconf = ConnectionOptions::new();
+    host_netconf.hostname = Some("host-netconf".into());
+    host_netconf.port = Some(2003);
+    host_netconf.extras = Some(Extras::new(json!({ "tier": "host" })));
+
+    let host = Host::builder()
+        .hostname("host-host")
+        .port(1003)
+        .groups({
+            let mut pg = ParentGroups::new();
+            pg.push("core".to_string());
+            pg
+        })
+        .connection_options("netconf", host_netconf)
+        .build();
+
+    let mut hosts = Hosts::new();
+    hosts.add_host("router1.lab", host);
+
+    let inventory = Inventory::builder()
+        .hosts(hosts)
+        .groups(groups)
+        .defaults(defaults)
+        .connections(ConnectionManager::default())
+        .build();
+
+    let resolved = inventory
+        .resolve_connection_params("router1.lab", "netconf")
+        .expect("resolved params should exist");
+
+    assert_eq!(resolved.hostname, "host-netconf");
+    assert_eq!(resolved.port, Some(2003));
+    assert_eq!(resolved.username.as_deref(), Some("group-user"));
+    assert_eq!(resolved.password, None);
+    assert_eq!(resolved.platform, None);
+    assert_eq!(resolved.extras, Some(Extras::new(json!({ "tier": "host" }))));
 }
 
 #[test]

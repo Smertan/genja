@@ -154,6 +154,12 @@ impl DerefTarget for Extras {
 )]
 pub struct Extras(serde_json::Value);
 
+impl Extras {
+    pub fn new(value: serde_json::Value) -> Self {
+        Extras(value)
+    }
+}
+
 impl DerefTarget for ParentGroups {
     type Target = Vec<String>;
 }
@@ -448,9 +454,6 @@ pub struct Host {
     pub(crate) groups: Option<ParentGroups>,
     pub(crate) data: Option<Data>,
     pub(crate) connection_options: Option<CustomTreeMap<ConnectionOptions>>,
-    #[serde(skip)]
-    #[schemars(skip)]
-    resolved_connection_params: CustomTreeMap<ResolvedConnectionParams>,
 }
 
 impl Host {
@@ -464,7 +467,6 @@ impl Host {
             groups: None,
             data: None,
             connection_options: None,
-            resolved_connection_params: CustomTreeMap::new(),
         }
     }
     pub fn builder() -> HostBuilder {
@@ -534,54 +536,40 @@ impl Host {
         self.connection_options.as_ref()
     }
 
-    pub fn resolve_connection_params(
-        &mut self,
-        connection_type: &str,
-    ) -> &ResolvedConnectionParams {
-        if self
-            .resolved_connection_params
-            .get(connection_type)
-            .is_none()
-        {
-            let mut resolved = ResolvedConnectionParams {
-                hostname: self.hostname.clone().unwrap_or_default(),
-                port: self.port,
-                username: self.username.clone(),
-                password: self.password.clone(),
-                platform: self.platform.clone(),
-                extras: None,
-            };
+    pub fn resolve_connection_params(&self, connection_type: &str) -> ResolvedConnectionParams {
+        let mut resolved = ResolvedConnectionParams {
+            hostname: self.hostname.clone().unwrap_or_default(),
+            port: self.port,
+            username: self.username.clone(),
+            password: self.password.clone(),
+            platform: self.platform.clone(),
+            extras: None,
+        };
 
-            if let Some(options_map) = &self.connection_options {
-                if let Some(options) = options_map.get(connection_type) {
-                    if let Some(hostname) = options.hostname.clone() {
-                        resolved.hostname = hostname;
-                    }
-                    if options.port.is_some() {
-                        resolved.port = options.port;
-                    }
-                    if options.username.is_some() {
-                        resolved.username = options.username.clone();
-                    }
-                    if options.password.is_some() {
-                        resolved.password = options.password.clone();
-                    }
-                    if options.platform.is_some() {
-                        resolved.platform = options.platform.clone();
-                    }
-                    if options.extras.is_some() {
-                        resolved.extras = options.extras.clone();
-                    }
+        if let Some(options_map) = &self.connection_options {
+            if let Some(options) = options_map.get(connection_type) {
+                if let Some(hostname) = options.hostname.clone() {
+                    resolved.hostname = hostname;
+                }
+                if options.port.is_some() {
+                    resolved.port = options.port;
+                }
+                if options.username.is_some() {
+                    resolved.username = options.username.clone();
+                }
+                if options.password.is_some() {
+                    resolved.password = options.password.clone();
+                }
+                if options.platform.is_some() {
+                    resolved.platform = options.platform.clone();
+                }
+                if options.extras.is_some() {
+                    resolved.extras = options.extras.clone();
                 }
             }
-
-            self.resolved_connection_params
-                .insert(connection_type.to_string(), resolved);
         }
 
-        self.resolved_connection_params
-            .get(connection_type)
-            .expect("resolved params should be present after insertion")
+        resolved
     }
 }
 
@@ -687,7 +675,6 @@ impl BaseBuilderHost for HostBuilder {
             groups: self.groups,
             data: self.data,
             connection_options: self.connection_options,
-            resolved_connection_params: CustomTreeMap::new(),
         }
     }
 }
@@ -1377,8 +1364,81 @@ impl Inventory {
         &self.connections
     }
 
+    /// Resolve a host by applying defaults and groups in priority order:
+    /// defaults < groups < host.
+    pub fn resolve_host(&self, name: &str) -> Option<Host> {
+        let host = self.hosts.get(name)?;
+        let mut resolved = Host::new();
+
+        if let Some(defaults) = self.defaults.as_ref() {
+            merge_defaults_into_host(&mut resolved, defaults);
+        }
+
+        let mut group_stack = std::collections::HashSet::new();
+        let mut group_cache = std::collections::HashMap::new();
+        if let Some(groups) = host.groups.as_ref() {
+            for group_name in groups.iter() {
+                if let Some(group) =
+                    self.resolve_group_internal(group_name, &mut group_stack, &mut group_cache)
+                {
+                    merge_group_into_host(&mut resolved, &group);
+                }
+            }
+        }
+
+        merge_host_into_host(&mut resolved, host);
+
+        Some(self.transform_host_value(&resolved))
+    }
+
+    /// Resolve connection parameters using defaults < groups < host, with
+    /// connection options taking precedence over base fields.
+    pub fn resolve_connection_params(
+        &self,
+        name: &str,
+        connection_type: &str,
+    ) -> Option<ResolvedConnectionParams> {
+        let host = self.resolve_host(name)?;
+        Some(host.resolve_connection_params(connection_type))
+    }
+
+    /// No-op; transforms are applied lazily on access.
+    pub fn apply_transform(&self) {}
+
+    fn resolve_group_internal(
+        &self,
+        name: &str,
+        stack: &mut std::collections::HashSet<String>,
+        memo: &mut std::collections::HashMap<String, Group>,
+    ) -> Option<Group> {
+        if let Some(cached) = memo.get(name) {
+            return Some(cached.clone());
+        }
+
+        if !stack.insert(name.to_string()) {
+            return None;
+        }
+
+        let group = self.groups.as_ref()?.get(name)?;
+        let mut resolved = empty_group();
+
+        if let Some(parent_groups) = group.groups.as_ref() {
+            for parent in parent_groups.iter() {
+                if let Some(parent_group) = self.resolve_group_internal(parent, stack, memo) {
+                    merge_group_into_group(&mut resolved, &parent_group);
+                }
+            }
+        }
+
+        merge_group_into_group(&mut resolved, group);
+
+        stack.remove(name);
+        memo.insert(name.to_string(), resolved.clone());
+        Some(resolved)
+    }
+
     fn transform_host_value(&self, host: &Host) -> Host {
-        let mut transformed = match &self.transform_function {
+        let transformed = match &self.transform_function {
             Some(transform) => transform.transform_host(host, self.transform_function_options.as_ref()),
             None => host.clone(),
         };
@@ -1387,7 +1447,7 @@ impl Inventory {
     }
 
     fn transform_group_value(&self, group: &Group) -> Group {
-        let mut transformed = match &self.transform_function {
+        let transformed = match &self.transform_function {
             Some(transform) => {
                 transform.transform_group(group, self.transform_function_options.as_ref())
             }
@@ -1424,6 +1484,134 @@ impl Inventory {
             }
             None => defaults.clone(),
         }
+    }
+}
+
+fn empty_group() -> Group {
+    Group {
+        hostname: None,
+        port: None,
+        username: None,
+        password: None,
+        platform: None,
+        groups: None,
+        data: None,
+        connection_options: None,
+    }
+}
+
+fn merge_defaults_into_host(target: &mut Host, defaults: &Defaults) {
+    merge_option(&mut target.hostname, &defaults.hostname);
+    merge_option(&mut target.port, &defaults.port);
+    merge_option(&mut target.username, &defaults.username);
+    merge_option(&mut target.password, &defaults.password);
+    merge_option(&mut target.platform, &defaults.platform);
+    merge_data(&mut target.data, &defaults.data);
+    merge_connection_options(&mut target.connection_options, &defaults.connection_options);
+}
+
+fn merge_group_into_host(target: &mut Host, group: &Group) {
+    merge_option(&mut target.hostname, &group.hostname);
+    merge_option(&mut target.port, &group.port);
+    merge_option(&mut target.username, &group.username);
+    merge_option(&mut target.password, &group.password);
+    merge_option(&mut target.platform, &group.platform);
+    merge_data(&mut target.data, &group.data);
+    merge_connection_options(&mut target.connection_options, &group.connection_options);
+}
+
+fn merge_host_into_host(target: &mut Host, host: &Host) {
+    merge_option(&mut target.hostname, &host.hostname);
+    merge_option(&mut target.port, &host.port);
+    merge_option(&mut target.username, &host.username);
+    merge_option(&mut target.password, &host.password);
+    merge_option(&mut target.platform, &host.platform);
+    merge_data(&mut target.data, &host.data);
+    merge_connection_options(&mut target.connection_options, &host.connection_options);
+    if host.groups.is_some() {
+        target.groups = host.groups.clone();
+    }
+}
+
+fn merge_group_into_group(target: &mut Group, group: &Group) {
+    merge_option(&mut target.hostname, &group.hostname);
+    merge_option(&mut target.port, &group.port);
+    merge_option(&mut target.username, &group.username);
+    merge_option(&mut target.password, &group.password);
+    merge_option(&mut target.platform, &group.platform);
+    merge_data(&mut target.data, &group.data);
+    merge_connection_options(&mut target.connection_options, &group.connection_options);
+    if group.groups.is_some() {
+        target.groups = group.groups.clone();
+    }
+}
+
+fn merge_option<T: Clone>(target: &mut Option<T>, source: &Option<T>) {
+    if let Some(value) = source.as_ref() {
+        *target = Some(value.clone());
+    }
+}
+
+fn merge_data(target: &mut Option<Data>, source: &Option<Data>) {
+    match (target.as_mut(), source.as_ref()) {
+        (Some(target_data), Some(source_data)) => {
+            if let (Some(target_obj), Some(source_obj)) =
+                (target_data.as_object_mut(), source_data.as_object())
+            {
+                for (key, value) in source_obj {
+                    target_obj.insert(key.clone(), value.clone());
+                }
+            } else {
+                *target = Some(source_data.clone());
+            }
+        }
+        (None, Some(source_data)) => {
+            *target = Some(source_data.clone());
+        }
+        _ => {}
+    }
+}
+
+fn merge_connection_options(
+    target: &mut Option<CustomTreeMap<ConnectionOptions>>,
+    source: &Option<CustomTreeMap<ConnectionOptions>>,
+) {
+    let Some(source_map) = source.as_ref() else {
+        return;
+    };
+
+    if target.is_none() {
+        *target = Some(CustomTreeMap::new());
+    }
+
+    let target_map = target.as_mut().expect("target map initialized");
+    for (name, options) in source_map.iter() {
+        if let Some(existing) = target_map.get_mut(name.as_str()) {
+            merge_connection_options_fields(existing, options);
+        } else {
+            target_map.insert(name.as_str(), options.clone());
+        }
+    }
+}
+
+fn merge_connection_options_fields(target: &mut ConnectionOptions, source: &ConnectionOptions) {
+    if source.hostname.is_some() {
+        target.hostname = source.hostname.clone();
+    }
+    if source.port.is_some() {
+        target.port = source.port;
+    }
+    if source.username.is_some() {
+        target.username = source.username.clone();
+    }
+    if source.password.is_some() {
+        target.password = source.password.clone();
+    }
+    if source.platform.is_some() {
+        target.platform = source.platform.clone();
+    }
+    if source.extras.is_some() {
+        target.extras = source.extras.clone();
     }
 }
 
