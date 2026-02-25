@@ -1386,6 +1386,12 @@ pub struct Inventory {
     #[serde(skip)]
     #[schemars(skip)]
     connections: Arc<ConnectionManager>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    host_cache: DashMap<NatString, Host>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    group_cache: DashMap<NatString, Group>,
 }
 
 impl BaseMethods for Inventory {}
@@ -1449,6 +1455,26 @@ impl Inventory {
         transformed
     }
 
+    fn cached_host_value(&self, key: &NatString, host: &Host) -> Host {
+        if let Some(entry) = self.host_cache.get(key) {
+            return entry.value().clone();
+        }
+
+        let transformed = self.transform_host_value(host);
+        self.host_cache.insert(key.clone(), transformed.clone());
+        transformed
+    }
+
+    fn cached_group_value(&self, key: &NatString, group: &Group) -> Group {
+        if let Some(entry) = self.group_cache.get(key) {
+            return entry.value().clone();
+        }
+
+        let transformed = self.transform_group_value(group);
+        self.group_cache.insert(key.clone(), transformed.clone());
+        transformed
+    }
+
     fn transform_defaults_value(&self, defaults: &Defaults) -> Defaults {
         match &self.transform_function {
             Some(transform) => {
@@ -1477,17 +1503,22 @@ impl<'a> HostsView<'a> {
     }
 
     pub fn get(&self, name: &str) -> Option<Host> {
+        let key = NatString::new(name.to_string());
+        if let Some(entry) = self.inventory.host_cache.get(&key) {
+            return Some(entry.value().clone());
+        }
+
         self.inventory
             .hosts
             .get(name)
-            .map(|host| self.inventory.transform_host_value(host))
+            .map(|host| self.inventory.cached_host_value(&key, host))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&'a NatString, Host)> {
         self.inventory
             .hosts
             .iter()
-            .map(|(id, host)| (id, self.inventory.transform_host_value(host)))
+            .map(|(id, host)| (id, self.inventory.cached_host_value(id, host)))
     }
 }
 
@@ -1510,15 +1541,20 @@ impl<'a> GroupsView<'a> {
     }
 
     pub fn get(&self, name: &str) -> Option<Group> {
+        let key = NatString::new(name.to_string());
+        if let Some(entry) = self.inventory.group_cache.get(&key) {
+            return Some(entry.value().clone());
+        }
+
         self.groups
             .get(name)
-            .map(|group| self.inventory.transform_group_value(group))
+            .map(|group| self.inventory.cached_group_value(&key, group))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&'a NatString, Group)> {
         self.groups
             .iter()
-            .map(|(id, group)| (id, self.inventory.transform_group_value(group)))
+            .map(|(id, group)| (id, self.inventory.cached_group_value(id, group)))
     }
 }
 
@@ -1532,6 +1568,8 @@ impl Default for Inventory {
             transform_function: None,
             transform_function_options: None,
             connections: Arc::new(ConnectionManager::default()),
+            host_cache: DashMap::new(),
+            group_cache: DashMap::new(),
         }
     }
 }
@@ -1626,6 +1664,8 @@ impl InventoryBuilder {
             connections: self
                 .connections
                 .unwrap_or_else(|| Arc::new(ConnectionManager::default())),
+            host_cache: DashMap::new(),
+            group_cache: DashMap::new(),
         }
     }
 }

@@ -33,7 +33,7 @@ pub trait DerefTarget {
 /// assert!(s1 < s2);
 /// // s1 < s2 in natural order (2 < 10)
 /// ```
-#[derive(PartialEq, Eq, Clone, JsonSchema, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, Hash, JsonSchema, Serialize, Deserialize)]
 pub struct NatString(String);
 
 impl Deref for NatString {
