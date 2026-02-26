@@ -533,6 +533,70 @@ impl Host {
         self.connection_options.as_ref()
     }
 
+    /// Resolves connection parameters for a specific connection type by merging host-level
+    /// settings with connection-specific overrides.
+    ///
+    /// This method uses only the fields on this `Host`. It does not apply defaults or group
+    /// inheritance. To include those, use `Inventory::resolve_connection_params` (see the second
+    /// example below).
+    ///
+    /// This method creates a complete set of connection parameters by starting with the host's
+    /// base connection fields (hostname, port, username, password, platform) and then applying
+    /// any connection-specific overrides from the `connection_options` map. Connection-specific
+    /// options take precedence over base host fields.
+    ///
+    /// # Parameters
+    ///
+    /// * `connection_type` - A string identifying the connection type to resolve parameters for
+    ///   (e.g., "ssh", "netconf", "http"). This is used as the key to lookup connection-specific
+    ///   options in the host's `connection_options` map.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `ResolvedConnectionParams` struct containing the fully resolved connection
+    /// parameters. If the host has connection-specific options for the given `connection_type`,
+    /// those values override the corresponding base host fields. Fields not specified in either
+    /// location will be `None` (except hostname, which defaults to an empty string if not set).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Host, ConnectionOptions, BaseBuilderHost};
+    /// let mut options = ConnectionOptions::new();
+    /// options.port = Some(830);
+    ///
+    /// let host = Host::builder()
+    ///     .hostname("10.0.0.1")
+    ///     .port(22)
+    ///     .connection_options("netconf", options)
+    ///     .build();
+    ///
+    /// let params = host.resolve_connection_params("netconf");
+    /// assert_eq!(params.hostname, "10.0.0.1");
+    /// assert_eq!(params.port, Some(830)); // Connection-specific port overrides base port
+    /// ```
+    ///
+    /// The following example shows how to resolve parameters through `Inventory`,
+    /// which applies defaults and group inheritance before connection-specific overrides.
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Host, Hosts, Inventory, ConnectionOptions, BaseBuilderHost};
+    /// let mut hosts = Hosts::new();
+    /// let mut options = ConnectionOptions::new();
+    /// options.port = Some(830);
+    /// let host = Host::builder()
+    ///     .hostname("10.0.0.1")
+    ///     .port(22)
+    ///     .connection_options("netconf", options)
+    ///     .build();
+    /// hosts.add_host("router1", host);
+    /// let inventory = Inventory::builder().hosts(hosts).build();
+    ///
+    /// let params = inventory
+    ///     .resolve_connection_params("router1", "netconf")
+    ///     .expect("resolved params");
+    /// assert_eq!(params.port, Some(830));
+    /// ```
     pub fn resolve_connection_params(&self, connection_type: &str) -> ResolvedConnectionParams {
         let mut resolved = ResolvedConnectionParams {
             hostname: self.hostname.clone().unwrap_or_default(),
@@ -1190,6 +1254,12 @@ impl DerefTarget for TransformFunctionOptions {
     type Target = serde_json::Value;
 }
 
+impl TransformFunctionOptions {
+    pub fn new(options: serde_json::Value) -> Self {
+        TransformFunctionOptions(options)
+    }
+}
+
 pub trait Connection
 where
     Self: Send + Sync + fmt::Debug,
@@ -1330,14 +1400,98 @@ pub struct Inventory {
 impl BaseMethods for Inventory {}
 
 impl Inventory {
+    /// Creates a new builder for constructing an `Inventory` instance.
+    ///
+    /// This method provides a fluent interface for building an `Inventory` with custom
+    /// configuration. The builder allows you to set optional hosts, groups, defaults,
+    /// transform functions, and connection managers before calling `build()` to create
+    /// the final inventory.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `InventoryBuilder` instance with all fields initialized to `None`.
+    /// Use the builder's methods to configure the inventory before calling `build()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .hosts(hosts)
+    ///     .build();
+    ///
+    /// assert_eq!(inventory.hosts().len(), 1);
+    /// ```
     pub fn builder() -> InventoryBuilder {
         InventoryBuilder::new()
     }
 
+    /// Returns a view of the inventory's hosts collection with transform functions applied.
+    ///
+    /// This method provides access to the inventory's hosts through a `HostsView` wrapper
+    /// that applies any configured transform function when accessing individual hosts.
+    /// The view provides read-only access to the hosts and caches transformed results
+    /// for improved performance on subsequent accesses.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `HostsView` containing a view of the hosts collection. The view allows
+    /// iteration over hosts and lookup by name, with transforms applied lazily on access.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .hosts(hosts)
+    ///     .build();
+    ///
+    /// let hosts_view = inventory.hosts();
+    /// assert_eq!(hosts_view.len(), 1);
+    /// if let Some(host) = hosts_view.get("router1") {
+    ///     assert_eq!(host.hostname(), Some("10.0.0.1"));
+    /// }
+    /// ```
     pub fn hosts(&self) -> HostsView<'_> {
         HostsView { inventory: self }
     }
 
+    /// Returns a view of the inventory's groups collection with transform functions applied.
+    ///
+    /// This method provides access to the inventory's groups through a `GroupsView` wrapper
+    /// that applies any configured transform function when accessing individual groups.
+    /// The view provides read-only access to the groups and caches transformed results
+    /// for improved performance on subsequent accesses.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(GroupsView)` containing a view of the groups collection if groups
+    /// are configured in the inventory. Returns `None` if no groups are present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Groups, Group, BaseBuilderHost};
+    /// let mut groups = Groups::new();
+    /// groups.add_group("core", Group::builder().platform("linux").build());
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .groups(groups)
+    ///     .build();
+    ///
+    /// if let Some(groups_view) = inventory.groups() {
+    ///     assert_eq!(groups_view.len(), 1);
+    ///     if let Some(group) = groups_view.get("core") {
+    ///         assert_eq!(group.platform(), Some("linux"));
+    ///     }
+    /// }
+    /// ```
     pub fn groups(&self) -> Option<GroupsView<'_>> {
         self.groups.as_ref().map(|groups| GroupsView {
             inventory: self,
@@ -1345,12 +1499,71 @@ impl Inventory {
         })
     }
 
+    /// Returns the inventory's default configuration after applying any configured transform function.
+    ///
+    /// This method provides access to the inventory-wide defaults that apply to all hosts and groups.
+    /// If a transform function is configured on the inventory, it will be applied to the defaults
+    /// before returning them. The transform allows for dynamic modification of default values based
+    /// on custom logic or external configuration.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(Defaults)` containing the default configuration (potentially transformed) if
+    /// defaults are configured in the inventory. Returns `None` if no defaults are set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Defaults};
+    /// let defaults = Defaults::builder()
+    ///     .username("admin")
+    ///     .port(22)
+    ///     .build();
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .defaults(defaults)
+    ///     .build();
+    ///
+    /// if let Some(defaults) = inventory.defaults() {
+    ///     assert_eq!(defaults.username(), Some("admin"));
+    ///     assert_eq!(defaults.port(), Some(22));
+    /// }
+    /// ```
     pub fn defaults(&self) -> Option<Defaults> {
         self.defaults
             .as_ref()
             .map(|defaults| self.transform_defaults_value(defaults))
     }
 
+    /// Returns a reference to the transform function options configured for this inventory.
+    ///
+    /// Transform function options provide additional configuration data that is passed to
+    /// the transform function when it processes hosts, groups, or defaults. These options
+    /// allow for dynamic customization of the transform behavior without modifying the
+    /// transform function itself.
+    ///
+    /// The options are stored as a `TransformFunctionOptions` wrapper around a JSON value,
+    /// allowing for flexible, schema-free configuration data.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(&TransformFunctionOptions)` containing a reference to the configured
+    /// options if they are set. Returns `None` if no transform function options have been
+    /// configured for this inventory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, TransformFunctionOptions};
+    /// let options = TransformFunctionOptions::new(serde_json::json!({"key": "value"}));
+    /// let inventory = Inventory::builder()
+    ///     .transform_function_options(options)
+    ///     .build();
+    ///
+    /// if let Some(opts) = inventory.transform_function_options() {
+    ///     println!("Transform options configured");
+    /// }
+    /// ```
     pub fn transform_function_options(&self) -> Option<&TransformFunctionOptions> {
         self.transform_function_options.as_ref()
     }
@@ -1369,8 +1582,42 @@ impl Inventory {
         self.resolved_params_cache.len()
     }
 
-    /// Resolve a host by applying defaults and groups in priority order:
-    /// defaults < groups < host.
+    /// Resolves a host by applying defaults, group settings, and host-specific configuration.
+    ///
+    /// This method performs hierarchical resolution of host configuration by merging settings
+    /// from multiple sources in priority order. The resolution follows this sequence:
+    ///
+    /// 1. Start with an empty host configuration
+    /// 2. Apply inventory defaults (if present)
+    /// 3. Apply parent group settings recursively (in order of group declaration)
+    /// 4. Apply host-specific settings
+    /// 5. Apply transform function (if configured)
+    ///
+    /// The result is cached to improve performance on subsequent calls for the same host.
+    /// Group resolution handles inheritance chains and prevents circular references.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The name of the host to resolve. This should match a key in the inventory's
+    ///   hosts collection. The name is used for both lookup and cache key generation.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(Host)` containing the fully resolved host configuration if the host exists
+    /// in the inventory. Returns `None` if the host is not found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Host, Hosts, BaseBuilderHost};
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+    /// let inventory = Inventory::builder().hosts(hosts).build();
+    ///
+    /// if let Some(resolved) = inventory.resolve_host("router1") {
+    ///     println!("Resolved hostname: {:?}", resolved.hostname());
+    /// }
+    /// ```
     pub fn resolve_host(&self, name: &str) -> Option<Host> {
         let key = NatString::new(name.to_string());
         if let Some(entry) = self.resolved_host_cache.get(&key) {
@@ -1499,6 +1746,36 @@ impl Inventory {
         Some(resolved)
     }
 
+    /// Recursively resolves a group by applying parent group settings and handling inheritance chains.
+    ///
+    /// This internal method performs hierarchical resolution of group configuration by merging settings
+    /// from parent groups. It uses memoization to cache resolved groups and a stack to detect and prevent
+    /// circular references in the group hierarchy.
+    ///
+    /// The resolution process:
+    /// 1. Checks the memo cache for previously resolved groups
+    /// 2. Detects circular references using the stack
+    /// 3. Recursively resolves parent groups
+    /// 4. Merges parent group settings into the current group
+    /// 5. Caches the result for future lookups
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The name of the group to resolve. This should match a key in the inventory's
+    ///   groups collection.
+    /// * `stack` - A mutable reference to a HashSet tracking the current resolution path. Used to
+    ///   detect circular references in the group hierarchy. Groups already in the stack indicate
+    ///   a circular dependency and will cause the method to return `None`.
+    /// * `memo` - A mutable reference to a HashMap caching previously resolved groups. This improves
+    ///   performance by avoiding redundant resolution of the same group during recursive traversal.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(Group)` containing the fully resolved group configuration with all parent
+    /// settings merged. Returns `None` if:
+    /// - The group does not exist in the inventory
+    /// - A circular reference is detected in the group hierarchy
+    /// - The inventory has no groups collection
     fn resolve_group_internal(
         &self,
         name: &str,
