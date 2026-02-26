@@ -115,7 +115,7 @@ impl Genja {
         }
     }
 
-    pub fn iter_hosts(&self) -> impl Iterator<Item = Host> + use<'_>{
+    pub fn iter_hosts(&self) -> impl Iterator<Item = Host> + use<'_> {
         self.host_ids
             .iter()
             .filter_map(|id| self.inventory.hosts().get(id))

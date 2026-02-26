@@ -405,10 +405,7 @@ impl DefaultsBuilder {
         self
     }
 
-    pub fn connection_options(
-        mut self,
-        options: CustomTreeMap<ConnectionOptions>,
-    ) -> Self {
+    pub fn connection_options(mut self, options: CustomTreeMap<ConnectionOptions>) -> Self {
         self.connection_options = Some(options);
         self
     }
@@ -798,7 +795,6 @@ impl Group {
     pub fn connection_options(&self) -> Option<&CustomTreeMap<ConnectionOptions>> {
         self.connection_options.as_ref()
     }
-
 }
 
 /// Builder for constructing `Group` entries.
@@ -1105,19 +1101,11 @@ impl Default for Groups {
 }
 
 pub trait Transform: Send + Sync {
-    fn transform_host(
-        &self,
-        host: &Host,
-        _options: Option<&TransformFunctionOptions>,
-    ) -> Host {
+    fn transform_host(&self, host: &Host, _options: Option<&TransformFunctionOptions>) -> Host {
         host.clone()
     }
 
-    fn transform_group(
-        &self,
-        group: &Group,
-        _options: Option<&TransformFunctionOptions>,
-    ) -> Group {
+    fn transform_group(&self, group: &Group, _options: Option<&TransformFunctionOptions>) -> Group {
         group.clone()
     }
 
@@ -1331,6 +1319,12 @@ pub struct Inventory {
     #[serde(skip)]
     #[schemars(skip)]
     group_cache: DashMap<NatString, Group>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    resolved_host_cache: DashMap<NatString, Host>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    resolved_params_cache: DashMap<(NatString, String), ResolvedConnectionParams>,
 }
 
 impl BaseMethods for Inventory {}
@@ -1345,9 +1339,10 @@ impl Inventory {
     }
 
     pub fn groups(&self) -> Option<GroupsView<'_>> {
-        self.groups
-            .as_ref()
-            .map(|groups| GroupsView { inventory: self, groups })
+        self.groups.as_ref().map(|groups| GroupsView {
+            inventory: self,
+            groups,
+        })
     }
 
     pub fn defaults(&self) -> Option<Defaults> {
@@ -1364,9 +1359,24 @@ impl Inventory {
         &self.connections
     }
 
+    #[cfg(test)]
+    pub(crate) fn resolved_host_cache_len(&self) -> usize {
+        self.resolved_host_cache.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resolved_params_cache_len(&self) -> usize {
+        self.resolved_params_cache.len()
+    }
+
     /// Resolve a host by applying defaults and groups in priority order:
     /// defaults < groups < host.
     pub fn resolve_host(&self, name: &str) -> Option<Host> {
+        let key = NatString::new(name.to_string());
+        if let Some(entry) = self.resolved_host_cache.get(&key) {
+            return Some(entry.value().clone());
+        }
+
         let host = self.hosts.get(name)?;
         let mut resolved = Host::new();
 
@@ -1388,22 +1398,106 @@ impl Inventory {
 
         merge_host_into_host(&mut resolved, host);
 
-        Some(self.transform_host_value(&resolved))
+        let resolved = self.transform_host_value(&resolved);
+        self.resolved_host_cache.insert(key, resolved.clone());
+        Some(resolved)
     }
 
-    /// Resolve connection parameters using defaults < groups < host, with
-    /// connection options taking precedence over base fields.
+    /// Resolves connection parameters for a specific host and connection type.
+    ///
+    /// This method combines defaults, group settings, and host-specific configuration
+    /// to produce a complete set of connection parameters. The resolution follows a
+    /// hierarchical priority order where each level can have both base fields and
+    /// connection-specific overrides:
+    ///
+    /// **Priority Order (lowest to highest):**
+    /// 1. `defaults` base fields
+    /// 2. `defaults.connection_options[connection_type]`
+    /// 3. `groups` base fields (applied in order for each parent group)
+    /// 4. `groups.connection_options[connection_type]` (applied in order for each parent group)
+    /// 5. `host` base fields
+    /// 6. `host.connection_options[connection_type]`
+    ///
+    /// At each level, connection-specific options override the base fields for that level.
+    /// The final result is a complete set of connection parameters with all fields resolved
+    /// according to this cascading priority system.
+    ///
+    /// Results are cached to improve performance on subsequent calls with the same parameters.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The name of the host to resolve connection parameters for. This should
+    ///   match a key in the inventory's hosts collection.
+    /// * `connection_type` - The type of connection to resolve parameters for (e.g., "ssh",
+    ///   "netconf", "http"). This determines which connection_options entry to apply.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(ResolvedConnectionParams)` containing the fully resolved connection
+    /// parameters if the host exists in the inventory. Returns `None` if the host is not
+    /// found or cannot be resolved.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Host, Hosts, BaseBuilderHost};
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+    /// let inventory = Inventory::builder().hosts(hosts).build();
+    ///
+    /// if let Some(params) = inventory.resolve_connection_params("router1", "ssh") {
+    ///     println!("Hostname: {}", params.hostname);
+    /// }
+    /// ```
+    ///
+    /// # Resolution Example
+    ///
+    /// ```text
+    /// Given:
+    ///   defaults:
+    ///     port: 22
+    ///     connection_options:
+    ///       netconf: { port: 830 }
+    ///
+    ///   groups["cisco"]:
+    ///     port: 2200
+    ///     connection_options:
+    ///       netconf: { port: 831 }
+    ///
+    ///   host["router1.lab"]:
+    ///     groups: ["cisco"]
+    ///     port: 2201
+    ///     connection_options:
+    ///       netconf: { port: 832 }
+    ///
+    /// Resolution for connection_type "netconf":
+    ///   1. defaults.port = 22
+    ///   2. defaults.connection_options["netconf"].port = 830 (overrides step 1)
+    ///   3. groups["cisco"].port = 2200 (overrides step 2)
+    ///   4. groups["cisco"].connection_options["netconf"].port = 831 (overrides step 3)
+    ///   5. host.port = 2201 (overrides step 4)
+    ///   6. host.connection_options["netconf"].port = 832 (overrides step 5)
+    ///
+    /// Final result: port = 832
+    /// ```
     pub fn resolve_connection_params(
         &self,
         name: &str,
         connection_type: &str,
     ) -> Option<ResolvedConnectionParams> {
-        let host = self.resolve_host(name)?;
-        Some(host.resolve_connection_params(connection_type))
-    }
+        let key = (
+            NatString::new(name.to_string()),
+            connection_type.to_string(),
+        );
+        if let Some(entry) = self.resolved_params_cache.get(&key) {
+            return Some(entry.value().clone());
+        }
 
-    /// No-op; transforms are applied lazily on access.
-    pub fn apply_transform(&self) {}
+        let host = self.resolve_host(name)?;
+        let resolved = host.resolve_connection_params(connection_type);
+        self.resolved_params_cache.insert(key, resolved.clone());
+        Some(resolved)
+    }
 
     fn resolve_group_internal(
         &self,
@@ -1439,7 +1533,9 @@ impl Inventory {
 
     fn transform_host_value(&self, host: &Host) -> Host {
         let transformed = match &self.transform_function {
-            Some(transform) => transform.transform_host(host, self.transform_function_options.as_ref()),
+            Some(transform) => {
+                transform.transform_host(host, self.transform_function_options.as_ref())
+            }
             None => host.clone(),
         };
 
@@ -1688,7 +1784,6 @@ impl<'a> GroupsView<'a> {
     }
 }
 
-
 impl Default for Inventory {
     fn default() -> Self {
         Inventory {
@@ -1700,6 +1795,8 @@ impl Default for Inventory {
             connections: Arc::new(ConnectionManager::default()),
             host_cache: DashMap::new(),
             group_cache: DashMap::new(),
+            resolved_host_cache: DashMap::new(),
+            resolved_params_cache: DashMap::new(),
         }
     }
 }
@@ -1796,6 +1893,8 @@ impl InventoryBuilder {
                 .unwrap_or_else(|| Arc::new(ConnectionManager::default())),
             host_cache: DashMap::new(),
             group_cache: DashMap::new(),
+            resolved_host_cache: DashMap::new(),
+            resolved_params_cache: DashMap::new(),
         }
     }
 }
@@ -1960,6 +2059,41 @@ mod tests {
         assert!(inventory.groups().is_none());
         assert!(inventory.defaults().is_none());
         assert!(inventory.transform_function_options().is_none());
+    }
+
+    #[test]
+    fn resolve_connection_params_uses_cache() {
+        let defaults: Defaults = serde_json::from_value(serde_json::json!({
+            "connection_options": {
+                "netconf": {
+                    "hostname": "default-netconf",
+                    "port": 2001
+                }
+            }
+        }))
+        .expect("defaults should deserialize");
+
+        let mut hosts = Hosts::new();
+        hosts.add_host("router1.lab", Host::builder().hostname("host-host").build());
+
+        let inventory = Inventory::builder()
+            .hosts(hosts)
+            .defaults(defaults)
+            .connections(ConnectionManager::default())
+            .build();
+
+        assert_eq!(inventory.resolved_host_cache_len(), 0);
+        assert_eq!(inventory.resolved_params_cache_len(), 0);
+        let _ = inventory
+            .resolve_connection_params("router1.lab", "netconf")
+            .expect("resolved params should exist");
+        assert_eq!(inventory.resolved_host_cache_len(), 1);
+        assert_eq!(inventory.resolved_params_cache_len(), 1);
+        let _ = inventory
+            .resolve_connection_params("router1.lab", "netconf")
+            .expect("resolved params should exist");
+        assert_eq!(inventory.resolved_host_cache_len(), 1);
+        assert_eq!(inventory.resolved_params_cache_len(), 1);
     }
 
     // TODO: Create a test to verify the Host defaults deserialization

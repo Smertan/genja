@@ -235,7 +235,10 @@ fn connection_options_precedence_defaults_groups_hosts() {
     assert_eq!(resolved.username.as_deref(), Some("group-user"));
     assert_eq!(resolved.password, None);
     assert_eq!(resolved.platform, None);
-    assert_eq!(resolved.extras, Some(Extras::new(json!({ "tier": "host" }))));
+    assert_eq!(
+        resolved.extras,
+        Some(Extras::new(json!({ "tier": "host" })))
+    );
 }
 
 #[test]
