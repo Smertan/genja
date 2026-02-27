@@ -80,6 +80,12 @@ impl fmt::Debug for NatString {
         write!(f, "{}", self.0)
     }
 }
+
+impl fmt::Display for NatString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 impl Ord for NatString {
     fn cmp(&self, other: &Self) -> Ordering {
         compare(&self.0, &other.0)

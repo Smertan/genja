@@ -105,35 +105,184 @@ pub trait DerefTarget {
     type Target;
 }
 
+/// Connection-specific configuration options that can override base host settings.
+///
+/// This struct defines optional connection parameters that can be specified per connection type
+/// (e.g., "ssh", "netconf", "http") to override the base connection settings defined at the host,
+/// group, or defaults level. Connection options are stored in a map keyed by connection type name
+/// and are applied during connection parameter resolution.
+///
+/// All fields are optional, allowing partial overrides. When resolving connection parameters,
+/// these options take precedence over base settings at the same hierarchy level (host, group, or defaults).
+///
+/// # Fields
+///
+/// * `hostname` - Optional hostname or IP address override for this connection type.
+///   When specified, overrides the base hostname for connections of this type.
+///
+/// * `port` - Optional port number override for this connection type.
+///   When specified, overrides the base port for connections of this type.
+///
+/// * `username` - Optional username override for authentication.
+///   When specified, overrides the base username for connections of this type.
+///
+/// * `password` - Optional password override for authentication.
+///   When specified, overrides the base password for connections of this type.
+///
+/// * `platform` - Optional platform identifier override.
+///   When specified, overrides the base platform for connections of this type.
+///
+/// * `extras` - Optional arbitrary JSON data for connection-specific configuration.
+///   Allows storing additional connection parameters that don't fit the standard fields.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::inventory::ConnectionOptions;
+/// let options = ConnectionOptions::builder()
+///     .port(830)
+///     .username("netconf_user")
+///     .build();
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct ConnectionOptions {
-    pub hostname: Option<String>,
-    pub port: Option<u16>,
-    pub username: Option<String>,
-    pub password: Option<String>,
-    pub platform: Option<String>,
-    pub extras: Option<Extras>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ResolvedConnectionParams {
-    pub hostname: String,
-    pub port: Option<u16>,
-    pub username: Option<String>,
-    pub password: Option<String>,
-    pub platform: Option<String>,
-    pub extras: Option<Extras>,
+    hostname: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    password: Option<String>,
+    platform: Option<String>,
+    extras: Option<Extras>,
 }
 
 impl Default for ConnectionOptions {
     fn default() -> Self {
-        Self::new()
+        Self::builder().build()
     }
 }
 
 impl ConnectionOptions {
+    pub fn builder() -> ConnectionOptionsBuilder {
+        ConnectionOptionsBuilder::new()
+    }
+
+    pub fn hostname(&self) -> Option<&str> {
+        self.hostname.as_deref()
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    pub fn username(&self) -> Option<&str> {
+        self.username.as_deref()
+    }
+
+    pub fn password(&self) -> Option<&str> {
+        self.password.as_deref()
+    }
+
+    pub fn platform(&self) -> Option<&str> {
+        self.platform.as_deref()
+    }
+
+    pub fn extras(&self) -> Option<&Extras> {
+        self.extras.as_ref()
+    }
+
+    /// Converts this `ConnectionOptions` instance into a builder for modification.
+    ///
+    /// This method creates a new `ConnectionOptionsBuilder` initialized with all the current
+    /// values from this `ConnectionOptions` instance. This is useful when you need to create
+    /// a modified copy of existing connection options while preserving most of the original
+    /// configuration.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `ConnectionOptionsBuilder` with all fields initialized to match the current
+    /// `ConnectionOptions` instance. The builder can then be used to modify specific fields
+    /// before calling `build()` to create a new `ConnectionOptions` instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::ConnectionOptions;
+    /// let options = ConnectionOptions::builder()
+    ///     .port(830)
+    ///     .username("netconf_user")
+    ///     .build();
+    ///
+    /// let modified = options.to_builder()
+    ///     .port(831)
+    ///     .build();
+    ///
+    /// assert_eq!(modified.port(), Some(831));
+    /// ```
+    pub fn to_builder(&self) -> ConnectionOptionsBuilder {
+        ConnectionOptionsBuilder {
+            hostname: self.hostname.clone(),
+            port: self.port,
+            username: self.username.clone(),
+            password: self.password.clone(),
+            platform: self.platform.clone(),
+            extras: self.extras.clone(),
+        }
+    }
+}
+
+/// Builder for constructing `ConnectionOptions` instances.
+///
+/// This builder provides a fluent interface for creating connection options with optional
+/// field overrides. All fields start as `None` and can be set individually before calling
+/// `build()` to create the final `ConnectionOptions` instance.
+///
+/// The builder is typically created via `ConnectionOptions::builder()` or by converting
+/// an existing `ConnectionOptions` instance using `to_builder()`.
+///
+/// # Fields
+///
+/// * `hostname` - Optional hostname or IP address override for the connection type.
+///   When set, this value will override the base hostname for connections of this type.
+///
+/// * `port` - Optional port number override for the connection type.
+///   When set, this value will override the base port for connections of this type.
+///
+/// * `username` - Optional username override for authentication.
+///   When set, this value will override the base username for connections of this type.
+///
+/// * `password` - Optional password override for authentication.
+///   When set, this value will override the base password for connections of this type.
+///
+/// * `platform` - Optional platform identifier override.
+///   When set, this value will override the base platform for connections of this type.
+///
+/// * `extras` - Optional arbitrary JSON data for connection-specific configuration.
+///   Allows storing additional connection parameters that don't fit the standard fields.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::inventory::ConnectionOptions;
+/// let options = ConnectionOptions::builder()
+///     .hostname("10.0.0.1")
+///     .port(830)
+///     .username("netconf_user")
+///     .build();
+///
+/// assert_eq!(options.hostname(), Some("10.0.0.1"));
+/// assert_eq!(options.port(), Some(830));
+/// ```
+pub struct ConnectionOptionsBuilder {
+    hostname: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    password: Option<String>,
+    platform: Option<String>,
+    extras: Option<Extras>,
+}
+
+impl ConnectionOptionsBuilder {
     pub fn new() -> Self {
-        ConnectionOptions {
+        Self {
             hostname: None,
             port: None,
             username: None,
@@ -142,6 +291,123 @@ impl ConnectionOptions {
             extras: None,
         }
     }
+
+    pub fn hostname<S>(mut self, hostname: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.hostname = Some(hostname.into());
+        self
+    }
+
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = Some(port);
+        self
+    }
+
+    pub fn username<S>(mut self, username: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.username = Some(username.into());
+        self
+    }
+
+    pub fn password<S>(mut self, password: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.password = Some(password.into());
+        self
+    }
+
+    pub fn platform<S>(mut self, platform: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.platform = Some(platform.into());
+        self
+    }
+
+    pub fn extras(mut self, extras: Extras) -> Self {
+        self.extras = Some(extras);
+        self
+    }
+
+    pub fn build(self) -> ConnectionOptions {
+        ConnectionOptions {
+            hostname: self.hostname,
+            port: self.port,
+            username: self.username,
+            password: self.password,
+            platform: self.platform,
+            extras: self.extras,
+        }
+    }
+}
+
+
+/// Fully resolved connection parameters for establishing a connection to a host.
+///
+/// This struct represents the final, merged connection configuration after applying
+/// defaults, group settings, host-specific settings, and connection-type-specific
+/// overrides. It contains all the information needed to establish a connection to
+/// a target host using a specific connection type (e.g., SSH, NETCONF, HTTP).
+///
+/// The resolution process follows a hierarchical priority order where settings at
+/// higher levels (host-specific) override settings at lower levels (defaults).
+/// Connection-specific options can override base settings at each hierarchy level.
+///
+/// # Fields
+///
+/// * `hostname` - The resolved hostname or IP address for the connection.
+///   This field is always present and defaults to an empty string if not specified
+///   anywhere in the hierarchy. It represents the target address for the connection.
+///
+/// * `port` - Optional port number for the connection. If `None`, the connection
+///   implementation should use its default port. When specified, it indicates the
+///   TCP/UDP port to use for establishing the connection.
+///
+/// * `username` - Optional username for authentication. If `None`, the connection
+///   may use other authentication methods or fail if credentials are required.
+///   When specified, it provides the username for credential-based authentication.
+///
+/// * `password` - Optional password for authentication. If `None`, the connection
+///   may use other authentication methods (e.g., SSH keys) or fail if a password
+///   is required. When specified, it provides the password for authentication.
+///
+/// * `platform` - Optional platform identifier (e.g., "linux", "cisco_ios", "junos").
+///   This helps connection implementations apply platform-specific behavior, command
+///   syntax, or protocol variations. If `None`, the connection uses generic behavior.
+///
+/// * `extras` - Optional arbitrary JSON data for additional connection-specific
+///   configuration. This allows passing custom parameters that don't fit the standard
+///   fields, such as timeout values, retry settings, or protocol-specific options.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::inventory::ResolvedConnectionParams;
+/// let params = ResolvedConnectionParams {
+///     hostname: "10.0.0.1".to_string(),
+///     port: Some(830),
+///     username: Some("admin".to_string()),
+///     password: Some("secret".to_string()),
+///     platform: Some("junos".to_string()),
+///     extras: None,
+/// };
+///
+/// assert_eq!(params.hostname, "10.0.0.1");
+/// assert_eq!(params.port, Some(830));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedConnectionParams {
+    pub hostname: String,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub platform: Option<String>,
+    pub extras: Option<Extras>,
 }
 
 impl DerefTarget for Extras {
@@ -263,6 +529,35 @@ impl Defaults {
         DefaultsBuilder::new()
     }
 
+    /// Converts this `Defaults` instance into a builder for modification.
+    ///
+    /// This method creates a new `DefaultsBuilder` initialized with all the current
+    /// values from this `Defaults` instance. This is useful when you need to create
+    /// a modified copy of existing defaults while preserving most of the original
+    /// configuration.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `DefaultsBuilder` with all fields initialized to match the current
+    /// `Defaults` instance. The builder can then be used to modify specific fields
+    /// before calling `build()` to create a new `Defaults` instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::Defaults;
+    /// let defaults = Defaults::builder()
+    ///     .username("admin")
+    ///     .port(22)
+    ///     .build();
+    ///
+    /// let modified = defaults.to_builder()
+    ///     .port(2222)
+    ///     .build();
+    ///
+    /// assert_eq!(modified.port(), Some(2222));
+    /// assert_eq!(modified.username(), Some("admin"));
+    /// ```
     pub fn to_builder(&self) -> DefaultsBuilder {
         let mut builder = Defaults::builder();
         if let Some(hostname) = self.hostname.as_deref() {
@@ -340,6 +635,52 @@ impl Defaults {
     }
 }
 
+/// Builder for constructing `Defaults` instances.
+///
+/// This builder provides a fluent interface for creating inventory defaults with optional
+/// configuration fields. All fields start as `None` and can be set individually using the
+/// builder methods before calling `build()` to create the final `Defaults` instance.
+///
+/// Defaults define base configuration values that apply to all hosts and groups in the
+/// inventory unless overridden at the group or host level. This allows for centralized
+/// management of common connection parameters and data.
+///
+/// # Fields
+///
+/// * `hostname` - Optional default hostname or IP address. Applied to hosts/groups that
+///   don't specify their own hostname.
+///
+/// * `port` - Optional default port number for connections. Applied to hosts/groups that
+///   don't specify their own port.
+///
+/// * `username` - Optional default username for authentication. Applied to hosts/groups
+///   that don't specify their own username.
+///
+/// * `password` - Optional default password for authentication. Applied to hosts/groups
+///   that don't specify their own password.
+///
+/// * `platform` - Optional default platform identifier (e.g., "linux", "cisco_ios").
+///   Applied to hosts/groups that don't specify their own platform.
+///
+/// * `data` - Optional arbitrary JSON data that applies to all hosts/groups by default.
+///   Can be overridden or merged at the group or host level.
+///
+/// * `connection_options` - Optional map of connection-specific overrides keyed by
+///   connection type. Allows per-connection-type customization of default parameters.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::inventory::Defaults;
+/// let defaults = Defaults::builder()
+///     .username("admin")
+///     .port(22)
+///     .platform("linux")
+///     .build();
+///
+/// assert_eq!(defaults.username(), Some("admin"));
+/// assert_eq!(defaults.port(), Some(22));
+/// ```
 pub struct DefaultsBuilder {
     hostname: Option<String>,
     port: Option<u16>,
@@ -470,6 +811,37 @@ impl Host {
         HostBuilder::new()
     }
 
+    /// Converts this `Host` instance into a builder for modification.
+    ///
+    /// This method creates a new `HostBuilder` initialized with all the current
+    /// values from this `Host` instance. This is useful when you need to create
+    /// a modified copy of an existing host while preserving most of the original
+    /// configuration.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `HostBuilder` with all fields initialized to match the current
+    /// `Host` instance. The builder can then be used to modify specific fields
+    /// before calling `build()` to create a new `Host` instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Host, BaseBuilderHost};
+    /// let host = Host::builder()
+    ///     .hostname("10.0.0.1")
+    ///     .port(22)
+    ///     .username("admin")
+    ///     .build();
+    ///
+    /// let modified = host.to_builder()
+    ///     .port(2222)
+    ///     .build();
+    ///
+    /// assert_eq!(modified.hostname(), Some("10.0.0.1"));
+    /// assert_eq!(modified.port(), Some(2222));
+    /// assert_eq!(modified.username(), Some("admin"));
+    /// ```
     pub fn to_builder(&self) -> HostBuilder {
         let mut builder = Host::builder();
         if let Some(hostname) = self.hostname() {
@@ -562,8 +934,7 @@ impl Host {
     ///
     /// ```
     /// # use genja_core::inventory::{Host, ConnectionOptions, BaseBuilderHost};
-    /// let mut options = ConnectionOptions::new();
-    /// options.port = Some(830);
+    /// let options = ConnectionOptions::builder().port(830).build();
     ///
     /// let host = Host::builder()
     ///     .hostname("10.0.0.1")
@@ -582,8 +953,7 @@ impl Host {
     /// ```
     /// # use genja_core::inventory::{Host, Hosts, Inventory, ConnectionOptions, BaseBuilderHost};
     /// let mut hosts = Hosts::new();
-    /// let mut options = ConnectionOptions::new();
-    /// options.port = Some(830);
+    /// let options = ConnectionOptions::builder().port(830).build();
     /// let host = Host::builder()
     ///     .hostname("10.0.0.1")
     ///     .port(22)
@@ -636,6 +1006,56 @@ impl Host {
 
 impl BaseMethods for Host {}
 
+/// Builder for constructing `Host` instances.
+///
+/// This builder provides a fluent interface for creating hosts with optional configuration
+/// fields. All fields start as `None` and can be set individually using the builder methods
+/// before calling `build()` to create the final `Host` instance.
+///
+/// The builder implements the `BaseBuilderHost` trait, which provides standard methods for
+/// setting connection parameters, group membership, and custom data. This allows for a
+/// consistent interface across different inventory entity builders.
+///
+/// # Fields
+///
+/// * `hostname` - Optional hostname or IP address for the host. This is the primary identifier
+///   used for network connections.
+///
+/// * `port` - Optional port number for connections. If not specified, defaults may be applied
+///   during connection parameter resolution.
+///
+/// * `username` - Optional username for authentication. Used for establishing connections to
+///   the host.
+///
+/// * `password` - Optional password for authentication. Used in conjunction with username for
+///   connection authentication.
+///
+/// * `platform` - Optional platform identifier (e.g., "linux", "cisco_ios"). Used to determine
+///   platform-specific behavior and connection handling.
+///
+/// * `groups` - Optional parent group names that this host belongs to. Groups provide inherited
+///   configuration through the inventory hierarchy.
+///
+/// * `data` - Optional arbitrary JSON data associated with the host. Allows storing custom
+///   metadata and configuration that doesn't fit standard fields.
+///
+/// * `connection_options` - Optional map of connection-specific overrides keyed by connection
+///   type. Allows per-connection-type customization of connection parameters.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::inventory::{Host, BaseBuilderHost};
+/// let host = Host::builder()
+///     .hostname("10.0.0.1")
+///     .port(22)
+///     .username("admin")
+///     .platform("linux")
+///     .build();
+///
+/// assert_eq!(host.hostname(), Some("10.0.0.1"));
+/// assert_eq!(host.port(), Some(22));
+/// ```
 pub struct HostBuilder {
     hostname: Option<String>,
     port: Option<u16>,
@@ -1182,10 +1602,183 @@ pub trait Transform: Send + Sync {
     }
 }
 
+
+/// A thread-safe wrapper around a transform function that can modify inventory entities.
+///
+/// `TransformFunction` encapsulates custom logic for dynamically transforming hosts, groups,
+/// and defaults in an inventory. It provides a flexible mechanism to modify inventory data
+/// based on runtime conditions, external configuration, or custom business logic without
+/// altering the underlying inventory structure.
+///
+/// The wrapper uses `Arc` for thread-safe reference counting, enabling the transform function
+/// to be shared across multiple threads and cloned efficiently. All clones share the same
+/// underlying transform logic.
+///
+/// # Transform Types
+///
+/// There are two ways to create a `TransformFunction`:
+///
+/// 1. **Host-only transform** - Using `new()`, which accepts a closure that only transforms hosts.
+///    Groups and defaults pass through unchanged.
+///
+/// 2. **Full transform** - Using `new_full()`, which accepts a type implementing the `Transform`
+///    trait, allowing custom transformation of hosts, groups, and defaults.
+///
+/// # When Transforms Are Applied
+///
+/// Transforms are applied lazily when accessing inventory entities through:
+/// - `Inventory::hosts()` - Returns a `HostsView` that applies transforms on access
+/// - `Inventory::groups()` - Returns a `GroupsView` that applies transforms on access  
+/// - `Inventory::defaults()` - Returns transformed defaults
+/// - `Inventory::resolve_host()` - Applies transforms to the resolved host
+///
+/// Results are cached to improve performance on subsequent accesses.
+///
+/// # Thread Safety
+///
+/// The `Clone` implementation creates a new reference to the same underlying transform
+/// function, not a deep copy. All clones share the same transform logic and can be safely
+/// used across threads.
+///
+/// # Examples
+///
+/// ## Host-only Transform
+///
+/// ```
+/// # use genja_core::inventory::{TransformFunction, Host, Inventory, Hosts, BaseBuilderHost};
+/// // Create a transform that modifies the port for all hosts
+/// let transform = TransformFunction::new(|host, _options| {
+///     host.to_builder()
+///         .port(2222)
+///         .build()
+/// });
+///
+/// let mut hosts = Hosts::new();
+/// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").port(22).build());
+///
+/// let inventory = Inventory::builder()
+///     .hosts(hosts)
+///     .transform_function(transform)
+///     .build();
+///
+/// // Transform is applied when accessing the host
+/// let host = inventory.hosts().get("router1").unwrap();
+/// assert_eq!(host.port(), Some(2222));
+/// ```
+///
+/// ## Full Transform with Options
+///
+/// ```
+/// # use genja_core::inventory::{Transform, TransformFunction, TransformFunctionOptions};
+/// # use genja_core::inventory::{Host, Group, Defaults, Inventory, Hosts, BaseBuilderHost};
+/// struct CustomTransform;
+///
+/// impl Transform for CustomTransform {
+///     fn transform_host(&self, host: &Host, options: Option<&TransformFunctionOptions>) -> Host {
+///         // Access transform options if provided
+///         if let Some(opts) = options {
+///             if let Some(prefix) = opts.get("hostname_prefix").and_then(|v| v.as_str()) {
+///                 if let Some(hostname) = host.hostname() {
+///                     return host.to_builder()
+///                         .hostname(format!("{}{}", prefix, hostname))
+///                         .build();
+///                 }
+///             }
+///         }
+///         host.clone()
+///     }
+///
+///     fn transform_group(&self, group: &Group, _options: Option<&TransformFunctionOptions>) -> Group {
+///         // Custom group transformation logic
+///         group.clone()
+///     }
+/// }
+///
+/// let transform = TransformFunction::new_full(CustomTransform);
+/// let options = TransformFunctionOptions::new(
+///     serde_json::json!({"hostname_prefix": "prod-"})
+/// );
+///
+/// let mut hosts = Hosts::new();
+/// hosts.add_host("router1", Host::builder().hostname("router1").build());
+///
+/// let inventory = Inventory::builder()
+///     .hosts(hosts)
+///     .transform_function(transform)
+///     .transform_function_options(options)
+///     .build();
+///
+/// let host = inventory.hosts().get("router1").unwrap();
+/// assert_eq!(host.hostname(), Some("prod-router1"));
+/// ```
+///
+/// ## Cloning and Sharing
+///
+/// ```
+/// # use genja_core::inventory::{TransformFunction, Host};
+/// let transform = TransformFunction::new(|host: &Host, _| host.clone());
+///
+/// // Cloning creates a new reference to the same transform
+/// let transform_clone = transform.clone();
+///
+/// // Both can be used independently and share the same underlying logic
+/// ```
 #[derive(Clone)]
 pub struct TransformFunction(Arc<dyn Transform>);
 
 impl TransformFunction {
+   /// Creates a new transform function that only modifies hosts.
+    ///
+    /// This is a convenience constructor for the common case where you only need to transform
+    /// hosts. Groups and defaults will pass through unchanged. The provided closure receives
+    /// a reference to the host and optional transform options, and should return a new `Host`
+    /// instance with the desired modifications.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F` - A closure type that takes `(&Host, Option<&TransformFunctionOptions>)` and
+    ///   returns a `Host`. The closure must be `Send + Sync + 'static` to allow thread-safe
+    ///   sharing across the inventory.
+    ///
+    /// # Parameters
+    ///
+    /// * `func` - A closure that implements the host transformation logic. It receives:
+    ///   - `&Host` - A reference to the host being transformed
+    ///   - `Option<&TransformFunctionOptions>` - Optional configuration data for the transform
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `TransformFunction` that applies the provided closure to hosts while
+    /// leaving groups and defaults unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{TransformFunction, Host, BaseBuilderHost};
+    /// // Simple transform that sets a default port
+    /// let transform = TransformFunction::new(|host, _options| {
+    ///     if host.port().is_none() {
+    ///         host.to_builder().port(22).build()
+    ///     } else {
+    ///         host.clone()
+    ///     }
+    /// });
+    /// ```
+    ///
+    /// ```
+    /// # use genja_core::inventory::{TransformFunction, Host, BaseBuilderHost};
+    /// // Transform using options
+    /// let transform = TransformFunction::new(|host, options| {
+    ///     if let Some(opts) = options {
+    ///         if let Some(default_port) = opts.get("default_port").and_then(|v| v.as_u64()) {
+    ///             if host.port().is_none() {
+    ///                 return host.to_builder().port(default_port as u16).build();
+    ///             }
+    ///         }
+    ///     }
+    ///     host.clone()
+    /// });
+    /// ```
     pub fn new<F>(func: F) -> Self
     where
         F: Fn(&Host, Option<&TransformFunctionOptions>) -> Host + Send + Sync + 'static,
@@ -1210,6 +1803,63 @@ impl TransformFunction {
         TransformFunction(Arc::new(HostOnlyTransform { func }))
     }
 
+    /// Creates a new transform function from a type implementing the `Transform` trait.
+    ///
+    /// This constructor allows for full control over transformation of hosts, groups, and
+    /// defaults. Use this when you need to implement custom transformation logic for all
+    /// inventory entity types, or when you need to maintain state across transformations.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - A type implementing the `Transform` trait. The type must be `'static` to
+    ///   allow it to be stored in the `Arc` wrapper.
+    ///
+    /// # Parameters
+    ///
+    /// * `transform` - An instance of a type implementing `Transform`. The instance will
+    ///   be wrapped in an `Arc` for thread-safe sharing.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `TransformFunction` that applies the provided `Transform` implementation
+    /// to hosts, groups, and defaults.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Transform, TransformFunction, TransformFunctionOptions};
+    /// # use genja_core::inventory::{Host, Group, Defaults, BaseBuilderHost};
+    /// struct EnvironmentTransform {
+    ///     environment: String,
+    /// }
+    ///
+    /// impl Transform for EnvironmentTransform {
+    ///     fn transform_host(&self, host: &Host, _options: Option<&TransformFunctionOptions>) -> Host {
+    ///         // Prefix hostname with environment
+    ///         if let Some(hostname) = host.hostname() {
+    ///             host.to_builder()
+    ///                 .hostname(format!("{}-{}", self.environment, hostname))
+    ///                 .build()
+    ///         } else {
+    ///             host.clone()
+    ///         }
+    ///     }
+    ///
+    ///     fn transform_group(&self, group: &Group, _options: Option<&TransformFunctionOptions>) -> Group {
+    ///         // Apply environment-specific group modifications
+    ///         group.clone()
+    ///     }
+    ///
+    ///     fn transform_defaults(&self, defaults: &Defaults, _options: Option<&TransformFunctionOptions>) -> Defaults {
+    ///         // Apply environment-specific defaults
+    ///         defaults.clone()
+    ///     }
+    /// }
+    ///
+    /// let transform = TransformFunction::new_full(EnvironmentTransform {
+    ///     environment: "prod".to_string(),
+    /// });
+    /// ```
     pub fn new_full<T>(transform: T) -> Self
     where
         T: Transform + 'static,
@@ -1988,6 +2638,39 @@ fn merge_connection_options_fields(target: &mut ConnectionOptions, source: &Conn
     }
 }
 
+/// A view over the hosts collection in an inventory that applies transform functions on access.
+///
+/// This struct provides a read-only view of the hosts stored in an `Inventory`. When accessing
+/// individual hosts through this view, any configured transform function is automatically applied.
+/// The view caches transformed results to improve performance on subsequent accesses to the same host.
+///
+/// The view does not own the inventory data; it holds a reference to the parent `Inventory` and
+/// provides methods to iterate over hosts, look up hosts by name, and query collection metadata.
+///
+/// # Lifetime
+///
+/// * `'a` - The lifetime of the reference to the parent `Inventory`. The view cannot outlive
+///   the inventory it references.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::inventory::{Inventory, Host, Hosts, BaseBuilderHost};
+/// let mut hosts = Hosts::new();
+/// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+/// let inventory = Inventory::builder().hosts(hosts).build();
+///
+/// let hosts_view = inventory.hosts();
+/// assert_eq!(hosts_view.len(), 1);
+///
+/// if let Some(host) = hosts_view.get("router1") {
+///     assert_eq!(host.hostname(), Some("10.0.0.1"));
+/// }
+///
+/// for (name, host) in hosts_view.iter() {
+///     println!("Host: {}", name);
+/// }
+/// ```
 pub struct HostsView<'a> {
     inventory: &'a Inventory,
 }
@@ -2025,6 +2708,41 @@ impl<'a> HostsView<'a> {
     }
 }
 
+/// A view over the groups collection in an inventory that applies transform functions on access.
+///
+/// This struct provides a read-only view of the groups stored in an `Inventory`. When accessing
+/// individual groups through this view, any configured transform function is automatically applied.
+/// The view caches transformed results to improve performance on subsequent accesses to the same group.
+///
+/// The view does not own the inventory data; it holds references to both the parent `Inventory` and
+/// the underlying `Groups` collection. It provides methods to iterate over groups, look up groups by
+/// name, and query collection metadata.
+///
+/// # Lifetime
+///
+/// * `'a` - The lifetime of the references to the parent `Inventory` and `Groups` collection. The view
+///   cannot outlive either the inventory or groups it references.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::inventory::{Inventory, Group, Groups, BaseBuilderHost};
+/// let mut groups = Groups::new();
+/// groups.add_group("core", Group::builder().platform("linux").build());
+/// let inventory = Inventory::builder().groups(groups).build();
+///
+/// if let Some(groups_view) = inventory.groups() {
+///     assert_eq!(groups_view.len(), 1);
+///
+///     if let Some(group) = groups_view.get("core") {
+///         assert_eq!(group.platform(), Some("linux"));
+///     }
+///
+///     for (name, group) in groups_view.iter() {
+///         println!("Group: {}", name);
+///     }
+/// }
+/// ```
 pub struct GroupsView<'a> {
     inventory: &'a Inventory,
     groups: &'a Groups,
@@ -2204,7 +2922,10 @@ mod tests {
                     i
                 )])))
                 .groups(groups)
-                .connection_options(String::from("Cisco"), ConnectionOptions::new())
+                .connection_options(
+                    String::from("Cisco"),
+                    ConnectionOptions::builder().build(),
+                )
                 .build();
             hosts.insert(name, host);
         }
@@ -2242,7 +2963,10 @@ mod tests {
                     "data for host {}",
                     i
                 )])))
-                .connection_options(String::from("Juniper"), ConnectionOptions::new())
+                .connection_options(
+                    String::from("Juniper"),
+                    ConnectionOptions::builder().build(),
+                )
                 .build();
 
             hosts.add_host(name, host);
@@ -2254,6 +2978,27 @@ mod tests {
     fn test_build_hosts() {
         let hosts = create_dummy_hosts();
         assert_eq!(hosts.unwrap().len(), 10);
+    }
+
+    #[test]
+    fn test_connection_options_builder() {
+        let extras = Extras::new(serde_json::json!({ "env": "lab", "tier": "core" }));
+
+        let options = ConnectionOptions::builder()
+            .hostname("192.0.2.55")
+            .port(830)
+            .username("netconf")
+            .password("secret")
+            .platform("iosxr")
+            .extras(extras.clone())
+            .build();
+
+        assert_eq!(options.hostname(), Some("192.0.2.55"));
+        assert_eq!(options.port(), Some(830));
+        assert_eq!(options.username(), Some("netconf"));
+        assert_eq!(options.password(), Some("secret"));
+        assert_eq!(options.platform(), Some("iosxr"));
+        assert_eq!(options.extras(), Some(&extras));
     }
 
     #[test]

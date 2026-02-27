@@ -15,13 +15,13 @@ fn build_connection_options(
     password: &str,
     platform: &str,
 ) -> ConnectionOptions {
-    let mut options = ConnectionOptions::new();
-    options.hostname = Some(hostname.to_string());
-    options.port = Some(port);
-    options.username = Some(username.to_string());
-    options.password = Some(password.to_string());
-    options.platform = Some(platform.to_string());
-    options
+    ConnectionOptions::builder()
+        .hostname(hostname)
+        .port(port)
+        .username(username)
+        .password(password)
+        .platform(platform)
+        .build()
 }
 
 #[test]
@@ -186,10 +186,11 @@ fn connection_options_precedence_defaults_groups_hosts() {
     }))
     .expect("defaults should deserialize");
 
-    let mut group_netconf = ConnectionOptions::new();
-    group_netconf.hostname = Some("group-netconf".into());
-    group_netconf.username = Some("group-user".into());
-    group_netconf.extras = Some(Extras::new(json!({ "tier": "group" })));
+    let group_netconf = ConnectionOptions::builder()
+        .hostname("group-netconf")
+        .username("group-user")
+        .extras(Extras::new(json!({ "tier": "group" })))
+        .build();
 
     let group = Group::builder()
         .hostname("group-host")
@@ -200,10 +201,11 @@ fn connection_options_precedence_defaults_groups_hosts() {
     let mut groups = Groups::new();
     groups.add_group("core", group);
 
-    let mut host_netconf = ConnectionOptions::new();
-    host_netconf.hostname = Some("host-netconf".into());
-    host_netconf.port = Some(2003);
-    host_netconf.extras = Some(Extras::new(json!({ "tier": "host" })));
+    let host_netconf = ConnectionOptions::builder()
+        .hostname("host-netconf")
+        .port(2003)
+        .extras(Extras::new(json!({ "tier": "host" })))
+        .build();
 
     let host = Host::builder()
         .hostname("host-host")
