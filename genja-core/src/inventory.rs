@@ -781,6 +781,66 @@ impl Data {
     }
 }
 
+/// Represents a single host in the inventory with connection parameters and metadata.
+///
+/// A `Host` defines the configuration for connecting to and managing a single network device
+/// or server. It contains optional connection parameters (hostname, port, credentials, platform),
+/// group membership information, arbitrary data, and connection-specific overrides.
+///
+/// Hosts are the fundamental unit of the inventory system. They can inherit configuration from
+/// groups and defaults through the inventory hierarchy, with host-level settings taking highest
+/// precedence during parameter resolution.
+///
+/// # Fields
+///
+/// * `hostname` - Optional hostname or IP address for the host. This is the primary identifier
+///   used for network connections. If not specified, it may be inherited from groups or defaults.
+///
+/// * `port` - Optional port number for connections. If not specified, defaults may be applied
+///   during connection parameter resolution or connection implementations may use their default ports.
+///
+/// * `username` - Optional username for authentication. Used for establishing connections to
+///   the host. Can be inherited from groups or defaults if not specified.
+///
+/// * `password` - Optional password for authentication. Used in conjunction with username for
+///   connection authentication. Can be inherited from groups or defaults if not specified.
+///
+/// * `platform` - Optional platform identifier (e.g., "linux", "cisco_ios", "junos"). Used to
+///   determine platform-specific behavior and connection handling. Can be inherited from groups
+///   or defaults if not specified.
+///
+/// * `groups` - Optional parent group names that this host belongs to. Groups provide inherited
+///   configuration through the inventory hierarchy. Multiple groups can be specified, and their
+///   configurations are merged in order.
+///
+/// * `data` - Optional arbitrary JSON data associated with the host. Allows storing custom
+///   metadata and configuration that doesn't fit standard fields. Can be merged with group
+///   and default data during resolution.
+///
+/// * `connection_options` - Optional map of connection-specific overrides keyed by connection
+///   type (e.g., "ssh", "netconf", "http"). Allows per-connection-type customization of
+///   connection parameters, overriding base host settings for specific connection types.
+///
+/// # Deserialization
+///
+/// - Unknown fields are rejected via `#[serde(deny_unknown_fields)]` to catch configuration errors
+/// - All fields are optional, allowing minimal host definitions
+/// - Connection options accept arbitrary map keys for different connection types
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::inventory::{Host, BaseBuilderHost};
+/// let host = Host::builder()
+///     .hostname("10.0.0.1")
+///     .port(22)
+///     .username("admin")
+///     .platform("linux")
+///     .build();
+///
+/// assert_eq!(host.hostname(), Some("10.0.0.1"));
+/// assert_eq!(host.port(), Some(22));
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Host {
@@ -793,7 +853,6 @@ pub struct Host {
     pub(crate) data: Option<Data>,
     pub(crate) connection_options: Option<CustomTreeMap<ConnectionOptions>>,
 }
-
 impl Host {
     pub fn new() -> Host {
         Host {
@@ -1506,6 +1565,11 @@ impl Hosts {
         Hosts(CustomTreeMap::new())
     }
 
+    /// Inserts a host into the collection under the provided name.
+    ///
+    /// If a host with the same name already exists, it will be replaced with the new host.
+    /// The name serves as the unique identifier for the host and is used in logs and output.
+    ///
     /// # Parameters
     ///
     /// * `name` - A string-like value that will be used as the unique identifier for the host.
@@ -1584,15 +1648,247 @@ impl Default for Groups {
     }
 }
 
+/// A trait for implementing custom transformation logic on inventory entities.
+///
+/// The `Transform` trait provides a flexible mechanism to modify hosts, groups, and defaults
+/// in an inventory based on custom logic, external configuration, or runtime conditions.
+/// Implementations of this trait can be wrapped in a `TransformFunction` and applied to an
+/// inventory to dynamically alter entity properties without modifying the underlying data.
+///
+/// All methods in this trait have default implementations that return clones of the input
+/// entities unchanged. Implementors only need to override the methods for entity types they
+/// wish to transform.
+///
+/// # Thread Safety
+///
+/// Implementations must be `Send + Sync` to allow safe sharing across threads. The inventory
+/// system uses `Arc` internally to share transform functions, so all transform logic must be
+/// thread-safe.
+///
+/// # Transform Methods
+///
+/// The trait provides three transformation methods, one for each inventory entity type:
+///
+/// * `transform_host` - Transforms individual host configurations
+/// * `transform_group` - Transforms group configurations
+/// * `transform_defaults` - Transforms inventory-wide defaults
+///
+/// Each method receives a reference to the entity being transformed and optional configuration
+/// through `TransformFunctionOptions`. The methods should return a new instance of the entity
+/// with the desired modifications applied.
+///
+/// # When Transforms Are Applied
+///
+/// Transforms are applied lazily when accessing inventory entities:
+/// - When calling `Inventory::hosts()` and accessing individual hosts
+/// - When calling `Inventory::groups()` and accessing individual groups
+/// - When calling `Inventory::defaults()`
+/// - During host resolution via `Inventory::resolve_host()`
+///
+/// Results are cached to improve performance on subsequent accesses.
+///
+/// # Transform Options
+///
+/// The optional `TransformFunctionOptions` parameter provides a way to pass configuration
+/// data to the transform function at runtime. This allows for flexible, data-driven
+/// transformations without hardcoding values in the transform implementation.
+///
+/// Options are stored as JSON values and can contain any structured data needed by the
+/// transform logic. Access the options using the `get()` method and JSON value accessors.
+///
+/// # Examples
+///
+/// ## Basic Host Transform
+///
+/// ```
+/// # use genja_core::inventory::{Transform, TransformFunction, TransformFunctionOptions};
+/// # use genja_core::inventory::{Host, Group, Defaults, BaseBuilderHost};
+/// struct PortTransform {
+///     default_port: u16,
+/// }
+///
+/// impl Transform for PortTransform {
+///     fn transform_host(&self, host: &Host, _options: Option<&TransformFunctionOptions>) -> Host {
+///         // Apply default port if host doesn't have one
+///         if host.port().is_none() {
+///             host.to_builder()
+///                 .port(self.default_port)
+///                 .build()
+///         } else {
+///             host.clone()
+///         }
+///     }
+/// }
+///
+/// let transform = TransformFunction::new_full(PortTransform { default_port: 2222 });
+/// ```
+///
+/// ## Transform Using Options
+///
+/// ```
+/// # use genja_core::inventory::{Transform, TransformFunction, TransformFunctionOptions};
+/// # use genja_core::inventory::{Host, Group, Defaults, BaseBuilderHost};
+/// struct PrefixTransform;
+///
+/// impl Transform for PrefixTransform {
+///     fn transform_host(&self, host: &Host, options: Option<&TransformFunctionOptions>) -> Host {
+///         // Get prefix from options
+///         let prefix = options
+///             .and_then(|opts| opts.get("hostname_prefix"))
+///             .and_then(|v| v.as_str())
+///             .unwrap_or("");
+///
+///         if !prefix.is_empty() {
+///             if let Some(hostname) = host.hostname() {
+///                 return host.to_builder()
+///                     .hostname(format!("{}{}", prefix, hostname))
+///                     .build();
+///             }
+///         }
+///         host.clone()
+///     }
+/// }
+///
+/// let transform = TransformFunction::new_full(PrefixTransform);
+/// let options = TransformFunctionOptions::new(
+///     serde_json::json!({"hostname_prefix": "prod-"})
+/// );
+/// ```
+///
+/// ## Multi-Entity Transform
+///
+/// ```
+/// # use genja_core::inventory::{Transform, TransformFunction, TransformFunctionOptions};
+/// # use genja_core::inventory::{Host, Group, Defaults, BaseBuilderHost};
+/// struct EnvironmentTransform {
+///     environment: String,
+/// }
+///
+/// impl Transform for EnvironmentTransform {
+///     fn transform_host(&self, host: &Host, _options: Option<&TransformFunctionOptions>) -> Host {
+///         // Add environment tag to hostname
+///         if let Some(hostname) = host.hostname() {
+///             host.to_builder()
+///                 .hostname(format!("{}.{}", hostname, self.environment))
+///                 .build()
+///         } else {
+///             host.clone()
+///         }
+///     }
+///
+///     fn transform_group(&self, group: &Group, _options: Option<&TransformFunctionOptions>) -> Group {
+///         // Apply environment-specific group settings
+///         if self.environment == "prod" {
+///             // Production groups might need different settings
+///             group.to_builder()
+///                 .port(443)
+///                 .build()
+///         } else {
+///             group.clone()
+///         }
+///     }
+///
+///     fn transform_defaults(&self, defaults: &Defaults, _options: Option<&TransformFunctionOptions>) -> Defaults {
+///         // Apply environment-specific defaults
+///         defaults.to_builder()
+///             .username(format!("{}-user", self.environment))
+///             .build()
+///     }
+/// }
+///
+/// let transform = TransformFunction::new_full(EnvironmentTransform {
+///     environment: "prod".to_string(),
+/// });
+/// ```
+///
+/// ## IP Address Mapping Transform
+///
+/// ```
+/// # use genja_core::inventory::{Transform, TransformFunction, TransformFunctionOptions};
+/// # use genja_core::inventory::{Host, Group, Defaults, BaseBuilderHost};
+/// struct IpMappingTransform;
+///
+/// impl Transform for IpMappingTransform {
+///     fn transform_host(&self, host: &Host, options: Option<&TransformFunctionOptions>) -> Host {
+///         // Get IP mapping from options
+///         let mapping = options
+///             .and_then(|opts| opts.get("ip_map"))
+///             .and_then(|v| v.as_object());
+///
+///         let Some(mapping) = mapping else {
+///             return host.clone();
+///         };
+///
+///         let mut builder = host.to_builder();
+///
+///         // Map hostname if it exists in the mapping
+///         if let Some(hostname) = host.hostname() {
+///             if let Some(mapped) = mapping.get(hostname).and_then(|v| v.as_str()) {
+///                 builder = builder.hostname(mapped);
+///             }
+///         }
+///
+///         builder.build()
+///     }
+/// }
+///
+/// let transform = TransformFunction::new_full(IpMappingTransform);
+/// let options = TransformFunctionOptions::new(serde_json::json!({
+///     "ip_map": {
+///         "10-0-0-1": "10.0.0.1",
+///         "10-0-0-2": "10.0.0.2"
+///     }
+/// }));
+/// ```
 pub trait Transform: Send + Sync {
+    /// Transforms a host entity.
+    ///
+    /// This method is called when a host is accessed through the inventory's host view
+    /// or during host resolution. The default implementation returns a clone of the
+    /// input host unchanged.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - A reference to the host being transformed
+    /// * `_options` - Optional configuration data for the transform
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `Host` instance with the desired transformations applied.
     fn transform_host(&self, host: &Host, _options: Option<&TransformFunctionOptions>) -> Host {
         host.clone()
     }
 
+    /// Transforms a group entity.
+    ///
+    /// This method is called when a group is accessed through the inventory's group view.
+    /// The default implementation returns a clone of the input group unchanged.
+    ///
+    /// # Parameters
+    ///
+    /// * `group` - A reference to the group being transformed
+    /// * `_options` - Optional configuration data for the transform
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `Group` instance with the desired transformations applied.
     fn transform_group(&self, group: &Group, _options: Option<&TransformFunctionOptions>) -> Group {
         group.clone()
     }
 
+    /// Transforms the inventory defaults.
+    ///
+    /// This method is called when defaults are accessed through `Inventory::defaults()`.
+    /// The default implementation returns a clone of the input defaults unchanged.
+    ///
+    /// # Parameters
+    ///
+    /// * `defaults` - A reference to the defaults being transformed
+    /// * `_options` - Optional configuration data for the transform
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `Defaults` instance with the desired transformations applied.
     fn transform_defaults(
         &self,
         defaults: &Defaults,
@@ -1866,11 +2162,70 @@ impl TransformFunction {
     {
         TransformFunction(Arc::new(transform))
     }
-
+    /// Applies the transform function to a host.
+    ///
+    /// This method delegates to the underlying `Transform` implementation to modify
+    /// the provided host according to the transform logic. It's primarily used internally
+    /// by the inventory system when accessing hosts through views or during resolution.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - A reference to the host to transform
+    /// * `options` - Optional configuration data to pass to the transform function
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `Host` instance with transformations applied. If no transform
+    /// logic is defined for hosts, returns a clone of the input host.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{TransformFunction, Host, BaseBuilderHost};
+    /// let transform = TransformFunction::new(|host, _| {
+    ///     host.to_builder().port(2222).build()
+    /// });
+    ///
+    /// let host = Host::builder().hostname("10.0.0.1").build();
+    /// let transformed = transform.transform_host(&host, None);
+    /// assert_eq!(transformed.port(), Some(2222));
+    /// ```
     pub fn transform_host(&self, host: &Host, options: Option<&TransformFunctionOptions>) -> Host {
         self.0.transform_host(host, options)
     }
 
+    /// Applies the transform function to a group.
+    ///
+    /// This method delegates to the underlying `Transform` implementation to modify
+    /// the provided group according to the transform logic. It's primarily used internally
+    /// by the inventory system when accessing groups through views.
+    ///
+    /// # Parameters
+    ///
+    /// * `group` - A reference to the group to transform
+    /// * `options` - Optional configuration data to pass to the transform function
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `Group` instance with transformations applied. If no transform
+    /// logic is defined for groups, returns a clone of the input group.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Transform, TransformFunction, TransformFunctionOptions, Group, BaseBuilderHost};
+    /// struct GroupTransform;
+    /// impl Transform for GroupTransform {
+    ///     fn transform_group(&self, group: &Group, _options: Option<&TransformFunctionOptions>) -> Group {
+    ///         group.to_builder().port(443).build()
+    ///     }
+    /// }
+    ///
+    /// let transform = TransformFunction::new_full(GroupTransform);
+    /// let group = Group::builder().platform("linux").build();
+    /// let transformed = transform.transform_group(&group, None);
+    /// assert_eq!(transformed.port(), Some(443));
+    /// ```
     pub fn transform_group(
         &self,
         group: &Group,
@@ -1879,6 +2234,38 @@ impl TransformFunction {
         self.0.transform_group(group, options)
     }
 
+        /// Applies the transform function to inventory defaults.
+    ///
+    /// This method delegates to the underlying `Transform` implementation to modify
+    /// the provided defaults according to the transform logic. It's primarily used internally
+    /// by the inventory system when accessing defaults through `Inventory::defaults()`.
+    ///
+    /// # Parameters
+    ///
+    /// * `defaults` - A reference to the defaults to transform
+    /// * `options` - Optional configuration data to pass to the transform function
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `Defaults` instance with transformations applied. If no transform
+    /// logic is defined for defaults, returns a clone of the input defaults.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Transform, TransformFunction, TransformFunctionOptions, Defaults, BaseBuilderHost};
+    /// struct DefaultsTransform;
+    /// impl Transform for DefaultsTransform {
+    ///     fn transform_defaults(&self, defaults: &Defaults, _options: Option<&TransformFunctionOptions>) -> Defaults {
+    ///         defaults.to_builder().username("admin").build()
+    ///     }
+    /// }
+    ///
+    /// let transform = TransformFunction::new_full(DefaultsTransform);
+    /// let defaults = Defaults::builder().port(22).build();
+    /// let transformed = transform.transform_defaults(&defaults, None);
+    /// assert_eq!(transformed.username(), Some("admin"));
+    /// ```
     pub fn transform_defaults(
         &self,
         defaults: &Defaults,
@@ -1895,6 +2282,105 @@ impl fmt::Debug for TransformFunction {
 }
 
 /// The TransformFunctionOptions struct is a wrapper for serde_json::Value, any json data is accepted.
+/// Configuration options passed to transform functions when processing inventory entities.
+///
+/// `TransformFunctionOptions` is a wrapper around a JSON value that provides flexible,
+/// schema-free configuration data for transform functions. It allows passing arbitrary
+/// structured data to transforms without requiring predefined types or schemas.
+///
+/// The wrapper implements `Deref` and `DerefMut` to provide direct access to the underlying
+/// `serde_json::Value`, enabling use of all JSON value methods for accessing and manipulating
+/// the configuration data.
+///
+/// # Usage in Transforms
+///
+/// Transform functions receive an `Option<&TransformFunctionOptions>` parameter that can be
+/// used to access configuration data. The options are typically set on the `Inventory` using
+/// `InventoryBuilder::transform_function_options()`.
+///
+/// # JSON Structure
+///
+/// The underlying JSON value can be any valid JSON structure:
+/// - Object: `{"key": "value", "nested": {"data": 123}}`
+/// - Array: `["item1", "item2"]`
+/// - Primitive: `"string"`, `42`, `true`, `null`
+///
+/// # Examples
+///
+/// ## Creating Options
+///
+/// ```
+/// # use genja_core::inventory::TransformFunctionOptions;
+/// // Simple key-value options
+/// let options = TransformFunctionOptions::new(serde_json::json!({
+///     "default_port": 2222,
+///     "environment": "production"
+/// }));
+///
+/// // Nested configuration
+/// let options = TransformFunctionOptions::new(serde_json::json!({
+///     "ssh": {
+///         "port": 22,
+///         "timeout": 30
+///     },
+///     "netconf": {
+///         "port": 830,
+///         "timeout": 60
+///     }
+/// }));
+/// ```
+///
+/// ## Accessing Options in Transforms
+///
+/// ```
+/// # use genja_core::inventory::{Transform, TransformFunctionOptions, Host, Group, Defaults, BaseBuilderHost};
+/// struct PortTransform;
+///
+/// impl Transform for PortTransform {
+///     fn transform_host(&self, host: &Host, options: Option<&TransformFunctionOptions>) -> Host {
+///         // Access options using JSON value methods
+///         if let Some(opts) = options {
+///             if let Some(port) = opts.get("default_port").and_then(|v| v.as_u64()) {
+///                 if host.port().is_none() {
+///                     return host.to_builder().port(port as u16).build();
+///                 }
+///             }
+///         }
+///         host.clone()
+///     }
+/// }
+/// ```
+///
+/// ## Using with Inventory
+///
+/// ```
+/// # use genja_core::inventory::{Inventory, TransformFunction, TransformFunctionOptions, Host, Hosts, BaseBuilderHost};
+/// let transform = TransformFunction::new(|host, options| {
+///     if let Some(opts) = options {
+///         if let Some(prefix) = opts.get("hostname_prefix").and_then(|v| v.as_str()) {
+///             if let Some(hostname) = host.hostname() {
+///                 return host.to_builder()
+///                     .hostname(format!("{}{}", prefix, hostname))
+///                     .build();
+///             }
+///         }
+///     }
+///     host.clone()
+/// });
+///
+/// let options = TransformFunctionOptions::new(serde_json::json!({
+///     "hostname_prefix": "prod-"
+/// }));
+///
+/// let mut hosts = Hosts::new();
+/// hosts.add_host("router1", Host::builder().hostname("router1").build());
+///
+/// let inventory = Inventory::builder()
+///     .hosts(hosts)
+///     .transform_function(transform)
+///     .transform_function_options(options)
+///     .build();
+/// ```
 #[derive(
     Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, DerefMacro, DerefMutMacro,
 )]
@@ -1905,6 +2391,42 @@ impl DerefTarget for TransformFunctionOptions {
 }
 
 impl TransformFunctionOptions {
+    /// Creates a new `TransformFunctionOptions` instance from a JSON value.
+    ///
+    /// This constructor wraps any valid JSON value in a `TransformFunctionOptions` struct,
+    /// providing a flexible way to pass configuration data to transform functions. The JSON
+    /// value can be of any type: object, array, string, number, boolean, or null.
+    ///
+    /// The options are typically accessed within transform function implementations using
+    /// the `Deref` trait to access the underlying `serde_json::Value` methods like `get()`,
+    /// `as_str()`, `as_object()`, etc.
+    ///
+    /// # Parameters
+    ///
+    /// * `options` - A `serde_json::Value` containing the configuration data to be passed
+    ///   to transform functions. This can be any valid JSON structure created using the
+    ///   `serde_json::json!` macro or parsed from JSON text.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `TransformFunctionOptions` instance wrapping the provided JSON value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::TransformFunctionOptions;
+    /// // Create options with an object
+    /// let options = TransformFunctionOptions::new(serde_json::json!({
+    ///     "default_port": 2222,
+    ///     "environment": "production"
+    /// }));
+    ///
+    /// // Create options with an array
+    /// let options = TransformFunctionOptions::new(serde_json::json!(["item1", "item2"]));
+    ///
+    /// // Create options with a primitive value
+    /// let options = TransformFunctionOptions::new(serde_json::json!("simple_string"));
+    /// ```
     pub fn new(options: serde_json::Value) -> Self {
         TransformFunctionOptions(options)
     }
@@ -1921,6 +2443,107 @@ where
     fn close(&mut self) -> ConnectionKey;
 }
 
+/// A unique identifier for a connection in the connection manager.
+///
+/// `ConnectionKey` serves as a composite key for looking up and managing connections
+/// in the `ConnectionManager`. It combines a hostname with a connection type to uniquely
+/// identify a specific connection instance. This allows the same host to have multiple
+/// concurrent connections of different types (e.g., SSH, NETCONF, HTTP).
+///
+/// The struct implements `Hash` and `Eq` to enable its use as a key in hash-based
+/// collections like `HashMap` and `DashMap`.
+///
+/// # Hash Function Behavior
+///
+/// When inserting a `ConnectionKey` into a hash-based collection (like `DashMap` in
+/// `ConnectionManager`), the hash function is used to:
+///
+/// 1. **Compute Hash Value**: Both `hostname` and `connection_type` fields are hashed
+///    together to produce a single hash value. This is done automatically by Rust's
+///    derive macro for `Hash`, which hashes each field in declaration order.
+///
+/// 2. **Determine Bucket**: The hash value is used to determine which internal bucket
+///    in the hash map should store this key-value pair. This enables O(1) average-case
+///    lookup performance.
+///
+/// 3. **Handle Collisions**: If two different keys produce the same hash value (a hash
+///    collision), the `Eq` implementation is used to distinguish between them. The
+///    collection stores multiple entries in the same bucket and uses `Eq` to find the
+///    exact match.
+///
+/// 4. **Enable Deduplication**: When inserting with the same `hostname` and
+///    `connection_type`, the hash function ensures the key maps to the same bucket,
+///    and `Eq` confirms it's the same key, allowing the collection to update the
+///    existing entry rather than creating a duplicate.
+///
+/// # Fields
+///
+/// * `hostname` - The hostname or IP address of the target device. This identifies
+///   the remote endpoint for the connection.
+/// * `connection_type` - The type of connection protocol (e.g., "ssh", "netconf", "http").
+///   This distinguishes between different connection types to the same host.
+///
+/// # Examples
+///
+/// ## Basic Usage
+///
+/// ```
+/// # use genja_core::inventory::ConnectionKey;
+/// let key = ConnectionKey::new("10.0.0.1", "ssh");
+/// assert_eq!(key.hostname, "10.0.0.1");
+/// assert_eq!(key.connection_type, "ssh");
+/// ```
+///
+/// ## Multiple Connection Types per Host
+///
+/// ```
+/// # use genja_core::inventory::ConnectionKey;
+/// use std::collections::HashMap;
+///
+/// let mut connections = HashMap::new();
+/// let ssh_key = ConnectionKey::new("router1", "ssh");
+/// let netconf_key = ConnectionKey::new("router1", "netconf");
+///
+/// // Same host can have different connection types
+/// // Each key produces a different hash due to different connection_type
+/// connections.insert(ssh_key, "SSH connection");
+/// connections.insert(netconf_key, "NETCONF connection");
+/// assert_eq!(connections.len(), 2);
+/// ```
+///
+/// ## Key Equality and Deduplication
+///
+/// ```
+/// # use genja_core::inventory::ConnectionKey;
+/// use std::collections::HashMap;
+///
+/// let mut connections = HashMap::new();
+/// let key1 = ConnectionKey::new("router1", "ssh");
+/// let key2 = ConnectionKey::new("router1", "ssh");
+///
+/// // Both keys have the same hostname and connection_type
+/// // They produce the same hash and are equal via Eq
+/// connections.insert(key1, "First connection");
+/// connections.insert(key2, "Second connection"); // Replaces first
+/// assert_eq!(connections.len(), 1);
+/// assert_eq!(connections.values().next(), Some(&"Second connection"));
+/// ```
+///
+/// ## Hash-Based Lookup in ConnectionManager
+///
+/// ```
+/// # use genja_core::inventory::{ConnectionKey, ConnectionManager};
+/// let manager = ConnectionManager::default();
+/// let key = ConnectionKey::new("router1", "ssh");
+///
+/// // The hash function enables fast lookup:
+/// // 1. Hash is computed from key
+/// // 2. Hash determines which bucket to search
+/// // 3. Eq is used to find exact match in bucket
+/// if let Some(connection) = manager.get(&key) {
+///     println!("Found existing connection");
+/// }
+/// ```
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ConnectionKey {
     pub hostname: String,
@@ -1928,6 +2551,44 @@ pub struct ConnectionKey {
 }
 
 impl ConnectionKey {
+    /// Creates a new `ConnectionKey` from a hostname and connection type.
+    ///
+    /// This constructor provides a convenient way to create a connection key by accepting
+    /// any type that can be converted into a `String` for both the hostname and connection
+    /// type parameters. This allows passing `&str`, `String`, or other string-like types
+    /// without explicit conversion.
+    ///
+    /// The resulting key uniquely identifies a connection in the `ConnectionManager` by
+    /// combining the target hostname with the connection protocol type.
+    ///
+    /// # Parameters
+    ///
+    /// * `hostname` - The hostname or IP address of the target device. Accepts any type
+    ///   implementing `Into<String>`, such as `&str` or `String`. This identifies the
+    ///   remote endpoint for the connection.
+    /// * `connection_type` - The type of connection protocol (e.g., "ssh", "netconf", "http").
+    ///   Accepts any type implementing `Into<String>`. This distinguishes between different
+    ///   connection types to the same host.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `ConnectionKey` instance with the provided hostname and connection type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::ConnectionKey;
+    /// // Using string slices
+    /// let key1 = ConnectionKey::new("10.0.0.1", "ssh");
+    ///
+    /// // Using owned strings
+    /// let hostname = String::from("router1");
+    /// let conn_type = String::from("netconf");
+    /// let key2 = ConnectionKey::new(hostname, conn_type);
+    ///
+    /// // Mixed types
+    /// let key3 = ConnectionKey::new("10.0.0.2", String::from("http"));
+    /// ```
     pub fn new(hostname: impl Into<String>, connection_type: impl Into<String>) -> Self {
         Self {
             hostname: hostname.into(),
