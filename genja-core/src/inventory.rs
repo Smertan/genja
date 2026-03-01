@@ -3236,6 +3236,40 @@ fn merge_option<T: Clone>(target: &mut Option<T>, source: &Option<T>) {
     }
 }
 
+/// Merges data from a source `Data` option into a target `Data` option.
+///
+/// This function performs intelligent merging of JSON data structures with the following behavior:
+///
+/// 1. **Object Merging**: When both target and source contain JSON objects, the function merges
+///    their key-value pairs. Keys present in the source object will overwrite corresponding keys
+///    in the target object, while keys unique to either object are preserved.
+///
+/// 2. **Non-Object Replacement**: When the target is not a JSON object (e.g., array, string, number)
+///    but the source is an object, the entire target is replaced with the source object rather than
+///    attempting to merge incompatible types.
+///
+/// 3. **Initialization**: When the target is `None` and the source contains data, the target is
+///    initialized with a clone of the source data.
+///
+/// 4. **No-Op Cases**: When the source is `None`, the target remains unchanged regardless of its state.
+///
+/// This function is used internally during host and group resolution to merge data fields from
+/// defaults, parent groups, and host-specific configurations in the proper priority order.
+///
+/// # Parameters
+///
+/// * `target` - A mutable reference to an optional `Data` value that will be modified in place.
+///   This represents the destination for the merge operation. If `None`, it may be initialized
+///   with the source data. If `Some`, its contents may be merged with or replaced by the source.
+///
+/// * `source` - A reference to an optional `Data` value containing the data to merge into the target.
+///   This represents the source of new or overriding values. If `None`, no changes are made to the
+///   target. If `Some`, its contents are merged into or replace the target based on their types.
+///
+/// # Examples
+///
+/// See the unit test `merge_data_merges_objects_and_replaces_non_objects` in the unit tests
+/// for a comprehensive example of how this function is used in practice during inventory resolution.
 fn merge_data(target: &mut Option<Data>, source: &Option<Data>) {
     match (target.as_mut(), source.as_ref()) {
         (Some(target_data), Some(source_data)) => {
@@ -3564,6 +3598,7 @@ impl Default for InventoryBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn create_dummy_hosts() -> Result<Hosts, std::io::Error> {
         let mut hosts = Hosts(CustomTreeMap::new());
@@ -3779,5 +3814,258 @@ mod tests {
         assert_eq!(inventory.resolved_params_cache_len(), 1);
     }
 
+    /// Tests the internal group resolution logic for proper merging and cycle detection.
+    ///
+    /// This test verifies two critical aspects of the `resolve_group_internal` method:
+    ///
+    /// 1. **Hierarchical Merging**: Tests that group inheritance correctly merges settings
+    ///    from parent groups in the proper order. Creates a three-level hierarchy (a -> b -> c)
+    ///    and verifies that settings cascade properly, with child groups overriding parent
+    ///    settings as expected.
+    ///
+    /// 2. **Cycle Detection**: Tests that circular group references are detected and handled
+    ///    gracefully without causing infinite loops. Creates a two-group cycle (cycle-a -> cycle-b -> cycle-a)
+    ///    and verifies that resolution completes successfully without hanging.
+    ///
+    /// # Test Structure
+    ///
+    /// The test is divided into two parts:
+    ///
+    /// ## Part 1: Hierarchical Merging
+    /// - Creates groups with inheritance chain: a (username) -> b (hostname, port) -> c (port, platform)
+    /// - Resolves group "a" and verifies all inherited settings are present
+    /// - Validates that closer ancestors override more distant ones (b's port overrides c's port)
+    ///
+    /// ## Part 2: Cycle Detection
+    /// - Creates a circular reference: cycle-a -> cycle-b -> cycle-a
+    /// - Attempts to resolve cycle-a
+    /// - Verifies that resolution completes without infinite loop
+    /// - Confirms that the resolved group maintains its structure
+    ///
+    /// # Assertions
+    ///
+    /// For hierarchical merging:
+    /// - `hostname` should be "b-host" (from group b)
+    /// - `port` should be 2002 (from group b, overriding c's 2001)
+    /// - `platform` should be "linux" (from group c)
+    /// - `username` should be "a-user" (from group a)
+    ///
+    /// For cycle detection:
+    /// - Resolution should complete without panic or timeout
+    /// - Resolved group should maintain its groups field
+    #[test]
+    fn resolve_group_internal_merges_and_detects_cycle() {
+        let mut groups = Groups::new();
+
+        let mut a_parents = ParentGroups::new();
+        a_parents.push("b".to_string());
+        let group_a = Group::builder().username("a-user").groups(a_parents).build();
+
+        let mut b_parents = ParentGroups::new();
+        b_parents.push("c".to_string());
+        let group_b = Group::builder()
+            .hostname("b-host")
+            .port(2002)
+            .groups(b_parents)
+            .build();
+
+        let group_c = Group::builder().port(2001).platform("linux").build();
+
+        groups.add_group("a", group_a);
+        groups.add_group("b", group_b);
+        groups.add_group("c", group_c);
+
+        let inventory = Inventory::builder().groups(groups).build();
+
+        let mut stack = std::collections::HashSet::new();
+        let mut memo = std::collections::HashMap::new();
+        let resolved = inventory
+            .resolve_group_internal("a", &mut stack, &mut memo)
+            .expect("group should resolve");
+
+        assert_eq!(resolved.hostname(), Some("b-host"));
+        assert_eq!(resolved.port(), Some(2002));
+        assert_eq!(resolved.platform(), Some("linux"));
+        assert_eq!(resolved.username(), Some("a-user"));
+
+        let mut cycle_groups = Groups::new();
+        let mut c1 = ParentGroups::new();
+        c1.push("cycle-b".to_string());
+        let mut c2 = ParentGroups::new();
+        c2.push("cycle-a".to_string());
+        cycle_groups.add_group("cycle-a", Group::builder().groups(c1).build());
+        cycle_groups.add_group("cycle-b", Group::builder().groups(c2).build());
+
+        let cycle_inventory = Inventory::builder().groups(cycle_groups).build();
+        let mut cycle_stack = std::collections::HashSet::new();
+        let mut cycle_memo = std::collections::HashMap::new();
+        let cycle_resolved = cycle_inventory
+            .resolve_group_internal("cycle-a", &mut cycle_stack, &mut cycle_memo)
+            .expect("cycle should not infinite loop");
+        assert!(cycle_resolved.groups().is_some());
+    }
+
+    /// Tests that transform functions are applied to hosts and results are cached in HostsView.
+    ///
+    /// This test verifies two critical behaviors of the `HostsView` implementation:
+    ///
+    /// 1. **Transform Application**: Confirms that the configured transform function is
+    ///    applied when accessing hosts through the view, modifying host properties as expected.
+    ///
+    /// 2. **Caching Behavior**: Validates that transformed results are cached, ensuring the
+    ///    transform function is called only once per unique host regardless of how many times
+    ///    that host is accessed.
+    ///
+    /// The test creates a transform function that increments each host's port number by 1
+    /// and tracks the number of times it's called. It then verifies that:
+    /// - Multiple accesses to the same host return the same transformed result
+    /// - The transform is only called once per host (cached after first access)
+    /// - Iteration over the view also uses the cache when available
+    ///
+    /// # Test Structure
+    ///
+    /// 1. Creates a transform function that increments port numbers and counts invocations
+    /// 2. Builds an inventory with two hosts (ports 10 and 20)
+    /// 3. Accesses the same host twice via `get()` and verifies caching
+    /// 4. Iterates over all hosts and verifies the transform was called exactly twice total
+    ///
+    /// # Assertions
+    ///
+    /// - First access to "h1" returns port 11 (10 + 1)
+    /// - Second access to "h1" returns port 11 (cached, transform not called again)
+    /// - Transform function called exactly once after two accesses to same host
+    /// - Transform function called exactly twice total after iterating all hosts
+    #[test]
+    fn transform_and_cache_hosts_view() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = Arc::clone(&calls);
+        let transform = TransformFunction::new(move |host, _| {
+            calls_clone.fetch_add(1, Ordering::SeqCst);
+            host.to_builder()
+                .port(host.port().unwrap_or(0) + 1)
+                .build()
+        });
+
+        let mut hosts = Hosts::new();
+        hosts.add_host("h1", Host::builder().port(10).build());
+        hosts.add_host("h2", Host::builder().port(20).build());
+
+        let inventory = Inventory::builder()
+            .hosts(hosts)
+            .transform_function(transform)
+            .build();
+
+        let view = inventory.hosts();
+        let first = view.get("h1").expect("host exists");
+        let second = view.get("h1").expect("host exists");
+        assert_eq!(first.port(), Some(11));
+        assert_eq!(second.port(), Some(11));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+
+        // Iterate over all hosts which triggers the transform function again
+        // as h2 has not been accessed yet. The transform function should be called twice.
+        let _ = view.iter().collect::<Vec<_>>();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// Tests the `merge_data` function's behavior when merging JSON objects and replacing non-objects.
+    ///
+    /// This test verifies two critical behaviors of the `merge_data` function:
+    ///
+    /// 1. **Object Merging**: When both target and source are JSON objects, the function should
+    ///    merge their key-value pairs. Keys present in both objects should be overwritten with
+    ///    the source's values, while keys unique to either object should be preserved.
+    ///
+    /// 2. **Non-Object Replacement**: When the target is not a JSON object (e.g., an array) but
+    ///    the source is an object, the entire target should be replaced with the source object
+    ///    rather than attempting to merge incompatible types.
+    ///
+    /// # Test Structure
+    ///
+    /// The test is divided into two parts:
+    ///
+    /// ## Part 1: Object Merging
+    /// - Creates a target object with keys "a" and "b"
+    /// - Creates a source object with keys "b" and "c"
+    /// - Merges source into target
+    /// - Verifies that:
+    ///   - Key "a" retains its original value (1)
+    ///   - Key "b" is overwritten with source's value (3)
+    ///   - Key "c" is added from source (4)
+    ///
+    /// ## Part 2: Non-Object Replacement
+    /// - Creates a target that is a JSON array
+    /// - Creates a source that is a JSON object
+    /// - Merges source into target
+    /// - Verifies that the target is completely replaced and is now an object
+    ///
+    /// # Assertions
+    ///
+    /// For object merging:
+    /// - `target["a"]` should equal 1 (preserved from original)
+    /// - `target["b"]` should equal 3 (overwritten by source)
+    /// - `target["c"]` should equal 4 (added from source)
+    ///
+    /// For non-object replacement:
+    /// - Target should be a JSON object after merge (not an array)
+    #[test]
+    fn merge_data_merges_objects_and_replaces_non_objects() {
+        let mut target = Some(Data::new(serde_json::json!({
+            "a": 1,
+            "b": 2
+        })));
+        let source = Some(Data::new(serde_json::json!({
+            "b": 3,
+            "c": 4
+        })));
+
+        merge_data(&mut target, &source);
+        let target_obj = target
+            .as_ref()
+            .and_then(|data| data.as_object())
+            .expect("target should be object");
+        assert_eq!(target_obj.get("a").and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(target_obj.get("b").and_then(|v| v.as_i64()), Some(3));
+        assert_eq!(target_obj.get("c").and_then(|v| v.as_i64()), Some(4));
+
+        let mut non_object_target = Some(Data::new(serde_json::json!(["x", "y"])));
+        let object_source = Some(Data::new(serde_json::json!({ "k": "v" })));
+        merge_data(&mut non_object_target, &object_source);
+        assert!(non_object_target
+            .as_ref()
+            .and_then(|data| data.as_object())
+            .is_some());
+    }
+
+    #[test]
+    fn merge_connection_options_fields_overrides_only_present_values() {
+        let mut target = ConnectionOptions::builder()
+            .hostname("primary")
+            .port(22)
+            .username("user")
+            .platform("linux")
+            .build();
+
+        let source = ConnectionOptions::builder()
+            .port(2222)
+            .password("secret")
+            .extras(Extras::new(serde_json::json!({ "tier": "core" })))
+            .build();
+
+        merge_connection_options_fields(&mut target, &source);
+
+        assert_eq!(target.hostname(), Some("primary"));
+        assert_eq!(target.port(), Some(2222));
+        assert_eq!(target.username(), Some("user"));
+        assert_eq!(target.password(), Some("secret"));
+        assert_eq!(target.platform(), Some("linux"));
+        assert_eq!(
+            target.extras().and_then(|v| v.get("tier")).and_then(|v| v.as_str()),
+            Some("core")
+        );
+    }
+
     // TODO: Create a test to verify the Host defaults deserialization
+
 }
