@@ -1,0 +1,14 @@
+[dependencies.genja-plugin-manager]
+path = "../../"
+
+[lib]
+crate-type = [
+    "lib",
+    "cdylib",
+]
+name = "plugin_inventory"
+
+[package]
+edition = "2024"
+name = "plugin_inventory"
+version = "0.1.0"

@@ -1,0 +1,19 @@
+[dependencies.genja-plugin-manager]
+path = "../../"
+
+[lib]
+crate-type = [
+    "lib",
+    "cdylib",
+]
+
+[package]
+edition = "2024"
+name = "plugin-mods"
+version = "0.1.0"
+
+[package.metadata.plugins]
+plugin_a_b = "../target/release/libplugin_mods.so"
+
+[package.metadata.plugins.inventory]
+inventory_a = "../target/release/libplugin_inventory.so"
