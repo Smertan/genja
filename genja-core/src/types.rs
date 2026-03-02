@@ -33,7 +33,7 @@ pub trait DerefTarget {
 /// assert!(s1 < s2);
 /// // s1 < s2 in natural order (2 < 10)
 /// ```
-#[derive(PartialEq, Eq, Clone, JsonSchema, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Clone, Hash, JsonSchema, Serialize, Deserialize)]
 pub struct NatString(String);
 
 impl Deref for NatString {
@@ -77,6 +77,12 @@ impl NatString {
 impl fmt::Debug for NatString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Use write! to format the fields directly without the struct wrapper
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Display for NatString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -160,7 +166,7 @@ impl<V> CustomTreeMap<V> {
     /// Inserts a key-value pair into the map.
     ///
     /// The where statement allows for string-like types
-    /// (&str, String, Cow<str>, etc.) including `numbers` that
+    /// (&str, String, `Cow<str>`, etc.) including `numbers` that
     /// can be turned into strings using the `ToString` trait. It
     /// makes the insertion process more flexible and easier to use.
     pub fn insert<K>(&mut self, key: K, value: V)
