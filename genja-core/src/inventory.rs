@@ -4066,6 +4066,284 @@ mod tests {
         );
     }
 
+    #[test]
+    fn base_methods_schema_returns_json() {
+        let schema = Host::schema();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&schema).expect("schema should be valid JSON");
+        assert!(parsed.get("$schema").is_some());
+    }
+
+    #[test]
+    fn connection_options_default_and_to_builder_round_trip() {
+        let options = ConnectionOptions::default();
+        assert_eq!(options.hostname(), None);
+        assert_eq!(options.port(), None);
+        assert_eq!(options.username(), None);
+        assert_eq!(options.password(), None);
+        assert_eq!(options.platform(), None);
+        assert_eq!(options.extras(), None);
+
+        let rebuilt = options.to_builder().build();
+        assert_eq!(options, rebuilt);
+    }
+
+    #[test]
+    fn defaults_builder_to_builder_and_accessors() {
+        let defaults = Defaults::builder()
+            .hostname("default-host")
+            .port(22)
+            .username("admin")
+            .password("secret")
+            .platform("linux")
+            .data(Data::new(serde_json::json!({"env": "lab"})))
+            .build();
+
+        assert!(!defaults.is_empty());
+        assert_eq!(defaults.hostname(), Some("default-host"));
+        assert_eq!(defaults.port(), Some(22));
+        assert_eq!(defaults.username(), Some("admin"));
+        assert_eq!(defaults.password(), Some("secret"));
+        assert_eq!(defaults.platform(), Some("linux"));
+        assert!(defaults.data().is_some());
+
+        let modified = defaults.to_builder().port(2222).build();
+        assert_eq!(modified.port(), Some(2222));
+        assert_eq!(modified.username(), Some("admin"));
+    }
+
+    #[test]
+    fn host_and_group_to_builder_preserve_connection_options() {
+        let opts1 = ConnectionOptions::builder().port(22).build();
+        let opts2 = ConnectionOptions::builder().port(830).build();
+
+        let host = Host::builder()
+            .hostname("h1")
+            .connection_options("ssh", opts1.clone())
+            .connection_options("netconf", opts2.clone())
+            .build();
+        let host_round = host.to_builder().build();
+        assert_eq!(
+            host_round
+                .connection_options()
+                .and_then(|m| m.get("ssh"))
+                .and_then(|o| o.port()),
+            Some(22)
+        );
+
+        let group = Group::builder()
+            .hostname("g1")
+            .connection_options("ssh", opts1)
+            .build();
+        let group_round = group.to_builder().build();
+        assert_eq!(
+            group_round
+                .connection_options()
+                .and_then(|m| m.get("ssh"))
+                .and_then(|o| o.port()),
+            Some(22)
+        );
+    }
+
+    #[test]
+    fn groups_default_is_empty() {
+        let groups = Groups::default();
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn transform_function_group_and_defaults_methods() {
+        struct CountTransform {
+            group_calls: Arc<AtomicUsize>,
+            defaults_calls: Arc<AtomicUsize>,
+        }
+
+        impl Transform for CountTransform {
+            fn transform_group(
+                &self,
+                group: &Group,
+                _options: Option<&TransformFunctionOptions>,
+            ) -> Group {
+                self.group_calls.fetch_add(1, Ordering::SeqCst);
+                group.to_builder().port(443).build()
+            }
+
+            fn transform_defaults(
+                &self,
+                defaults: &Defaults,
+                _options: Option<&TransformFunctionOptions>,
+            ) -> Defaults {
+                self.defaults_calls.fetch_add(1, Ordering::SeqCst);
+                defaults.to_builder().username("admin").build()
+            }
+        }
+
+        let group_calls = Arc::new(AtomicUsize::new(0));
+        let defaults_calls = Arc::new(AtomicUsize::new(0));
+        let transform = TransformFunction::new_full(CountTransform {
+            group_calls: Arc::clone(&group_calls),
+            defaults_calls: Arc::clone(&defaults_calls),
+        });
+
+        let group = Group::builder().platform("linux").build();
+        let defaults = Defaults::builder().port(22).build();
+
+        let transformed_group = transform.transform_group(&group, None);
+        let transformed_defaults = transform.transform_defaults(&defaults, None);
+
+        assert_eq!(transformed_group.port(), Some(443));
+        assert_eq!(transformed_defaults.username(), Some("admin"));
+        assert_eq!(group_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(defaults_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn transform_function_options_new() {
+        let options = TransformFunctionOptions::new(serde_json::json!({"k": "v"}));
+        assert_eq!(options.get("k").and_then(|v| v.as_str()), Some("v"));
+    }
+
+    #[test]
+    fn connection_manager_insert_get_and_close() {
+        #[derive(Debug)]
+        struct TestConnection {
+            closes: Arc<AtomicUsize>,
+            key: ConnectionKey,
+        }
+
+        impl Connection for TestConnection {
+            fn is_alive(&self) -> bool {
+                true
+            }
+
+            fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn close(&mut self) -> ConnectionKey {
+                self.closes.fetch_add(1, Ordering::SeqCst);
+                self.key.clone()
+            }
+        }
+
+        let manager = ConnectionManager::default();
+        let closes = Arc::new(AtomicUsize::new(0));
+        let key = ConnectionKey::new("h1", "ssh");
+        let connection = Arc::new(Mutex::new(TestConnection {
+            closes: Arc::clone(&closes),
+            key: key.clone(),
+        })) as Arc<Mutex<dyn Connection>>;
+
+        manager.insert(key.clone(), Arc::clone(&connection));
+        let fetched = manager.get(&key).expect("connection should exist");
+        assert!(Arc::ptr_eq(&connection, &fetched));
+
+        manager.close_connection(&key);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+        assert!(manager.get(&key).is_none());
+
+        let key2 = ConnectionKey::new("h2", "netconf");
+        let connection2 = Arc::new(Mutex::new(TestConnection {
+            closes: Arc::clone(&closes),
+            key: key2.clone(),
+        })) as Arc<Mutex<dyn Connection>>;
+        manager.insert(key.clone(), connection);
+        manager.insert(key2.clone(), connection2);
+        manager.close_all_connections();
+        assert_eq!(closes.load(Ordering::SeqCst), 3);
+        assert!(manager.get(&key).is_none());
+        assert!(manager.get(&key2).is_none());
+    }
+
+    #[test]
+    fn inventory_connections_and_resolve_host_cache_hit() {
+        let mut hosts = Hosts::new();
+        hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+        let inventory = Inventory::builder().hosts(hosts).build();
+
+        let _ = inventory.connections();
+        assert_eq!(inventory.resolved_host_cache_len(), 0);
+        let _ = inventory.resolve_host("router1");
+        assert_eq!(inventory.resolved_host_cache_len(), 1);
+        let _ = inventory.resolve_host("router1");
+        assert_eq!(inventory.resolved_host_cache_len(), 1);
+    }
+
+    #[test]
+    fn groups_view_applies_transform_and_accessors_work() {
+        let group_calls = Arc::new(AtomicUsize::new(0));
+        let group_calls_clone = Arc::clone(&group_calls);
+        struct GroupOnlyTransform {
+            calls: Arc<AtomicUsize>,
+        }
+
+        impl Transform for GroupOnlyTransform {
+            fn transform_group(
+                &self,
+                group: &Group,
+                _options: Option<&TransformFunctionOptions>,
+            ) -> Group {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                group.to_builder().port(1234).build()
+            }
+        }
+
+        let transform = TransformFunction::new_full(GroupOnlyTransform {
+            calls: group_calls_clone,
+        });
+
+        let mut groups = Groups::new();
+        groups.add_group("core", Group::builder().platform("linux").build());
+        groups.add_group("edge", Group::builder().platform("linux").build());
+
+        let inventory = Inventory::builder()
+            .groups(groups)
+            .transform_function(transform)
+            .build();
+
+        let view = inventory.groups().expect("groups view exists");
+        assert_eq!(view.len(), 2);
+        assert!(!view.is_empty());
+        assert_eq!(view.keys().count(), 2);
+
+        let core = view.get("core").expect("group exists");
+        assert_eq!(core.port(), Some(1234));
+
+        let _ = view.iter().collect::<Vec<_>>();
+        assert_eq!(group_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn merge_connection_options_merges_maps_and_overrides_fields() {
+        let mut target: Option<CustomTreeMap<ConnectionOptions>> = Some(CustomTreeMap::new());
+        let mut source: Option<CustomTreeMap<ConnectionOptions>> = Some(CustomTreeMap::new());
+
+        if let Some(map) = target.as_mut() {
+            map.insert(
+                "ssh",
+                ConnectionOptions::builder().hostname("t").port(22).build(),
+            );
+        }
+        if let Some(map) = source.as_mut() {
+            map.insert(
+                "ssh",
+                ConnectionOptions::builder().port(2222).username("u").build(),
+            );
+            map.insert(
+                "netconf",
+                ConnectionOptions::builder().port(830).build(),
+            );
+        }
+
+        merge_connection_options(&mut target, &source);
+        let merged = target.expect("target should exist");
+        let ssh = merged.get("ssh").expect("ssh should exist");
+        assert_eq!(ssh.hostname(), Some("t"));
+        assert_eq!(ssh.port(), Some(2222));
+        assert_eq!(ssh.username(), Some("u"));
+        assert!(merged.get("netconf").is_some());
+    }
+
     // TODO: Create a test to verify the Host defaults deserialization
 
 }
