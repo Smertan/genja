@@ -85,7 +85,7 @@ impl Genja {
     /// The host_ids are a Vec of owned NatString's, therefore they need
     /// to be cloned from the inventory's CustomTreeMap's keys.
     pub fn new(inventory: Inventory) -> Self {
-        let host_ids = inventory.hosts.keys().cloned().collect();
+        let host_ids = inventory.hosts().keys().cloned().collect();
         Self {
             inventory: Arc::new(inventory),
             host_ids: Arc::new(host_ids),
@@ -100,9 +100,9 @@ impl Genja {
     pub fn filter(&self, pred: impl Fn(&Host) -> bool) -> Self {
         let host_ids = self
             .inventory
-            .hosts
+            .hosts()
             .iter()
-            .filter_map(|(id, host)| if pred(host) { Some(id.clone()) } else { None })
+            .filter_map(|(id, host)| if pred(&host) { Some(id.clone()) } else { None })
             .collect();
 
         Self {
@@ -115,14 +115,14 @@ impl Genja {
         }
     }
 
-    pub fn iter_hosts(&self) -> impl Iterator<Item = &Host> {
+    pub fn iter_hosts(&self) -> impl Iterator<Item = Host> + use<'_> {
         self.host_ids
             .iter()
-            .filter_map(|id| self.inventory.hosts.get(id))
+            .filter_map(|id| self.inventory.hosts().get(id))
     }
 
-    pub fn iter_all_hosts(&self) -> impl Iterator<Item = (&NatString, &Host)> {
-        self.inventory.hosts.iter()
+    pub fn iter_all_hosts(&self) -> impl Iterator<Item = (&NatString, Host)> {
+        self.inventory.hosts().iter()
     }
 
     pub fn host_count(&self) -> usize {
