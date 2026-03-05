@@ -385,6 +385,7 @@ dependencies = [
 name = "genja-plugin-manager"
 version = "0.1.0"
 dependencies = [
+ "genja-core",
  "libloading",
  "log",
  "serde",

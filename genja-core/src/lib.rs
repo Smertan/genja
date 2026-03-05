@@ -61,6 +61,7 @@
 pub mod inventory;
 pub mod settings;
 pub mod types;
+pub mod task;
 
 // Re-export commonly used types
 use inventory::{Host, Inventory};

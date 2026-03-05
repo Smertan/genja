@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 
+use genja_core::inventory::Hosts;
+use genja_core::task::{Task, Tasks};
 pub type PathString = String;
 pub type GroupOrName = String;
 pub type PluginName = String;
@@ -72,30 +74,74 @@ impl Debug for dyn PluginInventory {
     }
 }
 
+impl Debug for dyn PluginConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {{ name: {} }}",
+            PluginConnection::group(self),
+            self.name()
+        )
+    }
+}
+
+pub trait PluginRunner: Plugin {
+    // Run a single task
+    fn run(&self, task: Task, hosts: &Hosts);
+
+    // Run all tasks in the task vec
+    fn run_tasks(&self, tasks: Tasks, hosts: &Hosts);
+
+    /// Returns the group name
+    fn group(&self) -> String {
+        String::from("RunnerPlugin")
+    }
+}
+
+pub trait PluginConnection: Plugin {
+    // Open a connection to a device
+    fn open(&self);
+
+    // Close a connection to a device
+    fn close(&self);
+
+    // Run all tasks in the task vec
+    fn connection(&self);
+
+    /// Returns the group name
+    fn group(&self) -> String {
+        String::from("ConnectionPlugin")
+    }
+}
+
 pub enum Plugins {
-    Base(Box<dyn Plugin>),
+    Connection(Box<dyn PluginConnection>),
     Inventory(Box<dyn PluginInventory>),
+    Runner(Box<dyn PluginRunner>)
 }
 
 impl Plugins {
     pub fn name(&self) -> String {
         match self {
-            Plugins::Base(base) => base.name(),
+            Plugins::Connection(connection) => connection.name(),
             Plugins::Inventory(inventory) => inventory.name(),
+            Plugins::Runner(runner) => runner.name(),
         }
     }
 
     pub fn group_name(&self) -> String {
         match self {
-            Plugins::Base(_) => String::from("Base"),
+            Plugins::Connection(_) => String::from("Connection"),
             Plugins::Inventory(_) => String::from("Inventory"),
+            Plugins::Runner(_) => String::from("Runner"),
         }
     }
 
     pub fn execute(&self, context: &dyn Any) -> Result<(), Box<dyn std::error::Error>> {
         match self {
-            Plugins::Base(base) => base.execute(context),
+            Plugins::Connection(connection) => connection.execute(context),
             Plugins::Inventory(inventory) => inventory.execute(context),
+            Plugins::Runner(runner) => runner.execute(context),
         }
     }
 }

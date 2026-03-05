@@ -1,4 +1,4 @@
-use plugin_manager::plugin_types::Plugin;
+use plugin_manager::plugin_types::{Plugin, PluginConnection};
 use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +14,23 @@ impl Plugin for PluginA {
         Ok(())
     }
 }
+
+impl PluginConnection for PluginA {
+    fn open(&self) {
+        println!("Opening connection in Plugin A");
+    }
+
+    fn close(&self) {
+        println!("Closing connection in Plugin A");
+    }
+
+    fn connection(&self) {
+        self.open();
+        println!("Running connection in Plugin A");
+        self.close();
+    }
+}
+
 impl PluginA {
     pub fn other_method(&self) {
         println!("Executing other method in Plugin A");

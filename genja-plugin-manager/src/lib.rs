@@ -212,13 +212,14 @@ pub mod plugin_types;
 
 use libloading::{Library, Symbol};
 use plugin_structs::{PluginCreate as PluginCreateNew, PluginResult as PluginResultNew};
-use plugin_types::{GroupOrName, Plugin, PluginEntry, PluginInventory, PluginName, Plugins};
+use plugin_types::{GroupOrName, PluginConnection, PluginEntry, PluginInventory, PluginName, Plugins};
 use serde::Deserialize;
 use std::any::Any;
 use std::collections::{HashMap, hash_map};
 use std::path::Path;
 // use std::error::Error;
 use std::io::{Error, ErrorKind};
+
 
 #[derive(Deserialize, Debug)]
 pub struct Metadata {
@@ -395,9 +396,9 @@ impl PluginManager {
 
     /// Gets an inventory plugin, returns None if the plugin is not a Base variant
     #[allow(clippy::borrowed_box)]
-    pub fn get_base_plugin(&self, name: &str) -> Option<&Box<dyn Plugin>> {
+    pub fn get_connection_plugin(&self, name: &str) -> Option<&Box<dyn PluginConnection>> {
         self.plugins.get(name).and_then(|plugin| match plugin {
-            Plugins::Base(base) => Some(base),
+            Plugins::Connection(base) => Some(base),
             _ => None,
         })
     }
@@ -437,8 +438,8 @@ impl PluginManager {
 
     /// Gets all Base plugins with their trait objects
     #[allow(clippy::borrowed_box)]
-    pub fn get_plugins_by_type_base(&self) -> Vec<(&String, &Box<dyn Plugin>)> {
-        get_plugins_by_variant!(self, Plugins::Base, &Box<dyn Plugin>)
+    pub fn get_plugins_by_type_connection(&self) -> Vec<(&String, &Box<dyn PluginConnection>)> {
+        get_plugins_by_variant!(self, Plugins::Connection, &Box<dyn PluginConnection>)
     }
 
     /// Gets all Inventory plugins with their trait objects
@@ -640,7 +641,7 @@ mod tests {
         let plugin_manager = PluginManager::new().activate_plugins().unwrap();
 
         // Get all plugins in the "base" group
-        let inventory_plugins = plugin_manager.get_plugins_by_type_base();
+        let inventory_plugins = plugin_manager.get_plugins_by_type_connection();
         assert_eq!(inventory_plugins.len(), 2);
 
         // Get all plugins in the "inventory" group
@@ -660,8 +661,8 @@ mod tests {
         all_plugins
             .iter()
             .for_each(|(name, group)| match name.as_str() {
-                "plugin_a" => assert_eq!(group, "Base"),
-                "plugin_b" => assert_eq!(group, "Base"),
+                "plugin_a" => assert_eq!(group, "Connection"),
+                "plugin_b" => assert_eq!(group, "Connection"),
                 "inventory_a" => assert_eq!(group, "Inventory"),
                 _ => panic!("Unexpected plugin name"),
             });
@@ -730,19 +731,19 @@ mod tests {
     fn get_plugins_by_type_test() {
         set_env_var();
         let plugin_manager = PluginManager::new().activate_plugins().unwrap();
-        let base_plugins = plugin_manager.get_plugins_by_type_base();
-        assert_eq!(base_plugins.len(), 2);
+        let connection_plugins = plugin_manager.get_plugins_by_type_connection();
+        assert_eq!(connection_plugins.len(), 2);
 
         // Check that the expected plugin names are present
         let base_plugin_names: Vec<&str> =
-            base_plugins.iter().map(|(name, _)| name.as_str()).collect();
+            connection_plugins.iter().map(|(name, _)| name.as_str()).collect();
         assert!(base_plugin_names.contains(&"plugin_a"));
         assert!(base_plugin_names.contains(&"plugin_b"));
 
         // Verify the debug output format for base plugins
-        for (name, plugin) in base_plugins {
+        for (name, plugin) in connection_plugins {
             let debug_output = format!("{:?}", plugin);
-            assert!(debug_output.contains("BasePlugin"));
+            assert!(debug_output.contains("ConnectionPlugin"));
             assert!(debug_output.contains(name));
         }
 
