@@ -1,0 +1,8 @@
+[package]
+name = "genja"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+genja-core = { path = "../genja-core" }
+genja-plugin-manager = { path = "../genja-plugin-manager" }

@@ -352,6 +352,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "genja"
+version = "0.1.0"
+dependencies = [
+ "genja-core",
+ "genja-plugin-manager",
+]
+
+[[package]]
 name = "genja-core"
 version = "0.1.0"
 dependencies = [
