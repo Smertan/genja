@@ -37,11 +37,12 @@ impl Error for GenjaError {}
 /// 1) `load_plugins()` to discover/register plugins.
 /// 2) `load_inventory(...)` to set runtime inventory.
 /// 3) call runner-related methods.
+#[derive(Debug, Clone)]
 pub struct Genja {
     inventory: Option<Arc<Inventory>>,
     host_ids: Arc<Vec<NatString>>,
     config: Arc<Settings>,
-    plugins: PluginManager,
+    plugins: Arc<PluginManager>,
     plugins_loaded: bool,
 }
 
@@ -57,7 +58,7 @@ impl Genja {
             inventory: None,
             host_ids: Arc::new(Vec::new()),
             config: Arc::new(Settings::default()),
-            plugins: PluginManager::new(),
+            plugins: Arc::new(PluginManager::new()),
             plugins_loaded: false,
         }
     }
@@ -68,14 +69,16 @@ impl Genja {
             inventory: Some(Arc::new(inventory)),
             host_ids: Arc::new(host_ids),
             config: Arc::new(Settings::default()),
-            plugins: PluginManager::new(),
+            plugins: Arc::new(PluginManager::new()),
             plugins_loaded: false,
         }
     }
 
     pub fn load_plugins(&mut self) -> Result<(), GenjaError> {
-        let manager = std::mem::replace(&mut self.plugins, PluginManager::new());
-        self.plugins = manager.activate_plugins().map_err(GenjaError::PluginLoad)?;
+        let manager = PluginManager::new()
+            .activate_plugins()
+            .map_err(GenjaError::PluginLoad)?;
+        self.plugins = Arc::new(manager);
         self.plugins_loaded = true;
         Ok(())
     }
@@ -103,7 +106,7 @@ impl Genja {
     }
 
     pub fn plugin_manager(&self) -> &PluginManager {
-        &self.plugins
+        self.plugins.as_ref()
     }
 
     pub fn execute_plugin(&self, name: &str, context: &dyn Any) -> Result<(), GenjaError> {
@@ -174,20 +177,31 @@ impl Genja {
         Ok(inventory.hosts().iter().map(|(id, host)| (id.clone(), host)).collect())
     }
 
-    pub fn filter_hosts(&mut self, pred: impl Fn(&Host) -> bool) -> Result<(), GenjaError> {
+    pub fn filter_hosts(&self, pred: impl Fn(&Host) -> bool) -> Result<Self, GenjaError> {
         let inventory = self
             .inventory
             .as_ref()
             .ok_or(GenjaError::InventoryNotLoaded)?;
 
-        let host_ids = inventory
-            .hosts()
+        let host_ids = self
+            .host_ids
             .iter()
-            .filter_map(|(id, host)| if pred(&host) { Some(id.clone()) } else { None })
+            .filter_map(|id| {
+                inventory.hosts().get(id).and_then(
+                    |host| {
+                        if pred(&host) { Some(id.clone()) } else { None }
+                    },
+                )
+            })
             .collect();
 
-        self.host_ids = Arc::new(host_ids);
-        Ok(())
+        Ok(Self {
+            inventory: Some(Arc::clone(inventory)),
+            host_ids: Arc::new(host_ids),
+            config: Arc::clone(&self.config),
+            plugins: Arc::clone(&self.plugins),
+            plugins_loaded: self.plugins_loaded,
+        })
     }
 
     fn ensure_plugins_loaded(&self) -> Result<(), GenjaError> {

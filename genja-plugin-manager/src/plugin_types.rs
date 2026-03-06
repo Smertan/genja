@@ -98,6 +98,16 @@ pub trait PluginRunner: Plugin {
     }
 }
 
+impl Debug for dyn PluginRunner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {{ name: {} }}",
+            PluginRunner::group(self),
+            self.name()
+        )
+    }
+}
 pub trait PluginConnection: Plugin {
     // Open a connection to a device
     fn open(&self);
@@ -113,7 +123,7 @@ pub trait PluginConnection: Plugin {
         String::from("ConnectionPlugin")
     }
 }
-
+#[derive(Debug)]
 pub enum Plugins {
     Connection(Box<dyn PluginConnection>),
     Inventory(Box<dyn PluginInventory>),

@@ -226,6 +226,7 @@ pub struct Metadata {
     pub plugins: Option<HashMap<GroupOrName, PluginEntry>>,
 }
 
+#[derive(Debug)]
 pub struct PluginManager {
     pub plugins: HashMap<PluginName, Plugins>,
     plugin_path: Vec<HashMap<GroupOrName, PluginEntry>>,
