@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 
-use genja_core::inventory::Hosts;
+use genja_core::inventory::{Hosts, TransformFunction};
 use genja_core::task::{Task, Tasks};
 pub type PathString = String;
 pub type GroupOrName = String;
@@ -108,6 +108,27 @@ impl Debug for dyn PluginRunner {
         )
     }
 }
+
+pub trait PluginTransformFunction: Plugin {
+    /// Returns a transform function instance for inventory processing.
+    fn transform_function(&self) -> TransformFunction;
+
+    /// Returns the group name
+    fn group(&self) -> String {
+        String::from("TransformFunctionPlugin")
+    }
+}
+
+impl Debug for dyn PluginTransformFunction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {{ name: {} }}",
+            PluginTransformFunction::group(self),
+            self.name()
+        )
+    }
+}
 pub trait PluginConnection: Plugin {
     // Open a connection to a device
     fn open(&self);
@@ -127,7 +148,8 @@ pub trait PluginConnection: Plugin {
 pub enum Plugins {
     Connection(Box<dyn PluginConnection>),
     Inventory(Box<dyn PluginInventory>),
-    Runner(Box<dyn PluginRunner>)
+    Runner(Box<dyn PluginRunner>),
+    TransformFunction(Box<dyn PluginTransformFunction>),
 }
 
 impl Plugins {
@@ -136,6 +158,7 @@ impl Plugins {
             Plugins::Connection(connection) => connection.name(),
             Plugins::Inventory(inventory) => inventory.name(),
             Plugins::Runner(runner) => runner.name(),
+            Plugins::TransformFunction(transform) => transform.name(),
         }
     }
 
@@ -144,6 +167,7 @@ impl Plugins {
             Plugins::Connection(_) => String::from("Connection"),
             Plugins::Inventory(_) => String::from("Inventory"),
             Plugins::Runner(_) => String::from("Runner"),
+            Plugins::TransformFunction(_) => String::from("TransformFunction"),
         }
     }
 
@@ -152,6 +176,7 @@ impl Plugins {
             Plugins::Connection(connection) => connection.execute(context),
             Plugins::Inventory(inventory) => inventory.execute(context),
             Plugins::Runner(runner) => runner.execute(context),
+            Plugins::TransformFunction(transform) => transform.execute(context),
         }
     }
 }

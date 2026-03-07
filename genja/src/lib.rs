@@ -1,4 +1,4 @@
-use genja_core::inventory::{Host, Inventory};
+use genja_core::inventory::{Host, Inventory, TransformFunctionOptions};
 use genja_core::{NatString, Settings};
 use plugin_manager::plugin_types::Plugins;
 use plugin_manager::plugin_types::PluginRunner;
@@ -14,7 +14,10 @@ pub enum GenjaError {
     InventoryNotLoaded,
     PluginNotFound(String),
     NotRunnerPlugin(String),
+    NotTransformPlugin(String),
     PluginLoad(Box<dyn Error>),
+    ConfigLoad(String),
+    InventoryLoad(String),
 }
 
 impl Display for GenjaError {
@@ -24,7 +27,12 @@ impl Display for GenjaError {
             GenjaError::InventoryNotLoaded => write!(f, "inventory has not been loaded"),
             GenjaError::PluginNotFound(name) => write!(f, "plugin '{name}' not found"),
             GenjaError::NotRunnerPlugin(name) => write!(f, "plugin '{name}' is not a runner plugin"),
+            GenjaError::NotTransformPlugin(name) => {
+                write!(f, "plugin '{name}' is not a transform function plugin")
+            }
             GenjaError::PluginLoad(err) => write!(f, "failed to load plugins: {err}"),
+            GenjaError::ConfigLoad(err) => write!(f, "failed to load settings: {err}"),
+            GenjaError::InventoryLoad(err) => write!(f, "failed to load inventory: {err}"),
         }
     }
 }
@@ -74,13 +82,76 @@ impl Genja {
         }
     }
 
-    pub fn load_plugins(&mut self) -> Result<(), GenjaError> {
-        let manager = PluginManager::new()
-            .activate_plugins()
-            .map_err(GenjaError::PluginLoad)?;
-        self.plugins = Arc::new(manager);
-        self.plugins_loaded = true;
+    pub fn from_settings_file(file_path: &str) -> Result<Self, GenjaError> {
+        let settings =
+            Settings::from_file(file_path).map_err(|err| GenjaError::ConfigLoad(err.to_string()))?;
+
+        let mut genja = Self::new();
+        genja.set_config(settings);
+        genja.load_plugins()?;
+        genja.load_inventory_from_settings()?;
+        Ok(genja)
+    }
+
+    pub fn load_inventory_from_settings(&mut self) -> Result<(), GenjaError> {
+        self.ensure_plugins_loaded()?;
+
+        let (hosts, groups, defaults) = self
+            .config
+            .inventory()
+            .load_inventory_files()
+            .map_err(GenjaError::InventoryLoad)?;
+
+        let mut builder = Inventory::builder().hosts(hosts);
+        if let Some(groups) = groups {
+            builder = builder.groups(groups);
+        }
+        if let Some(defaults) = defaults {
+            builder = builder.defaults(defaults);
+        }
+
+        if let Some(name) = self.config.inventory().transform_function() {
+            let plugin = self
+                .plugins
+                .get_plugin(name)
+                .ok_or_else(|| GenjaError::PluginNotFound(name.to_string()))?;
+
+            match plugin {
+                Plugins::TransformFunction(transform) => {
+                    builder = builder.transform_function(transform.transform_function());
+                }
+                _ => return Err(GenjaError::NotTransformPlugin(name.to_string())),
+            }
+
+            if let Some(options) = self.config.inventory().transform_function_options() {
+                builder = builder
+                    .transform_function_options(TransformFunctionOptions::new(options.clone()));
+            }
+        }
+
+        let inventory = builder.build();
+        self.load_inventory(inventory);
         Ok(())
+    }
+
+    pub fn load_plugins(&mut self) -> Result<(), GenjaError> {
+        match PluginManager::new().activate_plugins() {
+            Ok(manager) => {
+                self.plugins = Arc::new(manager);
+                self.plugins_loaded = true;
+                Ok(())
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                if msg.contains("No plugin metadata found in manifest") {
+                    self.plugins = Arc::new(PluginManager::new());
+                    self.plugins_loaded = true;
+                    Ok(())
+                } else {
+                    Err(GenjaError::PluginLoad(err))
+                }
+            }
+        }
     }
 
     pub fn load_inventory(&mut self, inventory: Inventory) {

@@ -212,7 +212,10 @@ pub mod plugin_types;
 
 use libloading::{Library, Symbol};
 use plugin_structs::{PluginCreate as PluginCreateNew, PluginResult as PluginResultNew};
-use plugin_types::{GroupOrName, PluginConnection, PluginEntry, PluginInventory, PluginName, Plugins};
+use plugin_types::{
+    GroupOrName, PluginConnection, PluginEntry, PluginInventory, PluginName, Plugins,
+    PluginTransformFunction,
+};
 use serde::Deserialize;
 use std::any::Any;
 use std::collections::{HashMap, hash_map};
@@ -413,6 +416,18 @@ impl PluginManager {
         })
     }
 
+    #[allow(clippy::borrowed_box)]
+    /// Gets a transform function plugin, returns None if the plugin is not a TransformFunction variant
+    pub fn get_transform_function_plugin(
+        &self,
+        name: &str,
+    ) -> Option<&Box<dyn PluginTransformFunction>> {
+        self.plugins.get(name).and_then(|plugin| match plugin {
+            Plugins::TransformFunction(transform) => Some(transform),
+            _ => None,
+        })
+    }
+
     /// Generic method to get plugins by variant type with a mapper function
     pub fn get_plugins_by_variant<'a, T>(
         &'a self,
@@ -447,6 +462,18 @@ impl PluginManager {
     #[allow(clippy::borrowed_box)]
     pub fn get_plugins_by_type_inventory(&self) -> Vec<(&String, &Box<dyn PluginInventory>)> {
         get_plugins_by_variant!(self, Plugins::Inventory, &Box<dyn PluginInventory>)
+    }
+
+    /// Gets all TransformFunction plugins with their trait objects
+    #[allow(clippy::borrowed_box)]
+    pub fn get_plugins_by_type_transform_function(
+        &self,
+    ) -> Vec<(&String, &Box<dyn PluginTransformFunction>)> {
+        get_plugins_by_variant!(
+            self,
+            Plugins::TransformFunction,
+            &Box<dyn PluginTransformFunction>
+        )
     }
 
     /// Deregisters the plugin with the given name.
