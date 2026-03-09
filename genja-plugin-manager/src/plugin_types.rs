@@ -1,3 +1,10 @@
+//! Plugin type system and shared aliases for the plugin manager.
+//!
+//! Defines core plugin traits, type aliases, and registry structures used by
+//! the plugin manager and plugin implementations.
+//! This module also provides the `Plugins` enum to work with heterogeneous
+//! plugin trait objects in a single collection.
+
 use libloading::Library;
 use serde::Deserialize;
 use std::any::Any;
@@ -13,6 +20,7 @@ pub type PluginName = String;
 pub type PluginResult = Result<(Library, Vec<Box<dyn Plugin>>), Box<dyn std::error::Error>>;
 pub type PluginCreate = unsafe fn() -> Vec<Box<dyn Plugin>>;
 
+/// Plugin entry in metadata, either a single path or a named group of paths.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum PluginEntry {
@@ -33,6 +41,9 @@ pub struct PluginManager {
     pub plugin_path: Vec<HashMap<GroupOrName, PluginEntry>>,
 }
 
+/// Base plugin interface implemented by all plugins.
+///
+/// Provides a name, an execution entry point, and an optional group label.
 pub trait Plugin: Send + Sync + Any {
     /// The name of the plugin. This is used to identify the plugin and
     /// to associate it with the context.
@@ -144,6 +155,10 @@ pub trait PluginConnection: Plugin {
         String::from("ConnectionPlugin")
     }
 }
+/// Heterogeneous container for supported plugin trait objects.
+///
+/// Each variant wraps a boxed trait object that implements a specific plugin
+/// interface.
 #[derive(Debug)]
 pub enum Plugins {
     Connection(Box<dyn PluginConnection>),
@@ -153,6 +168,7 @@ pub enum Plugins {
 }
 
 impl Plugins {
+    /// Return the plugin's declared name.
     pub fn name(&self) -> String {
         match self {
             Plugins::Connection(connection) => connection.name(),
@@ -162,6 +178,7 @@ impl Plugins {
         }
     }
 
+    /// Return the logical group name for this plugin variant.
     pub fn group_name(&self) -> String {
         match self {
             Plugins::Connection(_) => String::from("Connection"),
@@ -171,6 +188,7 @@ impl Plugins {
         }
     }
 
+    /// Execute the plugin with the provided context.
     pub fn execute(&self, context: &dyn Any) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Plugins::Connection(connection) => connection.execute(context),

@@ -229,9 +229,17 @@ pub struct Metadata {
     pub plugins: Option<HashMap<GroupOrName, PluginEntry>>,
 }
 
+/// Central registry and loader for dynamic plugins.
+///
+/// Holds the loaded plugin instances (`plugins`), metadata discovered from
+/// plugin manifests (`plugin_path`), and the underlying dynamic libraries
+/// (`libraries`) to keep them alive for the lifetime of the manager.
+///
+/// Note: `libraries` must be retained for as long as any plugin is in use,
+/// otherwise symbol pointers may become invalid.
 #[derive(Debug)]
 pub struct PluginManager {
-    pub plugins: HashMap<PluginName, Plugins>,
+    plugins: HashMap<PluginName, Plugins>,
     plugin_path: Vec<HashMap<GroupOrName, PluginEntry>>,
     libraries: Vec<libloading::Library>, // Add this to keep libraries alive
 }
@@ -241,6 +249,11 @@ impl Default for PluginManager {
         Self::new()
     }
 }
+/// Collect plugins matching a specific `Plugins` enum variant as trait objects.
+///
+/// This macro iterates the internal `plugins` map, filters by the given
+/// variant, and returns a collection of `(name, trait_object)` pairs.
+/// It is used to build typed views over the heterogeneous plugin registry.
 macro_rules! get_plugins_by_variant {
     ($self:expr, $variant:path, $trait_type:ty) => {
         $self
@@ -263,6 +276,11 @@ impl PluginManager {
         }
     }
 
+    /// Activate all plugins discovered from metadata and configured paths.
+    ///
+    /// Collects registrations from the plugin manifest and any entries in
+    /// `plugin_path`, then invokes activation for each entry. Returns the
+    /// updated `PluginManager` on success.
     pub fn activate_plugins(mut self) -> Result<PluginManager, Box<dyn std::error::Error>> {
         let meta_data = self.get_plugin_metadata();
         log::debug!("Plugin metadata: {:?}", meta_data);
@@ -300,11 +318,10 @@ impl PluginManager {
     /// inventory_plugin = "/path/to/inventory_plugin.so"
     /// ```
     pub fn get_plugin_metadata(&self) -> Metadata {
-        // FIXME: Rename the plugin_a_path variable
-        let plugin_a_path =
+        let plugin_path =
             std::env::var("CARGO_MANIFEST_PATH").unwrap_or_else(|_| ".".to_string());
 
-        let file_string = std::fs::read_to_string(plugin_a_path);
+        let file_string = std::fs::read_to_string(plugin_path);
         let manifest = match file_string {
             Ok(manifest) => manifest,
             Err(msg) => {
@@ -328,6 +345,10 @@ impl PluginManager {
         // metadata
     }
 
+    /// Load and register plugins for a single manifest entry.
+    ///
+    /// Supports both individual plugin paths and grouped plugin entries.
+    /// Loaded libraries are retained to keep symbols alive.
     fn activation_registration(
         &mut self,
         group_or_name: String,
@@ -356,6 +377,10 @@ impl PluginManager {
         Ok(())
     }
 
+    /// Load a dynamic library and invoke its `create_plugins` factory.
+    ///
+    /// Returns the opened library and the plugins it creates, or an error if
+    /// the file is missing, cannot be loaded, or the symbol is unavailable.
     pub fn load_plugin(&self, filename: &str) -> PluginResultNew {
         let path = Path::new(filename);
 
@@ -379,6 +404,9 @@ impl PluginManager {
         Ok((library, plugins))
     }
 
+    /// Insert a plugin into the registry by name.
+    ///
+    /// Panics if a plugin with the same name is already registered.
     pub fn register_plugin(&mut self, plugin: Plugins) {
         let name = plugin.name();
         log::info!("Registering plugin: {:?}", name);
