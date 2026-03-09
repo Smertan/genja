@@ -2773,6 +2773,35 @@ impl Inventory {
         HostsView { inventory: self }
     }
 
+    /// Returns a reference to the raw hosts collection without applying transforms.
+    ///
+    /// This accessor provides direct, read-only access to the underlying `Hosts`
+    /// data stored in the inventory. No transform function is applied, and no
+    /// cache is populated. This is useful for debugging, inspection, or when you
+    /// explicitly need the original, unmodified host data.
+    ///
+    /// # Returns
+    ///
+    /// Returns a reference to the raw `Hosts` collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .hosts(hosts)
+    ///     .build();
+    ///
+    /// let raw_hosts = inventory.hosts_raw();
+    /// assert_eq!(raw_hosts.len(), 1);
+    /// ```
+    pub fn hosts_raw(&self) -> &Hosts {
+        &self.hosts
+    }
+
     /// Returns a view of the inventory's groups collection with transform functions applied.
     ///
     /// This method provides access to the inventory's groups through a `GroupsView` wrapper
@@ -2810,6 +2839,36 @@ impl Inventory {
         })
     }
 
+    /// Returns a reference to the raw groups collection without applying transforms.
+    ///
+    /// This accessor provides direct, read-only access to the underlying `Groups`
+    /// data stored in the inventory. No transform function is applied, and no
+    /// cache is populated. This is useful for debugging, inspection, or when you
+    /// explicitly need the original, unmodified group data.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(&Groups)` if groups are configured in the inventory, or `None`
+    /// if no groups are present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Groups, Group, BaseBuilderHost};
+    /// let mut groups = Groups::new();
+    /// groups.add_group("core", Group::builder().platform("linux").build());
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .groups(groups)
+    ///     .build();
+    ///
+    /// let raw_groups = inventory.groups_raw().expect("groups exist");
+    /// assert_eq!(raw_groups.len(), 1);
+    /// ```
+    pub fn groups_raw(&self) -> Option<&Groups> {
+        self.groups.as_ref()
+    }
+
     /// Returns the inventory's default configuration after applying any configured transform function.
     ///
     /// This method provides access to the inventory-wide defaults that apply to all hosts and groups.
@@ -2844,6 +2903,37 @@ impl Inventory {
         self.defaults
             .as_ref()
             .map(|defaults| self.transform_defaults_value(defaults))
+    }
+
+    /// Returns a reference to the raw defaults configuration without applying transforms.
+    ///
+    /// This accessor provides direct, read-only access to the underlying `Defaults`
+    /// data stored in the inventory. No transform function is applied. This is useful
+    /// for debugging, inspection, or when you explicitly need the original defaults.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(&Defaults)` if defaults are configured in the inventory, or `None`
+    /// if no defaults are set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Defaults};
+    /// let defaults = Defaults::builder()
+    ///     .username("admin")
+    ///     .port(22)
+    ///     .build();
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .defaults(defaults)
+    ///     .build();
+    ///
+    /// let raw_defaults = inventory.defaults_raw().expect("defaults exist");
+    /// assert_eq!(raw_defaults.username(), Some("admin"));
+    /// ```
+    pub fn defaults_raw(&self) -> Option<&Defaults> {
+        self.defaults.as_ref()
     }
 
     /// Returns a reference to the transform function options configured for this inventory.

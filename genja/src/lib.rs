@@ -45,6 +45,20 @@ impl Error for GenjaError {}
 /// 1) `load_plugins()` to discover/register plugins.
 /// 2) `load_inventory(...)` to set runtime inventory.
 /// 3) call runner-related methods.
+///
+/// Note: The derived `Debug` output for `Genja` does not apply inventory transform
+/// functions. If you print `Genja` for debugging, the inventory data shown is the
+/// raw, untransformed inventory state.
+///
+/// # Examples
+///
+/// Create an instance from a settings file:
+///
+/// ```
+/// # use genja::Genja;
+/// let genja = Genja::from_settings_file("settings.yml");
+/// assert!(genja.is_ok());
+/// ```
 #[derive(Debug, Clone)]
 pub struct Genja {
     inventory: Option<Arc<Inventory>>,
@@ -170,6 +184,17 @@ impl Genja {
 
     pub fn config(&self) -> &Settings {
         &self.config
+    }
+
+    /// Returns a reference to the loaded inventory, if available.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GenjaError::InventoryNotLoaded` if no inventory has been loaded yet.
+    pub fn inventory(&self) -> Result<&Inventory, GenjaError> {
+        self.inventory
+            .as_deref()
+            .ok_or(GenjaError::InventoryNotLoaded)
     }
 
     pub fn set_config(&mut self, config: Settings) {
