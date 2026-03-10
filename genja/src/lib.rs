@@ -63,7 +63,7 @@ impl Error for GenjaError {}
 pub struct Genja {
     inventory: Option<Arc<Inventory>>,
     host_ids: Arc<Vec<NatString>>,
-    config: Arc<Settings>,
+    settings: Arc<Settings>,
     plugins: Arc<PluginManager>,
     plugins_loaded: bool,
 }
@@ -79,7 +79,7 @@ impl Genja {
         Self {
             inventory: None,
             host_ids: Arc::new(Vec::new()),
-            config: Arc::new(Settings::default()),
+            settings: Arc::new(Settings::default()),
             plugins: Arc::new(PluginManager::new()),
             plugins_loaded: false,
         }
@@ -90,7 +90,7 @@ impl Genja {
         Self {
             inventory: Some(Arc::new(inventory)),
             host_ids: Arc::new(host_ids),
-            config: Arc::new(Settings::default()),
+            settings: Arc::new(Settings::default()),
             plugins: Arc::new(PluginManager::new()),
             plugins_loaded: false,
         }
@@ -101,7 +101,7 @@ impl Genja {
             Settings::from_file(file_path).map_err(|err| GenjaError::ConfigLoad(err.to_string()))?;
 
         let mut genja = Self::new();
-        genja.set_config(settings);
+        genja.set_settings(settings);
         genja.load_plugins()?;
         genja.load_inventory_from_settings()?;
         Ok(genja)
@@ -111,7 +111,7 @@ impl Genja {
         self.ensure_plugins_loaded()?;
 
         let (hosts, groups, defaults) = self
-            .config
+            .settings
             .inventory()
             .load_inventory_files()
             .map_err(GenjaError::InventoryLoad)?;
@@ -124,7 +124,7 @@ impl Genja {
             builder = builder.defaults(defaults);
         }
 
-        if let Some(name) = self.config.inventory().transform_function() {
+        if let Some(name) = self.settings.inventory().transform_function() {
             let plugin = self
                 .plugins
                 .get_plugin(name)
@@ -137,7 +137,7 @@ impl Genja {
                 _ => return Err(GenjaError::NotTransformPlugin(name.to_string())),
             }
 
-            if let Some(options) = self.config.inventory().transform_function_options() {
+            if let Some(options) = self.settings.inventory().transform_function_options() {
                 builder = builder
                     .transform_function_options(TransformFunctionOptions::new(options.clone()));
             }
@@ -182,8 +182,8 @@ impl Genja {
         self.inventory.is_some()
     }
 
-    pub fn config(&self) -> &Settings {
-        &self.config
+    pub fn settings(&self) -> &Settings {
+        &self.settings
     }
 
     /// Returns a reference to the loaded inventory, if available.
@@ -197,8 +197,8 @@ impl Genja {
             .ok_or(GenjaError::InventoryNotLoaded)
     }
 
-    pub fn set_config(&mut self, config: Settings) {
-        self.config = Arc::new(config);
+    pub fn set_settings(&mut self, settings: Settings) {
+        self.settings = Arc::new(settings);
     }
 
     pub fn plugin_manager(&self) -> &PluginManager {
@@ -294,7 +294,7 @@ impl Genja {
         Ok(Self {
             inventory: Some(Arc::clone(inventory)),
             host_ids: Arc::new(host_ids),
-            config: Arc::clone(&self.config),
+            settings: Arc::clone(&self.settings),
             plugins: Arc::clone(&self.plugins),
             plugins_loaded: self.plugins_loaded,
         })

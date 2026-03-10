@@ -14,10 +14,15 @@ use std::fmt::Debug;
 
 use genja_core::inventory::{Hosts, TransformFunction};
 use genja_core::task::{Task, Tasks};
+/// Filesystem path to a plugin or plugin metadata entry.
 pub type PathString = String;
+/// Shared alias for a group name or plugin name key.
 pub type GroupOrName = String;
+/// Display name used to identify a plugin in the registry.
 pub type PluginName = String;
+/// Result of loading a plugin library and its exported plugin instances.
 pub type PluginResult = Result<(Library, Vec<Box<dyn Plugin>>), Box<dyn std::error::Error>>;
+/// Signature for a plugin factory function exported by dynamic libraries.
 pub type PluginCreate = unsafe fn() -> Vec<Box<dyn Plugin>>;
 
 /// Plugin entry in metadata, either a single path or a named group of paths.
@@ -58,8 +63,14 @@ pub trait Plugin: Send + Sync + Any {
     }
 }
 
+/// Loads or prepares inventory data for the system.
+///
+/// Inventory plugins override the default inventory loading behavior provided
+/// by the settings module. They provide the source of host data consumed by
+/// runners and transforms. Implementations should be safe to call from multiple
+/// threads and should avoid mutating shared state without synchronization.
 pub trait PluginInventory: Plugin {
-    // loads the inventory
+    /// Load the inventory data into the system.
     fn load(&self);
 
     /// Returns the group name
@@ -96,11 +107,16 @@ impl Debug for dyn PluginConnection {
     }
 }
 
+/// Executes tasks against a set of hosts.
+///
+/// Runner plugins provide task execution for a given inventory and task list.
+/// Implementers should be safe to call from multiple threads and should avoid
+/// mutating shared state without synchronization.
 pub trait PluginRunner: Plugin {
-    // Run a single task
+    /// Run a single task against the provided hosts.
     fn run(&self, task: Task, hosts: &Hosts);
 
-    // Run all tasks in the task vec
+    /// Run all tasks in the provided task list against the provided hosts.
     fn run_tasks(&self, tasks: Tasks, hosts: &Hosts);
 
     /// Returns the group name
@@ -120,6 +136,10 @@ impl Debug for dyn PluginRunner {
     }
 }
 
+/// Provides an inventory transform function.
+///
+/// Transform-function plugins supply a `TransformFunction` used to modify or
+/// normalize inventory data during loading.
 pub trait PluginTransformFunction: Plugin {
     /// Returns a transform function instance for inventory processing.
     fn transform_function(&self) -> TransformFunction;
@@ -140,14 +160,18 @@ impl Debug for dyn PluginTransformFunction {
         )
     }
 }
+/// Manages device connections for plugins that need an explicit session.
+///
+/// Connection plugins provide lifecycle hooks for establishing and tearing down
+/// connections and expose a connection operation for downstream use.
 pub trait PluginConnection: Plugin {
-    // Open a connection to a device
+    /// Open a connection to a device.
     fn open(&self);
 
-    // Close a connection to a device
+    /// Close a connection to a device.
     fn close(&self);
 
-    // Run all tasks in the task vec
+    /// Perform a connection operation (e.g., handshake or session check).
     fn connection(&self);
 
     /// Returns the group name
@@ -155,6 +179,7 @@ pub trait PluginConnection: Plugin {
         String::from("ConnectionPlugin")
     }
 }
+
 /// Heterogeneous container for supported plugin trait objects.
 ///
 /// Each variant wraps a boxed trait object that implements a specific plugin
