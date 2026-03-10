@@ -60,7 +60,7 @@
 //! ## SSH Validation
 //! SSH config is validated automatically when calling `Settings::from_file`.
 //! For manual validation, use `SSHConfig::validate`.
-use crate::inventory::{Defaults, Groups, Hosts};
+use crate::inventory::{Defaults, Groups, Hosts, TransformFunctionOptions};
 use config::{Config as ConfigBuilder, ConfigError, File, FileFormat};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -443,7 +443,7 @@ pub struct InventoryConfig {
     plugin: String,
     options: OptionsConfig,
     transform_function: Option<String>,
-    transform_function_options: Option<serde_json::Value>,
+    transform_function_options: Option<TransformFunctionOptions>,
 }
 
 impl Default for InventoryConfig {
@@ -474,7 +474,7 @@ impl InventoryConfig {
         self.transform_function.as_deref()
     }
 
-    pub fn transform_function_options(&self) -> Option<&serde_json::Value> {
+    pub fn transform_function_options(&self) -> Option<&TransformFunctionOptions> {
         self.transform_function_options.as_ref()
     }
 }
@@ -506,6 +506,7 @@ impl InventoryConfig {
 /// # Examples
 ///
 /// ```
+/// use genja_core::inventory::TransformFunctionOptions;
 /// use genja_core::settings::{InventoryConfig, OptionsConfig};
 ///
 /// // Build with custom plugin and options
@@ -515,7 +516,9 @@ impl InventoryConfig {
 ///         .hosts_file("/path/to/hosts.yaml")
 ///         .build())
 ///     .transform_function("my_transform")
-///     .transform_function_options(serde_json::json!({"key": "value"}))
+///     .transform_function_options(
+///         TransformFunctionOptions::new(serde_json::json!({"key": "value"})),
+///     )
 ///     .build();
 ///
 /// // Build with defaults
@@ -525,7 +528,7 @@ pub struct InventoryConfigBuilder {
     plugin: Option<String>,
     options: Option<OptionsConfig>,
     transform_function: Option<String>,
-    transform_function_options: Option<serde_json::Value>,
+    transform_function_options: Option<TransformFunctionOptions>,
 }
 
 impl InventoryConfigBuilder {
@@ -544,7 +547,7 @@ impl InventoryConfigBuilder {
         self
     }
 
-    pub fn transform_function_options(mut self, options: serde_json::Value) -> Self {
+    pub fn transform_function_options(mut self, options: TransformFunctionOptions) -> Self {
         self.transform_function_options = Some(options);
         self
     }

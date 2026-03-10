@@ -1,7 +1,6 @@
-use genja_core::inventory::{Host, Inventory, TransformFunctionOptions};
+use genja_core::inventory::{Host, Inventory};
 use genja_core::{NatString, Settings};
-use plugin_manager::plugin_types::Plugins;
-use plugin_manager::plugin_types::PluginRunner;
+use plugin_manager::plugin_types::{PluginInventory, PluginRunner, Plugins};
 use plugin_manager::PluginManager;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -12,8 +11,8 @@ pub enum GenjaError {
     PluginsNotLoaded,
     InventoryNotLoaded,
     PluginNotFound(String),
+    NotInventoryPlugin(String),
     NotRunnerPlugin(String),
-    NotTransformPlugin(String),
     PluginLoad(Box<dyn Error>),
     ConfigLoad(String),
     InventoryLoad(String),
@@ -25,10 +24,10 @@ impl Display for GenjaError {
             GenjaError::PluginsNotLoaded => write!(f, "plugins have not been loaded"),
             GenjaError::InventoryNotLoaded => write!(f, "inventory has not been loaded"),
             GenjaError::PluginNotFound(name) => write!(f, "plugin '{name}' not found"),
-            GenjaError::NotRunnerPlugin(name) => write!(f, "plugin '{name}' is not a runner plugin"),
-            GenjaError::NotTransformPlugin(name) => {
-                write!(f, "plugin '{name}' is not a transform function plugin")
+            GenjaError::NotInventoryPlugin(name) => {
+                write!(f, "plugin '{name}' is not an inventory plugin")
             }
+            GenjaError::NotRunnerPlugin(name) => write!(f, "plugin '{name}' is not a runner plugin"),
             GenjaError::PluginLoad(err) => write!(f, "failed to load plugins: {err}"),
             GenjaError::ConfigLoad(err) => write!(f, "failed to load settings: {err}"),
             GenjaError::InventoryLoad(err) => write!(f, "failed to load inventory: {err}"),
@@ -60,7 +59,6 @@ impl Error for GenjaError {}
 /// # std::fs::write(&path, "").unwrap();
 /// let genja = Genja::from_settings_file(path.to_str().unwrap());
 /// assert!(genja.is_ok());
-/// # std::fs::remove_file(&path).ok();
 /// ```
 #[derive(Debug, Clone)]
 pub struct Genja {
@@ -70,6 +68,8 @@ pub struct Genja {
     plugins: Arc<PluginManager>,
     plugins_loaded: bool,
 }
+
+pub mod plugins;
 
 impl Default for Genja {
     fn default() -> Self {
@@ -112,41 +112,38 @@ impl Genja {
 
     pub fn load_inventory_from_settings(&mut self) -> Result<(), GenjaError> {
         self.ensure_plugins_loaded()?;
+        let inventory_cfg = self.settings.inventory();
+        let plugin_name = inventory_cfg.plugin();
 
-        let (hosts, groups, defaults) = self
-            .settings
-            .inventory()
-            .load_inventory_files()
-            .map_err(GenjaError::InventoryLoad)?;
-
-        let mut builder = Inventory::builder().hosts(hosts);
-        if let Some(groups) = groups {
-            builder = builder.groups(groups);
-        }
-        if let Some(defaults) = defaults {
-            builder = builder.defaults(defaults);
+        if plugin_name == "FileInventoryPlugin" {
+            let default = crate::plugins::DefaultInventoryPlugin;
+            let inventory = default
+                .load(&self.settings, &self.plugins)
+                .map_err(|err| GenjaError::InventoryLoad(err.to_string()))?;
+            self.load_inventory(inventory);
+            return Ok(());
         }
 
-        if let Some(name) = self.settings.inventory().transform_function() {
-            let plugin = self
-                .plugins
-                .get_plugin(name)
-                .ok_or_else(|| GenjaError::PluginNotFound(name.to_string()))?;
-
-            match plugin {
-                Plugins::TransformFunction(transform) => {
-                    builder = builder.transform_function(transform.transform_function());
-                }
-                _ => return Err(GenjaError::NotTransformPlugin(name.to_string())),
+        if !plugin_name.is_empty() {
+            if let Some(plugin) = self.plugins.get_inventory_plugin(plugin_name) {
+                let inventory = plugin
+                    .load(&self.settings, &self.plugins)
+                    .map_err(|err| GenjaError::InventoryLoad(err.to_string()))?;
+                self.load_inventory(inventory);
+                return Ok(());
             }
 
-            if let Some(options) = self.settings.inventory().transform_function_options() {
-                builder = builder
-                    .transform_function_options(TransformFunctionOptions::new(options.clone()));
+            if self.plugins.get_plugin(plugin_name).is_some() {
+                return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
             }
+
+            return Err(GenjaError::PluginNotFound(plugin_name.to_string()));
         }
 
-        let inventory = builder.build();
+        let default = crate::plugins::DefaultInventoryPlugin;
+        let inventory = default
+            .load(&self.settings, &self.plugins)
+            .map_err(|err| GenjaError::InventoryLoad(err.to_string()))?;
         self.load_inventory(inventory);
         Ok(())
     }
