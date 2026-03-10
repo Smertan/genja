@@ -13,7 +13,8 @@ use std::fmt;
 use std::fmt::Debug;
 
 use genja_core::inventory::{Hosts, Inventory, TransformFunction};
-use genja_core::InventoryLoadError;
+use genja_core::{InventoryLoadError, Settings};
+use crate::PluginManager;
 use genja_core::task::{Task, Tasks};
 /// Filesystem path to a plugin or plugin metadata entry.
 pub type PathString = String;
@@ -40,12 +41,6 @@ pub struct PluginInfo {
     pub group: Option<String>,
 }
 
-/// Manages the lifecycle of loaded plugins.
-pub struct PluginManager {
-    pub plugins: HashMap<String, PluginInfo>,
-    // plugin_path: Vec<String>
-    pub plugin_path: Vec<HashMap<GroupOrName, PluginEntry>>,
-}
 
 /// Base plugin interface implemented by all plugins.
 ///
@@ -68,7 +63,11 @@ pub trait Plugin: Send + Sync + Any {
 /// threads and should avoid mutating shared state without synchronization.
 pub trait PluginInventory: Plugin {
     /// Load and return inventory data for the system.
-    fn load(&self) -> Result<Inventory, InventoryLoadError>;
+    fn load(
+        &self,
+        settings: &Settings,
+        plugins: &PluginManager,
+    ) -> Result<Inventory, InventoryLoadError>;
 
     /// Returns the group name
     fn group(&self) -> String {
@@ -209,6 +208,4 @@ impl Plugins {
             Plugins::TransformFunction(_) => String::from("TransformFunction"),
         }
     }
-
-    // No shared execute hook. Use the specific plugin trait APIs instead.
 }
