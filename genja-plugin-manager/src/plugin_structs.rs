@@ -1,4 +1,6 @@
 use crate::plugin_types::{Plugin, PluginInventory, Plugins};
+use genja_core::inventory::Inventory;
+use genja_core::InventoryLoadError;
 use libloading::Library;
 use std::collections::{HashMap, hash_map};
 
@@ -48,9 +50,9 @@ impl InventoryPlugins {
 }
 
 impl PluginInventory for InventoryPlugins {
-    fn load(&self) {
-        println!("Executing load method in InventoryPlugins");
-        // Load inventory plugins from a file or database
+    fn load(&self) -> Result<Inventory, InventoryLoadError> {
+        // Placeholder: return an empty inventory for now.
+        Ok(Inventory::builder().build())
     }
 }
 

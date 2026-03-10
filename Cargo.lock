@@ -935,6 +935,7 @@ dependencies = [
 name = "plugin_inventory"
 version = "0.1.0"
 dependencies = [
+ "genja-core",
  "genja-plugin-manager",
 ]
 

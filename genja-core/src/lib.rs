@@ -58,6 +58,7 @@
 //! }
 //! ```
 
+pub mod errors;
 pub mod inventory;
 pub mod settings;
 pub mod types;
@@ -65,3 +66,4 @@ pub mod task;
 
 pub use settings::Settings;
 pub use types::{CustomTreeMap, NatString};
+pub use errors::InventoryLoadError;

@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 
-use genja_core::inventory::{Hosts, TransformFunction};
+use genja_core::inventory::{Hosts, Inventory, TransformFunction};
+use genja_core::InventoryLoadError;
 use genja_core::task::{Task, Tasks};
 /// Filesystem path to a plugin or plugin metadata entry.
 pub type PathString = String;
@@ -66,8 +67,8 @@ pub trait Plugin: Send + Sync + Any {
 /// runners and transforms. Implementations should be safe to call from multiple
 /// threads and should avoid mutating shared state without synchronization.
 pub trait PluginInventory: Plugin {
-    /// Load the inventory data into the system.
-    fn load(&self);
+    /// Load and return inventory data for the system.
+    fn load(&self) -> Result<Inventory, InventoryLoadError>;
 
     /// Returns the group name
     fn group(&self) -> String {

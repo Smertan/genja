@@ -1,3 +1,5 @@
+use genja_core::inventory::Inventory;
+use genja_core::InventoryLoadError;
 use plugin_manager::plugin_types::{Plugin, PluginInventory};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -9,7 +11,7 @@ impl Plugin for InventoryA {
     }
 }
 impl PluginInventory for InventoryA {
-    fn load(&self) {
-        println!("Executing other method in Inventory A");
+    fn load(&self) -> Result<Inventory, InventoryLoadError> {
+        Ok(Inventory::builder().build())
     }
 }
