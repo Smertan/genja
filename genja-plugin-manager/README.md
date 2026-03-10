@@ -38,11 +38,13 @@ genja-plugin-manager = "0.1.0"
 
 ## Creating Plugins
 
-To create a plugin, implement the `Plugin` trait and export a `create_plugins` function:
+To create a plugin, implement the `Plugin` trait along with a typed plugin trait
+such as `PluginRunner`, then export a `create_plugins` function:
 
 ```rust
-use plugin_manager::Plugin;
-use std::any::Any;
+use genja_core::inventory::Hosts;
+use genja_core::task::{Task, Tasks};
+use plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
 
 #[derive(Debug)]
 struct MyPlugin;
@@ -51,16 +53,16 @@ impl Plugin for MyPlugin {
     fn name(&self) -> String {
         "my_plugin".to_string()
     }
-
-    fn execute(&self, _context: &dyn Any) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Executing MyPlugin");
-        Ok(())
-    }
 }
 
 #[unsafe(no_mangle)]
-pub fn create_plugins() -> Vec<Box<dyn Plugin>> {
-    vec![Box::new(MyPlugin)]
+pub fn create_plugins() -> Vec<Plugins> {
+    vec![Plugins::Runner(Box::new(MyPlugin))]
+}
+
+impl PluginRunner for MyPlugin {
+    fn run(&self, _task: Task, _hosts: &Hosts) {}
+    fn run_tasks(&self, _tasks: Tasks, _hosts: &Hosts) {}
 }
 ```
 
@@ -210,8 +212,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Activate plugins based on metadata in Cargo.toml
     plugin_manager = plugin_manager.activate_plugins()?;
     
-    // Execute a specific plugin
-    plugin_manager.execute_plugin("plugin_a", &())?;
+    // Access a specific plugin by type
+    if let Some(runner) = plugin_manager.get_runner_plugin("my_plugin") {
+        // runner.run(...);
+    }
     
     // Deregister a plugin
     let deregistered = plugin_manager.deregister_plugin("plugin_b");

@@ -3,7 +3,6 @@ use genja_core::{NatString, Settings};
 use plugin_manager::plugin_types::Plugins;
 use plugin_manager::plugin_types::PluginRunner;
 use plugin_manager::PluginManager;
-use std::any::Any;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -56,8 +55,12 @@ impl Error for GenjaError {}
 ///
 /// ```
 /// # use genja::Genja;
-/// let genja = Genja::from_settings_file("settings.yml");
+/// # let filename = format!("genja_settings_{}.yml", std::process::id());
+/// # let path = std::env::temp_dir().join(filename);
+/// # std::fs::write(&path, "").unwrap();
+/// let genja = Genja::from_settings_file(path.to_str().unwrap());
 /// assert!(genja.is_ok());
+/// # std::fs::remove_file(&path).ok();
 /// ```
 #[derive(Debug, Clone)]
 pub struct Genja {
@@ -203,13 +206,6 @@ impl Genja {
 
     pub fn plugin_manager(&self) -> &PluginManager {
         self.plugins.as_ref()
-    }
-
-    pub fn execute_plugin(&self, name: &str, context: &dyn Any) -> Result<(), GenjaError> {
-        self.ensure_plugins_loaded()?;
-        self.plugins
-            .execute_plugin(name, context)
-            .map_err(GenjaError::PluginLoad)
     }
 
     /// Guarded access for runner plugins.

@@ -48,14 +48,10 @@ pub struct PluginManager {
 
 /// Base plugin interface implemented by all plugins.
 ///
-/// Provides a name, an execution entry point, and an optional group label.
+/// Provides a name and an optional group label.
 pub trait Plugin: Send + Sync + Any {
-    /// The name of the plugin. This is used to identify the plugin and
-    /// to associate it with the context.
+    /// The name of the plugin. This is used to identify the plugin.
     fn name(&self) -> String;
-
-    /// Executes a single function with the provided context.
-    fn execute(&self, context: &dyn Any) -> Result<(), Box<dyn std::error::Error>>;
 
     /// Returns the group name
     fn group(&self) -> String {
@@ -213,13 +209,5 @@ impl Plugins {
         }
     }
 
-    /// Execute the plugin with the provided context.
-    pub fn execute(&self, context: &dyn Any) -> Result<(), Box<dyn std::error::Error>> {
-        match self {
-            Plugins::Connection(connection) => connection.execute(context),
-            Plugins::Inventory(inventory) => inventory.execute(context),
-            Plugins::Runner(runner) => runner.execute(context),
-            Plugins::TransformFunction(transform) => transform.execute(context),
-        }
-    }
+    // No shared execute hook. Use the specific plugin trait APIs instead.
 }

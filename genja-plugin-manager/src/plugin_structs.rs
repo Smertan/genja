@@ -1,8 +1,6 @@
 use crate::plugin_types::{Plugin, PluginInventory, Plugins};
 use libloading::Library;
-use std::any::Any;
 use std::collections::{HashMap, hash_map};
-use std::error::Error;
 
 pub type PluginCreate = unsafe fn() -> Vec<Plugins>;
 pub type PluginResult = Result<(Library, Vec<Plugins>), Box<dyn std::error::Error>>;
@@ -59,15 +57,5 @@ impl PluginInventory for InventoryPlugins {
 impl Plugin for InventoryPlugins {
     fn name(&self) -> String {
         String::from("Inventory Plugins")
-    }
-
-    fn execute(&self, context: &dyn Any) -> Result<(), Box<dyn Error>> {
-        // Or iterate through and execute individual plugins:
-        for (name, plugin) in &self.plugins {
-            log::info!("Executing inventory plugin: {}", name);
-            plugin.execute(context)?;
-        }
-
-        Ok(())
     }
 }

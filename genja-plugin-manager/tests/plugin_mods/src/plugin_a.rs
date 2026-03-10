@@ -1,5 +1,4 @@
 use plugin_manager::plugin_types::{Plugin, PluginConnection};
-use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginA;
@@ -7,11 +6,6 @@ pub struct PluginA;
 impl Plugin for PluginA {
     fn name(&self) -> String {
         String::from("plugin_a")
-    }
-
-    fn execute(&self, _context: &dyn Any) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Executing Plugin A");
-        Ok(())
     }
 }
 

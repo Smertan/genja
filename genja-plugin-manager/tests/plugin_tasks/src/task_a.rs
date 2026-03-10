@@ -1,5 +1,4 @@
 use plugin_manager::plugin_types::{Plugin, PluginConnection};
-use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskA;
@@ -7,11 +6,6 @@ pub struct TaskA;
 impl Plugin for TaskA {
     fn name(&self) -> String {
         String::from("task_a")
-    }
-
-    fn execute(&self, _context: &dyn Any) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Executing Task A");
-        Ok(())
     }
 }
 

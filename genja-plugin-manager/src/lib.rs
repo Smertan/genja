@@ -11,7 +11,7 @@
 //! - Dynamic loading of plugins from shared object files (.so)
 //! - Support for individual and grouped plugins
 //! - Plugin registration and deregistration
-//! - Execution of plugin functionality
+//! - Registry access for typed plugin functionality
 //! - Metadata-driven plugin configuration
 //!
 //!
@@ -20,8 +20,9 @@
 //! To create a plugin, implement the `Plugin` trait and export a `create_plugins` function:
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::Plugin;
-//! use std::any::Any;
+//! use genja_core::inventory::Hosts;
+//! use genja_core::task::{Task, Tasks};
+//! use plugin_manager::plugin_types::{Plugin, PluginRunner};
 //!
 //! #[derive(Debug)]
 //! struct MyPlugin;
@@ -31,15 +32,16 @@
 //!         "my_plugin".to_string()
 //!     }
 //!
-//!     fn execute(&self, _context: &dyn Any) -> Result<(), Box<dyn std::error::Error>> {
-//!         println!("Executing MyPlugin");
-//!         Ok(())
-//!     }
+//! }
+//!
+//! impl PluginRunner for MyPlugin {
+//!     fn run(&self, _task: Task, _hosts: &Hosts) {}
+//!     fn run_tasks(&self, _tasks: Tasks, _hosts: &Hosts) {}
 //! }
 //!
 //! #[unsafe(no_mangle)]
-//! pub fn create_plugins() -> Vec<Box<dyn Plugin>> {
-//!     vec![Box::new(MyPlugin)]
+//! pub fn create_plugins() -> Vec<plugin_manager::plugin_types::Plugins> {
+//!     vec![plugin_manager::plugin_types::Plugins::Runner(Box::new(MyPlugin))]
 //! }
 //! ```
 //!
@@ -187,8 +189,10 @@
 //! // Activate plugins based on metadata in Cargo.toml
 //! plugin_manager = plugin_manager.activate_plugins()?;
 //!
-//! // Execute a specific plugin
-//! plugin_manager.execute_plugin("plugin_a", &())?;
+//! // Access a specific plugin by type
+//! if let Some(runner) = plugin_manager.get_runner_plugin("my_plugin") {
+//!     // runner.run(...);
+//! }
 //!
 //! // Deregister a plugin
 //! let deregistered = plugin_manager.deregister_plugin("plugin_b");
@@ -213,11 +217,10 @@ pub mod plugin_types;
 use libloading::{Library, Symbol};
 use plugin_structs::{PluginCreate as PluginCreateNew, PluginResult as PluginResultNew};
 use plugin_types::{
-    GroupOrName, PluginConnection, PluginEntry, PluginInventory, PluginName, Plugins,
-    PluginTransformFunction,
+    GroupOrName, PluginConnection, PluginEntry, PluginInventory, PluginName, PluginRunner,
+    PluginTransformFunction, Plugins,
 };
 use serde::Deserialize;
-use std::any::Any;
 use std::collections::{HashMap, hash_map};
 use std::path::Path;
 // use std::error::Error;
@@ -537,18 +540,13 @@ impl PluginManager {
             .collect()
     }
 
-    pub fn execute_plugin(
-        &self,
-        name: &str,
-        context: &dyn Any,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(plugin) = self.plugins.get(name) {
-            plugin.execute(context)
-        } else {
-            let msg = format!("Plugin '{}' not found", name);
-            log::error!("{msg}");
-            Err(msg.into())
-        }
+    /// Gets a runner plugin by name, if registered.
+    #[allow(clippy::borrowed_box)]
+    pub fn get_runner_plugin(&self, name: &str) -> Option<&Box<dyn PluginRunner>> {
+        self.plugins.get(name).and_then(|plugin| match plugin {
+            Plugins::Runner(runner) => Some(runner),
+            _ => None,
+        })
     }
     pub fn with_path(mut self, path: &str, group: Option<&str>) -> Result<Self, Error> {
         let path = Path::new(&path);
@@ -768,19 +766,6 @@ mod tests {
         assert_eq!(plugin_manager.plugins.len(), 0);
         plugin_manager = plugin_manager.activate_plugins().unwrap();
         assert_eq!(plugin_manager.plugins.len(), 3);
-    }
-
-    #[test]
-    fn execute_plugin_test() {
-        set_env_var();
-        let plugin_manager = PluginManager::new().activate_plugins().unwrap();
-        let plugin_name = "plugin_a";
-        if let Some(plugin) = plugin_manager.get_plugin(plugin_name) {
-            let execution = plugin.execute(&());
-            assert!(execution.is_ok());
-        } else {
-            panic!("Plugin {} not found", plugin_name);
-        }
     }
 
     #[test]
