@@ -1,3 +1,32 @@
+//! Plugin integration layer for Genja.
+//!
+//! This module wires Genja Core settings to the plugin system and provides
+//! the default inventory plugin implementation used by the runtime.
+//!
+//! **Key points**
+//! - Plugins are managed by `plugin_manager::PluginManager`.
+//! - Inventory loading is delegated to an inventory plugin.
+//! - `DefaultInventoryPlugin` loads files defined in settings and optionally
+//!   applies a transform function plugin.
+//!
+//! # Configuration
+//!
+//! Inventory loading is driven by `Settings::inventory()`; it specifies the
+//! inventory files, optional groups/defaults, and transform function settings.
+//!
+//! # Examples
+//!
+//! ```no_run
+//! use genja::plugins::DefaultInventoryPlugin;
+//! use genja_core::Settings;
+//! use plugin_manager::PluginManager;
+//!
+//! let settings = Settings::default();
+//! let plugins = PluginManager::new();
+//! let inventory = DefaultInventoryPlugin
+//!     .load(&settings, &plugins)
+//!     .expect("inventory load failed");
+//! ```
 use genja_core::inventory::Inventory;
 use genja_core::{InventoryLoadError, Settings};
 use plugin_manager::PluginManager;
