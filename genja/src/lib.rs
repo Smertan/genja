@@ -1,7 +1,7 @@
 use genja_core::inventory::{Host, Inventory};
 use genja_core::{NatString, Settings};
-use plugin_manager::plugin_types::{PluginInventory, PluginRunner, Plugins};
 use plugin_manager::PluginManager;
+use plugin_manager::plugin_types::{PluginInventory, PluginRunner, Plugins};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -27,7 +27,9 @@ impl Display for GenjaError {
             GenjaError::NotInventoryPlugin(name) => {
                 write!(f, "plugin '{name}' is not an inventory plugin")
             }
-            GenjaError::NotRunnerPlugin(name) => write!(f, "plugin '{name}' is not a runner plugin"),
+            GenjaError::NotRunnerPlugin(name) => {
+                write!(f, "plugin '{name}' is not a runner plugin")
+            }
             GenjaError::PluginLoad(err) => write!(f, "failed to load plugins: {err}"),
             GenjaError::ConfigLoad(err) => write!(f, "failed to load settings: {err}"),
             GenjaError::InventoryLoad(err) => write!(f, "failed to load inventory: {err}"),
@@ -40,7 +42,7 @@ impl Error for GenjaError {}
 /// Runtime composition layer for Genja.
 ///
 /// Lifecycle:
-/// 1) `load_plugins()` to discover/register plugins.
+/// 1) (internal) load plugins to discover/register plugins.
 /// 2) `load_inventory(...)` to set runtime inventory.
 /// 3) call runner-related methods.
 ///
@@ -99,9 +101,9 @@ impl Genja {
         }
     }
 
-    pub fn from_settings_file(file_path: &str) -> Result<Self, GenjaError> {
-        let settings =
-            Settings::from_file(file_path).map_err(|err| GenjaError::ConfigLoad(err.to_string()))?;
+    pub fn from_settings_file(settings_file_path: &str) -> Result<Self, GenjaError> {
+        let settings = Settings::from_file(settings_file_path)
+            .map_err(|err| GenjaError::ConfigLoad(err.to_string()))?;
 
         let mut genja = Self::new();
         genja.set_settings(settings);
@@ -110,19 +112,10 @@ impl Genja {
         Ok(genja)
     }
 
-    pub fn load_inventory_from_settings(&mut self) -> Result<(), GenjaError> {
+    fn load_inventory_from_settings(&mut self) -> Result<(), GenjaError> {
         self.ensure_plugins_loaded()?;
         let inventory_cfg = self.settings.inventory();
         let plugin_name = inventory_cfg.plugin();
-
-        if plugin_name == "FileInventoryPlugin" {
-            let default = crate::plugins::DefaultInventoryPlugin;
-            let inventory = default
-                .load(&self.settings, &self.plugins)
-                .map_err(|err| GenjaError::InventoryLoad(err.to_string()))?;
-            self.load_inventory(inventory);
-            return Ok(());
-        }
 
         if !plugin_name.is_empty() {
             if let Some(plugin) = self.plugins.get_inventory_plugin(plugin_name) {
@@ -140,17 +133,35 @@ impl Genja {
             return Err(GenjaError::PluginNotFound(plugin_name.to_string()));
         }
 
-        let default = crate::plugins::DefaultInventoryPlugin;
-        let inventory = default
-            .load(&self.settings, &self.plugins)
-            .map_err(|err| GenjaError::InventoryLoad(err.to_string()))?;
-        self.load_inventory(inventory);
-        Ok(())
+        let default_name = "FileInventoryPlugin";
+        if let Some(plugin) = self.plugins.get_inventory_plugin(default_name) {
+            let inventory = plugin
+                .load(&self.settings, &self.plugins)
+                .map_err(|err| GenjaError::InventoryLoad(err.to_string()))?;
+            self.load_inventory(inventory);
+            return Ok(());
+        }
+
+        if self.plugins.get_plugin(default_name).is_some() {
+            return Err(GenjaError::NotInventoryPlugin(default_name.to_string()));
+        }
+
+        Err(GenjaError::PluginNotFound(default_name.to_string()))
     }
 
-    pub fn load_plugins(&mut self) -> Result<(), GenjaError> {
+    fn load_plugins(&mut self) -> Result<(), GenjaError> {
+        let default_name = self.settings.inventory().plugin();
         match PluginManager::new().activate_plugins() {
-            Ok(manager) => {
+            Ok(mut manager) => {
+                if default_name == "FileInventoryPlugin"
+                    && manager
+                        .get_inventory_plugin("FileInventoryPlugin")
+                        .is_none()
+                {
+                    manager.register_plugin(Plugins::Inventory(Box::new(
+                        crate::plugins::DefaultInventoryPlugin,
+                    )));
+                }
                 self.plugins = Arc::new(manager);
                 self.plugins_loaded = true;
                 Ok(())
@@ -158,7 +169,17 @@ impl Genja {
             Err(err) => {
                 let msg = err.to_string();
                 if msg.contains("No plugin metadata found in manifest") {
-                    self.plugins = Arc::new(PluginManager::new());
+                    let mut manager = PluginManager::new();
+                    if default_name == "FileInventoryPlugin"
+                        && manager
+                            .get_inventory_plugin("FileInventoryPlugin")
+                            .is_none()
+                    {
+                        manager.register_plugin(Plugins::Inventory(Box::new(
+                            crate::plugins::DefaultInventoryPlugin,
+                        )));
+                    }
+                    self.plugins = Arc::new(manager);
                     self.plugins_loaded = true;
                     Ok(())
                 } else {
@@ -229,9 +250,7 @@ impl Genja {
             .plugins
             .get_all_plugin_names_and_groups()
             .into_iter()
-            .filter_map(
-                |(name, group)| if group == "Runner" { Some(name) } else { None },
-            )
+            .filter_map(|(name, group)| if group == "Runner" { Some(name) } else { None })
             .collect())
     }
 
@@ -263,7 +282,11 @@ impl Genja {
             .inventory
             .as_ref()
             .ok_or(GenjaError::InventoryNotLoaded)?;
-        Ok(inventory.hosts().iter().map(|(id, host)| (id.clone(), host)).collect())
+        Ok(inventory
+            .hosts()
+            .iter()
+            .map(|(id, host)| (id.clone(), host))
+            .collect())
     }
 
     pub fn filter_hosts(&self, pred: impl Fn(&Host) -> bool) -> Result<Self, GenjaError> {
@@ -276,11 +299,10 @@ impl Genja {
             .host_ids
             .iter()
             .filter_map(|id| {
-                inventory.hosts().get(id).and_then(
-                    |host| {
-                        if pred(&host) { Some(id.clone()) } else { None }
-                    },
-                )
+                inventory
+                    .hosts()
+                    .get(id)
+                    .and_then(|host| if pred(&host) { Some(id.clone()) } else { None })
             })
             .collect();
 

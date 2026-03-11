@@ -1,7 +1,7 @@
 use genja_core::inventory::Inventory;
 use genja_core::{InventoryLoadError, Settings};
-use plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
 use plugin_manager::PluginManager;
+use plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
 
 pub struct DefaultInventoryPlugin;
 
@@ -33,11 +33,9 @@ impl PluginInventory for DefaultInventoryPlugin {
         }
 
         if let Some(name) = inventory_cfg.transform_function() {
-            let plugin = plugins
-                .get_plugin(name)
-                .ok_or_else(|| {
-                    InventoryLoadError::from(format!("Transform plugin '{}' not found", name))
-                })?;
+            let plugin = plugins.get_plugin(name).ok_or_else(|| {
+                InventoryLoadError::from(format!("Transform plugin '{}' not found", name))
+            })?;
 
             match plugin {
                 Plugins::TransformFunction(transform) => {
