@@ -1,7 +1,7 @@
 use genja_core::inventory::{Host, Inventory};
 use genja_core::{NatString, Settings};
 use plugin_manager::PluginManager;
-use plugin_manager::plugin_types::{PluginInventory, PluginRunner, Plugins};
+use plugin_manager::plugin_types::{PluginRunner, Plugins};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -73,13 +73,29 @@ pub struct Genja {
 
 pub mod plugins;
 
-impl Default for Genja {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl Genja {
+    /// Returns a builder that requires an inventory up front.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja::Genja;
+    /// # use genja_core::Settings;
+    /// # use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+    /// let inventory = Inventory::builder().hosts(hosts).build();
+    ///
+    /// let genja = Genja::builder(inventory)
+    ///     .with_settings(Settings::default())
+    ///     .build()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn builder(inventory: Inventory) -> GenjaBuilder {
+        GenjaBuilder::new(inventory)
+    }
+
     pub fn new() -> Self {
         Self {
             inventory: None,
@@ -329,5 +345,107 @@ impl Genja {
         } else {
             Err(GenjaError::InventoryNotLoaded)
         }
+    }
+}
+
+impl Default for Genja {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+
+/// Builder for constructing `Genja` instances with required inventory.
+///
+/// This builder provides a fluent interface for creating `Genja` objects with
+/// a preloaded inventory and optional settings or plugin manager. Fields that
+/// are not explicitly set will use their default values when `build()` is called.
+///
+/// # Fields
+///
+/// * `inventory` - Required inventory instance used to initialize `Genja`.
+/// * `settings` - Optional settings. When set, the provided settings are used.
+/// * `plugin_manager` - Optional plugin manager. When set, the provided manager
+///   is used for plugin loading and execution.
+///
+/// # Examples
+///
+/// ```
+/// use genja::GenjaBuilder;
+/// use genja_core::inventory::{Inventory, Hosts};
+///
+/// let inventory = Inventory::builder()
+///     .hosts(Hosts::new())
+///     .build();
+///
+/// let genja = GenjaBuilder::new(inventory)
+///     .build()
+///     .expect("failed to build Genja");
+/// ```
+#[derive(Debug)]
+pub struct GenjaBuilder {
+    inventory: Inventory,
+    settings: Option<Settings>,
+    plugin_manager: Option<PluginManager>,
+}
+
+impl GenjaBuilder {
+    pub fn new(inventory: Inventory) -> Self {
+        Self {
+            inventory,
+            settings: None,
+            plugin_manager: None,
+        }
+    }
+
+    pub fn with_settings(mut self, settings: Settings) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    pub fn with_plugin_manager(mut self, plugin_manager: PluginManager) -> Self {
+        self.plugin_manager = Some(plugin_manager);
+        self
+    }
+
+    /// Builds a `Genja` instance from the configured builder state.
+    ///
+    /// Applies optional settings, initializes or loads plugins, and loads the
+    /// required inventory into the resulting `Genja`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(GenjaError::PluginsNotLoaded)` if plugin loading fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use genja::GenjaBuilder;
+    /// use genja_core::inventory::{Inventory, Hosts};
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .hosts(Hosts::new())
+    ///     .build();
+    ///
+    /// let genja = GenjaBuilder::new(inventory)
+    ///     .build()
+    ///     .expect("failed to build Genja");
+    /// ```
+    pub fn build(self) -> Result<Genja, GenjaError> {
+        let mut genja = Genja::new();
+
+        if let Some(settings) = self.settings {
+            genja.set_settings(settings);
+        }
+
+        if let Some(plugin_manager) = self.plugin_manager {
+            genja.plugins = Arc::new(plugin_manager);
+            genja.plugins_loaded = true;
+        } else {
+            genja.load_plugins()?;
+        }
+
+        genja.load_inventory(self.inventory);
+        Ok(genja)
     }
 }
