@@ -1,3 +1,42 @@
+//! # Genja
+//!
+//! The main runtime composition layer for the Genja network automation framework.
+//!
+//! This crate provides the [`Genja`] type, which orchestrates inventory management,
+//! plugin loading, and task execution. It serves as the primary entry point for
+//! building and running network automation workflows.
+//!
+//! ## Quick Start
+//!
+//! ```no_run
+//! use genja::Genja;
+//! use genja_core::Settings;
+//!
+//! // Load from settings file
+//! let genja = Genja::from_settings_file("config.yaml")?;
+//!
+//! // Or build manually
+//! let settings = Settings::from_file("config.yaml")?;
+//! 
+//! let inventory = genja_core::inventory::Inventory::builder()
+//!     .hosts(genja_core::inventory::Hosts::new())
+//!     .build();
+//! 
+//! let genja = Genja::builder(inventory)
+//!     .with_settings(settings)
+//!     .build()?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! ## Architecture
+//!
+//! - **Inventory**: Manages hosts, groups, and defaults
+//! - **Plugins**: Extensible plugin system for inventory sources and task runners
+//! - **Settings**: Configuration loaded from files or environment variables
+//!
+//! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
+
+
 use genja_core::inventory::{Host, Inventory};
 use genja_core::{NatString, Settings};
 use plugin_manager::PluginManager;
@@ -140,7 +179,7 @@ impl Genja {
     ///     .build();
     ///
     /// let genja = Genja::from_inventory(inventory);
-    /// assert!(genja.inventory().is_some());
+    /// assert!(genja.inventory().is_ok());
     /// ```
     pub fn from_inventory(inventory: Inventory) -> Self {
         let host_ids = inventory.hosts().keys().cloned().collect();
@@ -156,7 +195,12 @@ impl Genja {
     /// Creates a `Genja` instance from a settings file path.
     ///
     /// Loads settings, initializes plugins, and loads inventory based on the
-    /// settings file.
+    /// settings file. This is equivalent to calling [`Settings::from_file`],
+    /// then [`Genja::new`], [`set_settings`](Self::set_settings),
+    /// [`load_plugins`](Self::load_plugins), and
+    /// [`load_inventory_from_settings`](Self::load_inventory_from_settings).
+    ///
+    /// For more control over the construction process, use [`Genja::builder`]
     ///
     /// # Errors
     ///
@@ -190,17 +234,15 @@ impl Genja {
 
     /// Loads inventory using the plugin specified in settings.
     ///
-    /// If the settings specify a plugin name, this method attempts to load
-    /// inventory through that inventory plugin. If no name is specified, it
-    /// falls back to the `"FileInventoryPlugin"` default.
+    /// Attempts to load inventory through the configured inventory plugin. Falls
+    /// back to `FileInventoryPlugin` if no plugin is specified in settings.
     ///
     /// # Errors
     ///
-    /// Returns `Err(GenjaError::PluginsNotLoaded)` if plugins are not loaded.
-    /// Returns `Err(GenjaError::NotInventoryPlugin)` if the named plugin exists
-    /// but is not an inventory plugin. Returns `Err(GenjaError::PluginNotFound)`
-    /// if no matching plugin is found. Returns `Err(GenjaError::InventoryLoad)`
-    /// if inventory loading fails.
+    /// - `GenjaError::PluginsNotLoaded` - Plugins have not been loaded yet
+    /// - `GenjaError::NotInventoryPlugin` - Named plugin exists but is not an inventory plugin
+    /// - `GenjaError::PluginNotFound` - No matching plugin found
+    /// - `GenjaError::InventoryLoad` - Inventory loading failed
     fn load_inventory_from_settings(&mut self) -> Result<(), GenjaError> {
         self.ensure_plugins_loaded()?;
         let inventory_cfg = self.settings.inventory();
@@ -238,6 +280,16 @@ impl Genja {
         Err(GenjaError::PluginNotFound(default_name.to_string()))
     }
 
+    /// Loads plugins from the plugin directory or registers default plugins.
+    ///
+    /// This method attempts to activate plugins using the plugin manager. If no
+    /// plugins are found in the manifest, it falls back to registering the default
+    /// `FileInventoryPlugin`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(GenjaError::PluginLoad)` if plugin loading fails for reasons
+    /// other than missing plugin metadata.
     fn load_plugins(&mut self) -> Result<(), GenjaError> {
         let default_name = self.settings.inventory().plugin();
         match PluginManager::new().activate_plugins() {
@@ -377,6 +429,43 @@ impl Genja {
         self.host_ids.len()
     }
 
+    /// Returns the currently selected host IDs.
+    ///
+    /// This list reflects any filtering applied via `filter_hosts`. To get all
+    /// hosts in the inventory (with full host data), use `iter_inventory_hosts`.
+    ///
+    /// # See Also
+    ///
+    /// * [`host_count`](Self::host_count) - Get the number of selected hosts
+    /// * [`filter_hosts`](Self::filter_hosts) - Filter hosts by predicate
+    /// * [`iter_selected_hosts`](Self::iter_selected_hosts) - Get full host objects
+    /// 
+    /// # Examples
+    ///
+    /// ```
+    /// use genja::Genja;
+    /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+    ///
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+    /// hosts.add_host("router2", Host::builder().hostname("10.0.0.2").build());
+    ///
+    /// let inventory = Inventory::builder().hosts(hosts).build();
+    /// let genja = Genja::from_inventory(inventory);
+    ///
+    /// // All hosts
+    /// assert_eq!(genja.host_ids().len(), 2);
+    ///
+    /// // After filtering
+    /// let filtered = genja.filter_hosts(|host| host.hostname() == Some("10.0.0.1"))?;
+    /// assert_eq!(filtered.host_ids().len(), 1);
+    /// assert_eq!(filtered.host_ids()[0].as_str(), "router1");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn host_ids(&self) -> &[NatString] {
+        &self.host_ids
+    }
+
     /// Returns the currently selected hosts, based on `host_ids`.
     ///
     /// This list reflects any prior filtering via `filter_hosts`.
@@ -430,7 +519,7 @@ impl Genja {
     /// let inventory = Inventory::builder().hosts(hosts).build();
     /// let genja = Genja::from_inventory(inventory);
     ///
-    /// let filtered = genja.filter_hosts(|host| host.hostname() == "10.0.0.1")?;
+    /// let filtered = genja.filter_hosts(|host| host.hostname() == Some("10.0.0.1"))?;
     /// assert_eq!(filtered.host_ids().len(), 1);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -483,34 +572,69 @@ impl Default for Genja {
     }
 }
 
-
 /// Builder for constructing `Genja` instances with required inventory.
 ///
 /// This builder provides a fluent interface for creating `Genja` objects with
-/// a preloaded inventory and optional settings or plugin manager. Fields that
-/// are not explicitly set will use their default values when `build()` is called.
+/// a preloaded inventory and optional settings or plugin manager.
 ///
-/// # Fields
+/// # Required Fields
 ///
-/// * `inventory` - Required inventory instance used to initialize `Genja`.
-/// * `settings` - Optional settings. When set, the provided settings are used.
-/// * `plugin_manager` - Optional plugin manager. When set, the provided manager
-///   is used for plugin loading and execution.
+/// * `inventory` - Must be provided via `new(inventory)`
+///
+/// # Optional Fields
+///
+/// * `settings` - Defaults to `Settings::default()`
+/// * `plugin_manager` - Defaults to auto-loaded plugins
 ///
 /// # Examples
 ///
+/// ## Basic Usage
+///
 /// ```
-/// use genja::GenjaBuilder;
+/// use genja::Genja;
+/// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+///
+/// let mut hosts = Hosts::new();
+/// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+/// let inventory = Inventory::builder().hosts(hosts).build();
+///
+/// let genja = Genja::builder(inventory)
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// ## With Custom Settings
+///
+/// ```no_run
+/// use genja::Genja;
+/// use genja_core::{Settings, inventory::{Inventory, Hosts}};
+///
+/// let inventory = Inventory::builder().hosts(Hosts::new()).build();
+/// let settings = Settings::from_file("config.yaml")?;
+///
+/// let genja = Genja::builder(inventory)
+///     .with_settings(settings)
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// ## With Custom Plugin Manager
+///
+/// ```
+/// use genja::Genja;
 /// use genja_core::inventory::{Inventory, Hosts};
+/// use plugin_manager::PluginManager;
 ///
-/// let inventory = Inventory::builder()
-///     .hosts(Hosts::new())
-///     .build();
+/// let inventory = Inventory::builder().hosts(Hosts::new()).build();
+/// let mut plugin_manager = PluginManager::new();
+/// // ... register custom plugins
 ///
-/// let genja = GenjaBuilder::new(inventory)
-///     .build()
-///     .expect("failed to build Genja");
+/// let genja = Genja::builder(inventory)
+///     .with_plugin_manager(plugin_manager)
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+
 #[derive(Debug)]
 pub struct GenjaBuilder {
     inventory: Inventory,
