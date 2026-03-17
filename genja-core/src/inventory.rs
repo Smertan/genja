@@ -46,7 +46,7 @@ use schemars::{schema_for, JsonSchema};
 use serde::de::{Error, SeqAccess, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 pub trait BaseMethods {
     fn schema() -> String
@@ -2597,13 +2597,40 @@ impl ConnectionKey {
     }
 }
 
+pub type ConnectionFactory =
+    dyn Fn(&ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> + Send + Sync;
+
 // TODO: Write documentation the ConnectionManager struct and its methods.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ConnectionManager {
     connections_map: DashMap<ConnectionKey, Arc<Mutex<dyn Connection>>>,
+    connection_factory: RwLock<Option<Arc<ConnectionFactory>>>,
+}
+
+impl fmt::Debug for ConnectionManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectionManager")
+            .field("connections_map_len", &self.connections_map.len())
+            .field(
+                "has_connection_factory",
+                &self
+                    .connection_factory
+                    .read()
+                    .map(|factory| factory.is_some())
+                    .unwrap_or(false),
+            )
+            .finish()
+    }
 }
 
 impl ConnectionManager {
+    pub fn with_connection_factory(factory: Arc<ConnectionFactory>) -> Self {
+        Self {
+            connections_map: DashMap::new(),
+            connection_factory: RwLock::new(Some(factory)),
+        }
+    }
+
     pub fn get(&self, key: &ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> {
         self.connections_map
             .get(key)
@@ -2614,22 +2641,29 @@ impl ConnectionManager {
         self.connections_map.insert(key, connection);
     }
 
-    // TODO: Include the logic to use the pluginManager to load and create connections
-    // with the use on the config held in the Nornir Struct.
     pub fn get_or_create<F, C>(&self, key: ConnectionKey, ctor: F) -> Arc<Mutex<dyn Connection>>
     where
         F: FnOnce() -> C,
         C: Connection + 'static,
     {
-        if let Some(connection) = self.get(&key) {
-            return connection;
-        }
+        let key_for_factory = key.clone();
+        let entry = self.connections_map.entry(key).or_insert_with(|| {
+            if let Ok(factory) = self.connection_factory.read() {
+                if let Some(factory) = factory.as_ref() {
+                    if let Some(connection) = factory(&key_for_factory) {
+                        return connection;
+                    }
+                }
+            }
+            Arc::new(Mutex::new(ctor())) as Arc<Mutex<dyn Connection>>
+        });
+        entry.clone()
+    }
 
-        let connection = Arc::new(Mutex::new(ctor())) as Arc<Mutex<dyn Connection>>;
-        self.connections_map
-            .entry(key)
-            .or_insert_with(|| connection.clone());
-        connection
+    pub fn set_connection_factory(&self, factory: Arc<ConnectionFactory>) {
+        if let Ok(mut slot) = self.connection_factory.write() {
+            *slot = Some(factory);
+        }
     }
 
     /// Close the connection associated with the given key and remove
@@ -2652,8 +2686,16 @@ impl ConnectionManager {
         self.connections_map.clear();
     }
 
-    pub fn open_connection(&self, _key: &ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> {
-        todo!()
+    pub fn open_connection(&self, key: &ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> {
+        if let Some(existing) = self.get(key) {
+            return Some(existing);
+        }
+
+        let factory = self.connection_factory.read().ok()?;
+        let factory = factory.as_ref()?;
+        let connection = factory(key)?;
+        self.connections_map.insert(key.clone(), connection.clone());
+        Some(connection)
     }
 }
 

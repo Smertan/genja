@@ -213,6 +213,7 @@
 pub mod plugin_structs;
 pub mod plugin_types;
 // pub use plugin_types;
+pub mod connection_factory;
 
 use libloading::{Library, Symbol};
 use plugin_structs::{PluginCreate as PluginCreateNew, PluginResult as PluginResultNew};

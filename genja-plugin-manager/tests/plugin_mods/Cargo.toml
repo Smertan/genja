@@ -1,6 +1,9 @@
 [dependencies.genja-plugin-manager]
 path = "../../"
 
+[dependencies.genja-core]
+path = "../../../genja-core"
+
 [lib]
 crate-type = [
     "lib",

@@ -12,7 +12,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 
-use genja_core::inventory::{Hosts, Inventory, TransformFunction};
+use genja_core::inventory::{
+    ConnectionKey, Hosts, Inventory, ResolvedConnectionParams, TransformFunction,
+};
 use genja_core::{InventoryLoadError, Settings};
 use crate::PluginManager;
 use genja_core::task::{Task, Tasks};
@@ -161,11 +163,14 @@ impl Debug for dyn PluginTransformFunction {
 /// Connection plugins provide lifecycle hooks for establishing and tearing down
 /// connections and expose a connection operation for downstream use.
 pub trait PluginConnection: Plugin {
+    /// Create a new per-host connection instance.
+    fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection>;
+
     /// Open a connection to a device.
-    fn open(&self);
+    fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String>;
 
     /// Close a connection to a device.
-    fn close(&self);
+    fn close(&mut self) -> ConnectionKey;
 
     /// Perform a connection operation (e.g., handshake or session check).
     fn connection(&self);

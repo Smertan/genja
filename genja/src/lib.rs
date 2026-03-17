@@ -40,6 +40,7 @@
 use genja_core::inventory::{Host, Inventory};
 use genja_core::{NatString, Settings};
 use plugin_manager::PluginManager;
+use plugin_manager::connection_factory::build_connection_factory;
 use plugin_manager::plugin_types::{PluginRunner, Plugins};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -349,6 +350,8 @@ impl Genja {
     /// genja.load_inventory(inventory);
     /// ```
     pub fn load_inventory(&mut self, inventory: Inventory) {
+        let factory = build_connection_factory(Arc::clone(&self.plugins));
+        inventory.connections().set_connection_factory(factory);
         let host_ids = inventory.hosts().keys().cloned().collect();
         self.inventory = Some(Arc::new(inventory));
         self.host_ids = Arc::new(host_ids);
