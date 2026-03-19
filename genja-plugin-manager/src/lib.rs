@@ -210,16 +210,14 @@
 //! This module provides a robust foundation for building plugin-based architectures
 //! in Rust applications, offering flexibility and ease of use.
 
-pub mod plugin_structs;
 pub mod plugin_types;
 // pub use plugin_types;
 pub mod connection_factory;
 
 use libloading::{Library, Symbol};
-use plugin_structs::{PluginCreate as PluginCreateNew, PluginResult as PluginResultNew};
 use plugin_types::{
-    GroupOrName, PluginConnection, PluginEntry, PluginInventory, PluginName, PluginRunner,
-    PluginTransformFunction, Plugins,
+    GroupOrName, PluginConnection, PluginCreatePlugins, PluginEntry, PluginInventory, PluginName,
+    PluginResultPlugins, PluginRunner, PluginTransformFunction, Plugins,
 };
 use serde::Deserialize;
 use std::collections::{HashMap, hash_map};
@@ -383,7 +381,7 @@ impl PluginManager {
     ///
     /// Returns the opened library and the plugins it creates, or an error if
     /// the file is missing, cannot be loaded, or the symbol is unavailable.
-    pub fn load_plugin(&self, filename: &str) -> PluginResultNew {
+    pub fn load_plugin(&self, filename: &str) -> PluginResultPlugins {
         let path = Path::new(filename);
 
         if !path.exists() {
@@ -397,7 +395,7 @@ impl PluginManager {
         let library = unsafe { Library::new(path)? };
         log::debug!("Library loaded successfully");
 
-        let create_plugin: Symbol<PluginCreateNew> = unsafe { library.get(b"create_plugins")? };
+        let create_plugin: Symbol<PluginCreatePlugins> = unsafe { library.get(b"create_plugins")? };
         log::debug!("Found create_plugins symbol");
 
         let plugins = unsafe { create_plugin() };

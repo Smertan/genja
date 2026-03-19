@@ -330,6 +330,11 @@ pub type PluginResult = Result<(Library, Vec<Box<dyn Plugin>>), Box<dyn std::err
 /// Signature for a plugin factory function exported by dynamic libraries.
 pub type PluginCreate = unsafe fn() -> Vec<Box<dyn Plugin>>;
 
+/// Signature for a plugin factory function exported by dynamic libraries.
+pub type PluginCreatePlugins = unsafe fn() -> Vec<Plugins>;
+/// Result of loading a plugin library and its exported plugin instances.
+pub type PluginResultPlugins = Result<(Library, Vec<Plugins>), Box<dyn std::error::Error>>;
+
 /// Plugin entry in metadata, either a single path or a named group of paths.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
