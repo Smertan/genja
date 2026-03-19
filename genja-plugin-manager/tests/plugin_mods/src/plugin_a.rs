@@ -4,11 +4,15 @@ use plugin_manager::plugin_types::{Plugin, PluginConnection};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginA {
     key: Option<ConnectionKey>,
+    alive: bool,
 }
 
 impl PluginA {
     fn with_key(key: ConnectionKey) -> Self {
-        Self { key: Some(key) }
+        Self {
+            key: Some(key),
+            alive: false,
+        }
     }
 }
 
@@ -25,24 +29,29 @@ impl PluginConnection for PluginA {
 
     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
         println!("Opening connection in Plugin A");
+        self.alive = true;
         Ok(())
     }
 
     fn close(&mut self) -> ConnectionKey {
         println!("Closing connection in Plugin A");
+        self.alive = false;
         self.key
             .clone()
             .unwrap_or_else(|| ConnectionKey::new("plugin_a", "connection"))
     }
 
-    fn connection(&self) {
-        println!("Running connection in Plugin A");
+    fn is_alive(&self) -> bool {
+        self.alive
     }
 }
 
 impl PluginA {
     pub fn new_prototype() -> Self {
-        Self { key: None }
+        Self {
+            key: None,
+            alive: false,
+        }
     }
 
     pub fn other_method(&self) {

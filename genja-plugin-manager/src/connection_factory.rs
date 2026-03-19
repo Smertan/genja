@@ -16,6 +16,11 @@ impl PluginConnectionAdapter {
 }
 
 impl Connection for PluginConnectionAdapter {
+    fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+        let instance = self.inner.create(key);
+        Box::new(PluginConnectionAdapter::new(instance))
+    }
+
     fn is_alive(&self) -> bool {
         self.alive
     }
@@ -33,6 +38,7 @@ impl Connection for PluginConnectionAdapter {
         self.alive = false;
         key
     }
+
 }
 
 pub fn build_connection_factory(plugins: Arc<PluginManager>) -> Arc<ConnectionFactory> {

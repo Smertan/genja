@@ -2436,6 +2436,8 @@ pub trait Connection
 where
     Self: Send + Sync + fmt::Debug,
 {
+    fn create(&self, key: &ConnectionKey) -> Box<dyn Connection>;
+
     fn is_alive(&self) -> bool;
 
     fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String>;
@@ -4344,6 +4346,13 @@ mod tests {
         }
 
         impl Connection for TestConnection {
+            fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+                Box::new(TestConnection {
+                    closes: Arc::clone(&self.closes),
+                    key: key.clone(),
+                })
+            }
+
             fn is_alive(&self) -> bool {
                 true
             }

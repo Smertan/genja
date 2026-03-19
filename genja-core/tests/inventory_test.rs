@@ -249,6 +249,10 @@ fn connection_manager_creates_connections_lazily() {
     struct TestConnection;
 
     impl genja_core::inventory::Connection for TestConnection {
+        fn create(&self, _key: &ConnectionKey) -> Box<dyn genja_core::inventory::Connection> {
+            Box::new(TestConnection)
+        }
+
         fn is_alive(&self) -> bool {
             true
         }

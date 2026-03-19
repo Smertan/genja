@@ -172,8 +172,8 @@ pub trait PluginConnection: Plugin {
     /// Close a connection to a device.
     fn close(&mut self) -> ConnectionKey;
 
-    /// Perform a connection operation (e.g., handshake or session check).
-    fn connection(&self);
+    /// Returns `true` if the connection is alive.
+    fn is_alive(&self) -> bool;
 
     /// Returns the group name
     fn group(&self) -> String {
