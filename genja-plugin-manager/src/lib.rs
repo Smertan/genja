@@ -227,7 +227,6 @@ use std::path::Path;
 // use std::error::Error;
 use std::io::{Error, ErrorKind};
 
-
 #[derive(Deserialize, Debug)]
 pub struct Metadata {
     pub plugins: Option<HashMap<GroupOrName, PluginEntry>>,
@@ -322,8 +321,7 @@ impl PluginManager {
     /// inventory_plugin = "/path/to/inventory_plugin.so"
     /// ```
     pub fn get_plugin_metadata(&self) -> Metadata {
-        let plugin_path =
-            std::env::var("CARGO_MANIFEST_PATH").unwrap_or_else(|_| ".".to_string());
+        let plugin_path = std::env::var("CARGO_MANIFEST_PATH").unwrap_or_else(|_| ".".to_string());
 
         let file_string = std::fs::read_to_string(plugin_path);
         let manifest = match file_string {
@@ -777,8 +775,10 @@ mod tests {
         assert_eq!(connection_plugins.len(), 2);
 
         // Check that the expected plugin names are present
-        let base_plugin_names: Vec<&str> =
-            connection_plugins.iter().map(|(name, _)| name.as_str()).collect();
+        let base_plugin_names: Vec<&str> = connection_plugins
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
         assert!(base_plugin_names.contains(&"plugin_a"));
         assert!(base_plugin_names.contains(&"plugin_b"));
 

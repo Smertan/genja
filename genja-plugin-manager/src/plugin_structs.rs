@@ -1,7 +1,7 @@
+use crate::PluginManager;
 use crate::plugin_types::{Plugin, PluginInventory, Plugins};
 use genja_core::inventory::Inventory;
 use genja_core::{InventoryLoadError, Settings};
-use crate::PluginManager;
 use libloading::Library;
 use std::collections::{HashMap, hash_map};
 
