@@ -21,38 +21,38 @@
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │                    Connection Manager                        │
-//! │                  (genja_core::inventory)                     │
+//! │                    Connection Manager                       │
+//! │                  (genja_core::inventory)                    │
 //! └─────────────────────────┬───────────────────────────────────┘
 //!                           │
 //!                           │ Uses ConnectionFactory
 //!                           ▼
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │              build_connection_factory()                      │
-//! │         Returns: Arc<ConnectionFactory>                      │
+//! │              build_connection_factory()                     │
+//! │         Returns: Arc<ConnectionFactory>                     │
 //! └─────────────────────────┬───────────────────────────────────┘
 //!                           │
 //!                           │ Queries for plugins
 //!                           ▼
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │                    PluginManager                             │
-//! │              (Registered Connection Plugins)                 │
+//! │                    PluginManager                            │
+//! │              (Registered Connection Plugins)                │
 //! └─────────────────────────┬───────────────────────────────────┘
 //!                           │
 //!                           │ Returns plugin instance
 //!                           ▼
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │              PluginConnectionAdapter                         │
-//! │         Wraps: Box<dyn PluginConnection>                     │
-//! │         Implements: Connection trait                         │
+//! │              PluginConnectionAdapter                        │
+//! │         Wraps: Box<dyn PluginConnection>                    │
+//! │         Implements: Connection trait                        │
 //! └─────────────────────────┬───────────────────────────────────┘
 //!                           │
 //!                           │ Delegates to
 //!                           ▼
 //! ┌─────────────────────────────────────────────────────────────┐
-//! │              Plugin Implementation                           │
+//! │              Plugin Implementation                          │
 //! │         (e.g., SSH, Telnet, NETCONF)                        │
-//! │         Implements: PluginConnection trait                   │
+//! │         Implements: PluginConnection trait                  │
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 //!

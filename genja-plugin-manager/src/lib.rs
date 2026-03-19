@@ -2,27 +2,51 @@
 //!
 //! A flexible and easy-to-use plugin management system for Rust applications.
 //!
-//! This module provides a `PluginManager` that allows dynamic loading, registration,
-//! and management of plugins at runtime. It supports individual plugins and grouped plugins,
-//! making it suitable for various application architectures.
+//! This crate provides dynamic loading, registration, and management of plugins at runtime.
+//! It supports individual plugins and grouped plugins, making it suitable for various
+//! application architectures where extensibility is required.
 //!
-//! ## Features
+//! ## Overview
 //!
-//! - Dynamic loading of plugins from shared object files (.so)
-//! - Support for individual and grouped plugins
-//! - Plugin registration and deregistration
-//! - Registry access for typed plugin functionality
+//! The plugin manager enables building modular applications where functionality can be
+//! added through plugins without recompilation. It handles:
+//!
+//! - Dynamic loading of plugins from shared libraries (.so, .dll, .dylib)
+//! - Plugin lifecycle management (registration, deregistration)
+//! - Type-safe plugin registry access
 //! - Metadata-driven plugin configuration
+//! - Support for multiple plugin types (Connection, Inventory, Runner, Transform)
 //!
+//! ## Architecture
 //!
-//! ## Creating Plugins
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                      PluginManager                              │
+//! │  - Loads plugins from shared libraries                          │
+//! │  - Maintains plugin registry                                    │
+//! │  - Provides type-safe access to plugins                         │
+//! └────────────────┬────────────────────────────────────────────────┘
+//!                  │
+//!                  │ manages
+//!                  │
+//!                  ▼
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                         Plugins Enum                            │
+//! │  - Connection(Box<dyn PluginConnection>)                        │
+//! │  - Inventory(Box<dyn PluginInventory>)                          │
+//! │  - Runner(Box<dyn PluginRunner>)                                │
+//! │  - TransformFunction(Box<dyn PluginTransformFunction>)          │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
 //!
-//! To create a plugin, implement the `Plugin` trait and export a `create_plugins` function:
+//! ## Quick Start
+//!
+//! ### Creating a Plugin
 //!
 //! ```rust
 //! use genja_core::inventory::Hosts;
 //! use genja_core::task::{Task, Tasks};
-//! use plugin_manager::plugin_types::{Plugin, PluginRunner};
+//! use plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
 //!
 //! #[derive(Debug)]
 //! struct MyPlugin;
@@ -31,150 +55,26 @@
 //!     fn name(&self) -> String {
 //!         "my_plugin".to_string()
 //!     }
-//!
 //! }
 //!
 //! impl PluginRunner for MyPlugin {
-//!     fn run(&self, _task: Task, _hosts: &Hosts) {}
-//!     fn run_tasks(&self, _tasks: Tasks, _hosts: &Hosts) {}
+//!     fn run(&self, _task: Task, _hosts: &Hosts) {
+//!         // Task execution logic
+//!     }
+//!
+//!     fn run_tasks(&self, _tasks: Tasks, _hosts: &Hosts) {
+//!         // Batch task execution logic
+//!     }
 //! }
 //!
+//! // Export plugin factory function
 //! #[unsafe(no_mangle)]
-//! pub fn create_plugins() -> Vec<plugin_manager::plugin_types::Plugins> {
-//!     vec![plugin_manager::plugin_types::Plugins::Runner(Box::new(MyPlugin))]
+//! pub fn create_plugins() -> Vec<Plugins> {
+//!     vec![Plugins::Runner(Box::new(MyPlugin))]
 //! }
 //! ```
 //!
-//! ## Setting up Cargo.toml for Plugins
-//!
-//! When creating a plugin, you need to set up your `Cargo.toml` file correctly:
-//!
-//! 1. Add the `genja-plugin-manager` as a dependency:
-//!
-//! ```toml
-//! [dependencies]
-//! genja-plugin-manager = "0.1.0"
-//! ```
-//!
-//! 2. Configure the library to be both a Rust library and a dynamic library:
-//!
-//! ```toml
-//! [lib]
-//! name = "your_plugin_name"
-//! crate-type = ["lib", "cdylib"]
-//! ```
-//!
-//! This configuration allows your plugin to be compiled as both a Rust library
-//! and a dynamic library, which is necessary for the PluginManager to load it at runtime.
-//!
-//! ## Building the Plugin
-//!
-//! To build your plugin for use with the main project:
-//!
-//! 1. Navigate to your plugin's directory.
-//! 2. Run the following command to build the plugin as a dynamic library:
-//!
-//!    ```bash
-//!    cargo build --release
-//!    ```
-//!
-//! 3. The compiled dynamic library will be in the `target/release` directory with a name like
-//!    `libyour_plugin_name.so` (on Linux), `libyour_plugin_name.dylib` (on macOS),
-//!    or `your_plugin_name.dll` (on Windows).
-//!
-//! ## Differences between Cargo.toml Files
-//!
-//! Both the main project using plugins and the individual plugin projects are end users of the plugin_manager.
-//!
-//! 1. Main Project Cargo.toml:
-//!    - Located in the root of the project that will use plugins.
-//!    - Includes `genja-plugin-manager` as a dependency.
-//!    - Does not need the `crate-type` specification.
-//!    - Does not contain any metadata for plugin configuration.
-//!    - The loaded plugins are dependant on the plugins specified in the `End-User's` project Cargo.toml.
-//!
-//!    Example:
-//!    ```toml
-//!    [package]
-//!    name = "main_project"
-//!    version = "0.1.0"
-//!    edition = "2024"
-//!
-//!    [dependencies]
-//!    genja-plugin-manager = "0.1.0"
-//!    ```
-//!
-//! 2. Plugin Project Cargo.toml:
-//!    - Located in a separate project directory for each plugin.
-//!    - Includes `genja-plugin-manager` as a dependency.
-//!    - Specifies `crate-type = ["lib", "cdylib"]` to build as both a Rust library and a dynamic library.
-//!    - Does not contain plugin metadata configuration.
-//!
-//!    Example:
-//!    ```toml
-//!    [package]
-//!    name = "my_plugin"
-//!    version = "0.1.0"
-//!    edition = "2024"
-//!
-//!    [dependencies]
-//!    genja-plugin-manager = "0.1.0"
-//!
-//!    [lib]
-//!    name = "my_plugin"
-//!    crate-type = ["lib", "cdylib"]
-//!    ```
-//!
-//! 3. End-User Project Cargo.toml:
-//!    - Includes the main project as dependencies.
-//!    - Contains metadata for plugin configuration.
-//!
-//!    Example:
-//!    ```toml
-//!    [package]
-//!    name = "my_application"
-//!    version = "0.1.0"
-//!    edition = "2024"
-//!
-//!    [dependencies]
-//!    main_project = "0.1.0"
-//!
-//!    [package.metadata.plugins]
-//!    my_plugin = "/path/to/libmy_plugin.so"
-//!    ```
-//!
-//! The main differences between these Cargo.toml files are:
-//!
-//! 1. The Main Project Cargo.toml sets up the core project that will use plugins:
-//!    - It includes the genja-plugin-manager as a dependency.
-//!    - It doesn't specify crate-type or contain plugin metadata.
-//!    - The plugins it can load are determined by the End-User's project configuration.
-//!
-//! 2. The Plugin Project Cargo.toml configures individual plugin projects:
-//!    - It includes the genja-plugin-manager as a dependency.
-//!    - It specifies crate-type as both "lib" and "cdylib" to produce a dynamic library.
-//!    - It doesn't contain any plugin metadata configuration.
-//!
-//! 3. The End-User Project Cargo.toml configures the application that will use the main project and its plugins:
-//!    - It includes the main project (not the genja-plugin-manager directly) as a dependency.
-//!    - It contains the metadata for plugin configuration, specifying which plugins to load and how to group them.
-//!
-//! ## Plugin Configuration
-//!
-//! Plugins are configured in the `Cargo.toml` file of the end-user project:
-//!
-//! ```toml
-//! [package.metadata.plugins]
-//! plugin_a = "/path/to/plugin_a.so"
-//!
-//! [package.metadata.plugins.group_name]
-//! plugin_b = "/path/to/plugin_b.so"
-//! plugin_c = "/path/to/plugin_c.so"
-//! ```
-//!
-//! ## Usage
-//!
-//! Here's a basic example of how to use the `PluginManager`:
+//! ### Using the Plugin Manager
 //!
 //! ```rust
 //! # unsafe {
@@ -183,32 +83,270 @@
 //! use plugin_manager::PluginManager;
 //!
 //! # fn doc_test() -> Result<(), Box<dyn std::error::Error>> {
-//! // Create a new PluginManager
+//! // Create and activate plugins
 //! let mut plugin_manager = PluginManager::new();
-//!
-//! // Activate plugins based on metadata in Cargo.toml
 //! plugin_manager = plugin_manager.activate_plugins()?;
 //!
-//! // Access a specific plugin by type
+//! // Access plugins by type
 //! if let Some(runner) = plugin_manager.get_runner_plugin("my_plugin") {
-//!     // runner.run(...);
+//!     // Use the runner plugin
 //! }
 //!
-//! // Deregister a plugin
-//! let deregistered = plugin_manager.deregister_plugin("plugin_b");
-//! print!("Deregistered plugin: {:?}", deregistered);
-//!
-//! // Deregister all plugins
-//! let deregistered = plugin_manager.deregister_all_plugins();
-//! println!("Deregistered plugins: {:?}", deregistered);
-//!
-//! #    Ok(())
+//! // List all plugins
+//! let all_plugins = plugin_manager.get_all_plugin_names_and_groups();
+//! for (name, group) in all_plugins {
+//!     println!("Plugin: {} ({})", name, group);
+//! }
+//! # Ok(())
 //! # }
 //! ```
 //!
+//! ## Plugin Configuration
 //!
-//! This module provides a robust foundation for building plugin-based architectures
-//! in Rust applications, offering flexibility and ease of use.
+//! Plugins are configured in the `Cargo.toml` file of the end-user project using
+//! package metadata. You can register plugins as individual entries or grouped
+//! by plugin type (e.g., `inventory`, `connection`, `runner`, `transform`):
+//!
+//! ```toml
+//! # Individual plugins
+//! [package.metadata.plugins]
+//! my_plugin = "/path/to/libmy_plugin.so"
+//!
+//! # Grouped plugins
+//! [package.metadata.plugins.network]
+//! ssh = "/path/to/libssh.so"
+//! telnet = "/path/to/libtelnet.so"
+//!
+//! # Grouped by plugin type (recommended)
+//! [package.metadata.plugins.inventory]
+//! inventory_a = "/path/to/libinventory.so"
+//!
+//! [package.metadata.plugins.connection]
+//! ssh = "/path/to/libssh.so"
+//! netconf = "/path/to/libnetconf.so"
+//!
+//! [package.metadata.plugins.runner]
+//! threaded = "/path/to/libthreaded.so"
+//!
+//! [package.metadata.plugins.transform]
+//! normalize = "/path/to/libnormalize.so"
+//! ```
+//!
+//! ## Plugin Types
+//!
+//! ### Connection Plugins
+//!
+//! Manage device connections with lifecycle hooks:
+//!
+//! ```rust
+//! use plugin_manager::plugin_types::{Plugin, PluginConnection};
+//! use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
+//!
+//! #[derive(Debug)]
+//! struct SshPlugin {
+//!     key: ConnectionKey,
+//!     connected: bool,
+//! }
+//!
+//! impl Plugin for SshPlugin {
+//!     fn name(&self) -> String { "ssh".to_string() }
+//! }
+//!
+//! impl PluginConnection for SshPlugin {
+//!     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+//!         Box::new(SshPlugin {
+//!             key: key.clone(),
+//!             connected: false,
+//!         })
+//!     }
+//!
+//!     fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
+//!         // Establish connection
+//!         self.connected = true;
+//!         Ok(())
+//!     }
+//!
+//!     fn close(&mut self) -> ConnectionKey {
+//!         self.connected = false;
+//!         self.key.clone()
+//!     }
+//!
+//!     fn is_alive(&self) -> bool {
+//!         self.connected
+//!     }
+//! }
+//! ```
+//!
+//! ### Inventory Plugins
+//!
+//! Load inventory data from various sources:
+//!
+//! ```rust
+//! use plugin_manager::plugin_types::{Plugin, PluginInventory};
+//! use plugin_manager::PluginManager;
+//! use genja_core::{Settings, InventoryLoadError};
+//! use genja_core::inventory::Inventory;
+//!
+//! #[derive(Debug)]
+//! struct DatabaseInventoryPlugin;
+//!
+//! impl Plugin for DatabaseInventoryPlugin {
+//!     fn name(&self) -> String { "database_inventory".to_string() }
+//! }
+//!
+//! impl PluginInventory for DatabaseInventoryPlugin {
+//!     fn load(
+//!         &self,
+//!         settings: &Settings,
+//!         plugins: &PluginManager,
+//!     ) -> Result<Inventory, InventoryLoadError> {
+//!         // Load from database
+//!         unimplemented!()
+//!     }
+//! }
+//! ```
+//!
+//! ### Runner Plugins
+//!
+//! Execute tasks against hosts:
+//!
+//! ```rust
+//! use plugin_manager::plugin_types::{Plugin, PluginRunner};
+//! use genja_core::inventory::Hosts;
+//! use genja_core::task::{Task, Tasks};
+//!
+//! #[derive(Debug)]
+//! struct SequentialRunner;
+//!
+//! impl Plugin for SequentialRunner {
+//!     fn name(&self) -> String { "sequential".to_string() }
+//! }
+//!
+//! impl PluginRunner for SequentialRunner {
+//!     fn run(&self, task: Task, hosts: &Hosts) {
+//!         // Execute task on each host sequentially
+//!     }
+//!
+//!     fn run_tasks(&self, tasks: Tasks, hosts: &Hosts) {
+//!         // Execute all tasks sequentially
+//!     }
+//! }
+//! ```
+//!
+//! ### Transform Function Plugins
+//!
+//! Provide inventory transformation functions:
+//!
+//! ```rust
+//! use plugin_manager::plugin_types::{Plugin, PluginTransformFunction};
+//! use genja_core::inventory::{TransformFunction, Host, BaseBuilderHost};
+//!
+//! #[derive(Debug)]
+//! struct NormalizeHostnamePlugin;
+//!
+//! impl Plugin for NormalizeHostnamePlugin {
+//!     fn name(&self) -> String { "normalize_hostname".to_string() }
+//! }
+//!
+//! impl PluginTransformFunction for NormalizeHostnamePlugin {
+//!     fn transform_function(&self) -> TransformFunction {
+//!         TransformFunction::new(|host: &Host, _options| {
+//!             if let Some(hostname) = host.hostname() {
+//!                 host.to_builder().hostname(hostname.to_lowercase()).build()
+//!             } else {
+//!                 host.clone()
+//!             }
+//!         })
+//!     }
+//! }
+//! ```
+//!
+//! ## Building Plugins
+//!
+//! ### Plugin Project Setup
+//!
+//! 1. Add dependency in `Cargo.toml`:
+//!
+//! ```toml
+//! [dependencies]
+//! genja-plugin-manager = "0.1.0"
+//! genja-core = "0.1.0"
+//! ```
+//!
+//! 2. Configure library type:
+//!
+//! ```toml
+//! [lib]
+//! name = "my_plugin"
+//! crate-type = ["lib", "cdylib"]
+//! ```
+//!
+//! 3. Build the plugin:
+//!
+//! ```bash
+//! cargo build --release
+//! ```
+//!
+//! The compiled library will be in `target/release/` with platform-specific naming:
+//! - Linux: `libmy_plugin.so`
+//! - macOS: `libmy_plugin.dylib`
+//! - Windows: `my_plugin.dll`
+//!
+//! When configuring the end-user project, prefer grouping by plugin type in
+//! `package.metadata.plugins` (see example below).
+//!
+//! ## Project Structure Differences
+//!
+//! ### Core Library (Plugin Consumer)
+//!
+//! ```toml
+//! [package]
+//! name = "genja"
+//! version = "0.1.0"
+//!
+//! [dependencies]
+//! genja-plugin-manager = "0.1.0"
+//! ```
+//!
+//! ### Plugin Project (Connection/Runner/Inventory/Transform)
+//!
+//! ```toml
+//! [package]
+//! name = "my_plugin"
+//! version = "0.1.0"
+//!
+//! [dependencies]
+//! genja-plugin-manager = "0.1.0"
+//! genja-core = "0.1.0"
+//!
+//! [lib]
+//! name = "my_plugin"
+//! crate-type = ["lib", "cdylib"]
+//! ```
+//!
+//! ### End-User Project
+//!
+//! ```toml
+//! [package]
+//! name = "genja-app"
+//! version = "0.1.0"
+//!
+//! [dependencies]
+//! genja = "0.1.0"
+//!
+//! # Grouped by plugin type (recommended)
+//! [package.metadata.plugins.connection]
+//! ssh = "/path/to/libssh.so"
+//!
+//! [package.metadata.plugins.inventory]
+//! inventory_a = "/path/to/libinventory.so"
+//!
+//! [package.metadata.plugins.runner]
+//! threaded = "/path/to/libthreaded.so"
+//!
+//! [package.metadata.plugins.transform]
+//! normalize = "/path/to/libnormalize.so"
+//! ```
 
 pub mod plugin_types;
 // pub use plugin_types;
