@@ -2682,12 +2682,6 @@ impl ConnectionManager {
         &self,
         key: ConnectionKey,
     ) -> Result<Option<Arc<Mutex<dyn Connection>>>, String> {
-        if let Some(existing) = self.get(&key) {
-            return Ok(Some(existing));
-        }
-
-        let key_for_factory = key.clone();
-        let connection_type = key_for_factory.connection_type.clone();
         let factory = {
             let guard = self
                 .connection_factory
@@ -2697,12 +2691,20 @@ impl ConnectionManager {
                 .clone()
                 .ok_or_else(|| "connection factory not set".to_string())?
         };
-        let Some(connection) = factory(&key_for_factory) else {
-            return Ok(None);
-        };
-        self.increment_create(&connection_type);
-        self.connections_map.insert(key, connection.clone());
-        Ok(Some(connection))
+
+        match self.connections_map.entry(key) {
+            dashmap::mapref::entry::Entry::Occupied(entry) => Ok(Some(entry.get().clone())),
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                let key_for_factory = entry.key().clone();
+                let connection_type = key_for_factory.connection_type.clone();
+                let Some(connection) = factory(&key_for_factory) else {
+                    return Ok(None);
+                };
+                self.increment_create(&connection_type);
+                entry.insert(connection.clone());
+                Ok(Some(connection))
+            }
+        }
     }
 
     pub fn set_connection_factory(&self, factory: Arc<ConnectionFactory>) {
