@@ -1,4 +1,3 @@
-
 //! Plugin type system and trait definitions for the plugin manager.
 //!
 //! This module defines the core plugin architecture used throughout the Genja plugin system.
@@ -523,7 +522,9 @@ impl Plugins {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use genja_core::inventory::{ConnectionKey, Hosts, ResolvedConnectionParams, TransformFunction};
+    use genja_core::inventory::{
+        ConnectionKey, Hosts, ResolvedConnectionParams, TransformFunction,
+    };
     use genja_core::task::{Task, Tasks};
     use serde_json::json;
 

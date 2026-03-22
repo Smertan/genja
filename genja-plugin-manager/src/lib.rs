@@ -942,5 +942,4 @@ mod tests {
     }
 }
 
-
 // TODO: Implement more comprehensive tests for PluginManager

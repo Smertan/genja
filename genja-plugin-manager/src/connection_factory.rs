@@ -221,7 +221,7 @@
 //!
 //! // Create and use connection
 //! let key = ConnectionKey::new("router1", "ssh");
-
+//!
 //! // Open connection
 //! let params = ResolvedConnectionParams {
 //!     hostname: "10.0.0.1".to_string(),
