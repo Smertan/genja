@@ -5,7 +5,7 @@
 //!
 //! # Architecture
 //!
-//! - **Plugin Management**: Handled by [`plugin_manager::PluginManager`]
+//! - **Plugin Management**: Handled by [`genja_plugin_manager::PluginManager`]
 //! - **Inventory Loading**: Delegated to inventory plugins implementing [`PluginInventory`]
 //! - **Default Implementation**: [`DefaultInventoryPlugin`] loads from files
 //! - **Extensibility**: Transform function plugins can modify hosts during load
@@ -39,8 +39,8 @@
 //! ```no_run
 //! use genja::plugins::DefaultInventoryPlugin;
 //! use genja_core::Settings;
-//! use plugin_manager::PluginManager;
-//! use plugin_manager::plugin_types::PluginInventory;
+//! use genja_plugin_manager::PluginManager;
+//! use genja_plugin_manager::plugin_types::PluginInventory;
 //!
 //! let settings = Settings::default();
 //! let plugins = PluginManager::new();
@@ -57,8 +57,8 @@
 //! ```no_run
 //! use genja::plugins::DefaultInventoryPlugin;
 //! use genja_core::Settings;
-//! use plugin_manager::PluginManager;
-//! use plugin_manager::plugin_types::{PluginInventory, Plugins};
+//! use genja_plugin_manager::PluginManager;
+//! use genja_plugin_manager::plugin_types::{PluginInventory, Plugins};
 //!
 //! let settings = Settings::from_file("config.yaml")?;
 //! let mut plugins = PluginManager::new();
@@ -75,12 +75,12 @@
 //!
 //! - [`Genja::load_inventory`](crate::Genja::load_inventory) - Loading inventory into runtime
 //! - [`Settings::inventory`](genja_core::Settings::inventory) - Inventory configuration
-//! - [`PluginManager`](plugin_manager::PluginManager) - Plugin management
+//! - [`PluginManager`](genja_plugin_manager::PluginManager) - Plugin management
 
 use genja_core::inventory::Inventory;
 use genja_core::{InventoryLoadError, Settings};
-use plugin_manager::PluginManager;
-use plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
+use genja_plugin_manager::PluginManager;
+use genja_plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
 
 /// Default file-based inventory plugin.
 ///
@@ -107,8 +107,8 @@ use plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
 /// ```no_run
 /// use genja::plugins::DefaultInventoryPlugin;
 /// use genja_core::Settings;
-/// use plugin_manager::PluginManager;
-/// use plugin_manager::plugin_types::PluginInventory;
+/// use genja_plugin_manager::PluginManager;
+/// use genja_plugin_manager::plugin_types::PluginInventory;
 ///
 /// let settings = Settings::default();
 /// let plugins = PluginManager::new();
@@ -122,8 +122,8 @@ use plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
 /// ```no_run
 /// use genja::plugins::DefaultInventoryPlugin;
 /// use genja_core::Settings;
-/// use plugin_manager::PluginManager;
-/// use plugin_manager::plugin_types::{PluginInventory, Plugins, PluginTransformFunction};
+/// use genja_plugin_manager::PluginManager;
+/// use genja_plugin_manager::plugin_types::{PluginInventory, Plugins, PluginTransformFunction};
 ///
 /// let mut settings = Settings::default();
 /// // Configure transform function in settings...
@@ -173,8 +173,8 @@ impl PluginInventory for DefaultInventoryPlugin {
     /// ```no_run
     /// use genja::plugins::DefaultInventoryPlugin;
     /// use genja_core::Settings;
-    /// use plugin_manager::PluginManager;
-    /// use plugin_manager::plugin_types::PluginInventory;
+    /// use genja_plugin_manager::PluginManager;
+    /// use genja_plugin_manager::plugin_types::PluginInventory;
     ///
     /// let settings = Settings::from_file("config.yaml")?;
     /// let plugins = PluginManager::new();

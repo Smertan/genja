@@ -88,7 +88,7 @@
 //! allowing them to be stored in a single collection:
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::Plugins;
+//! use genja_plugin_manager::plugin_types::Plugins;
 //!
 //! // Store different plugin types in a single vector
 //! let plugins: Vec<Plugins> = vec![
@@ -120,7 +120,7 @@
 //! The [`PluginInfo`] struct combines a plugin instance with its optional group:
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::PluginInfo;
+//! use genja_plugin_manager::plugin_types::PluginInfo;
 //!
 //! // let info = PluginInfo {
 //! //     plugin: Box::new(my_plugin),
@@ -133,7 +133,7 @@
 //! ## Implementing a Connection Plugin
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::{Plugin, PluginConnection};
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginConnection};
 //! use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
 //!
 //! #[derive(Debug)]
@@ -177,8 +177,8 @@
 //! ## Implementing an Inventory Plugin
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::{Plugin, PluginInventory};
-//! use plugin_manager::PluginManager;
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginInventory};
+//! use genja_plugin_manager::PluginManager;
 //! use genja_core::{Settings, InventoryLoadError};
 //! use genja_core::inventory::Inventory;
 //!
@@ -208,7 +208,7 @@
 //! ## Implementing a Runner Plugin
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::{Plugin, PluginRunner};
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 //! use genja_core::inventory::Hosts;
 //! use genja_core::task::{Task, Tasks};
 //!
@@ -241,7 +241,7 @@
 //! ## Implementing a Transform Function Plugin
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::{Plugin, PluginTransformFunction};
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginTransformFunction};
 //! use genja_core::inventory::{TransformFunction, Host, BaseBuilderHost};
 //!
 //! #[derive(Debug)]
@@ -270,7 +270,7 @@
 //! ## Working with the Plugins Enum
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::Plugins;
+//! use genja_plugin_manager::plugin_types::Plugins;
 //!
 //! fn process_plugin(plugin: &Plugins) {
 //!     match plugin {
@@ -295,7 +295,7 @@
 //! Plugins are created through factory functions exported from dynamic libraries:
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::Plugins;
+//! use genja_plugin_manager::plugin_types::Plugins;
 //!
 //! #[unsafe(no_mangle)]
 //! pub fn create_plugins() -> Vec<Plugins> {

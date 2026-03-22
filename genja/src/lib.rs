@@ -39,9 +39,9 @@
 
 use genja_core::inventory::{Host, Inventory};
 use genja_core::{NatString, Settings};
-use plugin_manager::PluginManager;
-use plugin_manager::connection_factory::build_connection_factory;
-use plugin_manager::plugin_types::{PluginRunner, Plugins};
+use genja_plugin_manager::PluginManager;
+use genja_plugin_manager::connection_factory::build_connection_factory;
+use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -626,7 +626,7 @@ impl Default for Genja {
 /// ```
 /// use genja::Genja;
 /// use genja_core::inventory::{Inventory, Hosts};
-/// use plugin_manager::PluginManager;
+/// use genja_plugin_manager::PluginManager;
 ///
 /// let inventory = Inventory::builder().hosts(Hosts::new()).build();
 /// let mut plugin_manager = PluginManager::new();

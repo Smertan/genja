@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-plugin-manager = { path = "../../genja_plugin_manager" }
+genja-plugin-manager = { path = "../../genja-plugin-manager" }
 
 [package.metadata.plugins]
 plugin_a_b = "../target/release/libplugin_mods.dylib"

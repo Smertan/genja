@@ -44,7 +44,7 @@ such as `PluginRunner`, then export a `create_plugins` function:
 ```rust
 use genja_core::inventory::Hosts;
 use genja_core::task::{Task, Tasks};
-use plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
+use genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
 
 #[derive(Debug)]
 struct MyPlugin;
@@ -203,7 +203,7 @@ plugin_c = "/path/to/plugin_c.so"
 Here's a basic example of how to use the `PluginManager`:
 
 ```rust
-use plugin_manager::PluginManager;
+use genja_plugin_manager::PluginManager;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a new PluginManager

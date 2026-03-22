@@ -61,7 +61,7 @@
 //! ## Basic Setup
 //!
 //! ```no_run
-//! use plugin_manager::{PluginManager, connection_factory::build_connection_factory};
+//! use genja_plugin_manager::{PluginManager, connection_factory::build_connection_factory};
 //! use genja_core::inventory::{ConnectionManager, ConnectionKey};
 //! use std::sync::Arc;
 //!
@@ -86,7 +86,7 @@
 //! Connection plugins must implement the `PluginConnection` trait:
 //!
 //! ```no_run
-//! use plugin_manager::plugin_types::{Plugin, PluginConnection};
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginConnection};
 //! use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
 //!
 //! struct MyConnectionPlugin {
@@ -187,7 +187,7 @@
 //! ## Complete Integration Example
 //!
 //! ```no_run
-//! use plugin_manager::{PluginManager, connection_factory::build_connection_factory};
+//! use genja_plugin_manager::{PluginManager, connection_factory::build_connection_factory};
 //! use genja_core::inventory::{
 //!     ConnectionManager, ConnectionKey, ResolvedConnectionParams,
 //!     BaseBuilderHost, Host, Hosts, Inventory,
@@ -292,7 +292,7 @@ use std::sync::{Arc, Mutex};
 /// # Examples
 ///
 /// ```no_run
-/// use plugin_manager::connection_factory::PluginConnectionAdapter;
+/// use genja_plugin_manager::connection_factory::PluginConnectionAdapter;
 /// use genja_core::inventory::{Connection, ConnectionKey, ResolvedConnectionParams};
 ///
 /// // Typically created by the connection factory, not directly
@@ -333,7 +333,7 @@ impl PluginConnectionAdapter {
     /// # Examples
     ///
     /// ```no_run
-    /// use plugin_manager::connection_factory::PluginConnectionAdapter;
+    /// use genja_plugin_manager::connection_factory::PluginConnectionAdapter;
     ///
     /// // let plugin_connection = ...; // Some PluginConnection implementation
     /// // let adapter = PluginConnectionAdapter::new(plugin_connection);
@@ -519,7 +519,7 @@ impl Connection for PluginConnectionAdapter {
 /// # Examples
 ///
 /// ```no_run
-/// use plugin_manager::{PluginManager, connection_factory::build_connection_factory};
+/// use genja_plugin_manager::{PluginManager, connection_factory::build_connection_factory};
 /// use genja_core::inventory::{ConnectionKey, ConnectionManager};
 /// use std::sync::Arc;
 ///

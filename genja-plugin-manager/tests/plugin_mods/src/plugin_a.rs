@@ -1,5 +1,5 @@
 use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
-use plugin_manager::plugin_types::{Plugin, PluginConnection};
+use genja_plugin_manager::plugin_types::{Plugin, PluginConnection};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginA {

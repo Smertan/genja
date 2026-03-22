@@ -1,6 +1,6 @@
 pub mod plugin_a;
 pub mod plugin_b;
-use plugin_manager::plugin_types::Plugins;
+use genja_plugin_manager::plugin_types::Plugins;
 
 #[unsafe(no_mangle)]
 pub fn create_plugins() -> Vec<Plugins> {

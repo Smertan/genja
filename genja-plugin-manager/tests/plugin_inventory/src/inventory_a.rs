@@ -1,7 +1,7 @@
 use genja_core::inventory::Inventory;
 use genja_core::{InventoryLoadError, Settings};
-use plugin_manager::PluginManager;
-use plugin_manager::plugin_types::{Plugin, PluginInventory};
+use genja_plugin_manager::PluginManager;
+use genja_plugin_manager::plugin_types::{Plugin, PluginInventory};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct InventoryA;

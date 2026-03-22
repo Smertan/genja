@@ -46,7 +46,7 @@
 //! ```rust
 //! use genja_core::inventory::Hosts;
 //! use genja_core::task::{Task, Tasks};
-//! use plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
 //!
 //! #[derive(Debug)]
 //! struct MyPlugin;
@@ -80,7 +80,7 @@
 //! # unsafe {
 //! #     std::env::set_var("CARGO_MANIFEST_PATH", "../tests/plugin_mods/Cargo.toml");
 //! # }
-//! use plugin_manager::PluginManager;
+//! use genja_plugin_manager::PluginManager;
 //!
 //! # fn doc_test() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create and activate plugins
@@ -139,7 +139,7 @@
 //! Manage device connections with lifecycle hooks:
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::{Plugin, PluginConnection};
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginConnection};
 //! use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
 //!
 //! #[derive(Debug)]
@@ -182,8 +182,8 @@
 //! Load inventory data from various sources:
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::{Plugin, PluginInventory};
-//! use plugin_manager::PluginManager;
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginInventory};
+//! use genja_plugin_manager::PluginManager;
 //! use genja_core::{Settings, InventoryLoadError};
 //! use genja_core::inventory::Inventory;
 //!
@@ -211,7 +211,7 @@
 //! Execute tasks against hosts:
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::{Plugin, PluginRunner};
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 //! use genja_core::inventory::Hosts;
 //! use genja_core::task::{Task, Tasks};
 //!
@@ -238,7 +238,7 @@
 //! Provide inventory transformation functions:
 //!
 //! ```rust
-//! use plugin_manager::plugin_types::{Plugin, PluginTransformFunction};
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginTransformFunction};
 //! use genja_core::inventory::{TransformFunction, Host, BaseBuilderHost};
 //!
 //! #[derive(Debug)]
@@ -941,3 +941,6 @@ mod tests {
         assert_eq!(plugin_manager.plugins.len(), 4);
     }
 }
+
+
+// TODO: Implement more comprehensive tests for PluginManager
