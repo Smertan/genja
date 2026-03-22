@@ -557,3 +557,362 @@ pub fn build_connection_factory(plugins: Arc<PluginManager>) -> Arc<ConnectionFa
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin_types::{Plugin, PluginConnection, PluginRunner};
+    use genja_core::inventory::Connection;
+    use genja_core::task::{Task, Tasks};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug)]
+    struct TestConnection {
+        name: &'static str,
+        key: ConnectionKey,
+        create_calls: Arc<AtomicUsize>,
+        open_calls: Arc<AtomicUsize>,
+        close_calls: Arc<AtomicUsize>,
+        alive: bool,
+    }
+
+    impl TestConnection {
+        fn new(
+            name: &'static str,
+            key: ConnectionKey,
+            create_calls: Arc<AtomicUsize>,
+            open_calls: Arc<AtomicUsize>,
+            close_calls: Arc<AtomicUsize>,
+        ) -> Self {
+            Self {
+                name,
+                key,
+                create_calls,
+                open_calls,
+                close_calls,
+                alive: false,
+            }
+        }
+    }
+
+    impl Plugin for TestConnection {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginConnection for TestConnection {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+            self.create_calls.fetch_add(1, Ordering::SeqCst);
+            Box::new(Self::new(
+                self.name,
+                key.clone(),
+                Arc::clone(&self.create_calls),
+                Arc::clone(&self.open_calls),
+                Arc::clone(&self.close_calls),
+            ))
+        }
+
+        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            self.open_calls.fetch_add(1, Ordering::SeqCst);
+            self.alive = true;
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.close_calls.fetch_add(1, Ordering::SeqCst);
+            self.alive = false;
+            self.key.clone()
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+    }
+
+    #[derive(Debug)]
+    struct DummyRunner {
+        name: &'static str,
+    }
+
+    impl Plugin for DummyRunner {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginRunner for DummyRunner {
+        fn run(&self, _task: Task, _hosts: &genja_core::inventory::Hosts) {}
+
+        fn run_tasks(&self, _tasks: Tasks, _hosts: &genja_core::inventory::Hosts) {}
+    }
+
+    fn default_params() -> ResolvedConnectionParams {
+        ResolvedConnectionParams {
+            hostname: "host1".to_string(),
+            port: Some(22),
+            username: Some("user".to_string()),
+            password: Some("pass".to_string()),
+            platform: Some("linux".to_string()),
+            extras: None,
+        }
+    }
+
+    #[test]
+    fn adapter_open_close_updates_alive_and_returns_key() {
+        let counters = (
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let key = ConnectionKey::new("host1", "ssh");
+        let plugin = TestConnection::new(
+            "ssh",
+            key.clone(),
+            Arc::clone(&counters.0),
+            Arc::clone(&counters.1),
+            Arc::clone(&counters.2),
+        );
+
+        let mut adapter = PluginConnectionAdapter::new(Box::new(plugin));
+        assert!(!adapter.is_alive());
+
+        adapter.open(&default_params()).unwrap();
+        assert!(adapter.is_alive());
+
+        let closed_key = adapter.close();
+        assert_eq!(closed_key, key);
+        assert!(!adapter.is_alive());
+
+        assert_eq!(counters.1.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.2.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn adapter_create_uses_plugin_create_and_starts_dead() {
+        let counters = (
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let key = ConnectionKey::new("host1", "ssh");
+        let plugin = TestConnection::new(
+            "ssh",
+            key.clone(),
+            Arc::clone(&counters.0),
+            Arc::clone(&counters.1),
+            Arc::clone(&counters.2),
+        );
+        let adapter = PluginConnectionAdapter::new(Box::new(plugin));
+
+        let new_key = ConnectionKey::new("host2", "ssh");
+        let new_conn = adapter.create(&new_key);
+        assert!(!new_conn.is_alive());
+        assert_eq!(counters.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn factory_returns_none_for_missing_or_non_connection_plugins() {
+        let manager = Arc::new(PluginManager::new());
+        let factory = build_connection_factory(Arc::clone(&manager));
+        let key = ConnectionKey::new("host1", "ssh");
+        assert!(factory(&key).is_none());
+
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Runner(Box::new(DummyRunner { name: "runner" })));
+        let factory = build_connection_factory(Arc::new(manager));
+        let key = ConnectionKey::new("host1", "runner");
+        assert!(factory(&key).is_none());
+    }
+
+    #[test]
+    fn factory_returns_adapter_for_connection_plugins() {
+        let counters = (
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let key = ConnectionKey::new("host1", "ssh");
+        let plugin = TestConnection::new(
+            "ssh",
+            key.clone(),
+            Arc::clone(&counters.0),
+            Arc::clone(&counters.1),
+            Arc::clone(&counters.2),
+        );
+
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Connection(Box::new(plugin)));
+
+        let factory = build_connection_factory(Arc::new(manager));
+        let connection = factory(&key).expect("expected connection plugin");
+
+        {
+            let mut guard = connection.lock().unwrap();
+            assert!(!guard.is_alive());
+            guard.open(&default_params()).unwrap();
+            assert!(guard.is_alive());
+            let closed_key = guard.close();
+            assert_eq!(closed_key, key);
+            assert!(!guard.is_alive());
+        }
+
+        assert_eq!(counters.0.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.1.load(Ordering::SeqCst), 1);
+        assert_eq!(counters.2.load(Ordering::SeqCst), 1);
+    }
+
+    /// Tests that connections created by the factory are thread-safe and can handle concurrent access.
+    ///
+    /// This test verifies that the connection adapter wrapped in `Arc<Mutex<_>>` properly
+    /// synchronizes access from multiple threads. It spawns two threads that concurrently
+    /// attempt to open and close the same connection, ensuring that:
+    ///
+    /// 1. The mutex prevents data races on the connection state
+    /// 2. Multiple threads can safely acquire and release the lock
+    /// 3. Connection operations (open/close) are properly serialized
+    /// 4. The operation counters reflect all concurrent operations
+    ///
+    /// # Test Setup
+    ///
+    /// - Creates a test connection plugin with atomic counters to track operations
+    /// - Registers the plugin with a `PluginManager`
+    /// - Builds a connection factory and creates a connection instance
+    /// - Uses a barrier to synchronize thread execution for maximum contention
+    ///
+    /// # Test Execution
+    ///
+    /// - Thread A: Opens the connection
+    /// - Thread B: Closes then reopens the connection
+    /// - Main thread: Waits for both threads and performs final cleanup
+    ///
+    /// # Assertions
+    ///
+    /// - Verifies that at least 2 open operations occurred (one per thread)
+    /// - Verifies that at least 1 close operation occurred (from thread B)
+    ///
+    /// # Panics
+    ///
+    /// This test will panic if:
+    /// - The connection factory returns `None`
+    /// - Any thread fails to acquire the mutex lock
+    /// - Any connection operation fails
+    /// - The expected minimum operation counts are not met
+    #[test]
+    fn factory_connection_is_thread_safe() {
+        let counters = (
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let key = ConnectionKey::new("host1", "ssh");
+        let plugin = TestConnection::new(
+            "ssh",
+            key.clone(),
+            Arc::clone(&counters.0),
+            Arc::clone(&counters.1),
+            Arc::clone(&counters.2),
+        );
+
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Connection(Box::new(plugin)));
+
+        let factory = build_connection_factory(Arc::new(manager));
+        let connection = factory(&key).expect("expected connection plugin");
+
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let params = Arc::new(default_params());
+
+        let conn_a = Arc::clone(&connection);
+        let barrier_a = Arc::clone(&barrier);
+        let params_a = Arc::clone(&params);
+        let thread_a = std::thread::spawn(move || {
+            barrier_a.wait();
+            let mut guard = conn_a.lock().unwrap();
+            guard.open(&params_a).unwrap();
+        });
+
+        let conn_b = Arc::clone(&connection);
+        let barrier_b = Arc::clone(&barrier);
+        let params_b = Arc::clone(&params);
+        let thread_b = std::thread::spawn(move || {
+            barrier_b.wait();
+            let mut guard = conn_b.lock().unwrap();
+            guard.close();
+            guard.open(&params_b).unwrap();
+        });
+
+        barrier.wait();
+        thread_a.join().unwrap();
+        thread_b.join().unwrap();
+
+        let mut guard = connection.lock().unwrap();
+        guard.close();
+
+        assert!(counters.1.load(Ordering::SeqCst) >= 2);
+        assert!(counters.2.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[test]
+    fn adapter_open_error_keeps_alive_false() {
+        #[derive(Debug)]
+        struct FailingConnection;
+
+        impl Plugin for FailingConnection {
+            fn name(&self) -> String {
+                "fail".to_string()
+            }
+        }
+
+        impl PluginConnection for FailingConnection {
+            fn create(&self, _key: &ConnectionKey) -> Box<dyn PluginConnection> {
+                Box::new(Self)
+            }
+
+            fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+                Err("boom".to_string())
+            }
+
+            fn close(&mut self) -> ConnectionKey {
+                ConnectionKey::new("host1", "fail")
+            }
+
+            fn is_alive(&self) -> bool {
+                false
+            }
+        }
+
+        let mut adapter = PluginConnectionAdapter::new(Box::new(FailingConnection));
+        assert!(!adapter.is_alive());
+        let err = adapter.open(&default_params()).unwrap_err();
+        assert_eq!(err, "boom");
+        assert!(!adapter.is_alive());
+    }
+
+    #[test]
+    fn adapter_create_can_be_called_multiple_times() {
+        let counters = (
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let key = ConnectionKey::new("host1", "ssh");
+        let plugin = TestConnection::new(
+            "ssh",
+            key,
+            Arc::clone(&counters.0),
+            Arc::clone(&counters.1),
+            Arc::clone(&counters.2),
+        );
+        let adapter = PluginConnectionAdapter::new(Box::new(plugin));
+
+        let key_a = ConnectionKey::new("host-a", "ssh");
+        let key_b = ConnectionKey::new("host-b", "ssh");
+        let conn_a = adapter.create(&key_a);
+        let conn_b = adapter.create(&key_b);
+
+        assert!(!conn_a.is_alive());
+        assert!(!conn_b.is_alive());
+        assert_eq!(counters.0.load(Ordering::SeqCst), 2);
+    }
+}

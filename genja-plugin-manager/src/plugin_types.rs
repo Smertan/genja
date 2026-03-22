@@ -519,3 +519,223 @@ impl Plugins {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use genja_core::inventory::{ConnectionKey, Hosts, ResolvedConnectionParams, TransformFunction};
+    use genja_core::task::{Task, Tasks};
+    use serde_json::json;
+
+    #[derive(Debug)]
+    struct DummyPlugin {
+        name: &'static str,
+    }
+
+    impl DummyPlugin {
+        fn new(name: &'static str) -> Self {
+            Self { name }
+        }
+    }
+
+    impl Plugin for DummyPlugin {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    #[derive(Debug)]
+    struct DummyInventory {
+        name: &'static str,
+    }
+
+    impl DummyInventory {
+        fn new(name: &'static str) -> Self {
+            Self { name }
+        }
+    }
+
+    impl Plugin for DummyInventory {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginInventory for DummyInventory {
+        fn load(
+            &self,
+            _settings: &Settings,
+            _plugins: &PluginManager,
+        ) -> Result<Inventory, InventoryLoadError> {
+            Ok(Inventory::builder().build())
+        }
+    }
+
+    #[derive(Debug)]
+    struct DummyRunner {
+        name: &'static str,
+    }
+
+    impl DummyRunner {
+        fn new(name: &'static str) -> Self {
+            Self { name }
+        }
+    }
+
+    impl Plugin for DummyRunner {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginRunner for DummyRunner {
+        fn run(&self, _task: Task, _hosts: &Hosts) {}
+
+        fn run_tasks(&self, _tasks: Tasks, _hosts: &Hosts) {}
+    }
+
+    #[derive(Debug)]
+    struct DummyTransform {
+        name: &'static str,
+    }
+
+    impl DummyTransform {
+        fn new(name: &'static str) -> Self {
+            Self { name }
+        }
+    }
+
+    impl Plugin for DummyTransform {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginTransformFunction for DummyTransform {
+        fn transform_function(&self) -> TransformFunction {
+            TransformFunction::new(|host, _| host.clone())
+        }
+    }
+
+    #[derive(Debug)]
+    struct DummyConnection {
+        name: &'static str,
+        key: ConnectionKey,
+        alive: bool,
+    }
+
+    impl DummyConnection {
+        fn new(name: &'static str) -> Self {
+            Self {
+                name,
+                key: ConnectionKey::new("host1", "dummy"),
+                alive: false,
+            }
+        }
+    }
+
+    impl Plugin for DummyConnection {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginConnection for DummyConnection {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+            Box::new(Self {
+                name: self.name,
+                key: key.clone(),
+                alive: false,
+            })
+        }
+
+        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            self.alive = true;
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.alive = false;
+            self.key.clone()
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+    }
+
+    #[test]
+    fn plugin_entry_deserializes_individual_and_group() {
+        let individual: PluginEntry = serde_json::from_value(json!("path/to/lib.so")).unwrap();
+        match individual {
+            PluginEntry::Individual(path) => assert_eq!(path, "path/to/lib.so"),
+            PluginEntry::Group(_) => panic!("expected individual plugin entry"),
+        }
+
+        let grouped: PluginEntry = serde_json::from_value(json!({
+            "ssh": "path/to/libssh.so",
+            "telnet": "path/to/libtelnet.so"
+        }))
+        .unwrap();
+
+        match grouped {
+            PluginEntry::Group(map) => {
+                assert_eq!(map.get("ssh"), Some(&"path/to/libssh.so".to_string()));
+                assert_eq!(map.get("telnet"), Some(&"path/to/libtelnet.so".to_string()));
+            }
+            PluginEntry::Individual(_) => panic!("expected grouped plugin entry"),
+        }
+    }
+
+    #[test]
+    fn plugins_name_and_group_name_match_variants() {
+        let connection = Plugins::Connection(Box::new(DummyConnection::new("conn")));
+        let inventory = Plugins::Inventory(Box::new(DummyInventory::new("inv")));
+        let runner = Plugins::Runner(Box::new(DummyRunner::new("run")));
+        let transform = Plugins::TransformFunction(Box::new(DummyTransform::new("tf")));
+
+        assert_eq!(connection.name(), "conn");
+        assert_eq!(connection.group_name(), "Connection");
+
+        assert_eq!(inventory.name(), "inv");
+        assert_eq!(inventory.group_name(), "Inventory");
+
+        assert_eq!(runner.name(), "run");
+        assert_eq!(runner.group_name(), "Runner");
+
+        assert_eq!(transform.name(), "tf");
+        assert_eq!(transform.group_name(), "TransformFunction");
+    }
+
+    #[test]
+    fn debug_impls_include_group_and_name() {
+        let base = DummyPlugin::new("base");
+        let inventory = DummyInventory::new("inv");
+        let runner = DummyRunner::new("run");
+        let transform = DummyTransform::new("tf");
+        let connection = DummyConnection::new("conn");
+
+        let base_dbg = format!("{:?}", &base as &dyn Plugin);
+        let inventory_dbg = format!("{:?}", &inventory as &dyn PluginInventory);
+        let runner_dbg = format!("{:?}", &runner as &dyn PluginRunner);
+        let transform_dbg = format!("{:?}", &transform as &dyn PluginTransformFunction);
+        let connection_dbg = format!("{:?}", &connection as &dyn PluginConnection);
+
+        assert_eq!(base_dbg, "BasePlugin { name: base }");
+        assert_eq!(inventory_dbg, "InventoryPlugin { name: inv }");
+        assert_eq!(runner_dbg, "RunnerPlugin { name: run }");
+        assert_eq!(transform_dbg, "TransformFunctionPlugin { name: tf }");
+        assert_eq!(connection_dbg, "ConnectionPlugin { name: conn }");
+    }
+
+    #[test]
+    fn plugin_info_holds_group_and_plugin() {
+        let info = PluginInfo {
+            plugin: Box::new(DummyPlugin::new("example")),
+            group: Some("network".to_string()),
+        };
+
+        assert_eq!(info.plugin.name(), "example");
+        assert_eq!(info.group.as_deref(), Some("network"));
+    }
+}

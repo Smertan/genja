@@ -2693,8 +2693,10 @@ impl ConnectionManager {
             return Some(existing);
         }
 
-        let factory = self.connection_factory.read().ok()?;
-        let factory = factory.as_ref()?;
+        let factory = {
+            let guard = self.connection_factory.read().ok()?;
+            guard.clone()?
+        };
         let connection = factory(key)?;
         self.connections_map.insert(key.clone(), connection.clone());
         Some(connection)
