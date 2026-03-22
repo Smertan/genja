@@ -78,7 +78,7 @@
 //!
 //! // 4. Use connection manager to create connections
 //! let key = ConnectionKey::new("router1", "ssh");
-//! // let connection = connection_manager.get_or_create(key, || { ... });
+//! // let connection = connection_manager.get_or_create(key);
 //! ```
 //!
 //! ## Plugin Integration
@@ -221,11 +221,7 @@
 //!
 //! // Create and use connection
 //! let key = ConnectionKey::new("router1", "ssh");
-//!
-//! let connection = connection_manager
-//!     .open_connection(&key)
-//!     .expect("connection plugin not found");
-//!
+
 //! // Open connection
 //! let params = ResolvedConnectionParams {
 //!     hostname: "10.0.0.1".to_string(),
@@ -235,16 +231,18 @@
 //!     platform: Some("cisco_ios".to_string()),
 //!     extras: None,
 //! };
+//! let connection = connection_manager
+//!     .open_connection(&key, &params)?
+//!     .expect("connection plugin not found");
 //!
-//! let mut conn = connection.lock().unwrap();
-//! conn.open(&params)?;
+//! let conn = connection.lock().unwrap();
 //!
 //! // Use connection...
 //! assert!(conn.is_alive());
 //!
 //! // Close connection
-//! conn.close();
-//! assert!(!conn.is_alive());
+//! drop(conn);
+//! connection_manager.close_connection(&key);
 //! # Ok(())
 //! # }
 //! ```
@@ -536,7 +534,7 @@ impl Connection for PluginConnectionAdapter {
 ///
 /// // Create connections through the manager
 /// let key = ConnectionKey::new("router1", "ssh");
-/// // let connection = connection_manager.get_or_create(key, || { ... });
+/// // let connection = connection_manager.get_or_create(key);
 /// ```
 ///
 /// # See Also

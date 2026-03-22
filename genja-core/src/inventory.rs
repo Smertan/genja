@@ -45,6 +45,7 @@ use genja_core_derive::{DerefMacro, DerefMutMacro};
 use schemars::{schema_for, JsonSchema};
 use serde::de::{Error, SeqAccess, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -2602,11 +2603,18 @@ impl ConnectionKey {
 pub type ConnectionFactory =
     dyn Fn(&ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> + Send + Sync;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ConnectionCounters {
+    pub create_calls: usize,
+    pub open_calls: usize,
+    pub close_calls: usize,
+}
+
 // TODO: Write documentation the ConnectionManager struct and its methods.
-#[derive(Default)]
 pub struct ConnectionManager {
     connections_map: DashMap<ConnectionKey, Arc<Mutex<dyn Connection>>>,
     connection_factory: RwLock<Option<Arc<ConnectionFactory>>>,
+    counters: Arc<DashMap<String, ConnectionCounters>>,
 }
 
 impl fmt::Debug for ConnectionManager {
@@ -2630,7 +2638,34 @@ impl ConnectionManager {
         Self {
             connections_map: DashMap::new(),
             connection_factory: RwLock::new(Some(factory)),
+            counters: Arc::new(DashMap::new()),
         }
+    }
+
+    fn increment_create(&self, connection_type: &str) {
+        let mut entry = self.counters.entry(connection_type.to_string()).or_default();
+        entry.create_calls += 1;
+    }
+
+    fn increment_open(&self, connection_type: &str) {
+        let mut entry = self.counters.entry(connection_type.to_string()).or_default();
+        entry.open_calls += 1;
+    }
+
+    fn increment_close(&self, connection_type: &str) {
+        let mut entry = self.counters.entry(connection_type.to_string()).or_default();
+        entry.close_calls += 1;
+    }
+
+    pub fn connection_counters_for(&self, connection_type: &str) -> Option<ConnectionCounters> {
+        self.counters.get(connection_type).map(|entry| *entry)
+    }
+
+    pub fn connection_counters_snapshot(&self) -> HashMap<String, ConnectionCounters> {
+        self.counters
+            .iter()
+            .map(|entry| (entry.key().clone(), *entry.value()))
+            .collect()
     }
 
     pub fn get(&self, key: &ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> {
@@ -2643,23 +2678,31 @@ impl ConnectionManager {
         self.connections_map.insert(key, connection);
     }
 
-    pub fn get_or_create<F, C>(&self, key: ConnectionKey, ctor: F) -> Arc<Mutex<dyn Connection>>
-    where
-        F: FnOnce() -> C,
-        C: Connection + 'static,
-    {
+    pub fn get_or_create(
+        &self,
+        key: ConnectionKey,
+    ) -> Result<Option<Arc<Mutex<dyn Connection>>>, String> {
+        if let Some(existing) = self.get(&key) {
+            return Ok(Some(existing));
+        }
+
         let key_for_factory = key.clone();
-        let entry = self.connections_map.entry(key).or_insert_with(|| {
-            if let Ok(factory) = self.connection_factory.read() {
-                if let Some(factory) = factory.as_ref() {
-                    if let Some(connection) = factory(&key_for_factory) {
-                        return connection;
-                    }
-                }
-            }
-            Arc::new(Mutex::new(ctor())) as Arc<Mutex<dyn Connection>>
-        });
-        entry.clone()
+        let connection_type = key_for_factory.connection_type.clone();
+        let factory = {
+            let guard = self
+                .connection_factory
+                .read()
+                .map_err(|_| "connection factory lock poisoned".to_string())?;
+            guard
+                .clone()
+                .ok_or_else(|| "connection factory not set".to_string())?
+        };
+        let Some(connection) = factory(&key_for_factory) else {
+            return Ok(None);
+        };
+        self.increment_create(&connection_type);
+        self.connections_map.insert(key, connection.clone());
+        Ok(Some(connection))
     }
 
     pub fn set_connection_factory(&self, factory: Arc<ConnectionFactory>) {
@@ -2674,6 +2717,7 @@ impl ConnectionManager {
         if let Some((_, connection)) = self.connections_map.remove(key) {
             if let Ok(mut connection) = connection.lock() {
                 connection.close();
+                self.increment_close(&key.connection_type);
             }
         }
     }
@@ -2683,23 +2727,41 @@ impl ConnectionManager {
         self.connections_map.iter().for_each(|entry| {
             if let Ok(mut connection) = entry.value().lock() {
                 connection.close();
+                self.increment_close(&entry.key().connection_type);
             }
         });
         self.connections_map.clear();
     }
 
-    pub fn open_connection(&self, key: &ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> {
-        if let Some(existing) = self.get(key) {
-            return Some(existing);
-        }
-
-        let factory = {
-            let guard = self.connection_factory.read().ok()?;
-            guard.clone()?
+    pub fn open_connection(
+        &self,
+        key: &ConnectionKey,
+        params: &ResolvedConnectionParams,
+    ) -> Result<Option<Arc<Mutex<dyn Connection>>>, String> {
+        let Some(connection) = self.get_or_create(key.clone())? else {
+            return Ok(None);
         };
-        let connection = factory(key)?;
-        self.connections_map.insert(key.clone(), connection.clone());
-        Some(connection)
+
+        {
+            let mut guard = connection
+                .lock()
+                .map_err(|_| "connection lock poisoned".to_string())?;
+            if !guard.is_alive() {
+                guard.open(params)?;
+                self.increment_open(&key.connection_type);
+            }
+        }
+        Ok(Some(connection))
+    }
+}
+
+impl Default for ConnectionManager {
+    fn default() -> Self {
+        Self {
+            connections_map: DashMap::new(),
+            connection_factory: RwLock::new(None),
+            counters: Arc::new(DashMap::new()),
+        }
     }
 }
 
