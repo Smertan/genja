@@ -561,33 +561,21 @@ mod tests {
     use super::*;
     use crate::plugin_types::{Plugin, PluginConnection, PluginRunner};
     use genja_core::inventory::Connection;
+    use genja_core::inventory::ConnectionManager;
     use genja_core::task::{Task, Tasks};
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Debug)]
     struct TestConnection {
         name: &'static str,
         key: ConnectionKey,
-        create_calls: Arc<AtomicUsize>,
-        open_calls: Arc<AtomicUsize>,
-        close_calls: Arc<AtomicUsize>,
         alive: bool,
     }
 
     impl TestConnection {
-        fn new(
-            name: &'static str,
-            key: ConnectionKey,
-            create_calls: Arc<AtomicUsize>,
-            open_calls: Arc<AtomicUsize>,
-            close_calls: Arc<AtomicUsize>,
-        ) -> Self {
+        fn new(name: &'static str, key: ConnectionKey) -> Self {
             Self {
                 name,
                 key,
-                create_calls,
-                open_calls,
-                close_calls,
                 alive: false,
             }
         }
@@ -601,24 +589,15 @@ mod tests {
 
     impl PluginConnection for TestConnection {
         fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
-            self.create_calls.fetch_add(1, Ordering::SeqCst);
-            Box::new(Self::new(
-                self.name,
-                key.clone(),
-                Arc::clone(&self.create_calls),
-                Arc::clone(&self.open_calls),
-                Arc::clone(&self.close_calls),
-            ))
+            Box::new(Self::new(self.name, key.clone()))
         }
 
         fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
-            self.open_calls.fetch_add(1, Ordering::SeqCst);
             self.alive = true;
             Ok(())
         }
 
         fn close(&mut self) -> ConnectionKey {
-            self.close_calls.fetch_add(1, Ordering::SeqCst);
             self.alive = false;
             self.key.clone()
         }
@@ -658,19 +637,8 @@ mod tests {
 
     #[test]
     fn adapter_open_close_updates_alive_and_returns_key() {
-        let counters = (
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-        );
         let key = ConnectionKey::new("host1", "ssh");
-        let plugin = TestConnection::new(
-            "ssh",
-            key.clone(),
-            Arc::clone(&counters.0),
-            Arc::clone(&counters.1),
-            Arc::clone(&counters.2),
-        );
+        let plugin = TestConnection::new("ssh", key.clone());
 
         let mut adapter = PluginConnectionAdapter::new(Box::new(plugin));
         assert!(!adapter.is_alive());
@@ -681,32 +649,17 @@ mod tests {
         let closed_key = adapter.close();
         assert_eq!(closed_key, key);
         assert!(!adapter.is_alive());
-
-        assert_eq!(counters.1.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.2.load(Ordering::SeqCst), 1);
     }
 
     #[test]
     fn adapter_create_uses_plugin_create_and_starts_dead() {
-        let counters = (
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-        );
         let key = ConnectionKey::new("host1", "ssh");
-        let plugin = TestConnection::new(
-            "ssh",
-            key.clone(),
-            Arc::clone(&counters.0),
-            Arc::clone(&counters.1),
-            Arc::clone(&counters.2),
-        );
+        let plugin = TestConnection::new("ssh", key.clone());
         let adapter = PluginConnectionAdapter::new(Box::new(plugin));
 
         let new_key = ConnectionKey::new("host2", "ssh");
         let new_conn = adapter.create(&new_key);
         assert!(!new_conn.is_alive());
-        assert_eq!(counters.0.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -725,19 +678,8 @@ mod tests {
 
     #[test]
     fn factory_returns_adapter_for_connection_plugins() {
-        let counters = (
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-        );
         let key = ConnectionKey::new("host1", "ssh");
-        let plugin = TestConnection::new(
-            "ssh",
-            key.clone(),
-            Arc::clone(&counters.0),
-            Arc::clone(&counters.1),
-            Arc::clone(&counters.2),
-        );
+        let plugin = TestConnection::new("ssh", key.clone());
 
         let mut manager = PluginManager::new();
         manager.register_plugin(Plugins::Connection(Box::new(plugin)));
@@ -754,10 +696,117 @@ mod tests {
             assert_eq!(closed_key, key);
             assert!(!guard.is_alive());
         }
+    }
 
-        assert_eq!(counters.0.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.1.load(Ordering::SeqCst), 1);
-        assert_eq!(counters.2.load(Ordering::SeqCst), 1);
+    #[test]
+    fn manager_counters_increment_on_open_and_close() {
+        let key = ConnectionKey::new("host1", "ssh");
+        let plugin = TestConnection::new("ssh", key.clone());
+
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Connection(Box::new(plugin)));
+
+        let factory = build_connection_factory(Arc::new(manager));
+        let connection_manager = ConnectionManager::with_connection_factory(factory);
+
+        let params = default_params();
+        let connection = connection_manager
+            .open_connection(&key, &params)
+            .unwrap()
+            .unwrap();
+
+        let counters = connection_manager.connection_counters_for("ssh").unwrap();
+        assert_eq!(counters.create_calls, 1);
+        assert_eq!(counters.open_calls, 1);
+        assert_eq!(counters.close_calls, 0);
+
+        drop(connection);
+        connection_manager.close_connection(&key);
+        let counters = connection_manager.connection_counters_for("ssh").unwrap();
+        assert_eq!(counters.create_calls, 1);
+        assert_eq!(counters.open_calls, 1);
+        assert_eq!(counters.close_calls, 1);
+    }
+
+    #[test]
+    fn open_connection_twice_does_not_double_count_open() {
+        let key = ConnectionKey::new("host1", "ssh");
+        let plugin = TestConnection::new("ssh", key.clone());
+
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Connection(Box::new(plugin)));
+
+        let factory = build_connection_factory(Arc::new(manager));
+        let connection_manager = ConnectionManager::with_connection_factory(factory);
+
+        let params = default_params();
+        connection_manager
+            .open_connection(&key, &params)
+            .unwrap()
+            .unwrap();
+
+        let counters_after_first = connection_manager.connection_counters_for("ssh").unwrap();
+        assert_eq!(counters_after_first.create_calls, 1);
+        assert_eq!(counters_after_first.open_calls, 1);
+
+        connection_manager
+            .open_connection(&key, &params)
+            .unwrap()
+            .unwrap();
+
+        let counters_after_second = connection_manager.connection_counters_for("ssh").unwrap();
+        assert_eq!(counters_after_second.create_calls, 1);
+        assert_eq!(counters_after_second.open_calls, 1);
+    }
+
+    #[test]
+    fn open_connection_errors_when_factory_missing() {
+        let connection_manager = ConnectionManager::default();
+        let key = ConnectionKey::new("host1", "ssh");
+        let params = default_params();
+
+        let err = connection_manager
+            .open_connection(&key, &params)
+            .unwrap_err();
+        assert_eq!(err, "connection factory not set");
+    }
+
+    #[test]
+    fn connection_counters_snapshot_tracks_multiple_types() {
+        let key_ssh = ConnectionKey::new("host1", "ssh");
+        let key_telnet = ConnectionKey::new("host2", "telnet");
+
+        let plugin_ssh = TestConnection::new("ssh", key_ssh.clone());
+        let plugin_telnet = TestConnection::new("telnet", key_telnet.clone());
+
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Connection(Box::new(plugin_ssh)));
+        manager.register_plugin(Plugins::Connection(Box::new(plugin_telnet)));
+
+        let factory = build_connection_factory(Arc::new(manager));
+        let connection_manager = ConnectionManager::with_connection_factory(factory);
+
+        let params = default_params();
+        connection_manager
+            .open_connection(&key_ssh, &params)
+            .unwrap()
+            .unwrap();
+        connection_manager
+            .open_connection(&key_telnet, &params)
+            .unwrap()
+            .unwrap();
+
+        let snapshot = connection_manager.connection_counters_snapshot();
+        let ssh = snapshot.get("ssh").copied().unwrap();
+        let telnet = snapshot.get("telnet").copied().unwrap();
+
+        assert_eq!(ssh.create_calls, 1);
+        assert_eq!(ssh.open_calls, 1);
+        assert_eq!(ssh.close_calls, 0);
+
+        assert_eq!(telnet.create_calls, 1);
+        assert_eq!(telnet.open_calls, 1);
+        assert_eq!(telnet.close_calls, 0);
     }
 
     /// Tests that connections created by the factory are thread-safe and can handle concurrent access.
@@ -798,57 +847,52 @@ mod tests {
     /// - The expected minimum operation counts are not met
     #[test]
     fn factory_connection_is_thread_safe() {
-        let counters = (
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-        );
         let key = ConnectionKey::new("host1", "ssh");
-        let plugin = TestConnection::new(
-            "ssh",
-            key.clone(),
-            Arc::clone(&counters.0),
-            Arc::clone(&counters.1),
-            Arc::clone(&counters.2),
-        );
+        let plugin = TestConnection::new("ssh", key.clone());
 
         let mut manager = PluginManager::new();
         manager.register_plugin(Plugins::Connection(Box::new(plugin)));
 
         let factory = build_connection_factory(Arc::new(manager));
-        let connection = factory(&key).expect("expected connection plugin");
+        let manager = Arc::new(ConnectionManager::with_connection_factory(factory));
 
         let barrier = Arc::new(std::sync::Barrier::new(3));
         let params = Arc::new(default_params());
 
-        let conn_a = Arc::clone(&connection);
         let barrier_a = Arc::clone(&barrier);
         let params_a = Arc::clone(&params);
+        let manager_a = Arc::clone(&manager);
+        let key_a = key.clone();
         let thread_a = std::thread::spawn(move || {
             barrier_a.wait();
-            let mut guard = conn_a.lock().unwrap();
-            guard.open(&params_a).unwrap();
+            manager_a
+                .open_connection(&key_a, &params_a)
+                .unwrap()
+                .unwrap();
         });
 
-        let conn_b = Arc::clone(&connection);
         let barrier_b = Arc::clone(&barrier);
         let params_b = Arc::clone(&params);
+        let manager_b = Arc::clone(&manager);
+        let key_b = key.clone();
         let thread_b = std::thread::spawn(move || {
             barrier_b.wait();
-            let mut guard = conn_b.lock().unwrap();
-            guard.close();
-            guard.open(&params_b).unwrap();
+            manager_b
+                .open_connection(&key_b, &params_b)
+                .unwrap()
+                .unwrap();
         });
 
         barrier.wait();
         thread_a.join().unwrap();
         thread_b.join().unwrap();
 
-        let mut guard = connection.lock().unwrap();
-        guard.close();
+        manager.close_connection(&key);
+        let counters = manager.connection_counters_for("ssh").unwrap();
 
-        assert!(counters.1.load(Ordering::SeqCst) >= 2);
-        assert!(counters.2.load(Ordering::SeqCst) >= 1);
+        assert_eq!(counters.create_calls, 1);
+        assert_eq!(counters.open_calls, 1);
+        assert_eq!(counters.close_calls, 1);
     }
 
     #[test]
@@ -889,19 +933,8 @@ mod tests {
 
     #[test]
     fn adapter_create_can_be_called_multiple_times() {
-        let counters = (
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-        );
         let key = ConnectionKey::new("host1", "ssh");
-        let plugin = TestConnection::new(
-            "ssh",
-            key,
-            Arc::clone(&counters.0),
-            Arc::clone(&counters.1),
-            Arc::clone(&counters.2),
-        );
+        let plugin = TestConnection::new("ssh", key);
         let adapter = PluginConnectionAdapter::new(Box::new(plugin));
 
         let key_a = ConnectionKey::new("host-a", "ssh");
@@ -911,6 +944,5 @@ mod tests {
 
         assert!(!conn_a.is_alive());
         assert!(!conn_b.is_alive());
-        assert_eq!(counters.0.load(Ordering::SeqCst), 2);
     }
 }
