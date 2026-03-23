@@ -717,11 +717,50 @@ impl PluginManager {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
 
-    fn set_env_var() {
+    fn env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let lock = LOCK.get_or_init(|| Mutex::new(()));
+        lock.lock().unwrap_or_else(|err| err.into_inner())
+    }
+
+    fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
+
+    fn ensure_test_plugins_built() {
+        static BUILT: OnceLock<()> = OnceLock::new();
+        BUILT.get_or_init(|| {
+            let status = Command::new("cargo")
+                .current_dir(workspace_root())
+                .args([
+                    "build",
+                    "--quiet",
+                    "-p",
+                    "plugin-mods",
+                    "-p",
+                    "plugin_inventory",
+                    "-p",
+                    "plugin_tasks",
+                ])
+                .status()
+                .expect("Failed to run cargo build for test plugins");
+            assert!(status.success(), "Failed to build test plugins");
+        });
+    }
+
+    fn set_env_var() -> MutexGuard<'static, ()> {
+        let guard = env_lock();
+        ensure_test_plugins_built();
         let file_name = match std::env::consts::OS {
             "linux" => "Cargo.toml",
             "windows" => "Cargo-windows.toml",
@@ -732,23 +771,75 @@ mod tests {
         unsafe {
             std::env::set_var("CARGO_MANIFEST_PATH", file);
         }
+        guard
     }
 
     fn make_file_path(module_name: &str) -> String {
+        ensure_test_plugins_built();
         let mut path_name = PathBuf::new();
         let mut module_name_prefix = String::from(std::env::consts::DLL_PREFIX);
         module_name_prefix.push_str(module_name);
         path_name.push("..");
         path_name.push("target");
-        path_name.push("release");
+        path_name.push("debug");
         path_name.push(module_name_prefix);
         path_name.set_extension(std::env::consts::DLL_EXTENSION);
         path_name.to_string_lossy().to_string()
     }
 
+    fn temp_manifest_path(filename: &str) -> std::path::PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let mut path = std::env::temp_dir();
+        path.push(format!("genja_plugin_manager_{now}_{filename}"));
+        path
+    }
+
+    fn temp_file_path(filename: &str) -> std::path::PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let mut path = std::env::temp_dir();
+        path.push(format!("genja_plugin_manager_{now}_{filename}"));
+        path
+    }
+
+    #[cfg(target_os = "linux")]
+    fn system_library_path() -> Option<&'static str> {
+        let candidates = [
+            "/lib/x86_64-linux-gnu/libc.so.6",
+            "/lib64/libc.so.6",
+            "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        ];
+        candidates.iter().copied().find(|p| Path::new(p).exists())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn system_library_path() -> Option<&'static str> {
+        let p = "/usr/lib/libSystem.B.dylib";
+        if Path::new(p).exists() {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn system_library_path() -> Option<&'static str> {
+        let p = "C:\\Windows\\System32\\kernel32.dll";
+        if Path::new(p).exists() {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
     #[test]
     fn get_plugin_path_test() {
-        set_env_var();
+        let _env = set_env_var();
         let plugin_manager = PluginManager::new();
         let metadata = plugin_manager.get_plugin_metadata();
         let plugins = metadata.plugins;
@@ -777,7 +868,7 @@ mod tests {
 
     #[test]
     fn get_plugin_metadata_test() {
-        set_env_var();
+        let _env = set_env_var();
         let plugin_manager = PluginManager::new();
         let metadata = plugin_manager.get_plugin_metadata();
         assert!(metadata.plugins.is_some());
@@ -786,8 +877,38 @@ mod tests {
     }
 
     #[test]
+    fn get_plugin_metadata_missing_manifest_test() {
+        let _env = env_lock();
+        let missing = temp_manifest_path("missing_manifest.toml");
+        unsafe {
+            std::env::set_var("CARGO_MANIFEST_PATH", missing.to_string_lossy().to_string());
+        }
+        let plugin_manager = PluginManager::new();
+        let metadata = plugin_manager.get_plugin_metadata();
+        assert!(metadata.plugins.is_none());
+    }
+
+    #[test]
+    fn get_plugin_metadata_missing_metadata_section_test() {
+        let _env = env_lock();
+        let manifest = temp_manifest_path("no_metadata.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"no_metadata\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("CARGO_MANIFEST_PATH", manifest.to_string_lossy().to_string());
+        }
+        let plugin_manager = PluginManager::new();
+        let metadata = plugin_manager.get_plugin_metadata();
+        assert!(metadata.plugins.is_none());
+        let _ = std::fs::remove_file(&manifest);
+    }
+
+    #[test]
     fn activate_plugins_test() {
-        set_env_var();
+        let _env = set_env_var();
         let mut plugin_manager = PluginManager::new();
         plugin_manager = plugin_manager.activate_plugins().unwrap();
         assert!(plugin_manager.get_plugin("plugin_a").is_some());
@@ -798,7 +919,7 @@ mod tests {
     #[should_panic]
     /// Test for duplicate activation of plugins.
     fn activate_plugins_and_panic_test() {
-        set_env_var();
+        let _env = set_env_var();
         let mut plugin_manager = PluginManager::new();
         plugin_manager = plugin_manager.activate_plugins().unwrap();
         _ = plugin_manager.activate_plugins().unwrap();
@@ -825,8 +946,36 @@ mod tests {
     }
 
     #[test]
+    fn load_plugin_missing_file_test() {
+        let plugin_manager = PluginManager::new();
+        let missing = temp_file_path("missing_plugin_file.so");
+        let result = plugin_manager.load_plugin(&missing.to_string_lossy());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_plugin_invalid_library_test() {
+        let plugin_manager = PluginManager::new();
+        let file = temp_file_path("not_a_library.so");
+        std::fs::write(&file, "not a library").unwrap();
+        let result = plugin_manager.load_plugin(&file.to_string_lossy());
+        assert!(result.is_err());
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn load_plugin_missing_symbol_test() {
+        let plugin_manager = PluginManager::new();
+        let Some(path) = system_library_path() else {
+            return;
+        };
+        let result = plugin_manager.load_plugin(path);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn activate_plugins_with_groups_test() {
-        set_env_var();
+        let _env = set_env_var();
         let plugin_manager = PluginManager::new().activate_plugins().unwrap();
 
         // Get all plugins in the "base" group
@@ -843,7 +992,7 @@ mod tests {
 
     #[test]
     fn get_all_plugin_names_and_groups_test() {
-        set_env_var();
+        let _env = set_env_var();
         let plugin_manager = PluginManager::new().activate_plugins().unwrap();
         let all_plugins = plugin_manager.get_all_plugin_names_and_groups();
         assert_eq!(all_plugins.len(), 3);
@@ -859,7 +1008,7 @@ mod tests {
 
     #[test]
     fn deregister_plugin_test() {
-        set_env_var();
+        let _env = set_env_var();
         let mut plugin_manager = PluginManager::new().activate_plugins().unwrap();
         assert_eq!(plugin_manager.plugins.len(), 3);
 
@@ -884,7 +1033,7 @@ mod tests {
 
     #[test]
     fn deregister_all_plugins_test() {
-        set_env_var();
+        let _env = set_env_var();
         let mut plugin_manager = PluginManager::new().activate_plugins().unwrap();
         assert_eq!(plugin_manager.plugins.len(), 3);
 
@@ -896,7 +1045,7 @@ mod tests {
 
     #[test]
     fn plugin_manager_new_test() {
-        set_env_var();
+        let _env = set_env_var();
         let mut plugin_manager = PluginManager::new();
         assert_eq!(plugin_manager.plugins.len(), 0);
         plugin_manager = plugin_manager.activate_plugins().unwrap();
@@ -905,7 +1054,7 @@ mod tests {
 
     #[test]
     fn get_plugins_by_type_test() {
-        set_env_var();
+        let _env = set_env_var();
         let plugin_manager = PluginManager::new().activate_plugins().unwrap();
         let connection_plugins = plugin_manager.get_plugins_by_type_connection();
         assert_eq!(connection_plugins.len(), 2);
@@ -931,7 +1080,7 @@ mod tests {
 
     #[test]
     fn with_path_test() {
-        set_env_var();
+        let _env = set_env_var();
         let path = make_file_path("plugin_tasks");
         let plugin_manager = PluginManager::new()
             .with_path(&path, None)
@@ -940,6 +1089,26 @@ mod tests {
             .unwrap();
         assert_eq!(plugin_manager.plugins.len(), 4);
     }
-}
 
-// TODO: Implement more comprehensive tests for PluginManager
+    #[test]
+    fn with_path_not_found_test() {
+        let missing = temp_file_path("missing_with_path_plugin.so");
+        let result = PluginManager::new().with_path(&missing.to_string_lossy(), None);
+        assert!(result.is_err());
+        if let Err(err) = result {
+            assert_eq!(err.kind(), ErrorKind::NotFound);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn with_path_duplicate_plugin_panics_test() {
+        let _env = set_env_var();
+        let duplicate = make_file_path("plugin_mods");
+        let _ = PluginManager::new()
+            .with_path(&duplicate, None)
+            .unwrap()
+            .activate_plugins()
+            .unwrap();
+    }
+}
