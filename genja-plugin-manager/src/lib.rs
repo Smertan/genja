@@ -467,7 +467,13 @@ impl PluginManager {
                 return Metadata { plugins: None };
             }
         };
-        let value: toml::Value = toml::from_str(&manifest).unwrap();
+        let value: toml::Value = match toml::from_str(&manifest) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("Error parsing manifest file: {err}");
+                return Metadata { plugins: None };
+            }
+        };
         // let metadata = if let Some(meta_data) = value
         if let Some(meta_data) = value
             .get("package")
@@ -502,14 +508,14 @@ impl PluginManager {
                 }
             }
             PluginEntry::Group(group_plugins) => {
-                group_plugins.iter().for_each(|(name, path)| {
+                for (name, path) in group_plugins {
                     log::debug!("Loading plugin group: {group_or_name}, {name} {path}");
-                    let (library, plugins) = self.load_plugin(path).unwrap();
+                    let (library, plugins) = self.load_plugin(path)?;
                     self.libraries.push(library);
                     for plugin in plugins {
                         self.register_plugin(plugin);
                     }
-                });
+                }
             }
         }
         Ok(())
@@ -903,6 +909,48 @@ mod tests {
         let plugin_manager = PluginManager::new();
         let metadata = plugin_manager.get_plugin_metadata();
         assert!(metadata.plugins.is_none());
+        let _ = std::fs::remove_file(&manifest);
+    }
+
+    #[test]
+    fn get_plugin_metadata_invalid_toml_test() {
+        let _env = env_lock();
+        let manifest = temp_manifest_path("invalid_toml.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"invalid\"\nversion =\n",
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("CARGO_MANIFEST_PATH", manifest.to_string_lossy().to_string());
+        }
+        let plugin_manager = PluginManager::new();
+        let metadata = plugin_manager.get_plugin_metadata();
+        assert!(metadata.plugins.is_none());
+        let _ = std::fs::remove_file(&manifest);
+    }
+
+    #[test]
+    fn activate_plugins_group_invalid_path_returns_error_test() {
+        let _env = env_lock();
+        let manifest = temp_manifest_path("group_invalid_path.toml");
+        std::fs::write(
+            &manifest,
+            r#"[package]
+name = "invalid_group"
+version = "0.1.0"
+
+[package.metadata.plugins.inventory]
+inventory_a = "../this/path/does/not/exist.so"
+"#,
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("CARGO_MANIFEST_PATH", manifest.to_string_lossy().to_string());
+        }
+        let plugin_manager = PluginManager::new();
+        let result = plugin_manager.activate_plugins();
+        assert!(result.is_err());
         let _ = std::fs::remove_file(&manifest);
     }
 
