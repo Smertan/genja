@@ -1145,6 +1145,18 @@ inventory_a = "../this/path/does/not/exist.so"
     }
 
     #[test]
+    fn with_path_group_loads_plugins() {
+        let _env = set_env_var();
+        let path = make_file_path("plugin_tasks");
+        let plugin_manager = PluginManager::new()
+            .with_path(&path, Some("extra"))
+            .unwrap()
+            .activate_plugins()
+            .unwrap();
+        assert_eq!(plugin_manager.plugins.len(), 4);
+    }
+
+    #[test]
     fn with_path_not_found_test() {
         let missing = temp_file_path("missing_with_path_plugin.so");
         let result = PluginManager::new().with_path(&missing.to_string_lossy(), None);
