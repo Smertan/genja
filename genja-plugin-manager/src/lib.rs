@@ -729,6 +729,12 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+    use crate::plugin_types::{
+        Plugin, PluginConnection, PluginInventory, PluginRunner, PluginTransformFunction,
+    };
+    use genja_core::inventory::{ConnectionKey, Inventory, ResolvedConnectionParams, TransformFunction};
+    use genja_core::task::{Task, Tasks};
+    use genja_core::{InventoryLoadError, Settings};
 
     fn env_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1158,5 +1164,150 @@ inventory_a = "../this/path/does/not/exist.so"
             .unwrap()
             .activate_plugins()
             .unwrap();
+    }
+
+    #[derive(Debug)]
+    struct DummyConnection {
+        name: &'static str,
+    }
+
+    impl Plugin for DummyConnection {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginConnection for DummyConnection {
+        fn create(&self, _key: &ConnectionKey) -> Box<dyn PluginConnection> {
+            Box::new(Self { name: self.name })
+        }
+
+        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            ConnectionKey::new("dummy", "conn")
+        }
+
+        fn is_alive(&self) -> bool {
+            false
+        }
+    }
+
+    #[derive(Debug)]
+    struct DummyInventory {
+        name: &'static str,
+    }
+
+    impl Plugin for DummyInventory {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginInventory for DummyInventory {
+        fn load(
+            &self,
+            _settings: &Settings,
+            _plugins: &PluginManager,
+        ) -> Result<Inventory, InventoryLoadError> {
+            Ok(Inventory::builder().build())
+        }
+    }
+
+    #[derive(Debug)]
+    struct DummyRunner {
+        name: &'static str,
+    }
+
+    impl Plugin for DummyRunner {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginRunner for DummyRunner {
+        fn run(&self, _task: Task, _hosts: &genja_core::inventory::Hosts) {}
+
+        fn run_tasks(&self, _tasks: Tasks, _hosts: &genja_core::inventory::Hosts) {}
+    }
+
+    #[derive(Debug)]
+    struct DummyTransform {
+        name: &'static str,
+    }
+
+    impl Plugin for DummyTransform {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginTransformFunction for DummyTransform {
+        fn transform_function(&self) -> TransformFunction {
+            TransformFunction::new(|host, _| host.clone())
+        }
+    }
+
+    #[test]
+    fn get_plugin_and_typed_getters_match_variants() {
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection { name: "conn" })));
+        manager.register_plugin(Plugins::Inventory(Box::new(DummyInventory { name: "inv" })));
+        manager.register_plugin(Plugins::Runner(Box::new(DummyRunner { name: "run" })));
+        manager.register_plugin(Plugins::TransformFunction(Box::new(DummyTransform { name: "tf" })));
+
+        assert!(manager.get_plugin("conn").is_some());
+        assert!(manager.get_plugin("inv").is_some());
+        assert!(manager.get_plugin("run").is_some());
+        assert!(manager.get_plugin("tf").is_some());
+        assert!(manager.get_plugin("missing").is_none());
+
+        assert!(manager.get_connection_plugin("conn").is_some());
+        assert!(manager.get_connection_plugin("inv").is_none());
+        assert!(manager.get_connection_plugin("run").is_none());
+        assert!(manager.get_connection_plugin("tf").is_none());
+
+        assert!(manager.get_inventory_plugin("inv").is_some());
+        assert!(manager.get_inventory_plugin("conn").is_none());
+        assert!(manager.get_inventory_plugin("run").is_none());
+        assert!(manager.get_inventory_plugin("tf").is_none());
+
+        assert!(manager.get_runner_plugin("run").is_some());
+        assert!(manager.get_runner_plugin("conn").is_none());
+        assert!(manager.get_runner_plugin("inv").is_none());
+        assert!(manager.get_runner_plugin("tf").is_none());
+
+        assert!(manager.get_transform_function_plugin("tf").is_some());
+        assert!(manager.get_transform_function_plugin("conn").is_none());
+        assert!(manager.get_transform_function_plugin("inv").is_none());
+        assert!(manager.get_transform_function_plugin("run").is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "Plugin 'dup' already registered")]
+    fn register_plugin_duplicate_name_panics() {
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection { name: "dup" })));
+        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection { name: "dup" })));
+    }
+
+    #[test]
+    fn get_plugins_by_type_transform_function_and_all_names() {
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection { name: "conn" })));
+        manager.register_plugin(Plugins::Inventory(Box::new(DummyInventory { name: "inv" })));
+        manager.register_plugin(Plugins::TransformFunction(Box::new(DummyTransform { name: "tf" })));
+
+        let transforms = manager.get_plugins_by_type_transform_function();
+        assert_eq!(transforms.len(), 1);
+        assert_eq!(transforms[0].0.as_str(), "tf");
+
+        let names = manager.get_all_plugin_names();
+        assert_eq!(names.len(), 3);
+        assert!(names.contains(&&"conn".to_string()));
+        assert!(names.contains(&&"inv".to_string()));
+        assert!(names.contains(&&"tf".to_string()));
     }
 }
