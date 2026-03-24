@@ -739,4 +739,16 @@ mod tests {
         assert_eq!(info.plugin.name(), "example");
         assert_eq!(info.group.as_deref(), Some("network"));
     }
+
+    #[test]
+    fn plugin_entry_rejects_invalid_shapes() {
+        let bad_individual: Result<PluginEntry, _> = serde_json::from_value(serde_json::json!(123));
+        assert!(bad_individual.is_err());
+
+        let bad_group: Result<PluginEntry, _> = serde_json::from_value(serde_json::json!({
+            "ssh": 123,
+            "telnet": false
+        }));
+        assert!(bad_group.is_err());
+    }
 }
