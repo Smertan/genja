@@ -1,7 +1,14 @@
+//! Core error types for Genja.
+//!
+//! This module currently defines `InventoryLoadError`, used by inventory plugins
+//! to report load failures in a consistent way.
+
 use std::fmt;
 
+/// Error returned when inventory loading fails.
 #[derive(Debug, Clone)]
 pub enum InventoryLoadError {
+    /// A human-readable error message.
     Message(String),
 }
 
