@@ -8,6 +8,8 @@
 //! - Hosts and groups are stored in `CustomTreeMap` keyed by name.
 //! - Defaults share the same fields as groups, minus `groups` and `defaults`.
 //! - Transforms are applied lazily when accessing hosts, groups, or defaults.
+//! - Builder methods are consistent across Host/Group/Defaults for shared fields; defaults
+//!   intentionally omit `groups`.
 //!
 //! # Examples
 //!
@@ -647,6 +649,8 @@ impl Defaults {
 /// inventory unless overridden at the group or host level. This allows for centralized
 /// management of common connection parameters and data.
 ///
+/// Unlike `Host` and `Group`, defaults do not support `groups` membership.
+///
 /// # Fields
 ///
 /// * `hostname` - Optional default hostname or IP address. Applied to hosts/groups that
@@ -773,11 +777,6 @@ impl DefaultsBuilder {
         self
     }
 
-    /// Replaces all connection options with the provided map.
-    pub fn connection_options_map(mut self, options: CustomTreeMap<ConnectionOptions>) -> Self {
-        self.connection_options = Some(options);
-        self
-    }
 
     pub fn build(self) -> Defaults {
         Defaults {
@@ -2629,13 +2628,475 @@ impl ConnectionKey {
 pub type ConnectionFactory =
     dyn Fn(&ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> + Send + Sync;
 
+/// Statistics tracking connection lifecycle operations per connection type.
+///
+/// `ConnectionCounters` provides a simple counter-based mechanism for monitoring connection
+/// operations in the `ConnectionManager`. Each connection type (e.g., "ssh", "netconf", "http")
+/// has its own set of counters that track how many times connections of that type have been
+/// created, opened, and closed.
+///
+/// These counters are useful for:
+/// - **Performance Monitoring**: Identify connection pool efficiency and reuse patterns
+/// - **Debugging**: Detect connection leaks, excessive creation, or improper cleanup
+/// - **Testing**: Verify connection lifecycle behavior in unit and integration tests
+/// - **Metrics**: Export connection statistics for observability systems
+///
+/// # Counter Semantics
+///
+/// * `create_calls` - Incremented when a new connection instance is created by the factory.
+///   This happens on the first call to `get_or_create()` for a unique `ConnectionKey`.
+///   Multiple calls with the same key do not increment this counter.
+///
+/// * `open_calls` - Incremented when `open()` is called on a connection. This happens when
+///   `open_connection()` is called and the connection's `is_alive()` returns `false`.
+///   Calling `open_connection()` on an already-alive connection does not increment this counter.
+///
+/// * `close_calls` - Incremented when a connection is closed via `close_connection()` or
+///   `close_all_connections()`. Each connection is counted only once when it's removed from
+///   the pool.
+///
+/// # Thread Safety
+///
+/// The counters are stored in a `DashMap<String, ConnectionCounters>` in the `ConnectionManager`,
+/// providing thread-safe concurrent access. Multiple threads can increment counters for different
+/// connection types simultaneously without blocking each other.
+///
+/// # Usage Patterns
+///
+/// ## Ideal Pattern (Efficient Connection Reuse)
+/// ```text
+/// create_calls: 1
+/// open_calls:   1
+/// close_calls:  1
+/// ```
+/// This indicates a connection was created once, opened once, and properly cleaned up.
+/// Multiple operations reused the same connection without reopening it.
+///
+/// ## Connection Leak Pattern
+/// ```text
+/// create_calls: 5
+/// open_calls:   5
+/// close_calls:  0
+/// ```
+/// This indicates connections are being created but never closed, suggesting a resource leak.
+///
+/// ## Excessive Recreation Pattern
+/// ```text
+/// create_calls: 100
+/// open_calls:   100
+/// close_calls:  100
+/// ```
+/// This indicates connections are being created and destroyed repeatedly instead of being
+/// reused, suggesting inefficient connection pooling.
+///
+/// # Examples
+///
+/// ## Monitoring Connection Usage
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
+/// # #[derive(Debug)]
+/// # struct SshConnection { alive: bool }
+/// # impl Connection for SshConnection {
+/// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(SshConnection { alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #         self.alive = true; Ok(())
+/// #     }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("router1", "ssh")
+/// #     }
+/// # }
+/// # let factory = Arc::new(|_key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let key = ConnectionKey::new("router1", "ssh");
+/// let params = ResolvedConnectionParams {
+///     hostname: "10.0.0.1".to_string(),
+///     port: Some(22),
+///     username: Some("admin".to_string()),
+///     password: None,
+///     platform: None,
+///     extras: None,
+/// };
+///
+/// // Perform operations
+/// manager.open_connection(&key, &params)?;
+/// manager.open_connection(&key, &params)?; // Reuses existing connection
+/// manager.close_connection(&key);
+///
+/// // Check counters
+/// let counters = manager.connection_counters_for("ssh").unwrap();
+/// assert_eq!(counters.create_calls, 1); // Created once
+/// assert_eq!(counters.open_calls, 1);   // Opened once (second call reused)
+/// assert_eq!(counters.close_calls, 1);  // Closed once
+/// # Ok::<(), String>(())
+/// ```
+///
+/// ## Detecting Connection Leaks in Tests
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
+/// # #[derive(Debug)]
+/// # struct SshConnection { alive: bool }
+/// # impl Connection for SshConnection {
+/// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(SshConnection { alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #         self.alive = true; Ok(())
+/// #     }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("router1", "ssh")
+/// #     }
+/// # }
+/// # let factory = Arc::new(|_key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let params = ResolvedConnectionParams {
+///     hostname: "10.0.0.1".to_string(),
+///     port: Some(22),
+///     username: Some("admin".to_string()),
+///     password: None,
+///     platform: None,
+///     extras: None,
+/// };
+///
+/// // Open multiple connections
+/// for i in 1..=5 {
+///     let key = ConnectionKey::new(format!("router{}", i), "ssh");
+///     manager.open_connection(&key, &params)?;
+/// }
+///
+/// // Verify all connections were created
+/// let counters = manager.connection_counters_for("ssh").unwrap();
+/// assert_eq!(counters.create_calls, 5);
+/// assert_eq!(counters.open_calls, 5);
+///
+/// // Clean up and verify no leaks
+/// manager.close_all_connections();
+/// let counters = manager.connection_counters_for("ssh").unwrap();
+/// assert_eq!(counters.close_calls, 5); // All connections closed
+/// # Ok::<(), String>(())
+/// ```
+///
+/// ## Comparing Multiple Connection Types
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
+/// # #[derive(Debug)]
+/// # struct TestConnection { conn_type: String, alive: bool }
+/// # impl Connection for TestConnection {
+/// #     fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(TestConnection { conn_type: key.connection_type.clone(), alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #         self.alive = true; Ok(())
+/// #     }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("host", &self.conn_type)
+/// #     }
+/// # }
+/// # let factory = Arc::new(|key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(TestConnection {
+/// #         conn_type: key.connection_type.clone(),
+/// #         alive: false
+/// #     })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let params = ResolvedConnectionParams {
+///     hostname: "10.0.0.1".to_string(),
+///     port: Some(22),
+///     username: Some("admin".to_string()),
+///     password: None,
+///     platform: None,
+///     extras: None,
+/// };
+///
+/// // Open different connection types
+/// manager.open_connection(&ConnectionKey::new("router1", "ssh"), &params)?;
+/// manager.open_connection(&ConnectionKey::new("router1", "netconf"), &params)?;
+///
+/// // Get snapshot of all counters
+/// let snapshot = manager.connection_counters_snapshot();
+/// let ssh_counters = snapshot.get("ssh").unwrap();
+/// let netconf_counters = snapshot.get("netconf").unwrap();
+///
+/// assert_eq!(ssh_counters.create_calls, 1);
+/// assert_eq!(netconf_counters.create_calls, 1);
+/// # Ok::<(), String>(())
+/// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ConnectionCounters {
     pub create_calls: usize,
     pub open_calls: usize,
     pub close_calls: usize,
 }
-
+/// Thread-safe manager for connection lifecycle and pooling.
+///
+/// `ConnectionManager` provides centralized management of connections to remote hosts,
+/// handling connection creation, caching, opening, and closing. It uses a factory pattern
+/// to create connections dynamically based on connection type, and maintains a pool of
+/// active connections for reuse across multiple operations.
+///
+/// The manager is designed for concurrent access and uses lock-free data structures
+/// (`DashMap`) for the connection pool and counters, with an `RwLock` for the factory
+/// to minimize contention.
+///
+/// # Architecture
+///
+/// The manager consists of four main components:
+///
+/// 1. **Connection Pool** (`connections_map`): A `DashMap` storing active connections
+///    keyed by `ConnectionKey` (hostname + connection type). Connections are wrapped
+///    in `Arc<Mutex<_>>` for thread-safe sharing and interior mutability.
+///
+/// 2. **Connection Factory** (`connection_factory`): An optional factory function that
+///    creates new connections on demand. The factory is wrapped in `RwLock<Option<Arc<_>>>`
+///    to allow runtime configuration while supporting concurrent reads.
+///
+/// 3. **Usage Counters** (`counters`): A `DashMap` tracking create, open, and close
+///    operations per connection type. Useful for monitoring, debugging, and testing.
+///
+/// 4. **Caching Strategy**: Connections are created lazily on first access and cached
+///    for subsequent use. The same connection instance is reused until explicitly closed.
+///
+/// # Connection Lifecycle
+///
+/// 1. **Creation**: When `get_or_create()` is called with a new key, the factory is
+///    invoked to create a connection. The connection is inserted into the pool and
+///    the `create_calls` counter is incremented.
+///
+/// 2. **Opening**: The `open_connection()` method checks if a connection is alive
+///    before calling `open()`. Only actual open operations increment the `open_calls`
+///    counter.
+///
+/// 3. **Reuse**: Subsequent calls with the same key return the cached connection
+///    without creating a new one or reopening it if it's still alive.
+///
+/// 4. **Closing**: Connections can be closed individually via `close_connection()` or
+///    all at once via `close_all_connections()`. Closed connections are removed from
+///    the pool and the `close_calls` counter is incremented.
+///
+/// # Thread Safety
+///
+/// The manager is fully thread-safe and designed for concurrent access:
+///
+/// - **Lock-Free Pool**: `DashMap` provides concurrent access to the connection pool
+///   without requiring a global lock. Different threads can access different connections
+///   simultaneously.
+///
+/// - **Per-Connection Locking**: Each connection is wrapped in `Mutex`, allowing
+///   fine-grained locking. Only the thread actively using a connection holds its lock.
+///
+/// - **Factory Configuration**: The factory uses `RwLock` to allow multiple concurrent
+///   reads (connection creation) while serializing writes (factory updates).
+///
+/// - **Lock Ordering**: Methods acquire locks in a consistent order (factory → connection)
+///   and release them promptly to prevent deadlocks.
+///
+/// # Factory Pattern
+///
+/// The connection factory is a function that takes a `ConnectionKey` and returns an
+/// optional connection. This design allows:
+///
+/// - **Plugin-Based Architecture**: Different connection types (SSH, NETCONF, HTTP)
+///   can be registered dynamically via plugins.
+///
+/// - **Lazy Loading**: Connections are only created when needed, reducing startup time
+///   and resource usage.
+///
+/// - **Graceful Degradation**: If no plugin is registered for a connection type, the
+///   factory returns `None` and the manager propagates this to the caller.
+///
+/// # Usage Counters
+///
+/// The manager tracks three types of operations per connection type:
+///
+/// - `create_calls`: Number of times a new connection was created
+/// - `open_calls`: Number of times `open()` was called on a connection
+/// - `close_calls`: Number of times a connection was closed
+///
+/// These counters are useful for:
+/// - Monitoring connection pool efficiency
+/// - Debugging connection leaks or excessive creation
+/// - Testing connection lifecycle behavior
+///
+/// # Examples
+///
+/// ## Basic Setup with Factory
+///
+/// ```
+/// use std::sync::{Arc, Mutex};
+/// use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
+///
+/// #[derive(Debug)]
+/// struct SshConnection {
+///     alive: bool,
+/// }
+///
+/// impl Connection for SshConnection {
+///     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+///         Box::new(SshConnection { alive: false })
+///     }
+///
+///     fn is_alive(&self) -> bool {
+///         self.alive
+///     }
+///
+///     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+///         -> Result<(), String> {
+///         self.alive = true;
+///         Ok(())
+///     }
+///
+///     fn close(&mut self) -> ConnectionKey {
+///         self.alive = false;
+///         ConnectionKey::new("router1", "ssh")
+///     }
+/// }
+///
+/// // Create a factory that returns SSH connections
+/// let factory = Arc::new(|key: &ConnectionKey| {
+///     if key.connection_type == "ssh" {
+///         Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+///     } else {
+///         None
+///     }
+/// });
+///
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// ```
+///
+/// ## Connection Reuse
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
+/// # #[derive(Debug)]
+/// # struct SshConnection { alive: bool }
+/// # impl Connection for SshConnection {
+/// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(SshConnection { alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+/// #         -> Result<(), String> { self.alive = true; Ok(()) }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("router1", "ssh")
+/// #     }
+/// # }
+/// # let factory = Arc::new(|_key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let key = ConnectionKey::new("router1", "ssh");
+///
+/// // First access creates the connection
+/// let conn1 = manager.get_or_create(key.clone())?.unwrap();
+///
+/// // Second access returns the same connection
+/// let conn2 = manager.get_or_create(key)?.unwrap();
+///
+/// assert!(Arc::ptr_eq(&conn1, &conn2));
+/// # Ok::<(), String>(())
+/// ```
+///
+/// ## Monitoring Connection Usage
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
+/// # #[derive(Debug)]
+/// # struct SshConnection { alive: bool }
+/// # impl Connection for SshConnection {
+/// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(SshConnection { alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #         self.alive = true; Ok(())
+/// #     }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("router1", "ssh")
+/// #     }
+/// # }
+/// # let factory = Arc::new(|_key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let key = ConnectionKey::new("router1", "ssh");
+/// let params = ResolvedConnectionParams {
+///     hostname: "10.0.0.1".to_string(),
+///     port: Some(22),
+///     username: Some("admin".to_string()),
+///     password: None,
+///     platform: None,
+///     extras: None,
+/// };
+///
+/// manager.open_connection(&key, &params)?;
+///
+/// // Check counters
+/// let counters = manager.connection_counters_for("ssh").unwrap();
+/// assert_eq!(counters.create_calls, 1);
+/// assert_eq!(counters.open_calls, 1);
+/// # Ok::<(), String>(())
+/// ```
+///
+/// ## Cleanup
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
+/// # #[derive(Debug)]
+/// # struct SshConnection { alive: bool }
+/// # impl Connection for SshConnection {
+/// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(SshConnection { alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+/// #         -> Result<(), String> { self.alive = true; Ok(()) }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("router1", "ssh")
+/// #     }
+/// # }
+/// # let factory = Arc::new(|_key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let key1 = ConnectionKey::new("router1", "ssh");
+/// let key2 = ConnectionKey::new("router2", "ssh");
+///
+/// manager.get_or_create(key1.clone())?;
+/// manager.get_or_create(key2.clone())?;
+///
+/// // Close specific connection
+/// manager.close_connection(&key1);
+///
+/// // Close all remaining connections
+/// manager.close_all_connections();
+///
+/// let counters = manager.connection_counters_for("ssh").unwrap();
+/// assert_eq!(counters.close_calls, 2);
+/// # Ok::<(), String>(())
+/// ```
 pub struct ConnectionManager {
     connections_map: DashMap<ConnectionKey, Arc<Mutex<dyn Connection>>>,
     connection_factory: RwLock<Option<Arc<ConnectionFactory>>>,
