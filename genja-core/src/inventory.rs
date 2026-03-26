@@ -578,8 +578,10 @@ impl Defaults {
         if let Some(data) = self.data.as_ref() {
             builder = builder.data(data.clone());
         }
-        if let Some(options) = self.connection_options.as_ref() {
-            builder = builder.connection_options(options.clone());
+        if let Some(options_map) = self.connection_options.as_ref() {
+            for (name, options) in options_map.iter() {
+                builder = builder.connection_options(name.to_string(), options.clone());
+            }
         }
         builder
     }
@@ -746,7 +748,33 @@ impl DefaultsBuilder {
         self
     }
 
-    pub fn connection_options(mut self, options: CustomTreeMap<ConnectionOptions>) -> Self {
+    /// Adds or updates connection-specific options for defaults.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - A string-like value identifying the connection type (e.g., "ssh", "netconf").
+    /// * `options` - A `ConnectionOptions` instance containing connection-specific configuration.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the connection options updated, allowing for method chaining.
+    /// If no connection options map exists, one is created before inserting the new options.
+    pub fn connection_options<S>(mut self, name: S, options: ConnectionOptions) -> Self
+    where
+        S: Into<String>,
+    {
+        if self.connection_options.is_none() {
+            self.connection_options = Some(CustomTreeMap::new());
+        }
+        self.connection_options
+            .as_mut()
+            .unwrap()
+            .insert(name.into(), options);
+        self
+    }
+
+    /// Replaces all connection options with the provided map.
+    pub fn connection_options_map(mut self, options: CustomTreeMap<ConnectionOptions>) -> Self {
         self.connection_options = Some(options);
         self
     }
@@ -2608,7 +2636,6 @@ pub struct ConnectionCounters {
     pub close_calls: usize,
 }
 
-// TODO: Write documentation the ConnectionManager struct and its methods.
 pub struct ConnectionManager {
     connections_map: DashMap<ConnectionKey, Arc<Mutex<dyn Connection>>>,
     connection_factory: RwLock<Option<Arc<ConnectionFactory>>>,
@@ -4839,5 +4866,235 @@ mod tests {
         assert!(merged.get("netconf").is_some());
     }
 
-    // TODO: Create a test to verify the Host defaults deserialization
+    #[test]
+    fn resolve_host_applies_defaults_groups_then_host_in_order() {
+        let defaults = Defaults::builder().port(10).build();
+
+        let group_a = Group::builder().port(20).build();
+        let group_b = Group::builder().port(30).build();
+
+        let mut groups = Groups::new();
+        groups.add_group("a", group_a);
+        groups.add_group("b", group_b);
+
+        let mut hosts = Hosts::new();
+        let mut parents = ParentGroups::new();
+        parents.push("a".to_string());
+        parents.push("b".to_string());
+        let host = Host::builder().port(40).groups(parents).build();
+        hosts.add_host("h1", host);
+
+        let inventory = Inventory::builder()
+            .hosts(hosts)
+            .groups(groups)
+            .defaults(defaults)
+            .build();
+
+        let resolved = inventory.resolve_host("h1").expect("host should resolve");
+        assert_eq!(resolved.port(), Some(40));
+    }
+
+    #[test]
+    fn resolve_connection_params_applies_priority_order() {
+        let defaults = Defaults::builder()
+            .port(10)
+            .connection_options(
+                "ssh",
+                ConnectionOptions::builder().port(11).build(),
+            )
+            .build();
+
+        let group = Group::builder()
+            .port(20)
+            .connection_options(
+                "ssh",
+                ConnectionOptions::builder().port(21).build(),
+            )
+            .build();
+
+        let mut groups = Groups::new();
+        groups.add_group("g1", group);
+
+        let mut parents = ParentGroups::new();
+        parents.push("g1".to_string());
+        let host = Host::builder()
+            .port(30)
+            .groups(parents)
+            .connection_options(
+                "ssh",
+                ConnectionOptions::builder().port(31).build(),
+            )
+            .build();
+
+        let mut hosts = Hosts::new();
+        hosts.add_host("h1", host);
+
+        let inventory = Inventory::builder()
+            .hosts(hosts)
+            .groups(groups)
+            .defaults(defaults)
+            .build();
+
+        let resolved = inventory
+            .resolve_connection_params("h1", "ssh")
+            .expect("params should resolve");
+        assert_eq!(resolved.port, Some(31));
+    }
+
+    #[test]
+    fn connection_manager_get_or_create_errors_without_factory() {
+        let manager = ConnectionManager::default();
+        let key = ConnectionKey::new("h1", "ssh");
+        let err = manager.get_or_create(key).unwrap_err();
+        assert_eq!(err, "connection factory not set");
+    }
+
+    #[test]
+    fn connection_manager_open_connection_propagates_open_error() {
+        #[derive(Debug)]
+        struct FailingConnection;
+
+        impl Connection for FailingConnection {
+            fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+                Box::new(FailingConnection)
+            }
+
+            fn is_alive(&self) -> bool {
+                false
+            }
+
+            fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+                Err("boom".to_string())
+            }
+
+            fn close(&mut self) -> ConnectionKey {
+                ConnectionKey::new("h1", "ssh")
+            }
+        }
+
+        let factory = Arc::new(|_key: &ConnectionKey| {
+            Some(Arc::new(Mutex::new(FailingConnection)) as Arc<Mutex<dyn Connection>>)
+        });
+        let manager = ConnectionManager::with_connection_factory(factory);
+        let key = ConnectionKey::new("h1", "ssh");
+        let params = ResolvedConnectionParams {
+            hostname: "h1".to_string(),
+            port: Some(22),
+            username: None,
+            password: None,
+            platform: None,
+            extras: None,
+        };
+
+        let err = manager.open_connection(&key, &params).unwrap_err();
+        assert_eq!(err, "boom");
+        let counters = manager.connection_counters_for("ssh").unwrap();
+        assert_eq!(counters.create_calls, 1);
+        assert_eq!(counters.open_calls, 0);
+    }
+
+    #[test]
+    fn connection_manager_open_connection_returns_none_when_factory_returns_none() {
+        let factory = Arc::new(|_key: &ConnectionKey| None);
+        let manager = ConnectionManager::with_connection_factory(factory);
+        let key = ConnectionKey::new("h1", "ssh");
+        let params = ResolvedConnectionParams {
+            hostname: "h1".to_string(),
+            port: Some(22),
+            username: None,
+            password: None,
+            platform: None,
+            extras: None,
+        };
+
+        let result = manager.open_connection(&key, &params).unwrap();
+        assert!(result.is_none());
+        assert!(manager.connection_counters_for("ssh").is_none());
+    }
+
+    #[test]
+    fn inventory_applies_transform_options_to_hosts_groups_and_defaults() {
+        struct OptTransform;
+
+        impl Transform for OptTransform {
+            fn transform_host(
+                &self,
+                host: &Host,
+                options: Option<&TransformFunctionOptions>,
+            ) -> Host {
+                let port = options
+                    .and_then(|opts| opts.get("port").and_then(|v| v.as_u64()))
+                    .unwrap_or(0) as u16;
+                host.to_builder().port(port).build()
+            }
+
+            fn transform_group(
+                &self,
+                group: &Group,
+                options: Option<&TransformFunctionOptions>,
+            ) -> Group {
+                let username = options
+                    .and_then(|opts| opts.get("username").and_then(|v| v.as_str()))
+                    .unwrap_or("default");
+                group.to_builder().username(username).build()
+            }
+
+            fn transform_defaults(
+                &self,
+                defaults: &Defaults,
+                options: Option<&TransformFunctionOptions>,
+            ) -> Defaults {
+                let hostname = options
+                    .and_then(|opts| opts.get("hostname").and_then(|v| v.as_str()))
+                    .unwrap_or("defaults");
+                defaults.to_builder().hostname(hostname).build()
+            }
+        }
+
+        let transform = TransformFunction::new_full(OptTransform);
+        let options = TransformFunctionOptions::new(serde_json::json!({
+            "port": 2022,
+            "username": "opt-user",
+            "hostname": "opt-defaults"
+        }));
+
+        let mut hosts = Hosts::new();
+        hosts.add_host("h1", Host::builder().build());
+
+        let mut groups = Groups::new();
+        groups.add_group("g1", Group::builder().build());
+
+        let defaults = Defaults::builder().build();
+
+        let inventory = Inventory::builder()
+            .hosts(hosts)
+            .groups(groups)
+            .defaults(defaults)
+            .transform_function(transform)
+            .transform_function_options(options)
+            .build();
+
+        let host = inventory.hosts().get("h1").expect("host exists");
+        assert_eq!(host.port(), Some(2022));
+
+        let group = inventory.groups().expect("groups exist").get("g1").unwrap();
+        assert_eq!(group.username(), Some("opt-user"));
+
+        let defaults = inventory.defaults().expect("defaults exist");
+        assert_eq!(defaults.hostname(), Some("opt-defaults"));
+    }
+
+    #[test]
+    fn host_deserializes_with_missing_fields_as_none() {
+        let host: Host = serde_json::from_value(serde_json::json!({}))
+            .expect("host should deserialize from empty object");
+        assert_eq!(host.hostname(), None);
+        assert_eq!(host.port(), None);
+        assert_eq!(host.username(), None);
+        assert_eq!(host.password(), None);
+        assert_eq!(host.platform(), None);
+        assert!(host.groups().is_none());
+        assert!(host.data().is_none());
+        assert!(host.connection_options().is_none());
+    }
 }
