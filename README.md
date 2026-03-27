@@ -10,6 +10,22 @@ use genja_core::Settings;
 let settings = Settings::from_file("config.yaml")?;
 ```
 
+Build a `Genja` instance with inventory + settings:
+
+```rust
+use genja::Genja;
+use genja_core::Settings;
+use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+
+let mut hosts = Hosts::new();
+hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+let inventory = Inventory::builder().hosts(hosts).build();
+
+let genja = Genja::builder(inventory)
+    .with_settings(Settings::from_file("config.yaml")?)
+    .build()?;
+```
+
 Example configuration files:
 
 - `examples/config.example.yaml`

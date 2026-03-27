@@ -5,7 +5,7 @@ use genja_core::inventory::{
 // use genja_core::CustomTreeMap;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 mod common;
 
 fn build_connection_options(
@@ -249,6 +249,10 @@ fn connection_manager_creates_connections_lazily() {
     struct TestConnection;
 
     impl genja_core::inventory::Connection for TestConnection {
+        fn create(&self, _key: &ConnectionKey) -> Box<dyn genja_core::inventory::Connection> {
+            Box::new(TestConnection)
+        }
+
         fn is_alive(&self) -> bool {
             true
         }
@@ -265,18 +269,16 @@ fn connection_manager_creates_connections_lazily() {
         }
     }
 
-    let manager = ConnectionManager::default();
+    let created = Arc::new(AtomicUsize::new(0));
+    let created_for_factory = Arc::clone(&created);
+    let manager = ConnectionManager::with_connection_factory(Arc::new(move |_key| {
+        created_for_factory.fetch_add(1, Ordering::SeqCst);
+        Some(Arc::new(Mutex::new(TestConnection)))
+    }));
     let key = ConnectionKey::new("router1.lab", "ssh2");
-    let created = AtomicUsize::new(0);
 
-    let first = manager.get_or_create(key.clone(), || {
-        created.fetch_add(1, Ordering::SeqCst);
-        TestConnection
-    });
-    let second = manager.get_or_create(key, || {
-        created.fetch_add(1, Ordering::SeqCst);
-        TestConnection
-    });
+    let first = manager.get_or_create(key.clone()).unwrap().unwrap();
+    let second = manager.get_or_create(key).unwrap().unwrap();
 
     assert_eq!(created.load(Ordering::SeqCst), 1);
     assert!(Arc::ptr_eq(&first, &second));

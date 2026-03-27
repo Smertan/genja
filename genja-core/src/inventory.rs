@@ -8,6 +8,8 @@
 //! - Hosts and groups are stored in `CustomTreeMap` keyed by name.
 //! - Defaults share the same fields as groups, minus `groups` and `defaults`.
 //! - Transforms are applied lazily when accessing hosts, groups, or defaults.
+//! - Builder methods are consistent across Host/Group/Defaults for shared fields; defaults
+//!   intentionally omit `groups`.
 //!
 //! # Examples
 //!
@@ -45,8 +47,9 @@ use genja_core_derive::{DerefMacro, DerefMutMacro};
 use schemars::{schema_for, JsonSchema};
 use serde::de::{Error, SeqAccess, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 pub trait BaseMethods {
     fn schema() -> String
@@ -346,7 +349,6 @@ impl ConnectionOptionsBuilder {
     }
 }
 
-
 /// Fully resolved connection parameters for establishing a connection to a host.
 ///
 /// This struct represents the final, merged connection configuration after applying
@@ -578,8 +580,10 @@ impl Defaults {
         if let Some(data) = self.data.as_ref() {
             builder = builder.data(data.clone());
         }
-        if let Some(options) = self.connection_options.as_ref() {
-            builder = builder.connection_options(options.clone());
+        if let Some(options_map) = self.connection_options.as_ref() {
+            for (name, options) in options_map.iter() {
+                builder = builder.connection_options(name.to_string(), options.clone());
+            }
         }
         builder
     }
@@ -644,6 +648,8 @@ impl Defaults {
 /// Defaults define base configuration values that apply to all hosts and groups in the
 /// inventory unless overridden at the group or host level. This allows for centralized
 /// management of common connection parameters and data.
+///
+/// Unlike `Host` and `Group`, defaults do not support `groups` membership.
 ///
 /// # Fields
 ///
@@ -746,10 +752,31 @@ impl DefaultsBuilder {
         self
     }
 
-    pub fn connection_options(mut self, options: CustomTreeMap<ConnectionOptions>) -> Self {
-        self.connection_options = Some(options);
+    /// Adds or updates connection-specific options for defaults.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - A string-like value identifying the connection type (e.g., "ssh", "netconf").
+    /// * `options` - A `ConnectionOptions` instance containing connection-specific configuration.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self` with the connection options updated, allowing for method chaining.
+    /// If no connection options map exists, one is created before inserting the new options.
+    pub fn connection_options<S>(mut self, name: S, options: ConnectionOptions) -> Self
+    where
+        S: Into<String>,
+    {
+        if self.connection_options.is_none() {
+            self.connection_options = Some(CustomTreeMap::new());
+        }
+        self.connection_options
+            .as_mut()
+            .unwrap()
+            .insert(name.into(), options);
         self
     }
+
 
     pub fn build(self) -> Defaults {
         Defaults {
@@ -1898,7 +1925,6 @@ pub trait Transform: Send + Sync {
     }
 }
 
-
 /// A thread-safe wrapper around a transform function that can modify inventory entities.
 ///
 /// `TransformFunction` encapsulates custom logic for dynamically transforming hosts, groups,
@@ -2023,7 +2049,7 @@ pub trait Transform: Send + Sync {
 pub struct TransformFunction(Arc<dyn Transform>);
 
 impl TransformFunction {
-   /// Creates a new transform function that only modifies hosts.
+    /// Creates a new transform function that only modifies hosts.
     ///
     /// This is a convenience constructor for the common case where you only need to transform
     /// hosts. Groups and defaults will pass through unchanged. The provided closure receives
@@ -2234,7 +2260,7 @@ impl TransformFunction {
         self.0.transform_group(group, options)
     }
 
-        /// Applies the transform function to inventory defaults.
+    /// Applies the transform function to inventory defaults.
     ///
     /// This method delegates to the underlying `Transform` implementation to modify
     /// the provided defaults according to the transform logic. It's primarily used internally
@@ -2436,6 +2462,8 @@ pub trait Connection
 where
     Self: Send + Sync + fmt::Debug,
 {
+    fn create(&self, key: &ConnectionKey) -> Box<dyn Connection>;
+
     fn is_alive(&self) -> bool;
 
     fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String>;
@@ -2597,13 +2625,544 @@ impl ConnectionKey {
     }
 }
 
-// TODO: Write documentation the ConnectionManager struct and its methods.
-#[derive(Debug, Default)]
+pub type ConnectionFactory =
+    dyn Fn(&ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> + Send + Sync;
+
+/// Statistics tracking connection lifecycle operations per connection type.
+///
+/// `ConnectionCounters` provides a simple counter-based mechanism for monitoring connection
+/// operations in the `ConnectionManager`. Each connection type (e.g., "ssh", "netconf", "http")
+/// has its own set of counters that track how many times connections of that type have been
+/// created, opened, and closed.
+///
+/// These counters are useful for:
+/// - **Performance Monitoring**: Identify connection pool efficiency and reuse patterns
+/// - **Debugging**: Detect connection leaks, excessive creation, or improper cleanup
+/// - **Testing**: Verify connection lifecycle behavior in unit and integration tests
+/// - **Metrics**: Export connection statistics for observability systems
+///
+/// # Counter Semantics
+///
+/// * `create_calls` - Incremented when a new connection instance is created by the factory.
+///   This happens on the first call to `get_or_create()` for a unique `ConnectionKey`.
+///   Multiple calls with the same key do not increment this counter.
+///
+/// * `open_calls` - Incremented when `open()` is called on a connection. This happens when
+///   `open_connection()` is called and the connection's `is_alive()` returns `false`.
+///   Calling `open_connection()` on an already-alive connection does not increment this counter.
+///
+/// * `close_calls` - Incremented when a connection is closed via `close_connection()` or
+///   `close_all_connections()`. Each connection is counted only once when it's removed from
+///   the pool.
+///
+/// # Thread Safety
+///
+/// The counters are stored in a `DashMap<String, ConnectionCounters>` in the `ConnectionManager`,
+/// providing thread-safe concurrent access. Multiple threads can increment counters for different
+/// connection types simultaneously without blocking each other.
+///
+/// # Usage Patterns
+///
+/// ## Ideal Pattern (Efficient Connection Reuse)
+/// ```text
+/// create_calls: 1
+/// open_calls:   1
+/// close_calls:  1
+/// ```
+/// This indicates a connection was created once, opened once, and properly cleaned up.
+/// Multiple operations reused the same connection without reopening it.
+///
+/// ## Connection Leak Pattern
+/// ```text
+/// create_calls: 5
+/// open_calls:   5
+/// close_calls:  0
+/// ```
+/// This indicates connections are being created but never closed, suggesting a resource leak.
+///
+/// ## Excessive Recreation Pattern
+/// ```text
+/// create_calls: 100
+/// open_calls:   100
+/// close_calls:  100
+/// ```
+/// This indicates connections are being created and destroyed repeatedly instead of being
+/// reused, suggesting inefficient connection pooling.
+///
+/// # Examples
+///
+/// ## Monitoring Connection Usage
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
+/// # #[derive(Debug)]
+/// # struct SshConnection { alive: bool }
+/// # impl Connection for SshConnection {
+/// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(SshConnection { alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #         self.alive = true; Ok(())
+/// #     }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("router1", "ssh")
+/// #     }
+/// # }
+/// # let factory = Arc::new(|_key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let key = ConnectionKey::new("router1", "ssh");
+/// let params = ResolvedConnectionParams {
+///     hostname: "10.0.0.1".to_string(),
+///     port: Some(22),
+///     username: Some("admin".to_string()),
+///     password: None,
+///     platform: None,
+///     extras: None,
+/// };
+///
+/// // Perform operations
+/// manager.open_connection(&key, &params)?;
+/// manager.open_connection(&key, &params)?; // Reuses existing connection
+/// manager.close_connection(&key);
+///
+/// // Check counters
+/// let counters = manager.connection_counters_for("ssh").unwrap();
+/// assert_eq!(counters.create_calls, 1); // Created once
+/// assert_eq!(counters.open_calls, 1);   // Opened once (second call reused)
+/// assert_eq!(counters.close_calls, 1);  // Closed once
+/// # Ok::<(), String>(())
+/// ```
+///
+/// ## Detecting Connection Leaks in Tests
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
+/// # #[derive(Debug)]
+/// # struct SshConnection { alive: bool }
+/// # impl Connection for SshConnection {
+/// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(SshConnection { alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #         self.alive = true; Ok(())
+/// #     }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("router1", "ssh")
+/// #     }
+/// # }
+/// # let factory = Arc::new(|_key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let params = ResolvedConnectionParams {
+///     hostname: "10.0.0.1".to_string(),
+///     port: Some(22),
+///     username: Some("admin".to_string()),
+///     password: None,
+///     platform: None,
+///     extras: None,
+/// };
+///
+/// // Open multiple connections
+/// for i in 1..=5 {
+///     let key = ConnectionKey::new(format!("router{}", i), "ssh");
+///     manager.open_connection(&key, &params)?;
+/// }
+///
+/// // Verify all connections were created
+/// let counters = manager.connection_counters_for("ssh").unwrap();
+/// assert_eq!(counters.create_calls, 5);
+/// assert_eq!(counters.open_calls, 5);
+///
+/// // Clean up and verify no leaks
+/// manager.close_all_connections();
+/// let counters = manager.connection_counters_for("ssh").unwrap();
+/// assert_eq!(counters.close_calls, 5); // All connections closed
+/// # Ok::<(), String>(())
+/// ```
+///
+/// ## Comparing Multiple Connection Types
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
+/// # #[derive(Debug)]
+/// # struct TestConnection { conn_type: String, alive: bool }
+/// # impl Connection for TestConnection {
+/// #     fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(TestConnection { conn_type: key.connection_type.clone(), alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #         self.alive = true; Ok(())
+/// #     }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("host", &self.conn_type)
+/// #     }
+/// # }
+/// # let factory = Arc::new(|key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(TestConnection {
+/// #         conn_type: key.connection_type.clone(),
+/// #         alive: false
+/// #     })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let params = ResolvedConnectionParams {
+///     hostname: "10.0.0.1".to_string(),
+///     port: Some(22),
+///     username: Some("admin".to_string()),
+///     password: None,
+///     platform: None,
+///     extras: None,
+/// };
+///
+/// // Open different connection types
+/// manager.open_connection(&ConnectionKey::new("router1", "ssh"), &params)?;
+/// manager.open_connection(&ConnectionKey::new("router1", "netconf"), &params)?;
+///
+/// // Get snapshot of all counters
+/// let snapshot = manager.connection_counters_snapshot();
+/// let ssh_counters = snapshot.get("ssh").unwrap();
+/// let netconf_counters = snapshot.get("netconf").unwrap();
+///
+/// assert_eq!(ssh_counters.create_calls, 1);
+/// assert_eq!(netconf_counters.create_calls, 1);
+/// # Ok::<(), String>(())
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ConnectionCounters {
+    pub create_calls: usize,
+    pub open_calls: usize,
+    pub close_calls: usize,
+}
+/// Thread-safe manager for connection lifecycle and pooling.
+///
+/// `ConnectionManager` provides centralized management of connections to remote hosts,
+/// handling connection creation, caching, opening, and closing. It uses a factory pattern
+/// to create connections dynamically based on connection type, and maintains a pool of
+/// active connections for reuse across multiple operations.
+///
+/// The manager is designed for concurrent access and uses lock-free data structures
+/// (`DashMap`) for the connection pool and counters, with an `RwLock` for the factory
+/// to minimize contention.
+///
+/// # Architecture
+///
+/// The manager consists of four main components:
+///
+/// 1. **Connection Pool** (`connections_map`): A `DashMap` storing active connections
+///    keyed by `ConnectionKey` (hostname + connection type). Connections are wrapped
+///    in `Arc<Mutex<_>>` for thread-safe sharing and interior mutability.
+///
+/// 2. **Connection Factory** (`connection_factory`): An optional factory function that
+///    creates new connections on demand. The factory is wrapped in `RwLock<Option<Arc<_>>>`
+///    to allow runtime configuration while supporting concurrent reads.
+///
+/// 3. **Usage Counters** (`counters`): A `DashMap` tracking create, open, and close
+///    operations per connection type. Useful for monitoring, debugging, and testing.
+///
+/// 4. **Caching Strategy**: Connections are created lazily on first access and cached
+///    for subsequent use. The same connection instance is reused until explicitly closed.
+///
+/// # Connection Lifecycle
+///
+/// 1. **Creation**: When `get_or_create()` is called with a new key, the factory is
+///    invoked to create a connection. The connection is inserted into the pool and
+///    the `create_calls` counter is incremented.
+///
+/// 2. **Opening**: The `open_connection()` method checks if a connection is alive
+///    before calling `open()`. Only actual open operations increment the `open_calls`
+///    counter.
+///
+/// 3. **Reuse**: Subsequent calls with the same key return the cached connection
+///    without creating a new one or reopening it if it's still alive.
+///
+/// 4. **Closing**: Connections can be closed individually via `close_connection()` or
+///    all at once via `close_all_connections()`. Closed connections are removed from
+///    the pool and the `close_calls` counter is incremented.
+///
+/// # Thread Safety
+///
+/// The manager is fully thread-safe and designed for concurrent access:
+///
+/// - **Lock-Free Pool**: `DashMap` provides concurrent access to the connection pool
+///   without requiring a global lock. Different threads can access different connections
+///   simultaneously.
+///
+/// - **Per-Connection Locking**: Each connection is wrapped in `Mutex`, allowing
+///   fine-grained locking. Only the thread actively using a connection holds its lock.
+///
+/// - **Factory Configuration**: The factory uses `RwLock` to allow multiple concurrent
+///   reads (connection creation) while serializing writes (factory updates).
+///
+/// - **Lock Ordering**: Methods acquire locks in a consistent order (factory → connection)
+///   and release them promptly to prevent deadlocks.
+///
+/// # Factory Pattern
+///
+/// The connection factory is a function that takes a `ConnectionKey` and returns an
+/// optional connection. This design allows:
+///
+/// - **Plugin-Based Architecture**: Different connection types (SSH, NETCONF, HTTP)
+///   can be registered dynamically via plugins.
+///
+/// - **Lazy Loading**: Connections are only created when needed, reducing startup time
+///   and resource usage.
+///
+/// - **Graceful Degradation**: If no plugin is registered for a connection type, the
+///   factory returns `None` and the manager propagates this to the caller.
+///
+/// # Usage Counters
+///
+/// The manager tracks three types of operations per connection type:
+///
+/// - `create_calls`: Number of times a new connection was created
+/// - `open_calls`: Number of times `open()` was called on a connection
+/// - `close_calls`: Number of times a connection was closed
+///
+/// These counters are useful for:
+/// - Monitoring connection pool efficiency
+/// - Debugging connection leaks or excessive creation
+/// - Testing connection lifecycle behavior
+///
+/// # Examples
+///
+/// ## Basic Setup with Factory
+///
+/// ```
+/// use std::sync::{Arc, Mutex};
+/// use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
+///
+/// #[derive(Debug)]
+/// struct SshConnection {
+///     alive: bool,
+/// }
+///
+/// impl Connection for SshConnection {
+///     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+///         Box::new(SshConnection { alive: false })
+///     }
+///
+///     fn is_alive(&self) -> bool {
+///         self.alive
+///     }
+///
+///     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+///         -> Result<(), String> {
+///         self.alive = true;
+///         Ok(())
+///     }
+///
+///     fn close(&mut self) -> ConnectionKey {
+///         self.alive = false;
+///         ConnectionKey::new("router1", "ssh")
+///     }
+/// }
+///
+/// // Create a factory that returns SSH connections
+/// let factory = Arc::new(|key: &ConnectionKey| {
+///     if key.connection_type == "ssh" {
+///         Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+///     } else {
+///         None
+///     }
+/// });
+///
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// ```
+///
+/// ## Connection Reuse
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
+/// # #[derive(Debug)]
+/// # struct SshConnection { alive: bool }
+/// # impl Connection for SshConnection {
+/// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(SshConnection { alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+/// #         -> Result<(), String> { self.alive = true; Ok(()) }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("router1", "ssh")
+/// #     }
+/// # }
+/// # let factory = Arc::new(|_key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let key = ConnectionKey::new("router1", "ssh");
+///
+/// // First access creates the connection
+/// let conn1 = manager.get_or_create(key.clone())?.unwrap();
+///
+/// // Second access returns the same connection
+/// let conn2 = manager.get_or_create(key)?.unwrap();
+///
+/// assert!(Arc::ptr_eq(&conn1, &conn2));
+/// # Ok::<(), String>(())
+/// ```
+///
+/// ## Monitoring Connection Usage
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
+/// # #[derive(Debug)]
+/// # struct SshConnection { alive: bool }
+/// # impl Connection for SshConnection {
+/// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(SshConnection { alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #         self.alive = true; Ok(())
+/// #     }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("router1", "ssh")
+/// #     }
+/// # }
+/// # let factory = Arc::new(|_key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let key = ConnectionKey::new("router1", "ssh");
+/// let params = ResolvedConnectionParams {
+///     hostname: "10.0.0.1".to_string(),
+///     port: Some(22),
+///     username: Some("admin".to_string()),
+///     password: None,
+///     platform: None,
+///     extras: None,
+/// };
+///
+/// manager.open_connection(&key, &params)?;
+///
+/// // Check counters
+/// let counters = manager.connection_counters_for("ssh").unwrap();
+/// assert_eq!(counters.create_calls, 1);
+/// assert_eq!(counters.open_calls, 1);
+/// # Ok::<(), String>(())
+/// ```
+///
+/// ## Cleanup
+///
+/// ```
+/// # use std::sync::{Arc, Mutex};
+/// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
+/// # #[derive(Debug)]
+/// # struct SshConnection { alive: bool }
+/// # impl Connection for SshConnection {
+/// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+/// #         Box::new(SshConnection { alive: false })
+/// #     }
+/// #     fn is_alive(&self) -> bool { self.alive }
+/// #     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+/// #         -> Result<(), String> { self.alive = true; Ok(()) }
+/// #     fn close(&mut self) -> ConnectionKey {
+/// #         self.alive = false;
+/// #         ConnectionKey::new("router1", "ssh")
+/// #     }
+/// # }
+/// # let factory = Arc::new(|_key: &ConnectionKey| {
+/// #     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+/// # });
+/// let manager = ConnectionManager::with_connection_factory(factory);
+/// let key1 = ConnectionKey::new("router1", "ssh");
+/// let key2 = ConnectionKey::new("router2", "ssh");
+///
+/// manager.get_or_create(key1.clone())?;
+/// manager.get_or_create(key2.clone())?;
+///
+/// // Close specific connection
+/// manager.close_connection(&key1);
+///
+/// // Close all remaining connections
+/// manager.close_all_connections();
+///
+/// let counters = manager.connection_counters_for("ssh").unwrap();
+/// assert_eq!(counters.close_calls, 2);
+/// # Ok::<(), String>(())
+/// ```
 pub struct ConnectionManager {
     connections_map: DashMap<ConnectionKey, Arc<Mutex<dyn Connection>>>,
+    connection_factory: RwLock<Option<Arc<ConnectionFactory>>>,
+    counters: Arc<DashMap<String, ConnectionCounters>>,
+}
+
+impl fmt::Debug for ConnectionManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectionManager")
+            .field("connections_map_len", &self.connections_map.len())
+            .field(
+                "has_connection_factory",
+                &self
+                    .connection_factory
+                    .read()
+                    .map(|factory| factory.is_some())
+                    .unwrap_or(false),
+            )
+            .finish()
+    }
 }
 
 impl ConnectionManager {
+    pub fn with_connection_factory(factory: Arc<ConnectionFactory>) -> Self {
+        Self {
+            connections_map: DashMap::new(),
+            connection_factory: RwLock::new(Some(factory)),
+            counters: Arc::new(DashMap::new()),
+        }
+    }
+
+    fn increment_create(&self, connection_type: &str) {
+        let mut entry = self
+            .counters
+            .entry(connection_type.to_string())
+            .or_default();
+        entry.create_calls += 1;
+    }
+
+    fn increment_open(&self, connection_type: &str) {
+        let mut entry = self
+            .counters
+            .entry(connection_type.to_string())
+            .or_default();
+        entry.open_calls += 1;
+    }
+
+    fn increment_close(&self, connection_type: &str) {
+        let mut entry = self
+            .counters
+            .entry(connection_type.to_string())
+            .or_default();
+        entry.close_calls += 1;
+    }
+
+    pub fn connection_counters_for(&self, connection_type: &str) -> Option<ConnectionCounters> {
+        self.counters.get(connection_type).map(|entry| *entry)
+    }
+
+    pub fn connection_counters_snapshot(&self) -> HashMap<String, ConnectionCounters> {
+        self.counters
+            .iter()
+            .map(|entry| (entry.key().clone(), *entry.value()))
+            .collect()
+    }
+
     pub fn get(&self, key: &ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> {
         self.connections_map
             .get(key)
@@ -2614,22 +3173,100 @@ impl ConnectionManager {
         self.connections_map.insert(key, connection);
     }
 
-    // TODO: Include the logic to use the pluginManager to load and create connections
-    // with the use on the config held in the Nornir Struct.
-    pub fn get_or_create<F, C>(&self, key: ConnectionKey, ctor: F) -> Arc<Mutex<dyn Connection>>
-    where
-        F: FnOnce() -> C,
-        C: Connection + 'static,
-    {
-        if let Some(connection) = self.get(&key) {
-            return connection;
-        }
+    /// Retrieves an existing connection or creates a new one using the configured factory.
+    ///
+    /// This method provides thread-safe, lazy initialization of connections. It first checks
+    /// for an existing connection in the map, and if missing, it uses the connection factory
+    /// to create one and inserts it.
+    ///
+    /// # Concurrency and Race Behavior
+    ///
+    /// - Creation uses `DashMap::entry`, so only one connection is created per unique key,
+    ///   even under concurrent access.
+    /// - The factory is called while holding the entry lock for that key’s shard. This avoids
+    ///   race conditions but means a slow factory can temporarily block other operations on the
+    ///   same shard.
+    /// - If the factory returns `None`, no entry is inserted and subsequent calls may retry.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - A `ConnectionKey` identifying the connection by hostname and connection type.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(connection))` if a connection exists or was created
+    /// - `Ok(None)` if the factory returns `None` (e.g., no plugin registered)
+    /// - `Err(...)` if the factory lock is poisoned or not configured
+    ///
+    /// # Errors
+    ///
+    /// - `"connection factory not set"` if no factory is configured
+    /// - `"connection factory lock poisoned"` if the factory lock is poisoned
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::{Arc, Mutex};
+    /// use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
+    ///
+    /// #[derive(Debug)]
+    /// struct DummyConnection;
+    ///
+    /// impl Connection for DummyConnection {
+    ///     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+    ///         Box::new(DummyConnection)
+    ///     }
+    ///     fn is_alive(&self) -> bool { true }
+    ///     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+    ///         -> Result<(), String> { Ok(()) }
+    ///     fn close(&mut self) -> ConnectionKey {
+    ///         ConnectionKey::new("router1", "ssh")
+    ///     }
+    /// }
+    ///
+    /// let factory = Arc::new(|_key: &ConnectionKey| {
+    ///     Some(Arc::new(Mutex::new(DummyConnection)) as Arc<Mutex<dyn Connection>>)
+    /// });
+    /// let manager = ConnectionManager::with_connection_factory(factory);
+    ///
+    /// let key = ConnectionKey::new("router1", "ssh");
+    /// let connection = manager.get_or_create(key)?;
+    /// assert!(connection.is_some());
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn get_or_create(
+        &self,
+        key: ConnectionKey,
+    ) -> Result<Option<Arc<Mutex<dyn Connection>>>, String> {
+        let factory = {
+            let guard = self
+                .connection_factory
+                .read()
+                .map_err(|_| "connection factory lock poisoned".to_string())?;
+            guard
+                .clone()
+                .ok_or_else(|| "connection factory not set".to_string())?
+        };
 
-        let connection = Arc::new(Mutex::new(ctor())) as Arc<Mutex<dyn Connection>>;
-        self.connections_map
-            .entry(key)
-            .or_insert_with(|| connection.clone());
-        connection
+        match self.connections_map.entry(key) {
+            dashmap::mapref::entry::Entry::Occupied(entry) => Ok(Some(entry.get().clone())),
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                let key_for_factory = entry.key().clone();
+                let connection_type = key_for_factory.connection_type.clone();
+                let Some(connection) = factory(&key_for_factory) else {
+                    return Ok(None);
+                };
+                self.increment_create(&connection_type);
+                entry.insert(connection.clone());
+                Ok(Some(connection))
+            }
+        }
+    }
+
+    pub fn set_connection_factory(&self, factory: Arc<ConnectionFactory>) {
+        if let Ok(mut slot) = self.connection_factory.write() {
+            *slot = Some(factory);
+        }
     }
 
     /// Close the connection associated with the given key and remove
@@ -2638,6 +3275,7 @@ impl ConnectionManager {
         if let Some((_, connection)) = self.connections_map.remove(key) {
             if let Ok(mut connection) = connection.lock() {
                 connection.close();
+                self.increment_close(&key.connection_type);
             }
         }
     }
@@ -2647,13 +3285,261 @@ impl ConnectionManager {
         self.connections_map.iter().for_each(|entry| {
             if let Ok(mut connection) = entry.value().lock() {
                 connection.close();
+                self.increment_close(&entry.key().connection_type);
             }
         });
         self.connections_map.clear();
     }
 
-    pub fn open_connection(&self, _key: &ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> {
-        todo!()
+    /// Opens a connection for the specified key, creating it if necessary.
+    ///
+    /// This method provides a high-level interface for establishing connections to remote hosts.
+    /// It combines connection retrieval/creation with automatic opening, ensuring the connection
+    /// is ready for use before returning. The method handles the full lifecycle:
+    ///
+    /// 1. **Retrieve or Create**: Calls `get_or_create()` to obtain a connection from the map
+    ///    or create a new one using the configured factory
+    /// 2. **Check Alive Status**: Acquires the connection's mutex and checks if it's already open
+    /// 3. **Open if Needed**: If the connection is not alive, calls `open()` with the provided
+    ///    parameters and increments the open counter
+    /// 4. **Return Ready Connection**: Returns the connection wrapped in `Arc<Mutex<_>>` for
+    ///    thread-safe access
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - A `ConnectionKey` identifying the connection by hostname and connection type.
+    ///   This key is used to look up or create the connection in the manager's map.
+    /// * `params` - A `ResolvedConnectionParams` containing the connection parameters such as
+    ///   hostname, port, username, password, and platform. These parameters are passed to the
+    ///   connection's `open()` method if the connection needs to be established.
+    ///
+    /// # Thread Safety and Locking
+    ///
+    /// The method uses a two-phase locking strategy to prevent deadlocks:
+    ///
+    /// 1. **Factory Lock**: `get_or_create()` briefly acquires the factory's `RwLock` to clone
+    ///    the `Arc<ConnectionFactory>`, then releases it before calling the factory function.
+    ///    This prevents holding the factory lock during connection creation.
+    ///
+    /// 2. **Connection Lock**: After obtaining the connection, the method acquires its `Mutex`
+    ///    in a scoped block (`{ ... }`). The lock is automatically released when the scope ends,
+    ///    before returning the connection. This allows the caller to acquire the lock again
+    ///    without deadlock.
+    ///
+    /// **Why the scoped lock?**
+    /// ```text
+    /// Without scope:                    With scope:
+    /// ---------------                   -----------
+    /// let mut guard = conn.lock();      {
+    /// guard.open(params)?;                  let mut guard = conn.lock();
+    /// // guard still held                   guard.open(params)?;
+    /// Ok(Some(conn))                    } // guard dropped here
+    /// // Caller tries conn.lock()       Ok(Some(conn))
+    /// // DEADLOCK! 💥                   // Caller can lock successfully ✓
+    /// ```
+    ///
+    /// # Connection Lifecycle
+    ///
+    /// The method respects the connection's alive state:
+    /// - If `is_alive()` returns `true`, the connection is already open and no action is taken
+    /// - If `is_alive()` returns `false`, `open()` is called to establish the connection
+    /// - The `open_calls` counter is incremented only when `open()` is actually called
+    ///
+    /// This prevents unnecessary reconnection attempts and tracks actual connection operations.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(Arc<Mutex<dyn Connection>>))` if:
+    /// - The connection was successfully retrieved or created, AND
+    /// - The connection was already alive OR was successfully opened
+    ///
+    /// Returns `Ok(None)` if:
+    /// - The factory function returned `None` (e.g., no plugin registered for this connection type)
+    ///
+    /// Returns `Err(String)` if:
+    /// - The connection factory is not configured: `"connection factory not set"`
+    /// - The factory lock is poisoned: `"connection factory lock poisoned"`
+    /// - The connection lock is poisoned: `"connection lock poisoned"`
+    /// - The connection's `open()` method returns an error (error message from the connection)
+    ///
+    /// # Examples
+    ///
+    /// ## Basic Usage
+    ///
+    /// ```
+    /// use std::sync::{Arc, Mutex};
+    /// use genja_core::inventory::{
+    ///     Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct SshConnection {
+    ///     alive: bool,
+    /// }
+    ///
+    /// impl Connection for SshConnection {
+    ///     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+    ///         Box::new(SshConnection { alive: false })
+    ///     }
+    ///
+    ///     fn is_alive(&self) -> bool {
+    ///         self.alive
+    ///     }
+    ///
+    ///     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+    ///         self.alive = true;
+    ///         Ok(())
+    ///     }
+    ///
+    ///     fn close(&mut self) -> ConnectionKey {
+    ///         self.alive = false;
+    ///         ConnectionKey::new("router1", "ssh")
+    ///     }
+    /// }
+    ///
+    /// let factory = Arc::new(|_key: &ConnectionKey| {
+    ///     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+    /// });
+    /// let manager = ConnectionManager::with_connection_factory(factory);
+    ///
+    /// let key = ConnectionKey::new("router1", "ssh");
+    /// let params = ResolvedConnectionParams {
+    ///     hostname: "10.0.0.1".to_string(),
+    ///     port: Some(22),
+    ///     username: Some("admin".to_string()),
+    ///     password: None,
+    ///     platform: None,
+    ///     extras: None,
+    /// };
+    ///
+    /// // First call creates and opens the connection
+    /// let connection = manager.open_connection(&key, &params)?;
+    /// assert!(connection.is_some());
+    ///
+    /// // Second call reuses the existing connection without reopening
+    /// let same_connection = manager.open_connection(&key, &params)?;
+    /// assert!(Arc::ptr_eq(&connection.unwrap(), &same_connection.unwrap()));
+    /// # Ok::<(), String>(())
+    /// ```
+    ///
+    /// ## Handling Missing Plugins
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use genja_core::inventory::{ConnectionKey, ConnectionManager, ResolvedConnectionParams};
+    ///
+    /// // Factory returns None for unknown connection types
+    /// let factory = Arc::new(|key: &ConnectionKey| {
+    ///     if key.connection_type == "ssh" {
+    ///         // ... return SSH connection
+    ///         None // simplified for example
+    ///     } else {
+    ///         None // No plugin for this type
+    ///     }
+    /// });
+    /// let manager = ConnectionManager::with_connection_factory(factory);
+    ///
+    /// let key = ConnectionKey::new("router1", "telnet");
+    /// let params = ResolvedConnectionParams {
+    ///     hostname: "10.0.0.1".to_string(),
+    ///     port: None,
+    ///     username: None,
+    ///     password: None,
+    ///     platform: None,
+    ///     extras: None,
+    /// };
+    ///
+    /// let result = manager.open_connection(&key, &params)?;
+    /// assert!(result.is_none()); // No plugin available
+    /// # Ok::<(), String>(())
+    /// ```
+    ///
+    /// ## Thread-Safe Concurrent Access
+    ///
+    /// ```
+    /// use std::sync::{Arc, Mutex};
+    /// use std::thread;
+    /// use genja_core::inventory::{
+    ///     Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams
+    /// };
+    ///
+    /// # #[derive(Debug)]
+    /// # struct SshConnection { alive: bool }
+    /// # impl Connection for SshConnection {
+    /// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+    /// #         Box::new(SshConnection { alive: false })
+    /// #     }
+    /// #     fn is_alive(&self) -> bool { self.alive }
+    /// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+    /// #         self.alive = true;
+    /// #         Ok(())
+    /// #     }
+    /// #     fn close(&mut self) -> ConnectionKey {
+    /// #         self.alive = false;
+    /// #         ConnectionKey::new("router1", "ssh")
+    /// #     }
+    /// # }
+    /// let factory = Arc::new(|_key: &ConnectionKey| {
+    ///     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
+    /// });
+    /// let manager = Arc::new(ConnectionManager::with_connection_factory(factory));
+    ///
+    /// let key = ConnectionKey::new("router1", "ssh");
+    /// let params = Arc::new(ResolvedConnectionParams {
+    ///     hostname: "10.0.0.1".to_string(),
+    ///     port: None,
+    ///     username: None,
+    ///     password: None,
+    ///     platform: None,
+    ///     extras: None,
+    /// });
+    ///
+    /// // Multiple threads can safely open the same connection
+    /// let handles: Vec<_> = (0..3)
+    ///     .map(|_| {
+    ///         let manager = Arc::clone(&manager);
+    ///         let key = key.clone();
+    ///         let params = Arc::clone(&params);
+    ///         thread::spawn(move || {
+    ///             manager.open_connection(&key, &params)
+    ///         })
+    ///     })
+    ///     .collect();
+    ///
+    /// for handle in handles {
+    ///     let result = handle.join().unwrap();
+    ///     assert!(result.is_ok());
+    /// }
+    /// ```
+    pub fn open_connection(
+        &self,
+        key: &ConnectionKey,
+        params: &ResolvedConnectionParams,
+    ) -> Result<Option<Arc<Mutex<dyn Connection>>>, String> {
+        let Some(connection) = self.get_or_create(key.clone())? else {
+            return Ok(None);
+        };
+
+        {
+            let mut guard = connection
+                .lock()
+                .map_err(|_| "connection lock poisoned".to_string())?;
+            if !guard.is_alive() {
+                guard.open(params)?;
+                self.increment_open(&key.connection_type);
+            }
+        }
+        Ok(Some(connection))
+    }
+}
+
+impl Default for ConnectionManager {
+    fn default() -> Self {
+        Self {
+            connections_map: DashMap::new(),
+            connection_factory: RwLock::new(None),
+            counters: Arc::new(DashMap::new()),
+        }
     }
 }
 
@@ -2773,6 +3659,35 @@ impl Inventory {
         HostsView { inventory: self }
     }
 
+    /// Returns a reference to the raw hosts collection without applying transforms.
+    ///
+    /// This accessor provides direct, read-only access to the underlying `Hosts`
+    /// data stored in the inventory. No transform function is applied, and no
+    /// cache is populated. This is useful for debugging, inspection, or when you
+    /// explicitly need the original, unmodified host data.
+    ///
+    /// # Returns
+    ///
+    /// Returns a reference to the raw `Hosts` collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .hosts(hosts)
+    ///     .build();
+    ///
+    /// let raw_hosts = inventory.hosts_raw();
+    /// assert_eq!(raw_hosts.len(), 1);
+    /// ```
+    pub fn hosts_raw(&self) -> &Hosts {
+        &self.hosts
+    }
+
     /// Returns a view of the inventory's groups collection with transform functions applied.
     ///
     /// This method provides access to the inventory's groups through a `GroupsView` wrapper
@@ -2810,6 +3725,36 @@ impl Inventory {
         })
     }
 
+    /// Returns a reference to the raw groups collection without applying transforms.
+    ///
+    /// This accessor provides direct, read-only access to the underlying `Groups`
+    /// data stored in the inventory. No transform function is applied, and no
+    /// cache is populated. This is useful for debugging, inspection, or when you
+    /// explicitly need the original, unmodified group data.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(&Groups)` if groups are configured in the inventory, or `None`
+    /// if no groups are present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Groups, Group, BaseBuilderHost};
+    /// let mut groups = Groups::new();
+    /// groups.add_group("core", Group::builder().platform("linux").build());
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .groups(groups)
+    ///     .build();
+    ///
+    /// let raw_groups = inventory.groups_raw().expect("groups exist");
+    /// assert_eq!(raw_groups.len(), 1);
+    /// ```
+    pub fn groups_raw(&self) -> Option<&Groups> {
+        self.groups.as_ref()
+    }
+
     /// Returns the inventory's default configuration after applying any configured transform function.
     ///
     /// This method provides access to the inventory-wide defaults that apply to all hosts and groups.
@@ -2844,6 +3789,37 @@ impl Inventory {
         self.defaults
             .as_ref()
             .map(|defaults| self.transform_defaults_value(defaults))
+    }
+
+    /// Returns a reference to the raw defaults configuration without applying transforms.
+    ///
+    /// This accessor provides direct, read-only access to the underlying `Defaults`
+    /// data stored in the inventory. No transform function is applied. This is useful
+    /// for debugging, inspection, or when you explicitly need the original defaults.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(&Defaults)` if defaults are configured in the inventory, or `None`
+    /// if no defaults are set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::inventory::{Inventory, Defaults};
+    /// let defaults = Defaults::builder()
+    ///     .username("admin")
+    ///     .port(22)
+    ///     .build();
+    ///
+    /// let inventory = Inventory::builder()
+    ///     .defaults(defaults)
+    ///     .build();
+    ///
+    /// let raw_defaults = inventory.defaults_raw().expect("defaults exist");
+    /// assert_eq!(raw_defaults.username(), Some("admin"));
+    /// ```
+    pub fn defaults_raw(&self) -> Option<&Defaults> {
+        self.defaults.as_ref()
     }
 
     /// Returns a reference to the transform function options configured for this inventory.
@@ -3618,10 +4594,7 @@ mod tests {
                     i
                 )])))
                 .groups(groups)
-                .connection_options(
-                    String::from("Cisco"),
-                    ConnectionOptions::builder().build(),
-                )
+                .connection_options(String::from("Cisco"), ConnectionOptions::builder().build())
                 .build();
             hosts.insert(name, host);
         }
@@ -3859,7 +4832,10 @@ mod tests {
 
         let mut a_parents = ParentGroups::new();
         a_parents.push("b".to_string());
-        let group_a = Group::builder().username("a-user").groups(a_parents).build();
+        let group_a = Group::builder()
+            .username("a-user")
+            .groups(a_parents)
+            .build();
 
         let mut b_parents = ParentGroups::new();
         b_parents.push("c".to_string());
@@ -3941,9 +4917,7 @@ mod tests {
         let calls_clone = Arc::clone(&calls);
         let transform = TransformFunction::new(move |host, _| {
             calls_clone.fetch_add(1, Ordering::SeqCst);
-            host.to_builder()
-                .port(host.port().unwrap_or(0) + 1)
-                .build()
+            host.to_builder().port(host.port().unwrap_or(0) + 1).build()
         });
 
         let mut hosts = Hosts::new();
@@ -3961,7 +4935,6 @@ mod tests {
         assert_eq!(first.port(), Some(11));
         assert_eq!(second.port(), Some(11));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-
 
         // Iterate over all hosts which triggers the transform function again
         // as h2 has not been accessed yet. The transform function should be called twice.
@@ -4061,7 +5034,10 @@ mod tests {
         assert_eq!(target.password(), Some("secret"));
         assert_eq!(target.platform(), Some("linux"));
         assert_eq!(
-            target.extras().and_then(|v| v.get("tier")).and_then(|v| v.as_str()),
+            target
+                .extras()
+                .and_then(|v| v.get("tier"))
+                .and_then(|v| v.as_str()),
             Some("core")
         );
     }
@@ -4212,6 +5188,13 @@ mod tests {
         }
 
         impl Connection for TestConnection {
+            fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+                Box::new(TestConnection {
+                    closes: Arc::clone(&self.closes),
+                    key: key.clone(),
+                })
+            }
+
             fn is_alive(&self) -> bool {
                 true
             }
@@ -4327,12 +5310,12 @@ mod tests {
         if let Some(map) = source.as_mut() {
             map.insert(
                 "ssh",
-                ConnectionOptions::builder().port(2222).username("u").build(),
+                ConnectionOptions::builder()
+                    .port(2222)
+                    .username("u")
+                    .build(),
             );
-            map.insert(
-                "netconf",
-                ConnectionOptions::builder().port(830).build(),
-            );
+            map.insert("netconf", ConnectionOptions::builder().port(830).build());
         }
 
         merge_connection_options(&mut target, &source);
@@ -4344,6 +5327,235 @@ mod tests {
         assert!(merged.get("netconf").is_some());
     }
 
-    // TODO: Create a test to verify the Host defaults deserialization
+    #[test]
+    fn resolve_host_applies_defaults_groups_then_host_in_order() {
+        let defaults = Defaults::builder().port(10).build();
 
+        let group_a = Group::builder().port(20).build();
+        let group_b = Group::builder().port(30).build();
+
+        let mut groups = Groups::new();
+        groups.add_group("a", group_a);
+        groups.add_group("b", group_b);
+
+        let mut hosts = Hosts::new();
+        let mut parents = ParentGroups::new();
+        parents.push("a".to_string());
+        parents.push("b".to_string());
+        let host = Host::builder().port(40).groups(parents).build();
+        hosts.add_host("h1", host);
+
+        let inventory = Inventory::builder()
+            .hosts(hosts)
+            .groups(groups)
+            .defaults(defaults)
+            .build();
+
+        let resolved = inventory.resolve_host("h1").expect("host should resolve");
+        assert_eq!(resolved.port(), Some(40));
+    }
+
+    #[test]
+    fn resolve_connection_params_applies_priority_order() {
+        let defaults = Defaults::builder()
+            .port(10)
+            .connection_options(
+                "ssh",
+                ConnectionOptions::builder().port(11).build(),
+            )
+            .build();
+
+        let group = Group::builder()
+            .port(20)
+            .connection_options(
+                "ssh",
+                ConnectionOptions::builder().port(21).build(),
+            )
+            .build();
+
+        let mut groups = Groups::new();
+        groups.add_group("g1", group);
+
+        let mut parents = ParentGroups::new();
+        parents.push("g1".to_string());
+        let host = Host::builder()
+            .port(30)
+            .groups(parents)
+            .connection_options(
+                "ssh",
+                ConnectionOptions::builder().port(31).build(),
+            )
+            .build();
+
+        let mut hosts = Hosts::new();
+        hosts.add_host("h1", host);
+
+        let inventory = Inventory::builder()
+            .hosts(hosts)
+            .groups(groups)
+            .defaults(defaults)
+            .build();
+
+        let resolved = inventory
+            .resolve_connection_params("h1", "ssh")
+            .expect("params should resolve");
+        assert_eq!(resolved.port, Some(31));
+    }
+
+    #[test]
+    fn connection_manager_get_or_create_errors_without_factory() {
+        let manager = ConnectionManager::default();
+        let key = ConnectionKey::new("h1", "ssh");
+        let err = manager.get_or_create(key).unwrap_err();
+        assert_eq!(err, "connection factory not set");
+    }
+
+    #[test]
+    fn connection_manager_open_connection_propagates_open_error() {
+        #[derive(Debug)]
+        struct FailingConnection;
+
+        impl Connection for FailingConnection {
+            fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
+                Box::new(FailingConnection)
+            }
+
+            fn is_alive(&self) -> bool {
+                false
+            }
+
+            fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+                Err("boom".to_string())
+            }
+
+            fn close(&mut self) -> ConnectionKey {
+                ConnectionKey::new("h1", "ssh")
+            }
+        }
+
+        let factory = Arc::new(|_key: &ConnectionKey| {
+            Some(Arc::new(Mutex::new(FailingConnection)) as Arc<Mutex<dyn Connection>>)
+        });
+        let manager = ConnectionManager::with_connection_factory(factory);
+        let key = ConnectionKey::new("h1", "ssh");
+        let params = ResolvedConnectionParams {
+            hostname: "h1".to_string(),
+            port: Some(22),
+            username: None,
+            password: None,
+            platform: None,
+            extras: None,
+        };
+
+        let err = manager.open_connection(&key, &params).unwrap_err();
+        assert_eq!(err, "boom");
+        let counters = manager.connection_counters_for("ssh").unwrap();
+        assert_eq!(counters.create_calls, 1);
+        assert_eq!(counters.open_calls, 0);
+    }
+
+    #[test]
+    fn connection_manager_open_connection_returns_none_when_factory_returns_none() {
+        let factory = Arc::new(|_key: &ConnectionKey| None);
+        let manager = ConnectionManager::with_connection_factory(factory);
+        let key = ConnectionKey::new("h1", "ssh");
+        let params = ResolvedConnectionParams {
+            hostname: "h1".to_string(),
+            port: Some(22),
+            username: None,
+            password: None,
+            platform: None,
+            extras: None,
+        };
+
+        let result = manager.open_connection(&key, &params).unwrap();
+        assert!(result.is_none());
+        assert!(manager.connection_counters_for("ssh").is_none());
+    }
+
+    #[test]
+    fn inventory_applies_transform_options_to_hosts_groups_and_defaults() {
+        struct OptTransform;
+
+        impl Transform for OptTransform {
+            fn transform_host(
+                &self,
+                host: &Host,
+                options: Option<&TransformFunctionOptions>,
+            ) -> Host {
+                let port = options
+                    .and_then(|opts| opts.get("port").and_then(|v| v.as_u64()))
+                    .unwrap_or(0) as u16;
+                host.to_builder().port(port).build()
+            }
+
+            fn transform_group(
+                &self,
+                group: &Group,
+                options: Option<&TransformFunctionOptions>,
+            ) -> Group {
+                let username = options
+                    .and_then(|opts| opts.get("username").and_then(|v| v.as_str()))
+                    .unwrap_or("default");
+                group.to_builder().username(username).build()
+            }
+
+            fn transform_defaults(
+                &self,
+                defaults: &Defaults,
+                options: Option<&TransformFunctionOptions>,
+            ) -> Defaults {
+                let hostname = options
+                    .and_then(|opts| opts.get("hostname").and_then(|v| v.as_str()))
+                    .unwrap_or("defaults");
+                defaults.to_builder().hostname(hostname).build()
+            }
+        }
+
+        let transform = TransformFunction::new_full(OptTransform);
+        let options = TransformFunctionOptions::new(serde_json::json!({
+            "port": 2022,
+            "username": "opt-user",
+            "hostname": "opt-defaults"
+        }));
+
+        let mut hosts = Hosts::new();
+        hosts.add_host("h1", Host::builder().build());
+
+        let mut groups = Groups::new();
+        groups.add_group("g1", Group::builder().build());
+
+        let defaults = Defaults::builder().build();
+
+        let inventory = Inventory::builder()
+            .hosts(hosts)
+            .groups(groups)
+            .defaults(defaults)
+            .transform_function(transform)
+            .transform_function_options(options)
+            .build();
+
+        let host = inventory.hosts().get("h1").expect("host exists");
+        assert_eq!(host.port(), Some(2022));
+
+        let group = inventory.groups().expect("groups exist").get("g1").unwrap();
+        assert_eq!(group.username(), Some("opt-user"));
+
+        let defaults = inventory.defaults().expect("defaults exist");
+        assert_eq!(defaults.hostname(), Some("opt-defaults"));
+    }
+
+    #[test]
+    fn host_deserializes_with_missing_fields_as_none() {
+        let host: Host = serde_json::from_value(serde_json::json!({}))
+            .expect("host should deserialize from empty object");
+        assert_eq!(host.hostname(), None);
+        assert_eq!(host.port(), None);
+        assert_eq!(host.username(), None);
+        assert_eq!(host.password(), None);
+        assert_eq!(host.platform(), None);
+        assert!(host.groups().is_none());
+        assert!(host.data().is_none());
+        assert!(host.connection_options().is_none());
+    }
 }
