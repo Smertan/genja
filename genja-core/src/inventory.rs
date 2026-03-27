@@ -41,7 +41,7 @@
 //! let inventory = Inventory::builder().transform_function(transform).build();
 //! let _ = inventory.hosts();
 //! ```
-use crate::{CustomTreeMap, NatString};
+use crate::{CustomTreeMap, NatString, State};
 use dashmap::DashMap;
 use genja_core_derive::{DerefMacro, DerefMutMacro};
 use schemars::{schema_for, JsonSchema};
@@ -3592,6 +3592,9 @@ pub struct Inventory {
     #[serde(skip)]
     #[schemars(skip)]
     resolved_params_cache: DashMap<(NatString, String), ResolvedConnectionParams>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    state: Arc<State>,
 }
 
 impl BaseMethods for Inventory {}
@@ -3657,6 +3660,11 @@ impl Inventory {
     /// ```
     pub fn hosts(&self) -> HostsView<'_> {
         HostsView { inventory: self }
+    }
+
+    /// Returns the global runtime state for the current Genja instance.
+    pub fn state(&self) -> &State {
+        self.state.as_ref()
     }
 
     /// Returns a reference to the raw hosts collection without applying transforms.
@@ -4348,18 +4356,28 @@ pub struct HostsView<'a> {
 
 impl<'a> HostsView<'a> {
     pub fn len(&self) -> usize {
-        self.inventory.hosts.len()
+        self.inventory
+            .hosts
+            .keys()
+            .filter(|key| self.inventory.state.is_in_scope_key(key))
+            .count()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inventory.hosts.is_empty()
+        self.len() == 0
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &'a NatString> {
-        self.inventory.hosts.keys()
+        self.inventory
+            .hosts
+            .keys()
+            .filter(|key| self.inventory.state.is_in_scope_key(key))
     }
 
     pub fn get(&self, name: &str) -> Option<Host> {
+        if !self.inventory.state.is_in_scope(name) {
+            return None;
+        }
         let key = NatString::new(name.to_string());
         if let Some(entry) = self.inventory.host_cache.get(&key) {
             return Some(entry.value().clone());
@@ -4375,7 +4393,13 @@ impl<'a> HostsView<'a> {
         self.inventory
             .hosts
             .iter()
-            .map(|(id, host)| (id, self.inventory.cached_host_value(id, host)))
+            .filter_map(|(id, host)| {
+                if self.inventory.state.is_in_scope_key(id) {
+                    Some((id, self.inventory.cached_host_value(id, host)))
+                } else {
+                    None
+                }
+            })
     }
 }
 
@@ -4463,6 +4487,7 @@ impl Default for Inventory {
             group_cache: DashMap::new(),
             resolved_host_cache: DashMap::new(),
             resolved_params_cache: DashMap::new(),
+            state: Arc::new(State::new()),
         }
     }
 }
@@ -4548,8 +4573,14 @@ impl InventoryBuilder {
     }
 
     pub fn build(self) -> Inventory {
+        let hosts = self.hosts.unwrap_or_default();
+        let state = State::new();
+        for key in hosts.keys() {
+            state.mark_in_scope_key(key);
+        }
+
         Inventory {
-            hosts: self.hosts.unwrap_or_default(),
+            hosts,
             groups: self.groups,
             defaults: self.defaults,
             transform_function: self.transform_function,
@@ -4561,6 +4592,7 @@ impl InventoryBuilder {
             group_cache: DashMap::new(),
             resolved_host_cache: DashMap::new(),
             resolved_params_cache: DashMap::new(),
+            state: Arc::new(state),
         }
     }
 }
