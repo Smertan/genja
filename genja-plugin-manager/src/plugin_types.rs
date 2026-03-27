@@ -221,7 +221,7 @@
 //! }
 //!
 //! impl PluginRunner for SequentialRunner {
-//!     fn run(&self, task: Task, hosts: &Hosts) {
+//!     fn run(&self, task: &dyn Task, hosts: &Hosts) {
 //!         // Execute task sequentially on each host
 //!         for (name, host) in hosts.iter() {
 //!             // Execute task on host
@@ -231,7 +231,7 @@
 //!     fn run_tasks(&self, tasks: Tasks, hosts: &Hosts) {
 //!         // Execute all tasks sequentially
 //!         for task in tasks.iter() {
-//!             self.run(task.clone(), hosts);
+//!             self.run(task.as_task(), hosts);
 //!         }
 //!     }
 //! }
@@ -416,7 +416,7 @@ impl Debug for dyn PluginConnection {
 /// mutating shared state without synchronization.
 pub trait PluginRunner: Plugin {
     /// Run a single task against the provided hosts.
-    fn run(&self, task: Task, hosts: &Hosts);
+    fn run(&self, task: &dyn Task, hosts: &Hosts);
 
     /// Run all tasks in the provided task list against the provided hosts.
     fn run_tasks(&self, tasks: Tasks, hosts: &Hosts);
@@ -590,7 +590,7 @@ mod tests {
     }
 
     impl PluginRunner for DummyRunner {
-        fn run(&self, _task: Task, _hosts: &Hosts) {}
+        fn run(&self, _task: &dyn Task, _hosts: &Hosts) {}
 
         fn run_tasks(&self, _tasks: Tasks, _hosts: &Hosts) {}
     }

@@ -619,7 +619,7 @@ mod tests {
     }
 
     impl PluginRunner for DummyRunner {
-        fn run(&self, _task: Task, _hosts: &genja_core::inventory::Hosts) {}
+        fn run(&self, _task: &dyn Task, _hosts: &genja_core::inventory::Hosts) {}
 
         fn run_tasks(&self, _tasks: Tasks, _hosts: &genja_core::inventory::Hosts) {}
     }
