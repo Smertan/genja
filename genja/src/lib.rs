@@ -38,61 +38,14 @@
 
 
 use genja_core::inventory::{Host, Inventory};
+pub use genja_core::GenjaError;
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
 use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-#[derive(Debug)]
-/// Error types returned by `Genja` operations.
-///
-/// Represents failures from plugin loading, inventory loading, and configuration
-/// parsing. These errors are surfaced by builder methods and runtime helpers.
-///
-/// # Variants
-///
-/// * `PluginsNotLoaded` - Plugins have not been loaded for the runtime.
-/// * `InventoryNotLoaded` - Inventory has not been loaded for the runtime.
-/// * `PluginNotFound` - A requested plugin name could not be found.
-/// * `NotInventoryPlugin` - The named plugin is not an inventory plugin.
-/// * `NotRunnerPlugin` - The named plugin is not a runner plugin.
-/// * `PluginLoad` - A plugin failed to load.
-/// * `ConfigLoad` - The configuration file could not be read or parsed.
-/// * `InventoryLoad` - Inventory loading failed.
-pub enum GenjaError {
-    PluginsNotLoaded,
-    InventoryNotLoaded,
-    PluginNotFound(String),
-    NotInventoryPlugin(String),
-    NotRunnerPlugin(String),
-    PluginLoad(Box<dyn Error>),
-    ConfigLoad(String),
-    InventoryLoad(String),
-}
-
-impl Display for GenjaError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GenjaError::PluginsNotLoaded => write!(f, "plugins have not been loaded"),
-            GenjaError::InventoryNotLoaded => write!(f, "inventory has not been loaded"),
-            GenjaError::PluginNotFound(name) => write!(f, "plugin '{name}' not found"),
-            GenjaError::NotInventoryPlugin(name) => {
-                write!(f, "plugin '{name}' is not an inventory plugin")
-            }
-            GenjaError::NotRunnerPlugin(name) => {
-                write!(f, "plugin '{name}' is not a runner plugin")
-            }
-            GenjaError::PluginLoad(err) => write!(f, "failed to load plugins: {err}"),
-            GenjaError::ConfigLoad(err) => write!(f, "failed to load settings: {err}"),
-            GenjaError::InventoryLoad(err) => write!(f, "failed to load inventory: {err}"),
-        }
-    }
-}
-
-impl Error for GenjaError {}
+// GenjaError is re-exported from genja-core.
 
 /// Runtime composition layer for `Genja`.
 ///
@@ -325,7 +278,7 @@ impl Genja {
                     self.plugins_loaded = true;
                     Ok(())
                 } else {
-                    Err(GenjaError::PluginLoad(err))
+                    Err(GenjaError::PluginLoad(err.to_string()))
                 }
             }
         }
