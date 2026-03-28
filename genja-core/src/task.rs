@@ -1,5 +1,6 @@
 use serde_json::Value;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 /// Task metadata required for execution.
 ///
@@ -18,6 +19,12 @@ pub trait TaskInfo {
 
     /// Return the task's options payload, if set.
     fn options(&self) -> Option<&Value>;
+}
+
+/// Sub-task provider interface.
+pub trait SubTasks {
+    /// Return any sub-tasks for this task.
+    fn sub_tasks(&self) -> Vec<Arc<dyn Task>>;
 }
 
 /// Core task interface required for execution.
@@ -39,7 +46,7 @@ pub trait TaskInfo {
 ///     }
 /// }
 /// ```
-pub trait Task: TaskInfo {
+pub trait Task: TaskInfo + SubTasks {
     /// Start executing the task.
     fn start(&self) -> Result<(), crate::GenjaError>;
 }
@@ -65,7 +72,11 @@ impl TaskDefinition {
 
 impl Task for TaskDefinition {
     fn start(&self) -> Result<(), crate::GenjaError> {
-        self.inner.start()
+        self.inner.start()?;
+        for task in self.inner.sub_tasks() {
+            task.start()?;
+        }
+        Ok(())
     }
 }
 
@@ -84,6 +95,12 @@ impl TaskInfo for TaskDefinition {
 
     fn options(&self) -> Option<&Value> {
         self.inner.options()
+    }
+}
+
+impl SubTasks for TaskDefinition {
+    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+        self.inner.sub_tasks()
     }
 }
 

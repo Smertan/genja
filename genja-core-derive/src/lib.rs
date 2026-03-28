@@ -30,7 +30,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    DeriveInput, GenericArgument, PathArguments, Type, TypePath, parse_macro_input,
+    DeriveInput, GenericArgument, Meta, PathArguments, Type, TypePath, parse_macro_input,
 };
 
 /// Generates an implementation of the `Deref` trait for the given type.
@@ -97,7 +97,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-#[proc_macro_derive(Task)]
+#[proc_macro_derive(Task, attributes(task))]
 pub fn derive_task(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -129,12 +129,27 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     let mut name_field = None;
     let mut plugin_name_field = None;
     let mut options_field = None;
+    let mut subtask_fields: Vec<(syn::Ident, SubtaskKind)> = Vec::new();
 
     for field in fields.iter() {
         let ident = match &field.ident {
             Some(ident) => ident,
             None => continue,
         };
+
+        if has_subtask_attr(&field.attrs) {
+            match subtask_kind(&field.ty) {
+                Some(kind) => subtask_fields.push((ident.clone(), kind)),
+                None => {
+                    return syn::Error::new_spanned(
+                        &field.ty,
+                        "subtask fields must be `Arc<dyn Task>`",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            }
+        }
 
         match ident.to_string().as_str() {
             "name" => name_field = Some(field.ty.clone()),
@@ -208,6 +223,31 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
         quote! { None }
     };
 
+    /// Generates token streams for pushing subtask fields into a task vector.
+    ///
+    /// This function creates a vector of `proc_macro2::TokenStream` objects, where each
+    /// token stream represents a statement that pushes a subtask field (wrapped in `Arc<dyn Task>`)
+    /// into a `tasks` vector. If there are no subtask fields, an empty vector is returned.
+    ///
+    /// # Parameters
+    ///
+    /// * `subtask_fields` - A slice of tuples containing the field identifier and its subtask kind.
+    ///                      Each tuple represents a field marked with the `#[task(subtask)]` attribute.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<proc_macro2::TokenStream>` containing the generated push statements for each subtask field.
+    /// Returns an empty vector if `subtask_fields` is empty.
+    let subtask_pushes = if subtask_fields.is_empty() {
+        Vec::new()
+    } else {
+        let mut pushes = Vec::new();
+        for (ident, _kind) in subtask_fields {
+            pushes.push(quote! { tasks.push(self.#ident.clone()); });
+        }
+        pushes
+    };
+
     let expanded = quote! {
         impl genja_core::task::TaskInfo for #name {
             fn name(&self) -> &str {
@@ -227,6 +267,24 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
 
             fn options(&self) -> Option<&serde_json::Value> {
                 #options_getter
+            }
+        }
+
+        /// Implementation of the `SubTasks` trait for the derived type.
+        ///
+        /// This implementation collects all fields marked with the `#[task(subtask)]` attribute
+        /// and returns them as a vector of `Arc<dyn Task>`. This allows the task system to
+        /// traverse and execute subtasks in a hierarchical manner.
+        ///
+        /// # Returns
+        ///
+        /// A `Vec<std::sync::Arc<dyn genja_core::task::Task>>` containing all subtasks
+        /// associated with this task instance.
+        impl genja_core::task::SubTasks for #name {
+            fn sub_tasks(&self) -> Vec<std::sync::Arc<dyn genja_core::task::Task>> {
+                let mut tasks: Vec<std::sync::Arc<dyn genja_core::task::Task>> = Vec::new();
+                #(#subtask_pushes)*
+                tasks
             }
         }
     };
@@ -304,4 +362,69 @@ fn is_value_type(ty: &Type) -> bool {
 
 fn is_string_or_static_str(ty: &Type) -> bool {
     is_string_type(ty) || is_static_str_type(ty)
+}
+
+#[derive(Copy, Clone)]
+enum SubtaskKind {
+    SingleArc,
+}
+
+fn has_subtask_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if !attr.path().is_ident("task") {
+            return false;
+        }
+        match attr.meta {
+            Meta::List(ref list) => list.tokens.to_string().contains("subtask"),
+            _ => false,
+        }
+    })
+}
+
+fn subtask_kind(ty: &Type) -> Option<SubtaskKind> {
+    if is_arc_task(ty) {
+        return Some(SubtaskKind::SingleArc);
+    }
+    None
+}
+
+fn is_arc_task(ty: &Type) -> bool {
+    match ty {
+        Type::Path(TypePath { path, .. }) => {
+            let seg = match path.segments.last() {
+                Some(seg) => seg,
+                None => return false,
+            };
+            if seg.ident != "Arc" {
+                return false;
+            }
+            match &seg.arguments {
+                PathArguments::AngleBracketed(args) => args
+                    .args
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        GenericArgument::Type(ty) => Some(ty),
+                        _ => None,
+                    })
+                    .any(is_task_trait_object),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn is_task_trait_object(ty: &Type) -> bool {
+    match ty {
+        Type::TraitObject(obj) => obj.bounds.iter().any(|bound| match bound {
+            syn::TypeParamBound::Trait(trait_bound) => trait_bound
+                .path
+                .segments
+                .last()
+                .map(|seg| seg.ident == "Task")
+                .unwrap_or(false),
+            _ => false,
+        }),
+        _ => false,
+    }
 }
