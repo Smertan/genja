@@ -61,7 +61,7 @@ pub fn create_plugins() -> Vec<Plugins> {
 }
 
 impl PluginRunner for MyPlugin {
-    fn run(&self, _task: Task, _hosts: &Hosts) {}
+    fn run(&self, _task: &dyn Task, _hosts: &Hosts) {}
     fn run_tasks(&self, _tasks: Tasks, _hosts: &Hosts) {}
 }
 ```

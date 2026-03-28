@@ -58,7 +58,7 @@
 //! }
 //!
 //! impl PluginRunner for MyPlugin {
-//!     fn run(&self, _task: Task, _hosts: &Hosts) {
+//!     fn run(&self, _task: &dyn Task, _hosts: &Hosts) {
 //!         // Task execution logic
 //!     }
 //!
@@ -223,7 +223,7 @@
 //! }
 //!
 //! impl PluginRunner for SequentialRunner {
-//!     fn run(&self, task: Task, hosts: &Hosts) {
+//!     fn run(&self, task: &dyn Task, hosts: &Hosts) {
 //!         // Execute task on each host sequentially
 //!     }
 //!
@@ -1240,7 +1240,7 @@ inventory_a = "../this/path/does/not/exist.so"
     }
 
     impl PluginRunner for DummyRunner {
-        fn run(&self, _task: Task, _hosts: &genja_core::inventory::Hosts) {}
+        fn run(&self, _task: &dyn Task, _hosts: &genja_core::inventory::Hosts) {}
 
         fn run_tasks(&self, _tasks: Tasks, _hosts: &genja_core::inventory::Hosts) {}
     }

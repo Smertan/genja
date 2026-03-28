@@ -65,7 +65,7 @@ pub mod settings;
 pub mod task;
 pub mod types;
 
-pub use errors::InventoryLoadError;
+pub use errors::{GenjaError, InventoryLoadError};
 pub use settings::Settings;
 pub use state::{HostStatus, State};
 pub use types::{CustomTreeMap, NatString};
