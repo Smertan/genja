@@ -110,9 +110,9 @@ pub trait DerefTarget {
 
 /// Connection-specific configuration options that can override base host settings.
 ///
-/// This struct defines optional connection parameters that can be specified per connection type
+/// This struct defines optional connection parameters that can be specified per connection plugin name
 /// (e.g., "ssh", "netconf", "http") to override the base connection settings defined at the host,
-/// group, or defaults level. Connection options are stored in a map keyed by connection type name
+/// group, or defaults level. Connection options are stored in a map keyed by connection plugin name name
 /// and are applied during connection parameter resolution.
 ///
 /// All fields are optional, allowing partial overrides. When resolving connection parameters,
@@ -120,10 +120,10 @@ pub trait DerefTarget {
 ///
 /// # Fields
 ///
-/// * `hostname` - Optional hostname or IP address override for this connection type.
+/// * `hostname` - Optional hostname or IP address override for this connection plugin name.
 ///   When specified, overrides the base hostname for connections of this type.
 ///
-/// * `port` - Optional port number override for this connection type.
+/// * `port` - Optional port number override for this connection plugin name.
 ///   When specified, overrides the base port for connections of this type.
 ///
 /// * `username` - Optional username override for authentication.
@@ -243,10 +243,10 @@ impl ConnectionOptions {
 ///
 /// # Fields
 ///
-/// * `hostname` - Optional hostname or IP address override for the connection type.
+/// * `hostname` - Optional hostname or IP address override for the connection plugin name.
 ///   When set, this value will override the base hostname for connections of this type.
 ///
-/// * `port` - Optional port number override for the connection type.
+/// * `port` - Optional port number override for the connection plugin name.
 ///   When set, this value will override the base port for connections of this type.
 ///
 /// * `username` - Optional username override for authentication.
@@ -352,9 +352,9 @@ impl ConnectionOptionsBuilder {
 /// Fully resolved connection parameters for establishing a connection to a host.
 ///
 /// This struct represents the final, merged connection configuration after applying
-/// defaults, group settings, host-specific settings, and connection-type-specific
+/// defaults, group settings, host-specific settings, and connection-plugin-name-specific
 /// overrides. It contains all the information needed to establish a connection to
-/// a target host using a specific connection type (e.g., SSH, NETCONF, HTTP).
+/// a target host using a specific connection plugin name (e.g., SSH, NETCONF, HTTP).
 ///
 /// The resolution process follows a hierarchical priority order where settings at
 /// higher levels (host-specific) override settings at lower levels (defaults).
@@ -672,7 +672,7 @@ impl Defaults {
 ///   Can be overridden or merged at the group or host level.
 ///
 /// * `connection_options` - Optional map of connection-specific overrides keyed by
-///   connection type. Allows per-connection-type customization of default parameters.
+///   connection plugin name. Allows per-connection-plugin-name customization of default parameters.
 ///
 /// # Examples
 ///
@@ -756,7 +756,7 @@ impl DefaultsBuilder {
     ///
     /// # Parameters
     ///
-    /// * `name` - A string-like value identifying the connection type (e.g., "ssh", "netconf").
+    /// * `name` - A string-like value identifying the connection plugin name (e.g., "ssh", "netconf").
     /// * `options` - A `ConnectionOptions` instance containing connection-specific configuration.
     ///
     /// # Returns
@@ -845,14 +845,14 @@ impl Data {
 ///   and default data during resolution.
 ///
 /// * `connection_options` - Optional map of connection-specific overrides keyed by connection
-///   type (e.g., "ssh", "netconf", "http"). Allows per-connection-type customization of
-///   connection parameters, overriding base host settings for specific connection types.
+///   type (e.g., "ssh", "netconf", "http"). Allows per-connection-plugin-name customization of
+///   connection parameters, overriding base host settings for specific connection plugin names.
 ///
 /// # Deserialization
 ///
 /// - Unknown fields are rejected via `#[serde(deny_unknown_fields)]` to catch configuration errors
 /// - All fields are optional, allowing minimal host definitions
-/// - Connection options accept arbitrary map keys for different connection types
+/// - Connection options accept arbitrary map keys for different connection plugin names
 ///
 /// # Examples
 ///
@@ -991,7 +991,7 @@ impl Host {
         self.connection_options.as_ref()
     }
 
-    /// Resolves connection parameters for a specific connection type by merging host-level
+    /// Resolves connection parameters for a specific connection plugin name by merging host-level
     /// settings with connection-specific overrides.
     ///
     /// This method uses only the fields on this `Host`. It does not apply defaults or group
@@ -1005,7 +1005,7 @@ impl Host {
     ///
     /// # Parameters
     ///
-    /// * `connection_type` - A string identifying the connection type to resolve parameters for
+    /// * `connection_type` - A string identifying the connection plugin name to resolve parameters for
     ///   (e.g., "ssh", "netconf", "http"). This is used as the key to lookup connection-specific
     ///   options in the host's `connection_options` map.
     ///
@@ -1126,7 +1126,7 @@ impl BaseMethods for Host {}
 ///   metadata and configuration that doesn't fit standard fields.
 ///
 /// * `connection_options` - Optional map of connection-specific overrides keyed by connection
-///   type. Allows per-connection-type customization of connection parameters.
+///   type. Allows per-connection-plugin-name customization of connection parameters.
 ///
 /// # Examples
 ///
@@ -1498,7 +1498,7 @@ impl BaseBuilderHost for GroupBuilder {
     ///
     /// # Parameters
     ///
-    /// * `name` - A string-like value identifying the connection type (e.g., "ssh", "netconf").
+    /// * `name` - A string-like value identifying the connection plugin name (e.g., "ssh", "netconf").
     /// * `options` - A `ConnectionOptions` instance containing connection-specific configuration.
     ///
     /// # Returns
@@ -2474,9 +2474,9 @@ where
 /// A unique identifier for a connection in the connection manager.
 ///
 /// `ConnectionKey` serves as a composite key for looking up and managing connections
-/// in the `ConnectionManager`. It combines a hostname with a connection type to uniquely
-/// identify a specific connection instance. This allows the same host to have multiple
-/// concurrent connections of different types (e.g., SSH, NETCONF, HTTP).
+/// in the `ConnectionManager`. It combines a hostname with a connection plugin name to
+/// uniquely identify a specific connection instance. This allows the same host to have
+/// multiple concurrent connections handled by different plugins (e.g., SSH, NETCONF, HTTP).
 ///
 /// The struct implements `Hash` and `Eq` to enable its use as a key in hash-based
 /// collections like `HashMap` and `DashMap`.
@@ -2486,7 +2486,7 @@ where
 /// When inserting a `ConnectionKey` into a hash-based collection (like `DashMap` in
 /// `ConnectionManager`), the hash function is used to:
 ///
-/// 1. **Compute Hash Value**: Both `hostname` and `connection_type` fields are hashed
+/// 1. **Compute Hash Value**: Both `hostname` and `plugin_name` fields are hashed
 ///    together to produce a single hash value. This is done automatically by Rust's
 ///    derive macro for `Hash`, which hashes each field in declaration order.
 ///
@@ -2500,7 +2500,7 @@ where
 ///    exact match.
 ///
 /// 4. **Enable Deduplication**: When inserting with the same `hostname` and
-///    `connection_type`, the hash function ensures the key maps to the same bucket,
+///    `plugin_name`, the hash function ensures the key maps to the same bucket,
 ///    and `Eq` confirms it's the same key, allowing the collection to update the
 ///    existing entry rather than creating a duplicate.
 ///
@@ -2508,8 +2508,8 @@ where
 ///
 /// * `hostname` - The hostname or IP address of the target device. This identifies
 ///   the remote endpoint for the connection.
-/// * `connection_type` - The type of connection protocol (e.g., "ssh", "netconf", "http").
-///   This distinguishes between different connection types to the same host.
+/// * `plugin_name` - The connection plugin name (e.g., "ssh", "netconf", "http").
+///   This distinguishes between different connection plugin types to the same host.
 ///
 /// # Examples
 ///
@@ -2519,10 +2519,10 @@ where
 /// # use genja_core::inventory::ConnectionKey;
 /// let key = ConnectionKey::new("10.0.0.1", "ssh");
 /// assert_eq!(key.hostname, "10.0.0.1");
-/// assert_eq!(key.connection_type, "ssh");
+/// assert_eq!(key.plugin_name, "ssh");
 /// ```
 ///
-/// ## Multiple Connection Types per Host
+/// ## Multiple Connection Plugins per Host
 ///
 /// ```
 /// # use genja_core::inventory::ConnectionKey;
@@ -2532,8 +2532,8 @@ where
 /// let ssh_key = ConnectionKey::new("router1", "ssh");
 /// let netconf_key = ConnectionKey::new("router1", "netconf");
 ///
-/// // Same host can have different connection types
-/// // Each key produces a different hash due to different connection_type
+/// // Same host can have different connection plugins
+/// // Each key produces a different hash due to different plugin_name
 /// connections.insert(ssh_key, "SSH connection");
 /// connections.insert(netconf_key, "NETCONF connection");
 /// assert_eq!(connections.len(), 2);
@@ -2549,7 +2549,7 @@ where
 /// let key1 = ConnectionKey::new("router1", "ssh");
 /// let key2 = ConnectionKey::new("router1", "ssh");
 ///
-/// // Both keys have the same hostname and connection_type
+/// // Both keys have the same hostname and plugin_name
 /// // They produce the same hash and are equal via Eq
 /// connections.insert(key1, "First connection");
 /// connections.insert(key2, "Second connection"); // Replaces first
@@ -2575,11 +2575,11 @@ where
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct ConnectionKey {
     pub hostname: String,
-    pub connection_type: String,
+    pub plugin_name: String,
 }
 
 impl ConnectionKey {
-    /// Creates a new `ConnectionKey` from a hostname and connection type.
+    /// Creates a new `ConnectionKey` from a hostname and plugin name.
     ///
     /// This constructor provides a convenient way to create a connection key by accepting
     /// any type that can be converted into a `String` for both the hostname and connection
@@ -2587,20 +2587,20 @@ impl ConnectionKey {
     /// without explicit conversion.
     ///
     /// The resulting key uniquely identifies a connection in the `ConnectionManager` by
-    /// combining the target hostname with the connection protocol type.
+    /// combining the target hostname with the connection plugin name.
     ///
     /// # Parameters
     ///
     /// * `hostname` - The hostname or IP address of the target device. Accepts any type
     ///   implementing `Into<String>`, such as `&str` or `String`. This identifies the
     ///   remote endpoint for the connection.
-    /// * `connection_type` - The type of connection protocol (e.g., "ssh", "netconf", "http").
+    /// * `plugin_name` - The connection plugin name (e.g., "ssh", "netconf", "http").
     ///   Accepts any type implementing `Into<String>`. This distinguishes between different
-    ///   connection types to the same host.
+    ///   connection plugin names to the same host.
     ///
     /// # Returns
     ///
-    /// Returns a new `ConnectionKey` instance with the provided hostname and connection type.
+    /// Returns a new `ConnectionKey` instance with the provided hostname and plugin name.
     ///
     /// # Examples
     ///
@@ -2611,16 +2611,16 @@ impl ConnectionKey {
     ///
     /// // Using owned strings
     /// let hostname = String::from("router1");
-    /// let conn_type = String::from("netconf");
-    /// let key2 = ConnectionKey::new(hostname, conn_type);
+/// let plugin_name = String::from("netconf");
+/// let key2 = ConnectionKey::new(hostname, plugin_name);
     ///
     /// // Mixed types
     /// let key3 = ConnectionKey::new("10.0.0.2", String::from("http"));
     /// ```
-    pub fn new(hostname: impl Into<String>, connection_type: impl Into<String>) -> Self {
+    pub fn new(hostname: impl Into<String>, plugin_name: impl Into<String>) -> Self {
         Self {
             hostname: hostname.into(),
-            connection_type: connection_type.into(),
+            plugin_name: plugin_name.into(),
         }
     }
 }
@@ -2628,10 +2628,10 @@ impl ConnectionKey {
 pub type ConnectionFactory =
     dyn Fn(&ConnectionKey) -> Option<Arc<Mutex<dyn Connection>>> + Send + Sync;
 
-/// Statistics tracking connection lifecycle operations per connection type.
+/// Statistics tracking connection lifecycle operations per connection plugin name.
 ///
 /// `ConnectionCounters` provides a simple counter-based mechanism for monitoring connection
-/// operations in the `ConnectionManager`. Each connection type (e.g., "ssh", "netconf", "http")
+/// operations in the `ConnectionManager`. Each connection plugin name (e.g., "ssh", "netconf", "http")
 /// has its own set of counters that track how many times connections of that type have been
 /// created, opened, and closed.
 ///
@@ -2659,7 +2659,7 @@ pub type ConnectionFactory =
 ///
 /// The counters are stored in a `DashMap<String, ConnectionCounters>` in the `ConnectionManager`,
 /// providing thread-safe concurrent access. Multiple threads can increment counters for different
-/// connection types simultaneously without blocking each other.
+/// connection plugin names simultaneously without blocking each other.
 ///
 /// # Usage Patterns
 ///
@@ -2798,7 +2798,7 @@ pub type ConnectionFactory =
 /// # struct TestConnection { conn_type: String, alive: bool }
 /// # impl Connection for TestConnection {
 /// #     fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
-/// #         Box::new(TestConnection { conn_type: key.connection_type.clone(), alive: false })
+/// #         Box::new(TestConnection { conn_type: key.plugin_name.clone(), alive: false })
 /// #     }
 /// #     fn is_alive(&self) -> bool { self.alive }
 /// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
@@ -2811,7 +2811,7 @@ pub type ConnectionFactory =
 /// # }
 /// # let factory = Arc::new(|key: &ConnectionKey| {
 /// #     Some(Arc::new(Mutex::new(TestConnection {
-/// #         conn_type: key.connection_type.clone(),
+/// #         conn_type: key.plugin_name.clone(),
 /// #         alive: false
 /// #     })) as Arc<Mutex<dyn Connection>>)
 /// # });
@@ -2825,7 +2825,7 @@ pub type ConnectionFactory =
 ///     extras: None,
 /// };
 ///
-/// // Open different connection types
+/// // Open different connection plugin names
 /// manager.open_connection(&ConnectionKey::new("router1", "ssh"), &params)?;
 /// manager.open_connection(&ConnectionKey::new("router1", "netconf"), &params)?;
 ///
@@ -2848,7 +2848,7 @@ pub struct ConnectionCounters {
 ///
 /// `ConnectionManager` provides centralized management of connections to remote hosts,
 /// handling connection creation, caching, opening, and closing. It uses a factory pattern
-/// to create connections dynamically based on connection type, and maintains a pool of
+/// to create connections dynamically based on connection plugin name, and maintains a pool of
 /// active connections for reuse across multiple operations.
 ///
 /// The manager is designed for concurrent access and uses lock-free data structures
@@ -2860,7 +2860,7 @@ pub struct ConnectionCounters {
 /// The manager consists of four main components:
 ///
 /// 1. **Connection Pool** (`connections_map`): A `DashMap` storing active connections
-///    keyed by `ConnectionKey` (hostname + connection type). Connections are wrapped
+///    keyed by `ConnectionKey` (hostname + connection plugin name). Connections are wrapped
 ///    in `Arc<Mutex<_>>` for thread-safe sharing and interior mutability.
 ///
 /// 2. **Connection Factory** (`connection_factory`): An optional factory function that
@@ -2868,7 +2868,7 @@ pub struct ConnectionCounters {
 ///    to allow runtime configuration while supporting concurrent reads.
 ///
 /// 3. **Usage Counters** (`counters`): A `DashMap` tracking create, open, and close
-///    operations per connection type. Useful for monitoring, debugging, and testing.
+///    operations per connection plugin name. Useful for monitoring, debugging, and testing.
 ///
 /// 4. **Caching Strategy**: Connections are created lazily on first access and cached
 ///    for subsequent use. The same connection instance is reused until explicitly closed.
@@ -2912,18 +2912,18 @@ pub struct ConnectionCounters {
 /// The connection factory is a function that takes a `ConnectionKey` and returns an
 /// optional connection. This design allows:
 ///
-/// - **Plugin-Based Architecture**: Different connection types (SSH, NETCONF, HTTP)
+/// - **Plugin-Based Architecture**: Different connection plugin names (SSH, NETCONF, HTTP)
 ///   can be registered dynamically via plugins.
 ///
 /// - **Lazy Loading**: Connections are only created when needed, reducing startup time
 ///   and resource usage.
 ///
-/// - **Graceful Degradation**: If no plugin is registered for a connection type, the
+/// - **Graceful Degradation**: If no plugin is registered for a connection plugin name, the
 ///   factory returns `None` and the manager propagates this to the caller.
 ///
 /// # Usage Counters
 ///
-/// The manager tracks three types of operations per connection type:
+/// The manager tracks three types of operations per connection plugin name:
 ///
 /// - `create_calls`: Number of times a new connection was created
 /// - `open_calls`: Number of times `open()` was called on a connection
@@ -2970,7 +2970,7 @@ pub struct ConnectionCounters {
 ///
 /// // Create a factory that returns SSH connections
 /// let factory = Arc::new(|key: &ConnectionKey| {
-///     if key.connection_type == "ssh" {
+///     if key.plugin_name == "ssh" {
 ///         Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
 ///     } else {
 ///         None
@@ -3190,7 +3190,7 @@ impl ConnectionManager {
     ///
     /// # Parameters
     ///
-    /// * `key` - A `ConnectionKey` identifying the connection by hostname and connection type.
+    /// * `key` - A `ConnectionKey` identifying the connection by hostname and connection plugin name.
     ///
     /// # Returns
     ///
@@ -3252,7 +3252,7 @@ impl ConnectionManager {
             dashmap::mapref::entry::Entry::Occupied(entry) => Ok(Some(entry.get().clone())),
             dashmap::mapref::entry::Entry::Vacant(entry) => {
                 let key_for_factory = entry.key().clone();
-                let connection_type = key_for_factory.connection_type.clone();
+                let connection_type = key_for_factory.plugin_name.clone();
                 let Some(connection) = factory(&key_for_factory) else {
                     return Ok(None);
                 };
@@ -3275,7 +3275,7 @@ impl ConnectionManager {
         if let Some((_, connection)) = self.connections_map.remove(key) {
             if let Ok(mut connection) = connection.lock() {
                 connection.close();
-                self.increment_close(&key.connection_type);
+                self.increment_close(&key.plugin_name);
             }
         }
     }
@@ -3285,7 +3285,7 @@ impl ConnectionManager {
         self.connections_map.iter().for_each(|entry| {
             if let Ok(mut connection) = entry.value().lock() {
                 connection.close();
-                self.increment_close(&entry.key().connection_type);
+                self.increment_close(&entry.key().plugin_name);
             }
         });
         self.connections_map.clear();
@@ -3307,7 +3307,7 @@ impl ConnectionManager {
     ///
     /// # Parameters
     ///
-    /// * `key` - A `ConnectionKey` identifying the connection by hostname and connection type.
+    /// * `key` - A `ConnectionKey` identifying the connection by hostname and connection plugin name.
     ///   This key is used to look up or create the connection in the manager's map.
     /// * `params` - A `ResolvedConnectionParams` containing the connection parameters such as
     ///   hostname, port, username, password, and platform. These parameters are passed to the
@@ -3354,7 +3354,7 @@ impl ConnectionManager {
     /// - The connection was already alive OR was successfully opened
     ///
     /// Returns `Ok(None)` if:
-    /// - The factory function returned `None` (e.g., no plugin registered for this connection type)
+    /// - The factory function returned `None` (e.g., no plugin registered for this connection plugin name)
     ///
     /// Returns `Err(String)` if:
     /// - The connection factory is not configured: `"connection factory not set"`
@@ -3428,9 +3428,9 @@ impl ConnectionManager {
     /// use std::sync::Arc;
     /// use genja_core::inventory::{ConnectionKey, ConnectionManager, ResolvedConnectionParams};
     ///
-    /// // Factory returns None for unknown connection types
+    /// // Factory returns None for unknown connection plugin names
     /// let factory = Arc::new(|key: &ConnectionKey| {
-    ///     if key.connection_type == "ssh" {
+    ///     if key.plugin_name == "ssh" {
     ///         // ... return SSH connection
     ///         None // simplified for example
     ///     } else {
@@ -3526,7 +3526,7 @@ impl ConnectionManager {
                 .map_err(|_| "connection lock poisoned".to_string())?;
             if !guard.is_alive() {
                 guard.open(params)?;
-                self.increment_open(&key.connection_type);
+                self.increment_open(&key.plugin_name);
             }
         }
         Ok(Some(connection))
@@ -3945,7 +3945,7 @@ impl Inventory {
         Some(resolved)
     }
 
-    /// Resolves connection parameters for a specific host and connection type.
+    /// Resolves connection parameters for a specific host and connection plugin name.
     ///
     /// This method combines defaults, group settings, and host-specific configuration
     /// to produce a complete set of connection parameters. The resolution follows a
