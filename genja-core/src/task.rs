@@ -95,7 +95,7 @@ impl TaskDefinition {
     /// * Returns `GenjaError::Message` if the task nesting exceeds `max_depth`.
     /// * Propagates any errors returned by the task's `start()` method or its sub-tasks.
     pub fn start(&self, max_depth: usize) -> Result<(), crate::GenjaError> {
-        Self::start_with_depth(self.inner.as_ref(), 1, max_depth)
+        Self::start_with_depth(self.inner.as_ref(), 0, max_depth)
     }
 
     fn start_with_depth(
