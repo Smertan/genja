@@ -70,19 +70,148 @@ impl TaskDefinition {
     }
 }
 
-impl Task for TaskDefinition {
-    fn start(&self) -> Result<(), crate::GenjaError> {
-        Self::start_recursive(self.inner.as_ref())
+impl TaskDefinition {
+    /// Execute this task and all its sub-tasks recursively up to a maximum depth.
+    ///
+    /// This method starts the task execution by calling the task's `start()` method,
+    /// then recursively executes all sub-tasks returned by `sub_tasks()`. The recursion
+    /// is limited by the `max_depth` parameter to prevent infinite loops or excessive
+    /// nesting.
+    ///
+    /// # Parameters
+    ///
+    /// * `max_depth` - The maximum depth of task nesting allowed. A depth of 1 means
+    ///   only the root task will execute. A depth of 2 allows the root task plus one
+    ///   level of sub-tasks, and so on.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the task and all its sub-tasks execute successfully within
+    /// the depth limit. Returns `Err(GenjaError)` if any task fails to execute or if
+    /// the maximum depth is exceeded.
+    ///
+    /// # Errors
+    ///
+    /// * Returns `GenjaError::Message` if the task nesting exceeds `max_depth`.
+    /// * Propagates any errors returned by the task's `start()` method or its sub-tasks.
+    pub fn start(&self, max_depth: usize) -> Result<(), crate::GenjaError> {
+        Self::start_with_depth(self.inner.as_ref(), 1, max_depth)
+    }
+
+    fn start_with_depth(
+        task: &dyn Task,
+        depth: usize,
+        max_depth: usize,
+    ) -> Result<(), crate::GenjaError> {
+        if depth > max_depth {
+            return Err(crate::GenjaError::Message(format!(
+                "max task depth exceeded: {}",
+                max_depth
+            )));
+        }
+
+        task.start()?;
+
+        for sub in task.sub_tasks() {
+            Self::start_with_depth(sub.as_ref(), depth + 1, max_depth)?;
+        }
+
+        Ok(())
     }
 }
 
-impl TaskDefinition {
-    fn start_recursive(task: &dyn Task) -> Result<(), crate::GenjaError> {
-        task.start()?;
-        for sub in task.sub_tasks() {
-            Self::start_recursive(sub.as_ref())?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inventory::ConnectionKey;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct TestTask {
+        name: &'static str,
+        subs: Vec<Arc<dyn Task>>,
+        counter: Arc<AtomicUsize>,
+    }
+
+    impl TaskInfo for TestTask {
+        fn name(&self) -> &str {
+            self.name
         }
-        Ok(())
+
+        fn plugin_name(&self) -> &str {
+            "ssh"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, "ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for TestTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            self.subs.clone()
+        }
+    }
+
+    impl Task for TestTask {
+        fn start(&self) -> Result<(), crate::GenjaError> {
+            self.counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn chain(depth: usize, counter: Arc<AtomicUsize>) -> Arc<dyn Task> {
+        if depth == 1 {
+            return Arc::new(TestTask {
+                name: "leaf",
+                subs: Vec::new(),
+                counter,
+            });
+        }
+
+        let child = chain(depth - 1, counter.clone());
+        Arc::new(TestTask {
+            name: "node",
+            subs: vec![child],
+            counter,
+        })
+    }
+
+    #[test]
+    fn start_runs_within_max_depth() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let root = chain(3, counter.clone());
+        let task = TaskDefinition::new(TestTask {
+            name: "root",
+            subs: vec![root],
+            counter: counter.clone(),
+        });
+
+        task.start(4).expect("start should succeed");
+        assert_eq!(counter.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn start_fails_when_depth_exceeds_limit() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let root = chain(5, counter.clone());
+        let task = TaskDefinition::new(TestTask {
+            name: "root",
+            subs: vec![root],
+            counter: counter.clone(),
+        });
+
+        let err = task.start(4).expect_err("start should fail at depth > 4");
+        match err {
+            crate::GenjaError::Message(msg) => {
+                assert!(msg.contains("max task depth exceeded"));
+            }
+            _ => panic!("unexpected error variant"),
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 4);
     }
 }
 

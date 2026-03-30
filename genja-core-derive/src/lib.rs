@@ -97,6 +97,44 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// Derives the `Task` trait implementation for a struct.
+///
+/// This procedural macro generates implementations of `TaskInfo` and `SubTasks` traits
+/// for structs that represent tasks in the task execution system. It validates the struct's
+/// fields and generates appropriate getter methods and subtask collection logic.
+///
+/// The macro expects the struct to have:
+/// - A `name` field of type `String` or `&'static str` (required)
+/// - An optional `plugin_name` field of type `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`
+/// - An optional `options` field of type `Option<serde_json::Value>`
+/// - Zero or more fields marked with `#[task(subtask)]` attribute of type `Arc<dyn Task>`
+///
+/// # Parameters
+///
+/// * `input` - A `TokenStream` representing the input tokens of the derive macro, containing
+///             the struct definition to which the `Task` trait should be applied.
+///
+/// # Returns
+///
+/// A `TokenStream` containing the generated implementations of `TaskInfo` and `SubTasks` traits.
+/// Returns a compile error if:
+/// - The macro is applied to a non-struct type
+/// - The struct doesn't have named fields
+/// - Required fields are missing or have incorrect types
+/// - Subtask fields are not of type `Arc<dyn Task>`
+///
+/// # Examples
+///
+/// ```ignore
+/// #[derive(Task)]
+/// struct MyTask {
+///     name: String,
+///     plugin_name: Option<String>,
+///     options: Option<serde_json::Value>,
+///     #[task(subtask)]
+///     child_task: Arc<dyn Task>,
+/// }
+/// ```
 #[proc_macro_derive(Task, attributes(task))]
 pub fn derive_task(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
