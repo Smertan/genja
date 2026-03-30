@@ -67,5 +67,8 @@ pub mod types;
 
 pub use errors::{GenjaError, InventoryLoadError};
 pub use settings::Settings;
-pub use state::{HostStatus, State};
+pub use state::{
+    ConnectionAttemptState, ConnectionFailureKind, ConnectionStatus, HostStatus, State,
+    TaskAttemptState, TaskExecutionKey, TaskFailureKind, TaskStatus,
+};
 pub use types::{CustomTreeMap, NatString};
