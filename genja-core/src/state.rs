@@ -23,15 +23,19 @@ impl State {
     }
 
     /// Mark a host as failed (out of scope).
-    pub fn mark_failed(&self, name: impl Into<String>) {
-        self.host_status
-            .insert(NatString::new(name.into()), HostStatus::Failed);
+    pub fn mark_failed<K>(&self, name: K)
+    where
+        K: Into<NatString>,
+    {
+        self.host_status.insert(name.into(), HostStatus::Failed);
     }
 
     /// Mark a host as back in scope.
-    pub fn mark_in_scope(&self, name: impl Into<String>) {
-        self.host_status
-            .insert(NatString::new(name.into()), HostStatus::InScope);
+    pub fn mark_in_scope<K>(&self, name: K)
+    where
+        K: Into<NatString>,
+    {
+        self.host_status.insert(name.into(), HostStatus::InScope);
     }
 
     /// Mark a host as back in scope using a key.
@@ -40,9 +44,26 @@ impl State {
     }
 
     /// Returns `true` if the host is currently in scope.
-    pub fn is_in_scope(&self, name: &str) -> bool {
-        let key = NatString::new(name.to_string());
+    pub fn is_in_scope<K>(&self, name: K) -> bool
+    where
+        K: Into<NatString>,
+    {
+        let key = name.into();
         self.is_in_scope_key(&key)
+    }
+
+    /// Return the tracked host scope status for a host, if present.
+    pub fn host_status<K>(&self, name: K) -> Option<HostStatus>
+    where
+        K: Into<NatString>,
+    {
+        let key = name.into();
+        self.host_status_key(&key)
+    }
+
+    /// Return the tracked host scope status for an existing key, if present.
+    pub fn host_status_key(&self, key: &NatString) -> Option<HostStatus> {
+        self.host_status.get(key).map(|entry| *entry.value())
     }
 
     /// Returns `true` if the host is currently in scope.
@@ -272,9 +293,22 @@ mod tests {
 
         state.mark_failed("router1");
         assert!(!state.is_in_scope("router1"));
+        assert_eq!(state.host_status("router1"), Some(HostStatus::Failed));
 
         state.mark_in_scope("router1");
         assert!(state.is_in_scope("router1"));
+        assert_eq!(state.host_status("router1"), Some(HostStatus::InScope));
+    }
+
+    #[test]
+    fn host_scope_accepts_natstring_inputs() {
+        let state = State::new();
+        let host = NatString::from("router1");
+
+        state.mark_failed(host.clone());
+
+        assert_eq!(state.host_status(&host), Some(HostStatus::Failed));
+        assert!(!state.is_in_scope(host));
     }
 
     #[test]

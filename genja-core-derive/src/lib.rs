@@ -223,21 +223,21 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
         quote! { None }
     };
 
-    /// Generates token streams for pushing subtask fields into a task vector.
-    ///
-    /// This function creates a vector of `proc_macro2::TokenStream` objects, where each
-    /// token stream represents a statement that pushes a subtask field (wrapped in `Arc<dyn Task>`)
-    /// into a `tasks` vector. If there are no subtask fields, an empty vector is returned.
-    ///
-    /// # Parameters
-    ///
-    /// * `subtask_fields` - A slice of tuples containing the field identifier and its subtask kind.
-    ///                      Each tuple represents a field marked with the `#[task(subtask)]` attribute.
-    ///
-    /// # Returns
-    ///
-    /// A `Vec<proc_macro2::TokenStream>` containing the generated push statements for each subtask field.
-    /// Returns an empty vector if `subtask_fields` is empty.
+    // Generates token streams for pushing subtask fields into a task vector.
+    //
+    // This function creates a vector of `proc_macro2::TokenStream` objects, where each
+    // token stream represents a statement that pushes a subtask field (wrapped in `Arc<dyn Task>`)
+    // into a `tasks` vector. If there are no subtask fields, an empty vector is returned.
+    //
+    // # Parameters
+    //
+    // * `subtask_fields` - A slice of tuples containing the field identifier and its subtask kind.
+    //                      Each tuple represents a field marked with the `#[task(subtask)]` attribute.
+    //
+    // # Returns
+    //
+    // A `Vec<proc_macro2::TokenStream>` containing the generated push statements for each subtask field.
+    // Returns an empty vector if `subtask_fields` is empty.
     let subtask_pushes = if subtask_fields.is_empty() {
         Vec::new()
     } else {

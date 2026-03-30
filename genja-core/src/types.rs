@@ -68,6 +68,30 @@ impl From<&NatString> for String {
     }
 }
 
+impl From<String> for NatString {
+    fn from(value: String) -> Self {
+        NatString(value)
+    }
+}
+
+impl From<&str> for NatString {
+    fn from(value: &str) -> Self {
+        NatString(value.to_string())
+    }
+}
+
+impl From<&String> for NatString {
+    fn from(value: &String) -> Self {
+        NatString(value.clone())
+    }
+}
+
+impl From<&NatString> for NatString {
+    fn from(value: &NatString) -> Self {
+        value.clone()
+    }
+}
+
 impl NatString {
     /// Creates a new `NatString` from a `String`.
     pub fn new(s: String) -> Self {
@@ -77,6 +101,12 @@ impl NatString {
     /// Returns the inner string as `&str`.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl AsRef<str> for NatString {
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }
 
