@@ -72,9 +72,15 @@ impl TaskDefinition {
 
 impl Task for TaskDefinition {
     fn start(&self) -> Result<(), crate::GenjaError> {
-        self.inner.start()?;
-        for task in self.inner.sub_tasks() {
-            task.start()?;
+        Self::start_recursive(self.inner.as_ref())
+    }
+}
+
+impl TaskDefinition {
+    fn start_recursive(task: &dyn Task) -> Result<(), crate::GenjaError> {
+        task.start()?;
+        for sub in task.sub_tasks() {
+            Self::start_recursive(sub.as_ref())?;
         }
         Ok(())
     }
