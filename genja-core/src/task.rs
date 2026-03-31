@@ -1,4 +1,5 @@
 use serde_json::Value;
+use log::warn;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -104,6 +105,12 @@ impl TaskDefinition {
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
         if depth > max_depth {
+            warn!(
+                "max task depth exceeded for task '{}' at depth {} with max_depth {}",
+                task.name(),
+                depth,
+                max_depth
+            );
             return Err(crate::GenjaError::Message(format!(
                 "max task depth exceeded: {}",
                 max_depth

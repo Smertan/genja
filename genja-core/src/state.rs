@@ -1,5 +1,6 @@
 use crate::{inventory::ConnectionKey, types::NatString};
 use dashmap::DashMap;
+use log::warn;
 
 /// Per-host execution state for the current Genja instance.
 ///
@@ -92,6 +93,18 @@ impl State {
 
     /// Set the current connection attempt state using an existing key.
     pub fn set_connection_state_key(&self, key: ConnectionKey, state: ConnectionAttemptState) {
+        if let ConnectionStatus::Failed(kind) = &state.status {
+            match &state.last_error {
+                Some(error) => warn!(
+                    "connection failed for host '{}' via plugin '{}' ({kind:?}): {error}",
+                    key.hostname, key.plugin_name
+                ),
+                None => warn!(
+                    "connection failed for host '{}' via plugin '{}' ({kind:?})",
+                    key.hostname, key.plugin_name
+                ),
+            }
+        }
         self.connection_state.insert(key, state);
     }
 
@@ -128,6 +141,18 @@ impl State {
 
     /// Set the current task attempt state using an existing key.
     pub fn set_task_state_key(&self, key: TaskExecutionKey, state: TaskAttemptState) {
+        if let TaskStatus::Failed(kind) = &state.status {
+            match &state.last_error {
+                Some(error) => warn!(
+                    "task failed for host '{}' in task '{}' ({kind:?}): {error}",
+                    key.host, key.task_name
+                ),
+                None => warn!(
+                    "task failed for host '{}' in task '{}' ({kind:?})",
+                    key.host, key.task_name
+                ),
+            }
+        }
         self.task_state.insert(key, state);
     }
 
