@@ -28,7 +28,9 @@ impl State {
     where
         K: Into<NatString>,
     {
-        self.host_status.insert(name.into(), HostStatus::Failed);
+        let name = name.into();
+        warn!("host '{}' marked as failed", name);
+        self.host_status.insert(name, HostStatus::Failed);
     }
 
     /// Mark a host as back in scope.
@@ -187,6 +189,16 @@ impl Default for HostStatus {
 }
 
 /// Runtime status of a connection attempt for a host/plugin pair.
+///
+/// This structure tracks the current state of connection attempts, including
+/// the connection status, number of attempts made, and any error message from
+/// the last failed attempt.
+///
+/// # Fields
+///
+/// * `status` - The current connection status (e.g., connecting, connected, failed).
+/// * `attempts` - The number of connection attempts that have been made.
+/// * `last_error` - An optional error message from the most recent failed connection attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionAttemptState {
     pub status: ConnectionStatus,
