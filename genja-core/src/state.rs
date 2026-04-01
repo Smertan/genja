@@ -366,6 +366,18 @@ mod tests {
     }
 
     #[test]
+    fn stores_connection_state_by_key() {
+        let state = State::new();
+        let key = ConnectionKey::new("router1", "ssh");
+        let connection_state = ConnectionAttemptState::new(ConnectionStatus::Connected)
+            .with_attempts(2);
+
+        state.set_connection_state_key(key.clone(), connection_state.clone());
+
+        assert_eq!(state.connection_state_key(&key), Some(connection_state));
+    }
+
+    #[test]
     fn stores_task_state_by_host_and_task() {
         let state = State::new();
         let task_state = TaskAttemptState::new(TaskStatus::Failed(TaskFailureKind::ParseFailed))
@@ -375,5 +387,16 @@ mod tests {
         state.set_task_state("router1", "show_version", task_state.clone());
 
         assert_eq!(state.task_state("router1", "show_version"), Some(task_state));
+    }
+
+    #[test]
+    fn stores_task_state_by_key() {
+        let state = State::new();
+        let key = TaskExecutionKey::new("router1", "show_version");
+        let task_state = TaskAttemptState::new(TaskStatus::Succeeded).with_attempts(1);
+
+        state.set_task_state_key(key.clone(), task_state.clone());
+
+        assert_eq!(state.task_state_key(&key), Some(task_state));
     }
 }
