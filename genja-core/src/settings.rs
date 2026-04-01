@@ -227,6 +227,13 @@ fn get_runner_max_task_depth_default() -> usize {
     10
 }
 
+/// Returns the default maximum number of connection attempts for runner execution.
+///
+/// See tests in this module for behavioral verification.
+fn get_runner_max_connection_attempts_default() -> usize {
+    3
+}
+
 /// Returns the default log level from `GENJA_LOGGING_LEVEL`, or "info".
 ///
 /// See tests in this module for behavioral verification.
@@ -1142,6 +1149,8 @@ impl Default for SSHConfigBuilder {
 ///   the thread pool size. Defaults to `{"num_of_workers": 10}`.
 /// * `max_task_depth` - Maximum recursion depth for task/sub-task execution.
 ///   Defaults to `10`.
+/// * `max_connection_attempts` - Maximum number of connection attempts before retries
+///   should stop and the connection should be treated as failed. Defaults to `3`.
 ///
 /// # Deserialization
 ///
@@ -1173,6 +1182,7 @@ pub struct RunnerConfig {
     // #[serde(default = "get_runner_options_default")]_runner_options_default")]
     options: serde_json::Value,
     max_task_depth: usize,
+    max_connection_attempts: usize,
 }
 
 impl Default for RunnerConfig {
@@ -1181,6 +1191,7 @@ impl Default for RunnerConfig {
             plugin: get_runner_plugin_default(),
             options: get_runner_options_default(),
             max_task_depth: get_runner_max_task_depth_default(),
+            max_connection_attempts: get_runner_max_connection_attempts_default(),
         }
     }
 }
@@ -1201,6 +1212,10 @@ impl RunnerConfig {
     pub fn max_task_depth(&self) -> usize {
         self.max_task_depth
     }
+
+    pub fn max_connection_attempts(&self) -> usize {
+        self.max_connection_attempts
+    }
 }
 
 /// Builder for constructing `RunnerConfig` instances with custom settings.
@@ -1220,6 +1235,9 @@ impl RunnerConfig {
 ///   depend on the selected plugin.
 /// * `max_task_depth` - Optional maximum recursion depth for task/sub-task execution. When set to
 ///   `Some(value)`, the specified depth will be used. If `None`, defaults to `10`.
+/// * `max_connection_attempts` - Optional maximum number of connection attempts before retries
+///   should stop. When set to `Some(value)`, the specified limit will be used. If `None`,
+///   defaults to `3`.
 ///
 /// # Examples
 ///
@@ -1239,6 +1257,7 @@ pub struct RunnerConfigBuilder {
     plugin: Option<String>,
     options: Option<serde_json::Value>,
     max_task_depth: Option<usize>,
+    max_connection_attempts: Option<usize>,
 }
 
 impl RunnerConfigBuilder {
@@ -1257,6 +1276,11 @@ impl RunnerConfigBuilder {
         self
     }
 
+    pub fn max_connection_attempts(mut self, max_connection_attempts: usize) -> Self {
+        self.max_connection_attempts = Some(max_connection_attempts);
+        self
+    }
+
     pub fn build(self) -> RunnerConfig {
         RunnerConfig {
             plugin: self.plugin.unwrap_or_else(get_runner_plugin_default),
@@ -1264,6 +1288,9 @@ impl RunnerConfigBuilder {
             max_task_depth: self
                 .max_task_depth
                 .unwrap_or_else(get_runner_max_task_depth_default),
+            max_connection_attempts: self
+                .max_connection_attempts
+                .unwrap_or_else(get_runner_max_connection_attempts_default),
         }
     }
 }
@@ -1274,6 +1301,7 @@ impl Default for RunnerConfigBuilder {
             plugin: None,
             options: None,
             max_task_depth: None,
+            max_connection_attempts: None,
         }
     }
 }
@@ -1946,6 +1974,7 @@ mod tests {
         assert_eq!(runner.plugin, "threaded");
         assert_eq!(runner.options, json!({"num_of_workers": 10}));
         assert_eq!(runner.max_task_depth, 10);
+        assert_eq!(runner.max_connection_attempts, 3);
     }
 
     #[test]
@@ -1954,6 +1983,7 @@ mod tests {
         assert_eq!(runner.plugin, "threaded");
         assert_eq!(runner.options, json!({"num_of_workers": 10}));
         assert_eq!(runner.max_task_depth, 10);
+        assert_eq!(runner.max_connection_attempts, 3);
     }
 
     #[test]
@@ -1961,7 +1991,8 @@ mod tests {
         let json = r#"{
             "plugin": "custom",
             "options": {"num_of_workers": 3, "queue": "fast"},
-            "max_task_depth": 5
+            "max_task_depth": 5,
+            "max_connection_attempts": 7
         }"#;
         let runner: RunnerConfig = serde_json::from_str(json).unwrap();
         assert_eq!(runner.plugin, "custom");
@@ -1970,6 +2001,14 @@ mod tests {
             json!({"num_of_workers": 3, "queue": "fast"})
         );
         assert_eq!(runner.max_task_depth, 5);
+        assert_eq!(runner.max_connection_attempts, 7);
+    }
+
+    #[test]
+    fn runner_config_builder_sets_max_connection_attempts() {
+        let runner = RunnerConfig::builder().max_connection_attempts(9).build();
+
+        assert_eq!(runner.max_connection_attempts(), 9);
     }
 
     #[test]

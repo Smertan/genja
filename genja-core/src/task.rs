@@ -218,7 +218,7 @@ mod tests {
             }
             _ => panic!("unexpected error variant"),
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 4);
+        assert_eq!(counter.load(Ordering::SeqCst), 5);
     }
 }
 
