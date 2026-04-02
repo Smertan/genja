@@ -89,8 +89,7 @@ impl State {
         plugin_name: impl Into<String>,
         state: ConnectionAttemptState,
     ) {
-        self.connection_state
-            .insert(ConnectionKey::new(host, plugin_name), state);
+        self.set_connection_state_key(ConnectionKey::new(host, plugin_name), state);
     }
 
     /// Set the current connection attempt state using an existing key.
@@ -130,6 +129,117 @@ impl State {
         &self.connection_state
     }
 
+    /// Record the start of a connection attempt and increment the attempt counter.
+    pub fn begin_connection_attempt(
+        &self,
+        host: impl Into<String>,
+        plugin_name: impl Into<String>,
+    ) {
+        self.begin_connection_attempt_key(ConnectionKey::new(host, plugin_name));
+    }
+
+    /// Record the start of a connection attempt and increment the attempt counter.
+    pub fn begin_connection_attempt_key(&self, key: ConnectionKey) {
+        let attempts = self
+            .connection_state_key(&key)
+            .map(|state| state.attempts + 1)
+            .unwrap_or(1);
+
+        self.set_connection_state_key(
+            key,
+            ConnectionAttemptState::new(ConnectionStatus::Connecting).with_attempts(attempts),
+        );
+    }
+
+    /// Mark a connection as successfully established while preserving the attempt count.
+    pub fn mark_connection_connected(
+        &self,
+        host: impl Into<String>,
+        plugin_name: impl Into<String>,
+    ) {
+        self.mark_connection_connected_key(ConnectionKey::new(host, plugin_name));
+    }
+
+    /// Mark a connection as successfully established while preserving the attempt count.
+    pub fn mark_connection_connected_key(&self, key: ConnectionKey) {
+        let attempts = self
+            .connection_state_key(&key)
+            .map(|state| state.attempts)
+            .unwrap_or(0);
+
+        self.set_connection_state_key(
+            key,
+            ConnectionAttemptState::new(ConnectionStatus::Connected).with_attempts(attempts),
+        );
+    }
+
+    /// Mark a connection as pending retry while preserving the attempt count.
+    pub fn mark_connection_retry_pending(
+        &self,
+        host: impl Into<String>,
+        plugin_name: impl Into<String>,
+        last_error: impl Into<String>,
+    ) {
+        self.mark_connection_retry_pending_key(
+            ConnectionKey::new(host, plugin_name),
+            last_error,
+        );
+    }
+
+    /// Mark a connection as pending retry while preserving the attempt count.
+    pub fn mark_connection_retry_pending_key(
+        &self,
+        key: ConnectionKey,
+        last_error: impl Into<String>,
+    ) {
+        let attempts = self
+            .connection_state_key(&key)
+            .map(|state| state.attempts)
+            .unwrap_or(0);
+
+        self.set_connection_state_key(
+            key,
+            ConnectionAttemptState::new(ConnectionStatus::RetryPending)
+                .with_attempts(attempts)
+                .with_last_error(last_error),
+        );
+    }
+
+    /// Mark a connection as terminally failed while preserving the attempt count.
+    pub fn mark_connection_failed(
+        &self,
+        host: impl Into<String>,
+        plugin_name: impl Into<String>,
+        kind: ConnectionFailureKind,
+        last_error: impl Into<String>,
+    ) {
+        self.mark_connection_failed_key(
+            ConnectionKey::new(host, plugin_name),
+            kind,
+            last_error,
+        );
+    }
+
+    /// Mark a connection as terminally failed while preserving the attempt count.
+    pub fn mark_connection_failed_key(
+        &self,
+        key: ConnectionKey,
+        kind: ConnectionFailureKind,
+        last_error: impl Into<String>,
+    ) {
+        let attempts = self
+            .connection_state_key(&key)
+            .map(|state| state.attempts)
+            .unwrap_or(0);
+
+        self.set_connection_state_key(
+            key,
+            ConnectionAttemptState::new(ConnectionStatus::Failed(kind))
+                .with_attempts(attempts)
+                .with_last_error(last_error),
+        );
+    }
+
     /// Set the current task attempt state for a host and task.
     pub fn set_task_state(
         &self,
@@ -137,8 +247,7 @@ impl State {
         task_name: impl Into<String>,
         state: TaskAttemptState,
     ) {
-        self.task_state
-            .insert(TaskExecutionKey::new(host, task_name), state);
+        self.set_task_state_key(TaskExecutionKey::new(host, task_name), state);
     }
 
     /// Set the current task attempt state using an existing key.
@@ -375,6 +484,82 @@ mod tests {
         state.set_connection_state_key(key.clone(), connection_state.clone());
 
         assert_eq!(state.connection_state_key(&key), Some(connection_state));
+    }
+
+    #[test]
+    fn begin_connection_attempt_sets_connecting_and_increments_attempts() {
+        let state = State::new();
+        let key = ConnectionKey::new("router1", "ssh");
+
+        state.begin_connection_attempt_key(key.clone());
+        assert_eq!(
+            state.connection_state_key(&key),
+            Some(ConnectionAttemptState::new(ConnectionStatus::Connecting).with_attempts(1))
+        );
+
+        state.begin_connection_attempt_key(key.clone());
+        assert_eq!(
+            state.connection_state_key(&key),
+            Some(ConnectionAttemptState::new(ConnectionStatus::Connecting).with_attempts(2))
+        );
+    }
+
+    #[test]
+    fn mark_connection_connected_preserves_attempt_count() {
+        let state = State::new();
+        let key = ConnectionKey::new("router1", "ssh");
+
+        state.begin_connection_attempt_key(key.clone());
+        state.begin_connection_attempt_key(key.clone());
+        state.mark_connection_connected_key(key.clone());
+
+        assert_eq!(
+            state.connection_state_key(&key),
+            Some(ConnectionAttemptState::new(ConnectionStatus::Connected).with_attempts(2))
+        );
+    }
+
+    #[test]
+    fn mark_connection_retry_pending_preserves_attempts_and_error() {
+        let state = State::new();
+        let key = ConnectionKey::new("router1", "ssh");
+
+        state.begin_connection_attempt_key(key.clone());
+        state.mark_connection_retry_pending_key(key.clone(), "timed out");
+
+        assert_eq!(
+            state.connection_state_key(&key),
+            Some(
+                ConnectionAttemptState::new(ConnectionStatus::RetryPending)
+                    .with_attempts(1)
+                    .with_last_error("timed out")
+            )
+        );
+    }
+
+    #[test]
+    fn mark_connection_failed_preserves_attempts_and_sets_failed_status() {
+        let state = State::new();
+        let key = ConnectionKey::new("router1", "ssh");
+
+        state.begin_connection_attempt_key(key.clone());
+        state.begin_connection_attempt_key(key.clone());
+        state.mark_connection_failed_key(
+            key.clone(),
+            ConnectionFailureKind::Timeout,
+            "timed out",
+        );
+
+        assert_eq!(
+            state.connection_state_key(&key),
+            Some(
+                ConnectionAttemptState::new(ConnectionStatus::Failed(
+                    ConnectionFailureKind::Timeout,
+                ))
+                .with_attempts(2)
+                .with_last_error("timed out")
+            )
+        );
     }
 
     #[test]
