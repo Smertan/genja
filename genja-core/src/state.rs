@@ -2,10 +2,52 @@ use crate::{inventory::ConnectionKey, types::NatString};
 use dashmap::DashMap;
 use log::warn;
 
+
+
 /// Per-host execution state for the current Genja instance.
 ///
-/// This state is internal to the runtime and is used to exclude failed hosts
-/// from host views until they are explicitly put back in scope.
+/// This structure maintains thread-safe state tracking for hosts, connections, and tasks
+/// within a Genja runtime. It uses concurrent hash maps ([`DashMap`]) to allow safe
+/// concurrent access from multiple threads without requiring external synchronization.
+///
+/// # State Categories
+///
+/// The state is organized into three primary categories:
+///
+/// * **Host Status** - Tracks whether hosts are in scope or have failed, allowing the
+///   runtime to exclude failed hosts from operations until they are explicitly restored.
+///
+/// * **Connection State** - Records connection attempt history for each host/plugin pair,
+///   including the current connection status, number of attempts, and any error messages
+///   from failed attempts.
+///
+/// * **Task State** - Tracks task execution state for each host/task pair, including
+///   execution status, attempt counts, and error information.
+///
+/// # Thread Safety
+///
+/// All state maps use [`DashMap`] internally, which provides lock-free concurrent access
+/// for most operations. This allows multiple threads to safely read and update state
+/// without explicit locking.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::state::State;
+/// let state = State::new();
+///
+/// // Track host failures
+/// state.mark_failed("router1");
+/// assert!(!state.is_in_scope("router1"));
+///
+/// // Track connection attempts
+/// state.begin_connection_attempt("router2", "ssh");
+/// state.mark_connection_connected("router2", "ssh");
+///
+/// // Restore failed hosts
+/// state.mark_in_scope("router1");
+/// assert!(state.is_in_scope("router1"));
+/// ```
 #[derive(Debug, Default)]
 pub struct State {
     host_status: DashMap<NatString, HostStatus>,
@@ -23,7 +65,25 @@ impl State {
         }
     }
 
-    /// Mark a host as failed (out of scope).
+    /// Marks a host as failed and removes it from the active scope.
+    ///
+    /// When a host is marked as failed, it will be excluded from host views and
+    /// operations until it is explicitly restored using [`mark_in_scope`](Self::mark_in_scope)
+    /// or [`mark_in_scope_key`](Self::mark_in_scope_key).
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The hostname to mark as failed. Can be any type that converts into a `NatString`,
+    ///   such as `&str`, `String`, or `NatString`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::State;
+    /// let state = State::new();
+    /// state.mark_failed("router1");
+    /// assert!(!state.is_in_scope("router1"));
+    /// ```
     pub fn mark_failed<K>(&self, name: K)
     where
         K: Into<NatString>,
@@ -33,7 +93,26 @@ impl State {
         self.host_status.insert(name, HostStatus::Failed);
     }
 
-    /// Mark a host as back in scope.
+    /// Marks a host as back in scope and restores it to the active host view.
+    ///
+    /// When a host is marked as in scope, it will be included in host views and
+    /// operations. This is typically used to restore a host that was previously
+    /// marked as failed using [`mark_failed`](Self::mark_failed).
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The hostname to mark as in scope. Can be any type that converts into a `NatString`,
+    ///   such as `&str`, `String`, or `NatString`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::State;
+    /// let state = State::new();
+    /// state.mark_failed("router1");
+    /// state.mark_in_scope("router1");
+    /// assert!(state.is_in_scope("router1"));
+    /// ```
     pub fn mark_in_scope<K>(&self, name: K)
     where
         K: Into<NatString>,
@@ -41,12 +120,63 @@ impl State {
         self.host_status.insert(name.into(), HostStatus::InScope);
     }
 
-    /// Mark a host as back in scope using a key.
+    /// Marks a host as back in scope using an existing `NatString` key.
+    ///
+    /// This is a more efficient variant of [`mark_in_scope`](Self::mark_in_scope) when you
+    /// already have a `NatString` reference, as it avoids an additional conversion.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - A reference to the `NatString` key representing the hostname to mark as in scope.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::State;
+    /// # use genja_core::types::NatString;
+    /// let state = State::new();
+    /// let host = NatString::from("router1");
+    /// state.mark_failed(host.clone());
+    /// state.mark_in_scope_key(&host);
+    /// assert!(state.is_in_scope_key(&host));
+    /// ```
     pub fn mark_in_scope_key(&self, key: &NatString) {
         self.host_status.insert(key.clone(), HostStatus::InScope);
     }
 
-    /// Returns `true` if the host is currently in scope.
+    /// Checks if a host is currently in scope and available for operations.
+    ///
+    /// A host is considered in scope unless it has been explicitly marked as failed
+    /// using [`mark_failed`](Self::mark_failed). Hosts that have never been tracked
+    /// are considered in scope by default.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The hostname to check. Can be any type that converts into a `NatString`,
+    ///   such as `&str`, `String`, or `NatString`.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the host is in scope (either explicitly marked as in scope or
+    /// never tracked), `false` if the host has been marked as failed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::State;
+    /// let state = State::new();
+    ///
+    /// // Untracked hosts are in scope by default
+    /// assert!(state.is_in_scope("router1"));
+    ///
+    /// // Failed hosts are not in scope
+    /// state.mark_failed("router1");
+    /// assert!(!state.is_in_scope("router1"));
+    ///
+    /// // Restored hosts are back in scope
+    /// state.mark_in_scope("router1");
+    /// assert!(state.is_in_scope("router1"));
+    /// ```
     pub fn is_in_scope<K>(&self, name: K) -> bool
     where
         K: Into<NatString>,
@@ -55,7 +185,40 @@ impl State {
         self.is_in_scope_key(&key)
     }
 
-    /// Return the tracked host scope status for a host, if present.
+    /// Returns the tracked host status for a host, if it has been explicitly set.
+    ///
+    /// This method retrieves the current status of a host if it has been tracked
+    /// (i.e., marked as failed or explicitly set as in scope). If the host has never
+    /// been tracked, this method returns `None`.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - The hostname to query. Can be any type that converts into a `NatString`,
+    ///   such as `&str`, `String`, or `NatString`.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(HostStatus)` if the host has been explicitly tracked, or `None`
+    /// if the host has never been marked with a status. Note that returning `None`
+    /// does not mean the host is out of scope; untracked hosts are considered in
+    /// scope by default (see [`is_in_scope`](Self::is_in_scope)).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, HostStatus};
+    /// let state = State::new();
+    ///
+    /// // Untracked hosts return None
+    /// assert_eq!(state.host_status("router1"), None);
+    ///
+    /// // Tracked hosts return their status
+    /// state.mark_failed("router1");
+    /// assert_eq!(state.host_status("router1"), Some(HostStatus::Failed));
+    ///
+    /// state.mark_in_scope("router1");
+    /// assert_eq!(state.host_status("router1"), Some(HostStatus::InScope));
+    /// ```
     pub fn host_status<K>(&self, name: K) -> Option<HostStatus>
     where
         K: Into<NatString>,
@@ -64,12 +227,81 @@ impl State {
         self.host_status_key(&key)
     }
 
-    /// Return the tracked host scope status for an existing key, if present.
+    /// Returns the tracked host status for a host using an existing `NatString` key.
+    ///
+    /// This is a more efficient variant of [`host_status`](Self::host_status) when you
+    /// already have a `NatString` reference, as it avoids an additional conversion.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - A reference to the `NatString` key representing the hostname to query.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(HostStatus)` if the host has been explicitly tracked, or `None`
+    /// if the host has never been marked with a status. Note that returning `None`
+    /// does not mean the host is out of scope; untracked hosts are considered in
+    /// scope by default (see [`is_in_scope`](Self::is_in_scope)).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, HostStatus};
+    /// # use genja_core::types::NatString;
+    /// let state = State::new();
+    /// let host = NatString::from("router1");
+    ///
+    /// // Untracked hosts return None
+    /// assert_eq!(state.host_status_key(&host), None);
+    ///
+    /// // Tracked hosts return their status
+    /// state.mark_failed(host.clone());
+    /// assert_eq!(state.host_status_key(&host), Some(HostStatus::Failed));
+    ///
+    /// state.mark_in_scope_key(&host);
+    /// assert_eq!(state.host_status_key(&host), Some(HostStatus::InScope));
+    /// ```
     pub fn host_status_key(&self, key: &NatString) -> Option<HostStatus> {
         self.host_status.get(key).map(|entry| *entry.value())
     }
 
-    /// Returns `true` if the host is currently in scope.
+    /// Checks if a host is currently in scope using an existing `NatString` key.
+    ///
+    /// This is a more efficient variant of [`is_in_scope`](Self::is_in_scope) when you
+    /// already have a `NatString` reference, as it avoids an additional conversion.
+    ///
+    /// A host is considered in scope unless it has been explicitly marked as failed
+    /// using [`mark_failed`](Self::mark_failed). Hosts that have never been tracked
+    /// are considered in scope by default.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - A reference to the `NatString` key representing the hostname to check.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the host is in scope (either explicitly marked as in scope or
+    /// never tracked), `false` if the host has been marked as failed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::State;
+    /// # use genja_core::types::NatString;
+    /// let state = State::new();
+    /// let host = NatString::from("router1");
+    ///
+    /// // Untracked hosts are in scope by default
+    /// assert!(state.is_in_scope_key(&host));
+    ///
+    /// // Failed hosts are not in scope
+    /// state.mark_failed(host.clone());
+    /// assert!(!state.is_in_scope_key(&host));
+    ///
+    /// // Restored hosts are back in scope
+    /// state.mark_in_scope_key(&host);
+    /// assert!(state.is_in_scope_key(&host));
+    /// ```
     pub fn is_in_scope_key(&self, key: &NatString) -> bool {
         match self.host_status.get(key) {
             Some(status) => *status.value() == HostStatus::InScope,
