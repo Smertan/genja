@@ -425,6 +425,7 @@ pub enum TaskFailureKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{sync::Arc, thread};
 
     #[test]
     fn host_scope_defaults_to_in_scope() {
@@ -458,6 +459,24 @@ mod tests {
     }
 
     #[test]
+    fn host_statuses_and_mark_in_scope_key_reflect_latest_scope() {
+        let state = State::new();
+        let host = NatString::from("router1");
+
+        state.mark_failed(host.clone());
+        assert_eq!(
+            state.host_statuses().get(&host).map(|entry| *entry.value()),
+            Some(HostStatus::Failed)
+        );
+
+        state.mark_in_scope_key(&host);
+        assert_eq!(
+            state.host_statuses().get(&host).map(|entry| *entry.value()),
+            Some(HostStatus::InScope)
+        );
+    }
+
+    #[test]
     fn stores_connection_state_by_host_and_plugin() {
         let state = State::new();
         let connection_state = ConnectionAttemptState::new(ConnectionStatus::Failed(
@@ -484,6 +503,25 @@ mod tests {
         state.set_connection_state_key(key.clone(), connection_state.clone());
 
         assert_eq!(state.connection_state_key(&key), Some(connection_state));
+    }
+
+    #[test]
+    fn connection_states_accessor_exposes_stored_entries() {
+        let state = State::new();
+        let key = ConnectionKey::new("router1", "ssh");
+        let connection_state = ConnectionAttemptState::new(ConnectionStatus::RetryPending)
+            .with_attempts(1)
+            .with_last_error("timed out");
+
+        state.set_connection_state_key(key.clone(), connection_state.clone());
+
+        assert_eq!(
+            state
+                .connection_states()
+                .get(&key)
+                .map(|entry| entry.value().clone()),
+            Some(connection_state)
+        );
     }
 
     #[test]
@@ -563,6 +601,128 @@ mod tests {
     }
 
     #[test]
+    fn mark_connection_connected_without_prior_attempts_uses_zero_attempts() {
+        let state = State::new();
+        let key = ConnectionKey::new("router1", "ssh");
+
+        state.mark_connection_connected_key(key.clone());
+
+        assert_eq!(
+            state.connection_state_key(&key),
+            Some(ConnectionAttemptState::new(ConnectionStatus::Connected).with_attempts(0))
+        );
+    }
+
+    #[test]
+    fn mark_connection_retry_pending_without_prior_attempts_uses_zero_attempts() {
+        let state = State::new();
+        let key = ConnectionKey::new("router1", "ssh");
+
+        state.mark_connection_retry_pending_key(key.clone(), "timed out");
+
+        assert_eq!(
+            state.connection_state_key(&key),
+            Some(
+                ConnectionAttemptState::new(ConnectionStatus::RetryPending)
+                    .with_attempts(0)
+                    .with_last_error("timed out")
+            )
+        );
+    }
+
+    #[test]
+    fn mark_connection_failed_without_prior_attempts_uses_zero_attempts() {
+        let state = State::new();
+        let key = ConnectionKey::new("router1", "ssh");
+
+        state.mark_connection_failed_key(
+            key.clone(),
+            ConnectionFailureKind::Timeout,
+            "timed out",
+        );
+
+        assert_eq!(
+            state.connection_state_key(&key),
+            Some(
+                ConnectionAttemptState::new(ConnectionStatus::Failed(
+                    ConnectionFailureKind::Timeout,
+                ))
+                .with_attempts(0)
+                .with_last_error("timed out")
+            )
+        );
+    }
+
+    #[test]
+    fn begin_connection_attempt_wrapper_increments_attempts() {
+        let state = State::new();
+
+        state.begin_connection_attempt("router1", "ssh");
+        state.begin_connection_attempt("router1", "ssh");
+
+        assert_eq!(
+            state.connection_state("router1", "ssh"),
+            Some(ConnectionAttemptState::new(ConnectionStatus::Connecting).with_attempts(2))
+        );
+    }
+
+    #[test]
+    fn mark_connection_connected_wrapper_preserves_attempt_count() {
+        let state = State::new();
+
+        state.begin_connection_attempt("router1", "ssh");
+        state.begin_connection_attempt("router1", "ssh");
+        state.mark_connection_connected("router1", "ssh");
+
+        assert_eq!(
+            state.connection_state("router1", "ssh"),
+            Some(ConnectionAttemptState::new(ConnectionStatus::Connected).with_attempts(2))
+        );
+    }
+
+    #[test]
+    fn mark_connection_retry_pending_wrapper_preserves_attempts_and_error() {
+        let state = State::new();
+
+        state.begin_connection_attempt("router1", "ssh");
+        state.mark_connection_retry_pending("router1", "ssh", "timed out");
+
+        assert_eq!(
+            state.connection_state("router1", "ssh"),
+            Some(
+                ConnectionAttemptState::new(ConnectionStatus::RetryPending)
+                    .with_attempts(1)
+                    .with_last_error("timed out")
+            )
+        );
+    }
+
+    #[test]
+    fn mark_connection_failed_wrapper_preserves_attempts_and_error() {
+        let state = State::new();
+
+        state.begin_connection_attempt("router1", "ssh");
+        state.begin_connection_attempt("router1", "ssh");
+        state.mark_connection_failed(
+            "router1",
+            "ssh",
+            ConnectionFailureKind::Timeout,
+            "timed out",
+        );
+
+        assert_eq!(
+            state.connection_state("router1", "ssh"),
+            Some(
+                ConnectionAttemptState::new(ConnectionStatus::Failed(
+                    ConnectionFailureKind::Timeout,
+                ))
+                .with_attempts(2)
+                .with_last_error("timed out")
+            )
+        );
+    }
+
+    #[test]
     fn stores_task_state_by_host_and_task() {
         let state = State::new();
         let task_state = TaskAttemptState::new(TaskStatus::Failed(TaskFailureKind::ParseFailed))
@@ -583,5 +743,67 @@ mod tests {
         state.set_task_state_key(key.clone(), task_state.clone());
 
         assert_eq!(state.task_state_key(&key), Some(task_state));
+    }
+
+    #[test]
+    fn task_states_accessor_exposes_stored_entries() {
+        let state = State::new();
+        let key = TaskExecutionKey::new("router1", "show_version");
+        let task_state = TaskAttemptState::new(TaskStatus::Running).with_attempts(1);
+
+        state.set_task_state_key(key.clone(), task_state.clone());
+
+        assert_eq!(
+            state.task_states().get(&key).map(|entry| entry.value().clone()),
+            Some(task_state)
+        );
+    }
+
+    #[test]
+    fn supports_concurrent_updates_across_maps() {
+        const THREADS: usize = 8;
+        const ATTEMPTS_PER_THREAD: usize = 200;
+
+        let state = Arc::new(State::new());
+        let mut handles = Vec::with_capacity(THREADS);
+
+        for i in 0..THREADS {
+            let state = Arc::clone(&state);
+            handles.push(thread::spawn(move || {
+                let host = format!("router{i}");
+
+                for _ in 0..ATTEMPTS_PER_THREAD {
+                    state.begin_connection_attempt(host.clone(), "ssh");
+                }
+
+                state.mark_failed(host.clone());
+                state.mark_in_scope(host.clone());
+                state.mark_connection_connected(host.clone(), "ssh");
+                state.set_task_state(
+                    host.clone(),
+                    "show_version",
+                    TaskAttemptState::new(TaskStatus::Succeeded).with_attempts(1),
+                );
+            }));
+        }
+
+        for handle in handles {
+            handle.join().expect("worker thread panicked");
+        }
+
+        for i in 0..THREADS {
+            let host = format!("router{i}");
+            let connection = state
+                .connection_state(&host, "ssh")
+                .expect("missing connection state");
+
+            assert_eq!(connection.status, ConnectionStatus::Connected);
+            assert_eq!(connection.attempts, ATTEMPTS_PER_THREAD);
+            assert!(state.is_in_scope(host.as_str()));
+            assert_eq!(
+                state.task_state(&host, "show_version"),
+                Some(TaskAttemptState::new(TaskStatus::Succeeded).with_attempts(1))
+            );
+        }
     }
 }
