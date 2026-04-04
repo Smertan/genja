@@ -309,12 +309,49 @@ impl State {
         }
     }
 
-    /// Return the raw host scope state map.
-    pub fn host_statuses(&self) -> &DashMap<NatString, HostStatus> {
-        &self.host_status
-    }
+    // TODO: Remove this method and use the accessors instead i.e., failed_hosts() and in_scope_hosts()
+    // /// Return the raw host scope state map.
+    // pub fn host_statuses(&self) -> &DashMap<NatString, HostStatus> {
+    //     &self.host_status
+    // }
 
-    /// Set the current connection attempt state for a host and plugin.
+    /// Sets the connection attempt state for a specific host and plugin combination.
+    ///
+    /// This method records the current state of a connection attempt, including the
+    /// connection status, number of attempts made, and any error information. The state
+    /// is stored using a `ConnectionKey` composed of the host and plugin name.
+    ///
+    /// If the connection state indicates a failure, a warning will be logged with details
+    /// about the failure kind and any associated error message.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - The hostname for which to set the connection state. Can be any type that
+    ///   converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// * `plugin_name` - The name of the connection plugin being used. Can be any type that
+    ///   converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// * `state` - The `ConnectionAttemptState` to record, containing the connection status,
+    ///   attempt count, and optional error information.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionAttemptState, ConnectionStatus};
+    /// let state = State::new();
+    ///
+    /// // Record a successful connection
+    /// let connection_state = ConnectionAttemptState::new(ConnectionStatus::Connected)
+    ///     .with_attempts(1);
+    /// state.set_connection_state("router1", "ssh", connection_state);
+    ///
+    /// // Verify the state was recorded
+    /// assert_eq!(
+    ///     state.connection_state("router1", "ssh").map(|s| s.status),
+    ///     Some(ConnectionStatus::Connected)
+    /// );
+    /// ```
     pub fn set_connection_state(
         &self,
         host: impl Into<String>,
@@ -324,7 +361,42 @@ impl State {
         self.set_connection_state_key(ConnectionKey::new(host, plugin_name), state);
     }
 
-    /// Set the current connection attempt state using an existing key.
+    /// Sets the connection attempt state using an existing `ConnectionKey`.
+    ///
+    /// This is a more efficient variant of [`set_connection_state`](Self::set_connection_state)
+    /// when you already have a `ConnectionKey`, as it avoids constructing a new key from
+    /// separate host and plugin name components.
+    ///
+    /// If the connection state indicates a failure, a warning will be logged with details
+    /// about the failure kind and any associated error message.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - The `ConnectionKey` identifying the host and plugin combination for which
+    ///   to set the connection state.
+    ///
+    /// * `state` - The `ConnectionAttemptState` to record, containing the connection status,
+    ///   attempt count, and optional error information.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionAttemptState, ConnectionStatus};
+    /// # use genja_core::inventory::ConnectionKey;
+    /// let state = State::new();
+    /// let key = ConnectionKey::new("router1", "ssh");
+    ///
+    /// // Record a successful connection
+    /// let connection_state = ConnectionAttemptState::new(ConnectionStatus::Connected)
+    ///     .with_attempts(1);
+    /// state.set_connection_state_key(key.clone(), connection_state);
+    ///
+    /// // Verify the state was recorded
+    /// assert_eq!(
+    ///     state.connection_state_key(&key).map(|s| s.status),
+    ///     Some(ConnectionStatus::Connected)
+    /// );
+    /// ```
     pub fn set_connection_state_key(&self, key: ConnectionKey, state: ConnectionAttemptState) {
         if let ConnectionStatus::Failed(kind) = &state.status {
             match &state.last_error {
@@ -341,7 +413,39 @@ impl State {
         self.connection_state.insert(key, state);
     }
 
-    /// Return the current connection attempt state for a host and plugin.
+    /// Retrieves the current connection attempt state for a specific host and plugin combination.
+    ///
+    /// This method looks up the connection state using the provided host and plugin name,
+    /// returning the current state if it exists. The state includes information about the
+    /// connection status, number of attempts made, and any error from the last failed attempt.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - The hostname for which to retrieve the connection state.
+    ///
+    /// * `plugin_name` - The name of the connection plugin being used.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(ConnectionAttemptState)` if a connection state has been recorded for
+    /// the given host and plugin combination, or `None` if no connection attempts have been
+    /// tracked for this combination.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionAttemptState, ConnectionStatus};
+    /// let state = State::new();
+    ///
+    /// // No state recorded yet
+    /// assert_eq!(state.connection_state("router1", "ssh"), None);
+    ///
+    /// // After recording a connection attempt
+    /// state.begin_connection_attempt("router1", "ssh");
+    /// let connection_state = state.connection_state("router1", "ssh");
+    /// assert!(connection_state.is_some());
+    /// assert_eq!(connection_state.unwrap().status, ConnectionStatus::Connecting);
+    /// ```
     pub fn connection_state(
         &self,
         host: &str,
@@ -351,17 +455,86 @@ impl State {
         self.connection_state.get(&key).map(|entry| entry.value().clone())
     }
 
-    /// Return the current connection attempt state for an existing key.
+    /// Retrieves the current connection attempt state using an existing `ConnectionKey`.
+    ///
+    /// This is a more efficient variant of [`connection_state`](Self::connection_state) when you
+    /// already have a `ConnectionKey`, as it avoids constructing a new key from separate host
+    /// and plugin name components.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - A reference to the `ConnectionKey` identifying the host and plugin combination
+    ///   for which to retrieve the connection state.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(ConnectionAttemptState)` if a connection state has been recorded for
+    /// the given key, or `None` if no connection attempts have been tracked for this
+    /// host and plugin combination.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionAttemptState, ConnectionStatus};
+    /// # use genja_core::inventory::ConnectionKey;
+    /// let state = State::new();
+    /// let key = ConnectionKey::new("router1", "ssh");
+    ///
+    /// // No state recorded yet
+    /// assert_eq!(state.connection_state_key(&key), None);
+    ///
+    /// // After recording a connection attempt
+    /// state.begin_connection_attempt_key(key.clone());
+    /// let connection_state = state.connection_state_key(&key);
+    /// assert!(connection_state.is_some());
+    /// assert_eq!(connection_state.unwrap().status, ConnectionStatus::Connecting);
+    /// ```
     pub fn connection_state_key(&self, key: &ConnectionKey) -> Option<ConnectionAttemptState> {
         self.connection_state.get(key).map(|entry| entry.value().clone())
     }
 
-    /// Return the raw connection state map.
-    pub fn connection_states(&self) -> &DashMap<ConnectionKey, ConnectionAttemptState> {
-        &self.connection_state
-    }
+    // TODO: Remove direct access and create an iterator, i.e., failed_connections(), open_connections(), etc.
+    // /// Return the raw connection state map.
+    // pub fn connection_states(&self) -> &DashMap<ConnectionKey, ConnectionAttemptState> {
+    //     &self.connection_state
+    // }
 
-    /// Record the start of a connection attempt and increment the attempt counter.
+    /// Records the start of a connection attempt and increments the attempt counter.
+    ///
+    /// This method marks the beginning of a new connection attempt for a specific host and
+    /// plugin combination. It automatically increments the attempt counter, tracking how many
+    /// times a connection has been attempted for this host/plugin pair. The connection status
+    /// is set to `ConnectionStatus::Connecting`.
+    ///
+    /// If this is the first connection attempt for the given host and plugin, the attempt
+    /// counter starts at 1. For subsequent attempts, the counter is incremented from its
+    /// previous value.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - The hostname for which to record the connection attempt. Can be any type that
+    ///   converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// * `plugin_name` - The name of the connection plugin being used for the attempt. Can be
+    ///   any type that converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionStatus};
+    /// let state = State::new();
+    ///
+    /// // First connection attempt
+    /// state.begin_connection_attempt("router1", "ssh");
+    /// let connection_state = state.connection_state("router1", "ssh").unwrap();
+    /// assert_eq!(connection_state.status, ConnectionStatus::Connecting);
+    /// assert_eq!(connection_state.attempts, 1);
+    ///
+    /// // Second connection attempt
+    /// state.begin_connection_attempt("router1", "ssh");
+    /// let connection_state = state.connection_state("router1", "ssh").unwrap();
+    /// assert_eq!(connection_state.attempts, 2);
+    /// ```
     pub fn begin_connection_attempt(
         &self,
         host: impl Into<String>,
@@ -370,7 +543,43 @@ impl State {
         self.begin_connection_attempt_key(ConnectionKey::new(host, plugin_name));
     }
 
-    /// Record the start of a connection attempt and increment the attempt counter.
+    /// Records the start of a connection attempt using an existing `ConnectionKey` and increments the attempt counter.
+    ///
+    /// This is a more efficient variant of [`begin_connection_attempt`](Self::begin_connection_attempt)
+    /// when you already have a `ConnectionKey`, as it avoids constructing a new key from separate
+    /// host and plugin name components.
+    ///
+    /// This method marks the beginning of a new connection attempt for the specified connection key.
+    /// It automatically increments the attempt counter, tracking how many times a connection has been
+    /// attempted for this host/plugin pair. The connection status is set to `ConnectionStatus::Connecting`.
+    ///
+    /// If this is the first connection attempt for the given key, the attempt counter starts at 1.
+    /// For subsequent attempts, the counter is incremented from its previous value.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - The `ConnectionKey` identifying the host and plugin combination for which to record
+    ///   the connection attempt.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionStatus};
+    /// # use genja_core::inventory::ConnectionKey;
+    /// let state = State::new();
+    /// let key = ConnectionKey::new("router1", "ssh");
+    ///
+    /// // First connection attempt
+    /// state.begin_connection_attempt_key(key.clone());
+    /// let connection_state = state.connection_state_key(&key).unwrap();
+    /// assert_eq!(connection_state.status, ConnectionStatus::Connecting);
+    /// assert_eq!(connection_state.attempts, 1);
+    ///
+    /// // Second connection attempt
+    /// state.begin_connection_attempt_key(key.clone());
+    /// let connection_state = state.connection_state_key(&key).unwrap();
+    /// assert_eq!(connection_state.attempts, 2);
+    /// ```
     pub fn begin_connection_attempt_key(&self, key: ConnectionKey) {
         let attempts = self
             .connection_state_key(&key)
@@ -383,7 +592,40 @@ impl State {
         );
     }
 
-    /// Mark a connection as successfully established while preserving the attempt count.
+    /// Marks a connection as successfully established while preserving the attempt count.
+    ///
+    /// This method updates the connection state to `ConnectionStatus::Connected`, indicating
+    /// that a connection has been successfully established for the specified host and plugin
+    /// combination. The attempt counter is preserved from any previous connection attempts,
+    /// allowing you to track how many attempts were needed before the connection succeeded.
+    ///
+    /// If no previous connection attempts were recorded, the attempt count will be set to 0.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - The hostname for which to mark the connection as connected. Can be any type
+    ///   that converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// * `plugin_name` - The name of the connection plugin that successfully established the
+    ///   connection. Can be any type that converts into a `String`, such as `&str`, `String`,
+    ///   or other string-like types.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionStatus};
+    /// let state = State::new();
+    ///
+    /// // Record connection attempts and then mark as connected
+    /// state.begin_connection_attempt("router1", "ssh");
+    /// state.begin_connection_attempt("router1", "ssh");
+    /// state.mark_connection_connected("router1", "ssh");
+    ///
+    /// // Verify the connection is marked as connected with preserved attempt count
+    /// let connection_state = state.connection_state("router1", "ssh").unwrap();
+    /// assert_eq!(connection_state.status, ConnectionStatus::Connected);
+    /// assert_eq!(connection_state.attempts, 2);
+    /// ```
     pub fn mark_connection_connected(
         &self,
         host: impl Into<String>,
@@ -392,7 +634,42 @@ impl State {
         self.mark_connection_connected_key(ConnectionKey::new(host, plugin_name));
     }
 
-    /// Mark a connection as successfully established while preserving the attempt count.
+    /// Marks a connection as successfully established using an existing `ConnectionKey` while preserving the attempt count.
+    ///
+    /// This is a more efficient variant of [`mark_connection_connected`](Self::mark_connection_connected)
+    /// when you already have a `ConnectionKey`, as it avoids constructing a new key from separate
+    /// host and plugin name components.
+    ///
+    /// This method updates the connection state to `ConnectionStatus::Connected`, indicating
+    /// that a connection has been successfully established. The attempt counter is preserved from
+    /// any previous connection attempts, allowing you to track how many attempts were needed
+    /// before the connection succeeded.
+    ///
+    /// If no previous connection attempts were recorded, the attempt count will be set to 0.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - The `ConnectionKey` identifying the host and plugin combination for which to
+    ///   mark the connection as connected.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionStatus};
+    /// # use genja_core::inventory::ConnectionKey;
+    /// let state = State::new();
+    /// let key = ConnectionKey::new("router1", "ssh");
+    ///
+    /// // Record connection attempts and then mark as connected
+    /// state.begin_connection_attempt_key(key.clone());
+    /// state.begin_connection_attempt_key(key.clone());
+    /// state.mark_connection_connected_key(key.clone());
+    ///
+    /// // Verify the connection is marked as connected with preserved attempt count
+    /// let connection_state = state.connection_state_key(&key).unwrap();
+    /// assert_eq!(connection_state.status, ConnectionStatus::Connected);
+    /// assert_eq!(connection_state.attempts, 2);
+    /// ```
     pub fn mark_connection_connected_key(&self, key: ConnectionKey) {
         let attempts = self
             .connection_state_key(&key)
@@ -405,7 +682,43 @@ impl State {
         );
     }
 
-    /// Mark a connection as pending retry while preserving the attempt count.
+    /// Marks a connection as pending retry while preserving the attempt count and recording the error.
+    ///
+    /// This method updates the connection state to `ConnectionStatus::RetryPending`, indicating
+    /// that a connection attempt has failed but will be retried. The attempt counter is preserved
+    /// from any previous connection attempts, and the provided error message is stored for
+    /// diagnostic purposes.
+    ///
+    /// If no previous connection attempts were recorded, the attempt count will be set to 0.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - The hostname for which to mark the connection as pending retry. Can be any type
+    ///   that converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// * `plugin_name` - The name of the connection plugin for which the retry is pending. Can be
+    ///   any type that converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// * `last_error` - The error message from the failed connection attempt that triggered the
+    ///   retry. Can be any type that converts into a `String`, such as `&str`, `String`, or other
+    ///   string-like types.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionStatus};
+    /// let state = State::new();
+    ///
+    /// // Record a connection attempt and mark as pending retry
+    /// state.begin_connection_attempt("router1", "ssh");
+    /// state.mark_connection_retry_pending("router1", "ssh", "connection timed out");
+    ///
+    /// // Verify the connection is marked as retry pending with error
+    /// let connection_state = state.connection_state("router1", "ssh").unwrap();
+    /// assert_eq!(connection_state.status, ConnectionStatus::RetryPending);
+    /// assert_eq!(connection_state.attempts, 1);
+    /// assert_eq!(connection_state.last_error, Some("connection timed out".to_string()));
+    /// ```
     pub fn mark_connection_retry_pending(
         &self,
         host: impl Into<String>,
