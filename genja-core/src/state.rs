@@ -731,7 +731,46 @@ impl State {
         );
     }
 
-    /// Mark a connection as pending retry while preserving the attempt count.
+    /// Marks a connection as pending retry using an existing `ConnectionKey` while preserving the attempt count and recording the error.
+    ///
+    /// This is a more efficient variant of [`mark_connection_retry_pending`](Self::mark_connection_retry_pending)
+    /// when you already have a `ConnectionKey`, as it avoids constructing a new key from separate
+    /// host and plugin name components.
+    ///
+    /// This method updates the connection state to `ConnectionStatus::RetryPending`, indicating
+    /// that a connection attempt has failed but will be retried. The attempt counter is preserved
+    /// from any previous connection attempts, and the provided error message is stored for
+    /// diagnostic purposes.
+    ///
+    /// If no previous connection attempts were recorded, the attempt count will be set to 0.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - The `ConnectionKey` identifying the host and plugin combination for which to
+    ///   mark the connection as pending retry.
+    ///
+    /// * `last_error` - The error message from the failed connection attempt that triggered the
+    ///   retry. Can be any type that converts into a `String`, such as `&str`, `String`, or other
+    ///   string-like types.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionStatus};
+    /// # use genja_core::inventory::ConnectionKey;
+    /// let state = State::new();
+    /// let key = ConnectionKey::new("router1", "ssh");
+    ///
+    /// // Record a connection attempt and mark as pending retry
+    /// state.begin_connection_attempt_key(key.clone());
+    /// state.mark_connection_retry_pending_key(key.clone(), "connection timed out");
+    ///
+    /// // Verify the connection is marked as retry pending with error
+    /// let connection_state = state.connection_state_key(&key).unwrap();
+    /// assert_eq!(connection_state.status, ConnectionStatus::RetryPending);
+    /// assert_eq!(connection_state.attempts, 1);
+    /// assert_eq!(connection_state.last_error, Some("connection timed out".to_string()));
+    /// ```
     pub fn mark_connection_retry_pending_key(
         &self,
         key: ConnectionKey,
@@ -750,7 +789,51 @@ impl State {
         );
     }
 
-    /// Mark a connection as terminally failed while preserving the attempt count.
+    /// Marks a connection as terminally failed while preserving the attempt count and recording the error.
+    ///
+    /// This method updates the connection state to `ConnectionStatus::Failed` with the specified
+    /// failure kind, indicating that a connection attempt has failed and will not be retried. The
+    /// attempt counter is preserved from any previous connection attempts, and the provided error
+    /// message is stored for diagnostic purposes.
+    ///
+    /// If no previous connection attempts were recorded, the attempt count will be set to 0.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - The hostname for which to mark the connection as failed. Can be any type that
+    ///   converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// * `plugin_name` - The name of the connection plugin for which the connection failed. Can be
+    ///   any type that converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// * `kind` - The `ConnectionFailureKind` classifying the type of failure (e.g., timeout,
+    ///   authentication failure, DNS error).
+    ///
+    /// * `last_error` - The error message from the failed connection attempt. Can be any type that
+    ///   converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionStatus, ConnectionFailureKind};
+    /// let state = State::new();
+    ///
+    /// // Record connection attempts and mark as failed
+    /// state.begin_connection_attempt("router1", "ssh");
+    /// state.begin_connection_attempt("router1", "ssh");
+    /// state.mark_connection_failed(
+    ///     "router1",
+    ///     "ssh",
+    ///     ConnectionFailureKind::Timeout,
+    ///     "connection timed out after 30 seconds"
+    /// );
+    ///
+    /// // Verify the connection is marked as failed with error details
+    /// let connection_state = state.connection_state("router1", "ssh").unwrap();
+    /// assert_eq!(connection_state.status, ConnectionStatus::Failed(ConnectionFailureKind::Timeout));
+    /// assert_eq!(connection_state.attempts, 2);
+    /// assert_eq!(connection_state.last_error, Some("connection timed out after 30 seconds".to_string()));
+    /// ```
     pub fn mark_connection_failed(
         &self,
         host: impl Into<String>,
