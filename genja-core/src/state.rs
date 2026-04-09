@@ -848,7 +848,53 @@ impl State {
         );
     }
 
-    /// Mark a connection as terminally failed while preserving the attempt count.
+    /// Marks a connection as terminally failed using an existing `ConnectionKey` while preserving the attempt count and recording the error.
+    ///
+    /// This is a more efficient variant of [`mark_connection_failed`](Self::mark_connection_failed)
+    /// when you already have a `ConnectionKey`, as it avoids constructing a new key from separate
+    /// host and plugin name components.
+    ///
+    /// This method updates the connection state to `ConnectionStatus::Failed` with the specified
+    /// failure kind, indicating that a connection attempt has failed and will not be retried. The
+    /// attempt counter is preserved from any previous connection attempts, and the provided error
+    /// message is stored for diagnostic purposes.
+    ///
+    /// If no previous connection attempts were recorded, the attempt count will be set to 0.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - The `ConnectionKey` identifying the host and plugin combination for which to
+    ///   mark the connection as failed.
+    ///
+    /// * `kind` - The `ConnectionFailureKind` classifying the type of failure (e.g., timeout,
+    ///   authentication failure, DNS error).
+    ///
+    /// * `last_error` - The error message from the failed connection attempt. Can be any type that
+    ///   converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, ConnectionStatus, ConnectionFailureKind};
+    /// # use genja_core::inventory::ConnectionKey;
+    /// let state = State::new();
+    /// let key = ConnectionKey::new("router1", "ssh");
+    ///
+    /// // Record connection attempts and mark as failed
+    /// state.begin_connection_attempt_key(key.clone());
+    /// state.begin_connection_attempt_key(key.clone());
+    /// state.mark_connection_failed_key(
+    ///     key.clone(),
+    ///     ConnectionFailureKind::Timeout,
+    ///     "connection timed out after 30 seconds"
+    /// );
+    ///
+    /// // Verify the connection is marked as failed with error details
+    /// let connection_state = state.connection_state_key(&key).unwrap();
+    /// assert_eq!(connection_state.status, ConnectionStatus::Failed(ConnectionFailureKind::Timeout));
+    /// assert_eq!(connection_state.attempts, 2);
+    /// assert_eq!(connection_state.last_error, Some("connection timed out after 30 seconds".to_string()));
+    /// ```
     pub fn mark_connection_failed_key(
         &self,
         key: ConnectionKey,
@@ -868,7 +914,43 @@ impl State {
         );
     }
 
-    /// Set the current task attempt state for a host and task.
+    /// Sets the task execution state for a specific host and task combination.
+    ///
+    /// This method records the current state of a task execution, including the
+    /// task status, number of attempts made, and any error information. The state
+    /// is stored using a `TaskExecutionKey` composed of the host and task name.
+    ///
+    /// If the task state indicates a failure, a warning will be logged with details
+    /// about the failure kind and any associated error message.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - The hostname for which to set the task state. Can be any type that
+    ///   converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// * `task_name` - The name of the task being executed. Can be any type that
+    ///   converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///
+    /// * `state` - The `TaskAttemptState` to record, containing the task status,
+    ///   attempt count, and optional error information.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, TaskAttemptState, TaskStatus};
+    /// let state = State::new();
+    ///
+    /// // Record a successful task execution
+    /// let task_state = TaskAttemptState::new(TaskStatus::Succeeded)
+    ///     .with_attempts(1);
+    /// state.set_task_state("router1", "show_version", task_state);
+    ///
+    /// // Verify the state was recorded
+    /// assert_eq!(
+    ///     state.task_state("router1", "show_version").map(|s| s.status),
+    ///     Some(TaskStatus::Succeeded)
+    /// );
+    /// ```
     pub fn set_task_state(
         &self,
         host: impl Into<String>,
@@ -878,7 +960,41 @@ impl State {
         self.set_task_state_key(TaskExecutionKey::new(host, task_name), state);
     }
 
-    /// Set the current task attempt state using an existing key.
+    /// Sets the task execution state using an existing `TaskExecutionKey`.
+    ///
+    /// This is a more efficient variant of [`set_task_state`](Self::set_task_state)
+    /// when you already have a `TaskExecutionKey`, as it avoids constructing a new key from
+    /// separate host and task name components.
+    ///
+    /// If the task state indicates a failure, a warning will be logged with details
+    /// about the failure kind and any associated error message.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - The `TaskExecutionKey` identifying the host and task combination for which
+    ///   to set the task state.
+    ///
+    /// * `state` - The `TaskAttemptState` to record, containing the task status,
+    ///   attempt count, and optional error information.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, TaskAttemptState, TaskStatus, TaskExecutionKey};
+    /// let state = State::new();
+    /// let key = TaskExecutionKey::new("router1", "show_version");
+    ///
+    /// // Record a successful task execution
+    /// let task_state = TaskAttemptState::new(TaskStatus::Succeeded)
+    ///     .with_attempts(1);
+    /// state.set_task_state_key(key.clone(), task_state);
+    ///
+    /// // Verify the state was recorded
+    /// assert_eq!(
+    ///     state.task_state_key(&key).map(|s| s.status),
+    ///     Some(TaskStatus::Succeeded)
+    /// );
+    /// ```
     pub fn set_task_state_key(&self, key: TaskExecutionKey, state: TaskAttemptState) {
         if let TaskStatus::Failed(kind) = &state.status {
             match &state.last_error {
@@ -895,24 +1011,117 @@ impl State {
         self.task_state.insert(key, state);
     }
 
-    /// Return the current task attempt state for a host and task.
+    /// Retrieves the current task execution state for a specific host and task combination.
+    ///
+    /// This method looks up the task state using the provided host and task name,
+    /// returning the current state if it exists. The state includes information about the
+    /// task status, number of attempts made, and any error from the last failed attempt.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - The hostname for which to retrieve the task state.
+    ///
+    /// * `task_name` - The name of the task being queried.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(TaskAttemptState)` if a task state has been recorded for
+    /// the given host and task combination, or `None` if no task execution has been
+    /// tracked for this combination.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, TaskAttemptState, TaskStatus};
+    /// let state = State::new();
+    ///
+    /// // No state recorded yet
+    /// assert_eq!(state.task_state("router1", "show_version"), None);
+    ///
+    /// // After recording a task execution
+    /// let task_state = TaskAttemptState::new(TaskStatus::Running).with_attempts(1);
+    /// state.set_task_state("router1", "show_version", task_state.clone());
+    /// assert_eq!(state.task_state("router1", "show_version"), Some(task_state));
+    /// ```
     pub fn task_state(&self, host: &str, task_name: &str) -> Option<TaskAttemptState> {
         let key = TaskExecutionKey::new(host, task_name);
         self.task_state.get(&key).map(|entry| entry.value().clone())
     }
 
-    /// Return the current task attempt state for an existing key.
+    /// Retrieves the current task execution state using an existing `TaskExecutionKey`.
+    ///
+    /// This is a more efficient variant of [`task_state`](Self::task_state) when you
+    /// already have a `TaskExecutionKey`, as it avoids constructing a new key from separate
+    /// host and task name components.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - A reference to the `TaskExecutionKey` identifying the host and task combination
+    ///   for which to retrieve the task state.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(TaskAttemptState)` if a task state has been recorded for
+    /// the given key, or `None` if no task execution has been tracked for this
+    /// host and task combination.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{State, TaskAttemptState, TaskStatus, TaskExecutionKey};
+    /// let state = State::new();
+    /// let key = TaskExecutionKey::new("router1", "show_version");
+    ///
+    /// // No state recorded yet
+    /// assert_eq!(state.task_state_key(&key), None);
+    ///
+    /// // After recording a task execution
+    /// let task_state = TaskAttemptState::new(TaskStatus::Running).with_attempts(1);
+    /// state.set_task_state_key(key.clone(), task_state.clone());
+    /// assert_eq!(state.task_state_key(&key), Some(task_state));
+    /// ```
     pub fn task_state_key(&self, key: &TaskExecutionKey) -> Option<TaskAttemptState> {
         self.task_state.get(key).map(|entry| entry.value().clone())
     }
 
-    /// Return the raw task state map.
-    pub fn task_states(&self) -> &DashMap<TaskExecutionKey, TaskAttemptState> {
-        &self.task_state
-    }
+    // TODO: Remove direct access and use the accessors instead.
+    // /// Return the raw task state map.
+    // pub fn task_states(&self) -> &DashMap<TaskExecutionKey, TaskAttemptState> {
+    //     &self.task_state
+    // }
 }
 
-/// Host state within the current Genja runtime.
+/// Represents the operational status of a host within the Genja runtime.
+///
+/// This enum tracks whether a host is currently available for operations or has
+/// been marked as failed. Hosts can transition between these states using the
+/// [`State::mark_failed`] and [`State::mark_in_scope`] methods.
+///
+/// # Variants
+///
+/// * `InScope` - The host is available and can participate in operations. This is
+///   the default state for hosts that have not been explicitly marked as failed.
+///
+/// * `Failed` - The host has been marked as failed and will be excluded from
+///   operations until it is explicitly restored to the `InScope` state.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::state::{State, HostStatus};
+/// let state = State::new();
+///
+/// // Check the status of a host
+/// assert_eq!(state.host_status("router1"), None); // Untracked hosts return None
+///
+/// // Mark a host as failed
+/// state.mark_failed("router1");
+/// assert_eq!(state.host_status("router1"), Some(HostStatus::Failed));
+///
+/// // Restore the host to in-scope status
+/// state.mark_in_scope("router1");
+/// assert_eq!(state.host_status("router1"), Some(HostStatus::InScope));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostStatus {
     InScope,
