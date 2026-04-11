@@ -60,10 +60,15 @@
 
 pub mod errors;
 pub mod inventory;
+pub mod state;
 pub mod settings;
 pub mod task;
 pub mod types;
 
-pub use errors::InventoryLoadError;
+pub use errors::{GenjaError, InventoryLoadError};
 pub use settings::Settings;
+pub use state::{
+    ConnectionAttemptState, ConnectionFailureKind, ConnectionStatus, HostStatus, State,
+    TaskAttemptState, TaskExecutionKey, TaskFailureKind, TaskStatus,
+};
 pub use types::{CustomTreeMap, NatString};

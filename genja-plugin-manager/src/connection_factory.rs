@@ -368,7 +368,7 @@ impl Connection for PluginConnectionAdapter {
     /// // let adapter: Box<dyn Connection> = ...;
     /// // let key = ConnectionKey {
     /// //     hostname: "router1".to_string(),
-    /// //     connection_type: "ssh".to_string(),
+    /// //     plugin_name: "ssh".to_string(),
     /// // };
     /// // let new_connection = adapter.create(&key);
     /// ```
@@ -544,7 +544,7 @@ impl Connection for PluginConnectionAdapter {
 /// * [`ConnectionFactory`] - The factory type returned by this function
 pub fn build_connection_factory(plugins: Arc<PluginManager>) -> Arc<ConnectionFactory> {
     Arc::new(move |key: &ConnectionKey| {
-        let plugin = plugins.get_plugin(&key.connection_type)?;
+        let plugin = plugins.get_plugin(&key.plugin_name)?;
         match plugin {
             Plugins::Connection(connection) => {
                 let instance = connection.create(key);
@@ -619,7 +619,7 @@ mod tests {
     }
 
     impl PluginRunner for DummyRunner {
-        fn run(&self, _task: Task, _hosts: &genja_core::inventory::Hosts) {}
+        fn run(&self, _task: &dyn Task, _hosts: &genja_core::inventory::Hosts) {}
 
         fn run_tasks(&self, _tasks: Tasks, _hosts: &genja_core::inventory::Hosts) {}
     }
