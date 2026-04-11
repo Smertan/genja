@@ -1,0 +1,92 @@
+name: Continuous Integration (CI)
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    name: Check Rust project
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1.0.6
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Run cargo check
+        uses: actions-rs/cargo@v1
+        with:
+          command: check
+
+  format:
+    name: Format Rust project
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1.0.6
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: rustfmt
+      - name: Run cargo fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --check
+
+  clippy:
+    name: Clippy lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1.0.6
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: clippy
+      - name: Run clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: -- -D warnings
+
+  test:
+    name: Rust project
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: ["ubuntu-latest", "macos-latest", "windows-latest"]
+        rust_toolchain: ["stable"]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install latest nightly
+        uses: actions-rs/toolchain@v1.0.6
+        with:
+            toolchain: ${{ matrix.rust_toolchain }}
+            override: true
+      
+      - name: Run cargo build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+
+      - name: Print tests directory (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          echo "Contents of tests directory:"
+          ls -l tests/plugin_inventory/.cargo/
+          ls -l target/release/
+
+      - name: Print tests directory (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          echo "Contents of tests directory:"
+          ls -l target/release/
+    
+      - name: Run cargo test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test

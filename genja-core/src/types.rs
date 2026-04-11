@@ -1,5 +1,9 @@
+//! Common types used across Genja Core.
+//!
+//! This module provides shared utility types like `NatString` for natural
+//! string ordering and `CustomTreeMap` for maps keyed by `NatString`.
+
 use natord::compare;
-use pyo3::prelude::*;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 // use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
@@ -64,13 +68,45 @@ impl From<&NatString> for String {
     }
 }
 
+impl From<String> for NatString {
+    fn from(value: String) -> Self {
+        NatString(value)
+    }
+}
+
+impl From<&str> for NatString {
+    fn from(value: &str) -> Self {
+        NatString(value.to_string())
+    }
+}
+
+impl From<&String> for NatString {
+    fn from(value: &String) -> Self {
+        NatString(value.clone())
+    }
+}
+
+impl From<&NatString> for NatString {
+    fn from(value: &NatString) -> Self {
+        value.clone()
+    }
+}
+
 impl NatString {
+    /// Creates a new `NatString` from a `String`.
     pub fn new(s: String) -> Self {
         NatString(s)
     }
 
+    /// Returns the inner string as `&str`.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl AsRef<str> for NatString {
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }
 
@@ -100,7 +136,7 @@ impl PartialOrd for NatString {
 
 /// A wrapper around `BTreeMap` that uses natural ordering for string keys.
 ///
-/// `MyTree` provides a map data structure where keys are automatically sorted
+/// `CustomTreeMap` provides a map data structure where keys are automatically sorted
 /// using natural (alphanumeric) ordering instead of lexicographic ordering.
 /// For example, "host2" will come before "host10" in the natural order.
 ///
@@ -159,6 +195,7 @@ impl<V: fmt::Display + fmt::Debug> fmt::Display for CustomTreeMap<V> {
 }
 
 impl<V> CustomTreeMap<V> {
+    /// Creates an empty map.
     pub fn new() -> Self {
         CustomTreeMap(BTreeMap::new())
     }
@@ -176,22 +213,27 @@ impl<V> CustomTreeMap<V> {
         self.0.insert(NatString::new(key.to_string()), value);
     }
 
+    /// Returns a reference to the value for the given key, if present.
     pub fn get(&self, key: &str) -> Option<&V> {
         self.0.get(&NatString::new(key.to_string()))
     }
 
+    /// Returns a mutable reference to the value for the given key, if present.
     pub fn get_mut(&mut self, key: &str) -> Option<&mut V> {
         self.0.get_mut(&NatString::new(key.to_string()))
     }
 
+    /// Removes the entry for the given key and returns its value, if present.
     pub fn remove(&mut self, key: &str) -> Option<V> {
         self.0.remove(&NatString::new(key.to_string()))
     }
 
+    /// Returns the number of entries in the map.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    /// Returns `true` if the map contains no entries.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -214,19 +256,6 @@ where
     fn json_schema(gen: &mut SchemaGenerator) -> Schema {
         <BTreeMap<String, V>>::json_schema(gen)
     }
-}
-
-/// Formats the sum of two numbers as string.
-#[pyfunction]
-fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
-    Ok((a + b).to_string())
-}
-
-/// A Python module implemented in Rust.
-#[pymodule]
-fn genja_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
-    Ok(())
 }
 
 #[cfg(test)]
