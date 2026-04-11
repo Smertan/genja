@@ -1,3 +1,252 @@
+//! Runtime state management for Genja execution.
+//!
+//! This module provides thread-safe state tracking for the Genja automation framework,
+//! managing the lifecycle and status of hosts, connections, and task executions throughout
+//! a playbook run. The state system uses concurrent data structures to enable safe access
+//! from multiple threads while maintaining consistency across all tracked entities.
+//!
+//! # Overview
+//!
+//! The state module centers around the [`State`] structure, which maintains three primary
+//! categories of runtime information:
+//!
+//! 1. **Host Status** - Tracks whether hosts are in scope (available for operations) or
+//!    have been marked as failed and should be excluded from further operations.
+//!
+//! 2. **Connection State** - Records the status of connection attempts for each host/plugin
+//!    combination, including the number of attempts made, current connection status, and
+//!    error information from failed attempts.
+//!
+//! 3. **Task Execution State** - Maintains the execution status of tasks on individual hosts,
+//!    tracking whether tasks are pending, running, succeeded, failed, or skipped, along with
+//!    attempt counts and error details.
+//!
+//! All state tracking is designed to be thread-safe, allowing concurrent access from multiple
+//! execution threads without requiring external synchronization.
+//!
+//! # Core Types
+//!
+//! ## State Management
+//!
+//! - [`State`] - The main state container that tracks all runtime information using concurrent
+//!   hash maps. Provides methods for querying and updating host status, connection state, and
+//!   task execution state.
+//!
+//! ## Host Status
+//!
+//! - [`HostStatus`] - Indicates whether a host is in scope or has been marked as failed.
+//!   Hosts default to `InScope` and can be transitioned to `Failed` when errors occur.
+//!
+//! ## Connection Tracking
+//!
+//! - [`ConnectionAttemptState`] - Tracks the state of connection attempts for a specific
+//!   host/plugin pair, including status, attempt count, and error information.
+//!
+//! - [`ConnectionStatus`] - Represents the current status of a connection attempt, from
+//!   initial connection through success, retry, or failure states.
+//!
+//! - [`ConnectionFailureKind`] - Categorizes connection failures into specific types
+//!   (timeout, authentication, DNS, etc.) for targeted error handling.
+//!
+//! ## Task Execution Tracking
+//!
+//! - [`TaskAttemptState`] - Tracks the state of task execution attempts for a specific
+//!   host/task pair, including status, attempt count, and error information.
+//!
+//! - [`TaskExecutionKey`] - A composite key that uniquely identifies a task execution
+//!   by combining hostname and task name.
+//!
+//! - [`TaskStatus`] - Represents the current status of a task execution, from pending
+//!   through running, succeeded, failed, or skipped states.
+//!
+//! - [`TaskFailureKind`] - Categorizes task execution failures into specific types
+//!   (command failed, parse failed, validation failed, etc.) for targeted error handling.
+//!
+//! # Usage Patterns
+//!
+//! ## Basic State Creation
+//!
+//! ```rust
+//! use genja_core::state::State;
+//!
+//! let state = State::new();
+//! ```
+//!
+//! ## Host Status Management
+//!
+//! ```rust
+//! # use genja_core::state::{State, HostStatus};
+//! # let state = State::new();
+//! // Check if a host is in scope (defaults to true)
+//! assert!(state.is_in_scope("router1"));
+//!
+//! // Mark a host as failed
+//! state.mark_failed("router1");
+//! assert_eq!(state.host_status("router1"), Some(HostStatus::Failed));
+//!
+//! // Restore a host to in-scope status
+//! state.mark_in_scope("router1");
+//! assert_eq!(state.host_status("router1"), Some(HostStatus::InScope));
+//! ```
+//!
+//! ## Connection State Tracking
+//!
+//! ```rust
+//! # use genja_core::state::{State, ConnectionAttemptState, ConnectionStatus, ConnectionFailureKind};
+//! # let state = State::new();
+//! // Begin a connection attempt
+//! state.begin_connection_attempt("router1", "ssh");
+//!
+//! // Mark the connection as successful
+//! state.mark_connection_connected("router1", "ssh");
+//!
+//! // Or mark it for retry with an error message
+//! state.mark_connection_retry_pending("router1", "ssh", "connection timed out");
+//!
+//! // Or mark it as permanently failed
+//! state.mark_connection_failed(
+//!     "router1",
+//!     "ssh",
+//!     ConnectionFailureKind::Timeout,
+//!     "connection timed out after 30 seconds"
+//! );
+//!
+//! // Query the current connection state
+//! if let Some(conn_state) = state.connection_state("router1", "ssh") {
+//!     println!("Connection status: {:?}", conn_state.status);
+//!     println!("Attempts made: {}", conn_state.attempts);
+//!     if let Some(error) = conn_state.last_error {
+//!         println!("Last error: {}", error);
+//!     }
+//! }
+//! ```
+//!
+//! ## Task Execution State Tracking
+//!
+//! ```rust
+//! # use genja_core::state::{State, TaskAttemptState, TaskStatus, TaskFailureKind};
+//! # let state = State::new();
+//! // Record a successful task execution
+//! let task_state = TaskAttemptState::new(TaskStatus::Succeeded)
+//!     .with_attempts(1);
+//! state.set_task_state("router1", "show_version", task_state);
+//!
+//! // Record a failed task execution with error details
+//! let failed_state = TaskAttemptState::new(
+//!     TaskStatus::Failed(TaskFailureKind::ParseFailed)
+//! )
+//! .with_attempts(2)
+//! .with_last_error("failed to parse command output");
+//! state.set_task_state("router1", "configure_interface", failed_state);
+//!
+//! // Query task execution state
+//! if let Some(task_state) = state.task_state("router1", "show_version") {
+//!     println!("Task status: {:?}", task_state.status);
+//!     println!("Attempts made: {}", task_state.attempts);
+//! }
+//! ```
+//!
+//! ## Using Keys for Efficient Lookups
+//!
+//! When you need to perform multiple operations on the same host/plugin or host/task
+//! combination, using the `_key` variants of methods can be more efficient:
+//!
+//! ```rust
+//! # use genja_core::state::State;
+//! # use genja_core::inventory::ConnectionKey;
+//! # let state = State::new();
+//! // Create a key once
+//! let key = ConnectionKey::new("router1", "ssh");
+//!
+//! // Use it for multiple operations
+//! state.begin_connection_attempt_key(key.clone());
+//! state.mark_connection_connected_key(key.clone());
+//!
+//! // Query using the same key
+//! if let Some(conn_state) = state.connection_state_key(&key) {
+//!     println!("Connection established after {} attempts", conn_state.attempts);
+//! }
+//! ```
+//!
+//! # Thread Safety
+//!
+//! All state tracking structures use `DashMap` internally, which provides concurrent
+//! access without requiring external locks. This allows multiple threads to safely
+//! update and query state simultaneously:
+//!
+//! ```rust
+//! # use genja_core::state::State;
+//! # use std::sync::Arc;
+//! # use std::thread;
+//! let state = Arc::new(State::new());
+//!
+//! let mut handles = vec![];
+//! for i in 0..4 {
+//!     let state = Arc::clone(&state);
+//!     handles.push(thread::spawn(move || {
+//!         let host = format!("router{}", i);
+//!         state.begin_connection_attempt(&host, "ssh");
+//!         state.mark_connection_connected(&host, "ssh");
+//!     }));
+//! }
+//!
+//! for handle in handles {
+//!     handle.join().unwrap();
+//! }
+//! ```
+//!
+//! # Design Considerations
+//!
+//! ## Builder Pattern
+//!
+//! State structures like [`ConnectionAttemptState`] and [`TaskAttemptState`] use the
+//! builder pattern for convenient construction and method chaining:
+//!
+//! ```rust
+//! # use genja_core::state::{ConnectionAttemptState, ConnectionStatus, ConnectionFailureKind};
+//! let state = ConnectionAttemptState::new(
+//!     ConnectionStatus::Failed(ConnectionFailureKind::Timeout)
+//! )
+//! .with_attempts(3)
+//! .with_last_error("connection timed out after 30 seconds");
+//! ```
+//!
+//! ## Attempt Counting
+//!
+//! Connection and task attempt counters are preserved across state transitions,
+//! allowing you to track the total number of attempts made even after a connection
+//! succeeds or a task completes:
+//!
+//! ```rust
+//! # use genja_core::state::State;
+//! # let state = State::new();
+//! state.begin_connection_attempt("router1", "ssh"); // attempts = 1
+//! state.begin_connection_attempt("router1", "ssh"); // attempts = 2
+//! state.mark_connection_connected("router1", "ssh"); // attempts still = 2
+//! ```
+//!
+//! ## Error Tracking
+//!
+//! Error messages from failed attempts are preserved in the state, allowing for
+//! detailed diagnostics and logging:
+//!
+//! ```rust
+//! # use genja_core::state::{State, ConnectionFailureKind};
+//! # let state = State::new();
+//! state.begin_connection_attempt("router1", "ssh");
+//! state.mark_connection_failed(
+//!     "router1",
+//!     "ssh",
+//!     ConnectionFailureKind::Auth,
+//!     "authentication failed: invalid credentials"
+//! );
+//!
+//! if let Some(conn_state) = state.connection_state("router1", "ssh") {
+//!     if let Some(error) = conn_state.last_error {
+//!         eprintln!("Connection failed: {}", error);
+//!     }
+//! }
+//! ```
 use crate::{inventory::ConnectionKey, types::NatString};
 use dashmap::DashMap;
 use log::warn;
@@ -1134,17 +1383,54 @@ impl Default for HostStatus {
     }
 }
 
-/// Runtime status of a connection attempt for a host/plugin pair.
+/// Tracks the state of connection attempts for a specific host and plugin combination.
 ///
-/// This structure tracks the current state of connection attempts, including
-/// the connection status, number of attempts made, and any error message from
-/// the last failed attempt.
+/// This structure maintains comprehensive information about connection attempts, including
+/// the current connection status, the number of attempts that have been made, and any error
+/// message from the most recent failed attempt. It is used by the [`State`] structure to
+/// track connection history and current state for each host/plugin pair.
 ///
 /// # Fields
 ///
-/// * `status` - The current connection status (e.g., connecting, connected, failed).
-/// * `attempts` - The number of connection attempts that have been made.
+/// * `status` - The current [`ConnectionStatus`] indicating whether the connection is in
+///   progress, successfully established, pending retry, or has failed. This field provides
+///   high-level information about the connection state.
+///
+/// * `attempts` - The total number of connection attempts that have been made for this
+///   host/plugin combination. This counter is incremented each time a connection attempt
+///   begins and is preserved across status changes, allowing you to track how many attempts
+///   were needed before a connection succeeded or ultimately failed.
+///
 /// * `last_error` - An optional error message from the most recent failed connection attempt.
+///   This field is `None` if no error has occurred or if the connection is currently in
+///   progress. When present, it contains diagnostic information about why the last connection
+///   attempt failed, which can be useful for troubleshooting and logging.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::state::{ConnectionAttemptState, ConnectionStatus, ConnectionFailureKind};
+/// // Create a new connection state indicating a successful connection
+/// let state = ConnectionAttemptState::new(ConnectionStatus::Connected)
+///     .with_attempts(2);
+///
+/// assert_eq!(state.status, ConnectionStatus::Connected);
+/// assert_eq!(state.attempts, 2);
+/// assert_eq!(state.last_error, None);
+///
+/// // Create a connection state with a failure and error message
+/// let failed_state = ConnectionAttemptState::new(
+///     ConnectionStatus::Failed(ConnectionFailureKind::Timeout)
+/// )
+/// .with_attempts(3)
+/// .with_last_error("connection timed out after 30 seconds");
+///
+/// assert_eq!(failed_state.attempts, 3);
+/// assert_eq!(
+///     failed_state.last_error,
+///     Some("connection timed out after 30 seconds".to_string())
+/// );
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionAttemptState {
     pub status: ConnectionStatus,
@@ -1153,6 +1439,34 @@ pub struct ConnectionAttemptState {
 }
 
 impl ConnectionAttemptState {
+    /// Creates a new `ConnectionAttemptState` with the specified connection status.
+    ///
+    /// This constructor initializes a connection attempt state with the given status,
+    /// setting the attempt counter to 0 and leaving the error field empty. This is
+    /// typically used when first recording a connection attempt or when transitioning
+    /// to a new connection state.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - The initial [`ConnectionStatus`] for this connection attempt state.
+    ///   This indicates whether the connection is in progress, successfully established,
+    ///   pending retry, or has failed.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `ConnectionAttemptState` instance with the specified status,
+    /// zero attempts, and no error message.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{ConnectionAttemptState, ConnectionStatus};
+    /// // Create a state for a new connection attempt
+    /// let state = ConnectionAttemptState::new(ConnectionStatus::Connecting);
+    /// assert_eq!(state.status, ConnectionStatus::Connecting);
+    /// assert_eq!(state.attempts, 0);
+    /// assert_eq!(state.last_error, None);
+    /// ```
     pub fn new(status: ConnectionStatus) -> Self {
         Self {
             status,
@@ -1161,18 +1475,167 @@ impl ConnectionAttemptState {
         }
     }
 
+    /// Sets the number of connection attempts for this connection state.
+    ///
+    /// This builder method allows you to specify how many connection attempts have been
+    /// made for a particular host/plugin combination. The attempt count is typically used
+    /// to track retry behavior and can be helpful for implementing exponential backoff
+    /// strategies or determining when to give up on a connection.
+    ///
+    /// This method consumes `self` and returns a new instance with the updated attempt
+    /// count, following the builder pattern for convenient method chaining.
+    ///
+    /// # Parameters
+    ///
+    /// * `attempts` - The number of connection attempts to record. This should represent
+    ///   the total number of attempts made, not just the increment. A value of 0 indicates
+    ///   no attempts have been made yet, while higher values indicate multiple retry attempts.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` with the `attempts` field updated to the specified value, allowing
+    /// for method chaining with other builder methods like [`with_last_error`](Self::with_last_error).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{ConnectionAttemptState, ConnectionStatus};
+    /// // Create a connection state with 3 attempts
+    /// let state = ConnectionAttemptState::new(ConnectionStatus::Connecting)
+    ///     .with_attempts(3);
+    ///
+    /// assert_eq!(state.attempts, 3);
+    /// ```
+    ///
+    /// ```
+    /// # use genja_core::state::{ConnectionAttemptState, ConnectionStatus, ConnectionFailureKind};
+    /// // Chain multiple builder methods together
+    /// let state = ConnectionAttemptState::new(
+    ///     ConnectionStatus::Failed(ConnectionFailureKind::Timeout)
+    /// )
+    /// .with_attempts(5)
+    /// .with_last_error("connection timed out after 30 seconds");
+    ///
+    /// assert_eq!(state.attempts, 5);
+    /// assert_eq!(state.last_error, Some("connection timed out after 30 seconds".to_string()));
+    /// ```
     pub fn with_attempts(mut self, attempts: usize) -> Self {
         self.attempts = attempts;
         self
     }
 
+    /// Sets the error message from the most recent failed connection attempt.
+    ///
+    /// This builder method allows you to record diagnostic information about why a
+    /// connection attempt failed. The error message is typically set when marking a
+    /// connection as retry pending or failed, and can be used for logging, debugging,
+    /// or displaying error information to users.
+    ///
+    /// This method consumes `self` and returns a new instance with the error message
+    /// set, following the builder pattern for convenient method chaining.
+    ///
+    /// # Parameters
+    ///
+    /// * `last_error` - The error message to record. Can be any type that converts into
+    ///   a `String`, such as `&str`, `String`, error types that implement `Display`, or
+    ///   other string-like types. The error message should provide meaningful diagnostic
+    ///   information about what went wrong during the connection attempt.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` with the `last_error` field set to `Some(error_message)`, allowing
+    /// for method chaining with other builder methods like [`with_attempts`](Self::with_attempts).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{ConnectionAttemptState, ConnectionStatus, ConnectionFailureKind};
+    /// // Create a connection state with an error message
+    /// let state = ConnectionAttemptState::new(
+    ///     ConnectionStatus::Failed(ConnectionFailureKind::Timeout)
+    /// )
+    /// .with_last_error("connection timed out after 30 seconds");
+    ///
+    /// assert_eq!(
+    ///     state.last_error,
+    ///     Some("connection timed out after 30 seconds".to_string())
+    /// );
+    /// ```
+    ///
+    /// ```
+    /// # use genja_core::state::{ConnectionAttemptState, ConnectionStatus};
+    /// // Chain multiple builder methods together
+    /// let state = ConnectionAttemptState::new(ConnectionStatus::RetryPending)
+    ///     .with_attempts(2)
+    ///     .with_last_error("authentication failed: invalid credentials");
+    ///
+    /// assert_eq!(state.attempts, 2);
+    /// assert_eq!(
+    ///     state.last_error,
+    ///     Some("authentication failed: invalid credentials".to_string())
+    /// );
+    /// ```
+    ///
+    /// ```
+    /// # use genja_core::state::{ConnectionAttemptState, ConnectionStatus, ConnectionFailureKind};
+    /// // Use with String type
+    /// let error_msg = String::from("network unreachable");
+    /// let state = ConnectionAttemptState::new(
+    ///     ConnectionStatus::Failed(ConnectionFailureKind::Transport)
+    /// )
+    /// .with_last_error(error_msg);
+    ///
+    /// assert_eq!(state.last_error, Some("network unreachable".to_string()));
+    /// ```
     pub fn with_last_error(mut self, last_error: impl Into<String>) -> Self {
         self.last_error = Some(last_error.into());
         self
     }
 }
 
-/// High-level connection execution state for a host/plugin pair.
+/// Represents the current status of a connection attempt for a host/plugin pair.
+///
+/// This enum tracks the lifecycle of a connection attempt, from the initial state
+/// through various stages of connection establishment, including success, retry,
+/// and failure states. It is used within [`ConnectionAttemptState`] to provide
+/// high-level information about the current state of a connection.
+///
+/// # Variants
+///
+/// * `NeverTried` - No connection attempt has been made yet for this host/plugin
+///   combination. This is the initial state before any connection activity.
+///
+/// * `Connecting` - A connection attempt is currently in progress. This state is
+///   set when [`State::begin_connection_attempt`] is called and indicates that
+///   the connection plugin is actively attempting to establish a connection.
+///
+/// * `Connected` - The connection has been successfully established. This state
+///   is set when [`State::mark_connection_connected`] is called and indicates
+///   that the connection is ready for use.
+///
+/// * `RetryPending` - A connection attempt has failed but will be retried. This
+///   state is set when [`State::mark_connection_retry_pending`] is called and
+///   indicates that the connection will be attempted again after a delay or
+///   under different conditions.
+///
+/// * `Failed(ConnectionFailureKind)` - The connection attempt has failed and will
+///   not be retried. This state is set when [`State::mark_connection_failed`] is
+///   called and includes a [`ConnectionFailureKind`] that classifies the type of
+///   failure that occurred (e.g., timeout, authentication failure, DNS error).
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::state::{ConnectionStatus, ConnectionFailureKind};
+/// // Check different connection states
+/// let connecting = ConnectionStatus::Connecting;
+/// let connected = ConnectionStatus::Connected;
+/// let failed = ConnectionStatus::Failed(ConnectionFailureKind::Timeout);
+///
+/// assert_eq!(connecting, ConnectionStatus::Connecting);
+/// assert_eq!(connected, ConnectionStatus::Connected);
+/// assert!(matches!(failed, ConnectionStatus::Failed(_)));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionStatus {
     NeverTried,
@@ -1182,7 +1645,52 @@ pub enum ConnectionStatus {
     Failed(ConnectionFailureKind),
 }
 
-/// Classified connection failure kinds.
+/// Classifies the type of failure that occurred during a connection attempt.
+///
+/// This enum categorizes connection failures into distinct types, allowing for
+/// more targeted error handling, retry logic, and diagnostic reporting. Each
+/// variant represents a different category of connection failure that may require
+/// different handling strategies.
+///
+/// # Variants
+///
+/// * `Timeout` - The connection attempt exceeded the configured timeout period.
+///   This typically indicates network latency issues, an unresponsive host, or
+///   firewall rules blocking the connection.
+///
+/// * `Refused` - The connection was actively refused by the remote host. This
+///   usually means the host is reachable but the service is not running or is
+///   not accepting connections on the specified port.
+///
+/// * `Auth` - Authentication failed during the connection attempt. This indicates
+///   that the credentials provided were invalid, expired, or insufficient for
+///   establishing the connection.
+///
+/// * `Dns` - DNS resolution failed for the hostname. This means the hostname
+///   could not be resolved to an IP address, possibly due to DNS server issues
+///   or an invalid hostname.
+///
+/// * `Transport` - A transport-layer error occurred during the connection attempt.
+///   This includes network unreachable errors, connection reset by peer, and
+///   other low-level network failures.
+///
+/// * `Unknown` - The failure type could not be determined or does not fit into
+///   any of the other categories. This is used as a fallback for unexpected or
+///   unclassified errors.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::state::{ConnectionFailureKind, ConnectionStatus};
+/// // Create different failure kinds
+/// let timeout = ConnectionFailureKind::Timeout;
+/// let auth = ConnectionFailureKind::Auth;
+/// let dns = ConnectionFailureKind::Dns;
+///
+/// // Use in connection status
+/// let failed_status = ConnectionStatus::Failed(ConnectionFailureKind::Timeout);
+/// assert!(matches!(failed_status, ConnectionStatus::Failed(_)));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionFailureKind {
     Timeout,
@@ -1193,7 +1701,55 @@ pub enum ConnectionFailureKind {
     Unknown,
 }
 
-/// Identifies a task execution for a specific host.
+/// A unique identifier for tracking task execution state for a specific host and task combination.
+///
+/// This structure serves as a composite key used by the [`State`] structure to track the
+/// execution state of tasks on individual hosts. Each `TaskExecutionKey` uniquely identifies
+/// a task execution by combining the hostname with the task name, allowing the state tracking
+/// system to maintain separate execution histories for different task/host pairs.
+///
+/// The key is used internally by methods like [`State::set_task_state`], [`State::task_state`],
+/// and their `_key` variants to store and retrieve [`TaskAttemptState`] information.
+///
+/// # Fields
+///
+/// * `host` - A [`NatString`] representing the hostname on which the task is being executed.
+///   Using `NatString` provides efficient string handling with natural sorting capabilities,
+///   which can be useful when displaying or organizing task execution results by hostname.
+///
+/// * `task_name` - The name of the task being executed. This is a standard `String` that
+///   identifies the specific task or operation being performed on the host. Task names should
+///   be unique within a playbook or execution context to ensure proper state tracking.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::state::TaskExecutionKey;
+/// # use genja_core::types::NatString;
+/// // Create a task execution key for a specific host and task
+/// let key = TaskExecutionKey::new("router1", "show_version");
+/// assert_eq!(key.host, NatString::from("router1"));
+/// assert_eq!(key.task_name, "show_version");
+///
+/// // Keys can be used to track task state
+/// # use genja_core::state::{State, TaskAttemptState, TaskStatus};
+/// let state = State::new();
+/// let task_state = TaskAttemptState::new(TaskStatus::Running).with_attempts(1);
+/// state.set_task_state_key(key.clone(), task_state.clone());
+/// assert_eq!(state.task_state_key(&key), Some(task_state));
+/// ```
+///
+/// ```
+/// # use genja_core::state::TaskExecutionKey;
+/// // Keys with the same host and task name are equal
+/// let key1 = TaskExecutionKey::new("router1", "show_version");
+/// let key2 = TaskExecutionKey::new("router1", "show_version");
+/// assert_eq!(key1, key2);
+///
+/// // Keys with different hosts or task names are not equal
+/// let key3 = TaskExecutionKey::new("router2", "show_version");
+/// assert_ne!(key1, key3);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TaskExecutionKey {
     pub host: NatString,
@@ -1201,6 +1757,50 @@ pub struct TaskExecutionKey {
 }
 
 impl TaskExecutionKey {
+    /// Creates a new `TaskExecutionKey` from a host and task name.
+    ///
+    /// This constructor method creates a unique identifier for tracking task execution state
+    /// by combining a hostname with a task name. The resulting key can be used with methods
+    /// like [`State::set_task_state_key`] and [`State::task_state_key`] to store and retrieve
+    /// task execution information.
+    ///
+    /// The host parameter is converted into a [`NatString`] for efficient string handling with
+    /// natural sorting capabilities, while the task name is stored as a standard `String`.
+    ///
+    /// # Parameters
+    ///
+    /// * `host` - The hostname for which the task is being executed. Can be any type that
+    ///   converts into a `String`, such as `&str`, `String`, or other string-like types.
+    ///   This will be stored as a `NatString` in the resulting key.
+    ///
+    /// * `task_name` - The name of the task being executed. Can be any type that converts
+    ///   into a `String`, such as `&str`, `String`, or other string-like types. Task names
+    ///   should be unique within a playbook or execution context to ensure proper state tracking.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `TaskExecutionKey` instance with the specified host and task name,
+    /// ready to be used for tracking task execution state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::TaskExecutionKey;
+    /// # use genja_core::types::NatString;
+    /// // Create a key using string slices
+    /// let key = TaskExecutionKey::new("router1", "show_version");
+    /// assert_eq!(key.host, NatString::from("router1"));
+    /// assert_eq!(key.task_name, "show_version");
+    /// ```
+    ///
+    /// ```
+    /// # use genja_core::state::TaskExecutionKey;
+    /// // Create a key using owned Strings
+    /// let host = String::from("router2");
+    /// let task = String::from("configure_interface");
+    /// let key = TaskExecutionKey::new(host, task);
+    /// assert_eq!(key.task_name, "configure_interface");
+    /// ```
     pub fn new(host: impl Into<String>, task_name: impl Into<String>) -> Self {
         Self {
             host: NatString::new(host.into()),
@@ -1209,7 +1809,55 @@ impl TaskExecutionKey {
     }
 }
 
-/// Runtime status of a task attempt for a host/task pair.
+
+/// Tracks the state of task execution attempts for a specific host and task combination.
+///
+/// This structure maintains comprehensive information about task execution attempts, including
+/// the current task status, the number of attempts that have been made, and any error message
+/// from the most recent failed attempt. It is used by the [`State`] structure to track task
+/// execution history and current state for each host/task pair.
+///
+/// # Fields
+///
+/// * `status` - The current [`TaskStatus`] indicating whether the task is pending, running,
+///   succeeded, pending retry, failed, or skipped. This field provides high-level information
+///   about the task execution state.
+///
+/// * `attempts` - The total number of task execution attempts that have been made for this
+///   host/task combination. This counter tracks how many times the task has been attempted
+///   and is preserved across status changes, allowing you to track how many attempts were
+///   needed before the task succeeded or ultimately failed.
+///
+/// * `last_error` - An optional error message from the most recent failed task execution attempt.
+///   This field is `None` if no error has occurred or if the task is currently running or has
+///   succeeded. When present, it contains diagnostic information about why the last task
+///   execution attempt failed, which can be useful for troubleshooting and logging.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::state::{TaskAttemptState, TaskStatus, TaskFailureKind};
+/// // Create a new task state indicating a successful execution
+/// let state = TaskAttemptState::new(TaskStatus::Succeeded)
+///     .with_attempts(1);
+///
+/// assert_eq!(state.status, TaskStatus::Succeeded);
+/// assert_eq!(state.attempts, 1);
+/// assert_eq!(state.last_error, None);
+///
+/// // Create a task state with a failure and error message
+/// let failed_state = TaskAttemptState::new(
+///     TaskStatus::Failed(TaskFailureKind::ParseFailed)
+/// )
+/// .with_attempts(2)
+/// .with_last_error("failed to parse command output");
+///
+/// assert_eq!(failed_state.attempts, 2);
+/// assert_eq!(
+///     failed_state.last_error,
+///     Some("failed to parse command output".to_string())
+/// );
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskAttemptState {
     pub status: TaskStatus,
@@ -1218,6 +1866,34 @@ pub struct TaskAttemptState {
 }
 
 impl TaskAttemptState {
+    /// Creates a new `TaskAttemptState` with the specified task status.
+    ///
+    /// This constructor initializes a task attempt state with the given status,
+    /// setting the attempt counter to 0 and leaving the error field empty. This is
+    /// typically used when first recording a task execution or when transitioning
+    /// to a new task state.
+    ///
+    /// # Parameters
+    ///
+    /// * `status` - The initial [`TaskStatus`] for this task attempt state.
+    ///   This indicates whether the task is pending, running, succeeded, pending retry,
+    ///   failed, or skipped.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `TaskAttemptState` instance with the specified status,
+    /// zero attempts, and no error message.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{TaskAttemptState, TaskStatus};
+    /// // Create a state for a new task execution
+    /// let state = TaskAttemptState::new(TaskStatus::Running);
+    /// assert_eq!(state.status, TaskStatus::Running);
+    /// assert_eq!(state.attempts, 0);
+    /// assert_eq!(state.last_error, None);
+    /// ```
     pub fn new(status: TaskStatus) -> Self {
         Self {
             status,
@@ -1226,18 +1902,168 @@ impl TaskAttemptState {
         }
     }
 
+    /// Sets the number of task execution attempts for this task state.
+    ///
+    /// This builder method allows you to specify how many task execution attempts have been
+    /// made for a particular host/task combination. The attempt count is typically used
+    /// to track retry behavior and can be helpful for implementing retry strategies or
+    /// determining when to give up on a task execution.
+    ///
+    /// This method consumes `self` and returns a new instance with the updated attempt
+    /// count, following the builder pattern for convenient method chaining.
+    ///
+    /// # Parameters
+    ///
+    /// * `attempts` - The number of task execution attempts to record. This should represent
+    ///   the total number of attempts made, not just the increment. A value of 0 indicates
+    ///   no attempts have been made yet, while higher values indicate multiple retry attempts.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` with the `attempts` field updated to the specified value, allowing
+    /// for method chaining with other builder methods like [`with_last_error`](Self::with_last_error).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{TaskAttemptState, TaskStatus};
+    /// // Create a task state with 2 attempts
+    /// let state = TaskAttemptState::new(TaskStatus::Running)
+    ///     .with_attempts(2);
+    ///
+    /// assert_eq!(state.attempts, 2);
+    /// ```
+    ///
+    /// ```
+    /// # use genja_core::state::{TaskAttemptState, TaskStatus, TaskFailureKind};
+    /// // Chain multiple builder methods together
+    /// let state = TaskAttemptState::new(
+    ///     TaskStatus::Failed(TaskFailureKind::ParseFailed)
+    /// )
+    /// .with_attempts(3)
+    /// .with_last_error("failed to parse command output");
+    ///
+    /// assert_eq!(state.attempts, 3);
+    /// assert_eq!(state.last_error, Some("failed to parse command output".to_string()));
+    /// ```
     pub fn with_attempts(mut self, attempts: usize) -> Self {
         self.attempts = attempts;
         self
     }
 
+    /// Sets the error message from the most recent failed task execution attempt.
+    ///
+    /// This builder method allows you to record diagnostic information about why a
+    /// task execution attempt failed. The error message is typically set when marking a
+    /// task as retry pending or failed, and can be used for logging, debugging,
+    /// or displaying error information to users.
+    ///
+    /// This method consumes `self` and returns a new instance with the error message
+    /// set, following the builder pattern for convenient method chaining.
+    ///
+    /// # Parameters
+    ///
+    /// * `last_error` - The error message to record. Can be any type that converts into
+    ///   a `String`, such as `&str`, `String`, error types that implement `Display`, or
+    ///   other string-like types. The error message should provide meaningful diagnostic
+    ///   information about what went wrong during the task execution attempt.
+    ///
+    /// # Returns
+    ///
+    /// Returns `self` with the `last_error` field set to `Some(error_message)`, allowing
+    /// for method chaining with other builder methods like [`with_attempts`](Self::with_attempts).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use genja_core::state::{TaskAttemptState, TaskStatus, TaskFailureKind};
+    /// // Create a task state with an error message
+    /// let state = TaskAttemptState::new(
+    ///     TaskStatus::Failed(TaskFailureKind::ParseFailed)
+    /// )
+    /// .with_last_error("failed to parse show version output");
+    ///
+    /// assert_eq!(
+    ///     state.last_error,
+    ///     Some("failed to parse show version output".to_string())
+    /// );
+    /// ```
+    ///
+    /// ```
+    /// # use genja_core::state::{TaskAttemptState, TaskStatus};
+    /// // Chain multiple builder methods together
+    /// let state = TaskAttemptState::new(TaskStatus::RetryPending)
+    ///     .with_attempts(1)
+    ///     .with_last_error("command execution timed out");
+    ///
+    /// assert_eq!(state.attempts, 1);
+    /// assert_eq!(
+    ///     state.last_error,
+    ///     Some("command execution timed out".to_string())
+    /// );
+    /// ```
+    ///
+    /// ```
+    /// # use genja_core::state::{TaskAttemptState, TaskStatus, TaskFailureKind};
+    /// // Use with String type
+    /// let error_msg = String::from("validation failed: invalid interface name");
+    /// let state = TaskAttemptState::new(
+    ///     TaskStatus::Failed(TaskFailureKind::ValidationFailed)
+    /// )
+    /// .with_last_error(error_msg);
+    ///
+    /// assert_eq!(state.last_error, Some("validation failed: invalid interface name".to_string()));
+    /// ```
     pub fn with_last_error(mut self, last_error: impl Into<String>) -> Self {
         self.last_error = Some(last_error.into());
         self
     }
 }
 
-/// High-level task execution state for a host/task pair.
+/// Represents the current status of a task execution attempt for a host/task pair.
+///
+/// This enum tracks the lifecycle of a task execution, from the initial pending state
+/// through various stages of execution, including success, retry, and failure states.
+/// It is used within [`TaskAttemptState`] to provide high-level information about the
+/// current state of a task execution.
+///
+/// # Variants
+///
+/// * `Pending` - The task has been scheduled but has not yet started execution. This is
+///   the initial state before any task execution activity begins.
+///
+/// * `Running` - The task is currently being executed. This state indicates that the task
+///   execution is actively in progress.
+///
+/// * `Succeeded` - The task has completed successfully. This state indicates that the task
+///   execution finished without errors and achieved its intended outcome.
+///
+/// * `RetryPending` - A task execution attempt has failed but will be retried. This state
+///   indicates that the task will be attempted again after a delay or under different
+///   conditions.
+///
+/// * `Failed(TaskFailureKind)` - The task execution has failed and will not be retried.
+///   This state includes a [`TaskFailureKind`] that classifies the type of failure that
+///   occurred (e.g., command failed, parse failed, validation failed, timeout).
+///
+/// * `Skipped` - The task was skipped and not executed. This typically occurs when task
+///   conditions are not met or when the task is explicitly configured to be skipped.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::state::{TaskStatus, TaskFailureKind};
+/// // Check different task states
+/// let pending = TaskStatus::Pending;
+/// let running = TaskStatus::Running;
+/// let succeeded = TaskStatus::Succeeded;
+/// let failed = TaskStatus::Failed(TaskFailureKind::ParseFailed);
+///
+/// assert_eq!(pending, TaskStatus::Pending);
+/// assert_eq!(running, TaskStatus::Running);
+/// assert_eq!(succeeded, TaskStatus::Succeeded);
+/// assert!(matches!(failed, TaskStatus::Failed(_)));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskStatus {
     Pending,
@@ -1248,7 +2074,51 @@ pub enum TaskStatus {
     Skipped,
 }
 
-/// Classified task failure kinds.
+/// Classifies the type of failure that occurred during a task execution attempt.
+///
+/// This enum categorizes task execution failures into distinct types, allowing for
+/// more targeted error handling, retry logic, and diagnostic reporting. Each variant
+/// represents a different category of task failure that may require different handling
+/// strategies.
+///
+/// # Variants
+///
+/// * `CommandFailed` - The command or operation executed by the task failed. This
+///   typically indicates that the command returned a non-zero exit code or encountered
+///   an error during execution.
+///
+/// * `ParseFailed` - Parsing of the task output or result failed. This indicates that
+///   the task executed successfully but the output could not be parsed into the expected
+///   format or structure.
+///
+/// * `ValidationFailed` - Validation of the task result or output failed. This indicates
+///   that the task executed and was parsed successfully, but the result did not meet
+///   the expected validation criteria.
+///
+/// * `Timeout` - The task execution exceeded the configured timeout period. This
+///   typically indicates that the task took too long to complete or became unresponsive.
+///
+/// * `DependencyFailed` - A dependency required by the task failed or was not available.
+///   This indicates that the task could not execute because a prerequisite task or
+///   resource was not in the expected state.
+///
+/// * `Unknown` - The failure type could not be determined or does not fit into any of
+///   the other categories. This is used as a fallback for unexpected or unclassified
+///   errors.
+///
+/// # Examples
+///
+/// ```
+/// # use genja_core::state::{TaskFailureKind, TaskStatus};
+/// // Create different failure kinds
+/// let command_failed = TaskFailureKind::CommandFailed;
+/// let parse_failed = TaskFailureKind::ParseFailed;
+/// let timeout = TaskFailureKind::Timeout;
+///
+/// // Use in task status
+/// let failed_status = TaskStatus::Failed(TaskFailureKind::ParseFailed);
+/// assert!(matches!(failed_status, TaskStatus::Failed(_)));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskFailureKind {
     CommandFailed,
@@ -1258,7 +2128,6 @@ pub enum TaskFailureKind {
     DependencyFailed,
     Unknown,
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
