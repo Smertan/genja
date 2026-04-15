@@ -39,6 +39,7 @@
 
 use genja_core::inventory::{Host, Inventory};
 pub use genja_core::GenjaError;
+use genja_core::task::{Task, TaskDefinition};
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
@@ -518,6 +519,17 @@ impl Genja {
             Ok(())
         } else {
             Err(GenjaError::InventoryNotLoaded)
+        }
+    }
+    // TODO: Create a run function which tasks a Task definition
+    // should be able to take any number of args, maybe serde_json::Value
+    // There might need to be a TaskExecutor to handle failures and retries.
+    // Run should use the selected PluginRunner to execute the tasks.
+    pub fn run<T: Task + 'static>(&self, _task: T) {
+        let task_def = TaskDefinition::new(_task);
+        let hosts = self.iter_inventory_hosts().unwrap();
+        for (hostname, host) in hosts {
+            println!("The host {} {:?}", hostname, host);
         }
     }
 }

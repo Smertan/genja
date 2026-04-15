@@ -50,6 +50,11 @@ pub trait SubTasks {
 pub trait Task: TaskInfo + SubTasks {
     /// Start executing the task.
     fn start(&self) -> Result<(), crate::GenjaError>;
+
+    // TODO: should have a function to execute the task with args,
+    // (host: Host, args, serde_json::value))
+    // fn start
+    // Based on a per host basis#
 }
 
 /// A task wrapper that enforces the task trait flow.
