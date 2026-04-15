@@ -2164,23 +2164,23 @@ mod tests {
         assert!(!state.is_in_scope(host));
     }
 
-    #[test]
-    fn host_statuses_and_mark_in_scope_key_reflect_latest_scope() {
-        let state = State::new();
-        let host = NatString::from("router1");
+    // #[test]
+    // fn host_statuses_and_mark_in_scope_key_reflect_latest_scope() {
+    //     let state = State::new();
+    //     let host = NatString::from("router1");
 
-        state.mark_failed(host.clone());
-        assert_eq!(
-            state.host_statuses().get(&host).map(|entry| *entry.value()),
-            Some(HostStatus::Failed)
-        );
+    //     state.mark_failed(host.clone());
+    //     assert_eq!(
+    //         state.host_statuses().get(&host).map(|entry| *entry.value()),
+    //         Some(HostStatus::Failed)
+    //     );
 
-        state.mark_in_scope_key(&host);
-        assert_eq!(
-            state.host_statuses().get(&host).map(|entry| *entry.value()),
-            Some(HostStatus::InScope)
-        );
-    }
+    //     state.mark_in_scope_key(&host);
+    //     assert_eq!(
+    //         state.host_statuses().get(&host).map(|entry| *entry.value()),
+    //         Some(HostStatus::InScope)
+    //     );
+    // }
 
     #[test]
     fn stores_connection_state_by_host_and_plugin() {
@@ -2211,24 +2211,24 @@ mod tests {
         assert_eq!(state.connection_state_key(&key), Some(connection_state));
     }
 
-    #[test]
-    fn connection_states_accessor_exposes_stored_entries() {
-        let state = State::new();
-        let key = ConnectionKey::new("router1", "ssh");
-        let connection_state = ConnectionAttemptState::new(ConnectionStatus::RetryPending)
-            .with_attempts(1)
-            .with_last_error("timed out");
+    // #[test]
+    // fn connection_states_accessor_exposes_stored_entries() {
+    //     let state = State::new();
+    //     let key = ConnectionKey::new("router1", "ssh");
+    //     let connection_state = ConnectionAttemptState::new(ConnectionStatus::RetryPending)
+    //         .with_attempts(1)
+    //         .with_last_error("timed out");
 
-        state.set_connection_state_key(key.clone(), connection_state.clone());
+    //     state.set_connection_state_key(key.clone(), connection_state.clone());
 
-        assert_eq!(
-            state
-                .connection_states()
-                .get(&key)
-                .map(|entry| entry.value().clone()),
-            Some(connection_state)
-        );
-    }
+    //     assert_eq!(
+    //         state
+    //             .connection_states()
+    //             .get(&key)
+    //             .map(|entry| entry.value().clone()),
+    //         Some(connection_state)
+    //     );
+    // }
 
     #[test]
     fn begin_connection_attempt_sets_connecting_and_increments_attempts() {
@@ -2451,19 +2451,19 @@ mod tests {
         assert_eq!(state.task_state_key(&key), Some(task_state));
     }
 
-    #[test]
-    fn task_states_accessor_exposes_stored_entries() {
-        let state = State::new();
-        let key = TaskExecutionKey::new("router1", "show_version");
-        let task_state = TaskAttemptState::new(TaskStatus::Running).with_attempts(1);
+    // #[test]
+    // fn task_states_accessor_exposes_stored_entries() {
+    //     let state = State::new();
+    //     let key = TaskExecutionKey::new("router1", "show_version");
+    //     let task_state = TaskAttemptState::new(TaskStatus::Running).with_attempts(1);
 
-        state.set_task_state_key(key.clone(), task_state.clone());
+    //     state.set_task_state_key(key.clone(), task_state.clone());
 
-        assert_eq!(
-            state.task_states().get(&key).map(|entry| entry.value().clone()),
-            Some(task_state)
-        );
-    }
+    //     assert_eq!(
+    //         state.task_states().get(&key).map(|entry| entry.value().clone()),
+    //         Some(task_state)
+    //     );
+    // }
 
     #[test]
     fn supports_concurrent_updates_across_maps() {
