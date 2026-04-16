@@ -1,7 +1,52 @@
+use serde::Serialize;
 use serde_json::Value;
 use log::warn;
+use std::any::type_name;
+use std::error::Error;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+
+pub type TaskError = Arc<dyn Error + Send + Sync + 'static>;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskFailure {
+    #[serde(skip)]
+    error: TaskError,
+    error_type: String,
+    message: String,
+}
+
+impl TaskFailure {
+    pub fn new<E>(error: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        Self {
+            error_type: type_name::<E>().to_string(),
+            message: error.to_string(),
+            error: Arc::new(error),
+        }
+    }
+
+    pub fn downcast_ref<E>(&self) -> Option<&E>
+    where
+        E: Error + 'static,
+    {
+        self.error.downcast_ref::<E>()
+    }
+
+    pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self.error.as_ref()
+    }
+
+    pub fn error_type(&self) -> &str {
+        &self.error_type
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
 
 /// Task metadata required for execution.
 ///
@@ -136,7 +181,19 @@ impl TaskDefinition {
 mod tests {
     use super::*;
     use crate::inventory::ConnectionKey;
+    use std::fmt;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug)]
+    struct TestTaskFailureError;
+
+    impl fmt::Display for TestTaskFailureError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "task failure test error")
+        }
+    }
+
+    impl Error for TestTaskFailureError {}
 
     struct TestTask {
         name: &'static str,
@@ -224,6 +281,20 @@ mod tests {
             _ => panic!("unexpected error variant"),
         }
         assert_eq!(counter.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn task_failure_preserves_metadata_and_supports_downcast() {
+        let failure = TaskFailure::new(TestTaskFailureError);
+
+        assert_eq!(failure.message(), "task failure test error");
+        assert_eq!(failure.error().to_string(), "task failure test error");
+        assert!(
+            failure
+                .error_type()
+                .ends_with("task::tests::TestTaskFailureError")
+        );
+        assert!(failure.downcast_ref::<TestTaskFailureError>().is_some());
     }
 }
 
