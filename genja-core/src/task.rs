@@ -1,3 +1,4 @@
+use crate::types::{CustomTreeMap, NatString};
 use serde::Serialize;
 use serde_json::Value;
 use log::warn;
@@ -7,6 +8,166 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 pub type TaskError = Arc<dyn Error + Send + Sync + 'static>;
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TaskResults {
+    task_name: String,
+    hosts: CustomTreeMap<HostTaskResult>,
+    sub_tasks: CustomTreeMap<TaskResults>,
+}
+
+impl TaskResults {
+    pub fn new(task_name: impl Into<String>) -> Self {
+        Self {
+            task_name: task_name.into(),
+            hosts: CustomTreeMap::new(),
+            sub_tasks: CustomTreeMap::new(),
+        }
+    }
+
+    pub fn task_name(&self) -> &str {
+        &self.task_name
+    }
+
+    pub fn insert_host_result<K>(&mut self, hostname: K, result: HostTaskResult)
+    where
+        K: Into<NatString>,
+    {
+        self.hosts.insert(hostname.into(), result);
+    }
+
+    pub fn host_result(&self, hostname: &str) -> Option<&HostTaskResult> {
+        self.hosts.get(hostname)
+    }
+
+    pub fn host_result_mut(&mut self, hostname: &str) -> Option<&mut HostTaskResult> {
+        self.hosts.get_mut(hostname)
+    }
+
+    pub fn hosts(&self) -> &CustomTreeMap<HostTaskResult> {
+        &self.hosts
+    }
+
+    pub fn insert_sub_task<K>(&mut self, task_name: K, results: TaskResults)
+    where
+        K: Into<NatString>,
+    {
+        self.sub_tasks.insert(task_name.into(), results);
+    }
+
+    pub fn sub_task(&self, task_name: &str) -> Option<&TaskResults> {
+        self.sub_tasks.get(task_name)
+    }
+
+    pub fn sub_task_mut(&mut self, task_name: &str) -> Option<&mut TaskResults> {
+        self.sub_tasks.get_mut(task_name)
+    }
+
+    pub fn sub_tasks(&self) -> &CustomTreeMap<TaskResults> {
+        &self.sub_tasks
+    }
+
+    pub fn passed_hosts(&self) -> Vec<&NatString> {
+        self.hosts
+            .iter()
+            .filter_map(|(host, result)| result.is_passed().then_some(host))
+            .collect()
+    }
+
+    pub fn failed_hosts(&self) -> Vec<&NatString> {
+        self.hosts
+            .iter()
+            .filter_map(|(host, result)| result.is_failed().then_some(host))
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum HostTaskResult {
+    Passed(TaskSuccess),
+    Failed(TaskFailure),
+    Skipped,
+}
+
+impl HostTaskResult {
+    pub fn passed(result: TaskSuccess) -> Self {
+        Self::Passed(result)
+    }
+
+    pub fn failed(failure: TaskFailure) -> Self {
+        Self::Failed(failure)
+    }
+
+    pub fn skipped() -> Self {
+        Self::Skipped
+    }
+
+    pub fn is_passed(&self) -> bool {
+        matches!(self, Self::Passed(_))
+    }
+
+    pub fn is_failed(&self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
+
+    pub fn is_skipped(&self) -> bool {
+        matches!(self, Self::Skipped)
+    }
+
+    pub fn success(&self) -> Option<&TaskSuccess> {
+        match self {
+            Self::Passed(success) => Some(success),
+            Self::Failed(_) | Self::Skipped => None,
+        }
+    }
+
+    pub fn failure(&self) -> Option<&TaskFailure> {
+        match self {
+            Self::Failed(failure) => Some(failure),
+            Self::Passed(_) | Self::Skipped => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TaskSuccess {
+    result: Option<Value>,
+    changed: bool,
+    diff: Option<String>,
+}
+
+impl TaskSuccess {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_result(mut self, result: Value) -> Self {
+        self.result = Some(result);
+        self
+    }
+
+    pub fn with_changed(mut self, changed: bool) -> Self {
+        self.changed = changed;
+        self
+    }
+
+    pub fn with_diff(mut self, diff: impl Into<String>) -> Self {
+        self.diff = Some(diff.into());
+        self
+    }
+
+    pub fn result(&self) -> Option<&Value> {
+        self.result.as_ref()
+    }
+
+    pub fn changed(&self) -> bool {
+        self.changed
+    }
+
+    pub fn diff(&self) -> Option<&str> {
+        self.diff.as_deref()
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskFailure {
@@ -177,10 +338,62 @@ impl TaskDefinition {
     }
 }
 
+impl TaskInfo for TaskDefinition {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn plugin_name(&self) -> &str {
+        self.inner.plugin_name()
+    }
+
+    fn get_connection_key(&self, hostname: &str) -> crate::inventory::ConnectionKey {
+        self.inner.get_connection_key(hostname)
+    }
+
+    fn options(&self) -> Option<&Value> {
+        self.inner.options()
+    }
+}
+
+impl SubTasks for TaskDefinition {
+    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+        self.inner.sub_tasks()
+    }
+}
+
+#[derive(Default)]
+pub struct Tasks(Vec<TaskDefinition>);
+
+impl Tasks {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn add_task<T: Task + 'static>(&mut self, task: T) {
+        self.0.push(TaskDefinition::new(task));
+    }
+}
+
+impl Deref for Tasks {
+    type Target = Vec<TaskDefinition>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Tasks {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::inventory::ConnectionKey;
+    use serde_json::json;
     use std::fmt;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -296,55 +509,75 @@ mod tests {
         );
         assert!(failure.downcast_ref::<TestTaskFailureError>().is_some());
     }
-}
 
-impl TaskInfo for TaskDefinition {
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
+    #[test]
+    fn task_results_store_recursive_host_and_sub_task_results() {
+        let mut root = TaskResults::new("deploy");
+        root.insert_host_result(
+            "router1",
+            HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_result(json!({"deployed": true}))
+                    .with_changed(true),
+            ),
+        );
+        root.insert_host_result(
+            "router2",
+            HostTaskResult::failed(TaskFailure::new(TestTaskFailureError)),
+        );
 
-    fn plugin_name(&self) -> &str {
-        self.inner.plugin_name()
-    }
+        let mut validate = TaskResults::new("validate");
+        validate.insert_host_result(
+            "router1",
+            HostTaskResult::passed(TaskSuccess::new().with_result(json!({"valid": true}))),
+        );
+        validate.insert_host_result("router2", HostTaskResult::skipped());
 
-    fn get_connection_key(&self, hostname: &str) -> crate::inventory::ConnectionKey {
-        self.inner.get_connection_key(hostname)
-    }
+        let mut collect_logs = TaskResults::new("collect_logs");
+        collect_logs.insert_host_result(
+            "router1",
+            HostTaskResult::passed(TaskSuccess::new().with_diff("captured logs")),
+        );
+        collect_logs.insert_host_result("router2", HostTaskResult::skipped());
 
-    fn options(&self) -> Option<&Value> {
-        self.inner.options()
-    }
-}
+        validate.insert_sub_task("collect_logs", collect_logs);
+        root.insert_sub_task("validate", validate);
 
-impl SubTasks for TaskDefinition {
-    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-        self.inner.sub_tasks()
-    }
-}
+        assert_eq!(root.task_name(), "deploy");
+        assert_eq!(
+            root.passed_hosts()
+                .into_iter()
+                .map(|host| host.as_str())
+                .collect::<Vec<_>>(),
+            vec!["router1"]
+        );
+        assert_eq!(
+            root.failed_hosts()
+                .into_iter()
+                .map(|host| host.as_str())
+                .collect::<Vec<_>>(),
+            vec!["router2"]
+        );
 
-#[derive(Default)]
-pub struct Tasks(Vec<TaskDefinition>);
+        let validate = root.sub_task("validate").expect("validate sub task should exist");
+        assert_eq!(validate.task_name(), "validate");
+        assert!(
+            validate
+                .host_result("router2")
+                .expect("router2 validate result should exist")
+                .is_skipped()
+        );
 
-impl Tasks {
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
-
-    pub fn add_task<T: Task + 'static>(&mut self, task: T) {
-        self.0.push(TaskDefinition::new(task));
-    }
-}
-
-impl Deref for Tasks {
-    type Target = Vec<TaskDefinition>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for Tasks {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        let collect_logs = validate
+            .sub_task("collect_logs")
+            .expect("collect_logs sub task should exist");
+        assert_eq!(collect_logs.task_name(), "collect_logs");
+        assert_eq!(
+            collect_logs
+                .host_result("router1")
+                .and_then(HostTaskResult::success)
+                .and_then(TaskSuccess::diff),
+            Some("captured logs")
+        );
     }
 }
