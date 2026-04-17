@@ -732,7 +732,9 @@ mod tests {
     use crate::plugin_types::{
         Plugin, PluginConnection, PluginInventory, PluginRunner, PluginTransformFunction,
     };
-    use genja_core::inventory::{ConnectionKey, Inventory, ResolvedConnectionParams, TransformFunction};
+    use genja_core::inventory::{
+        ConnectionKey, Inventory, ResolvedConnectionParams, TransformFunction,
+    };
     use genja_core::task::{Task, Tasks};
     use genja_core::{InventoryLoadError, Settings};
 
@@ -832,21 +834,13 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn system_library_path() -> Option<&'static str> {
         let p = "/usr/lib/libSystem.B.dylib";
-        if Path::new(p).exists() {
-            Some(p)
-        } else {
-            None
-        }
+        if Path::new(p).exists() { Some(p) } else { None }
     }
 
     #[cfg(target_os = "windows")]
     fn system_library_path() -> Option<&'static str> {
         let p = "C:\\Windows\\System32\\kernel32.dll";
-        if Path::new(p).exists() {
-            Some(p)
-        } else {
-            None
-        }
+        if Path::new(p).exists() { Some(p) } else { None }
     }
 
     #[test]
@@ -910,7 +904,10 @@ mod tests {
         )
         .unwrap();
         unsafe {
-            std::env::set_var("CARGO_MANIFEST_PATH", manifest.to_string_lossy().to_string());
+            std::env::set_var(
+                "CARGO_MANIFEST_PATH",
+                manifest.to_string_lossy().to_string(),
+            );
         }
         let plugin_manager = PluginManager::new();
         let metadata = plugin_manager.get_plugin_metadata();
@@ -922,13 +919,12 @@ mod tests {
     fn get_plugin_metadata_invalid_toml_test() {
         let _env = env_lock();
         let manifest = temp_manifest_path("invalid_toml.toml");
-        std::fs::write(
-            &manifest,
-            "[package]\nname = \"invalid\"\nversion =\n",
-        )
-        .unwrap();
+        std::fs::write(&manifest, "[package]\nname = \"invalid\"\nversion =\n").unwrap();
         unsafe {
-            std::env::set_var("CARGO_MANIFEST_PATH", manifest.to_string_lossy().to_string());
+            std::env::set_var(
+                "CARGO_MANIFEST_PATH",
+                manifest.to_string_lossy().to_string(),
+            );
         }
         let plugin_manager = PluginManager::new();
         let metadata = plugin_manager.get_plugin_metadata();
@@ -952,7 +948,10 @@ inventory_a = "../this/path/does/not/exist.so"
         )
         .unwrap();
         unsafe {
-            std::env::set_var("CARGO_MANIFEST_PATH", manifest.to_string_lossy().to_string());
+            std::env::set_var(
+                "CARGO_MANIFEST_PATH",
+                manifest.to_string_lossy().to_string(),
+            );
         }
         let plugin_manager = PluginManager::new();
         let result = plugin_manager.activate_plugins();
@@ -1265,10 +1264,14 @@ inventory_a = "../this/path/does/not/exist.so"
     #[test]
     fn get_plugin_and_typed_getters_match_variants() {
         let mut manager = PluginManager::new();
-        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection { name: "conn" })));
+        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection {
+            name: "conn",
+        })));
         manager.register_plugin(Plugins::Inventory(Box::new(DummyInventory { name: "inv" })));
         manager.register_plugin(Plugins::Runner(Box::new(DummyRunner { name: "run" })));
-        manager.register_plugin(Plugins::TransformFunction(Box::new(DummyTransform { name: "tf" })));
+        manager.register_plugin(Plugins::TransformFunction(Box::new(DummyTransform {
+            name: "tf",
+        })));
 
         assert!(manager.get_plugin("conn").is_some());
         assert!(manager.get_plugin("inv").is_some());
@@ -1301,16 +1304,24 @@ inventory_a = "../this/path/does/not/exist.so"
     #[should_panic(expected = "Plugin 'dup' already registered")]
     fn register_plugin_duplicate_name_panics() {
         let mut manager = PluginManager::new();
-        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection { name: "dup" })));
-        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection { name: "dup" })));
+        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection {
+            name: "dup",
+        })));
+        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection {
+            name: "dup",
+        })));
     }
 
     #[test]
     fn get_plugins_by_type_transform_function_and_all_names() {
         let mut manager = PluginManager::new();
-        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection { name: "conn" })));
+        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection {
+            name: "conn",
+        })));
         manager.register_plugin(Plugins::Inventory(Box::new(DummyInventory { name: "inv" })));
-        manager.register_plugin(Plugins::TransformFunction(Box::new(DummyTransform { name: "tf" })));
+        manager.register_plugin(Plugins::TransformFunction(Box::new(DummyTransform {
+            name: "tf",
+        })));
 
         let transforms = manager.get_plugins_by_type_transform_function();
         assert_eq!(transforms.len(), 1);

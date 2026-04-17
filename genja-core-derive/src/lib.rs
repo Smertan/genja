@@ -29,9 +29,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{
-    DeriveInput, GenericArgument, Meta, PathArguments, Type, TypePath, parse_macro_input,
-};
+use syn::{DeriveInput, GenericArgument, Meta, PathArguments, Type, TypePath, parse_macro_input};
 
 /// Generates an implementation of the `Deref` trait for the given type.
 ///
@@ -143,24 +141,18 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     let data = match input.data {
         syn::Data::Struct(data) => data,
         _ => {
-            return syn::Error::new_spanned(
-                name,
-                "Task can only be derived for structs",
-            )
-            .to_compile_error()
-            .into();
+            return syn::Error::new_spanned(name, "Task can only be derived for structs")
+                .to_compile_error()
+                .into();
         }
     };
 
     let fields = match data.fields {
         syn::Fields::Named(fields) => fields.named,
         _ => {
-            return syn::Error::new_spanned(
-                name,
-                "Task requires named fields",
-            )
-            .to_compile_error()
-            .into();
+            return syn::Error::new_spanned(name, "Task requires named fields")
+                .to_compile_error()
+                .into();
         }
     };
 
@@ -210,12 +202,9 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     };
 
     if !is_string_type(&name_ty) && !is_static_str_type(&name_ty) {
-        return syn::Error::new_spanned(
-            name_ty,
-            "`name` must be `String` or `&'static str`",
-        )
-        .to_compile_error()
-        .into();
+        return syn::Error::new_spanned(name_ty, "`name` must be `String` or `&'static str`")
+            .to_compile_error()
+            .into();
     }
 
     let plugin_name_ty = plugin_name_field.clone();
@@ -229,7 +218,6 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
             .into();
         }
     }
-
 
     if let Some(options_ty) = &options_field {
         if !is_option_of(options_ty, is_value_type) {
@@ -332,9 +320,11 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
 
 fn is_string_type(ty: &Type) -> bool {
     match ty {
-        Type::Path(TypePath { path, .. }) => {
-            path.segments.last().map(|seg| seg.ident == "String").unwrap_or(false)
-        }
+        Type::Path(TypePath { path, .. }) => path
+            .segments
+            .last()
+            .map(|seg| seg.ident == "String")
+            .unwrap_or(false),
         _ => false,
     }
 }

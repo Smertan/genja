@@ -60,8 +60,8 @@
 
 pub mod errors;
 pub mod inventory;
-pub mod state;
 pub mod settings;
+pub mod state;
 pub mod task;
 pub mod types;
 
