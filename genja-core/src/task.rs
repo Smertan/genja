@@ -1,7 +1,8 @@
+use crate::inventory::Host;
 use crate::types::{CustomTreeMap, NatString};
+use log::warn;
 use serde::Serialize;
 use serde_json::Value;
-use log::warn;
 use std::any::type_name;
 use std::error::Error;
 use std::ops::{Deref, DerefMut};
@@ -248,14 +249,14 @@ pub trait SubTasks {
 /// }
 ///
 /// impl Task for MyTask {
-///     fn start(&self) -> Result<(), genja_core::GenjaError> {
-///         Ok(())
+///     fn start(&self, _host: &genja_core::inventory::Host) -> genja_core::task::HostTaskResult {
+///         genja_core::task::HostTaskResult::passed(genja_core::task::TaskSuccess::new())
 ///     }
 /// }
 /// ```
 pub trait Task: TaskInfo + SubTasks {
     /// Start executing the task.
-    fn start(&self) -> Result<(), crate::GenjaError>;
+    fn start(&self, host: &Host) -> HostTaskResult;
 
     // TODO: should have a function to execute the task with args,
     // (host: Host, args, serde_json::value))
@@ -298,20 +299,28 @@ impl TaskDefinition {
     ///
     /// # Returns
     ///
-    /// Returns `Ok(())` if the task and all its sub-tasks execute successfully within
-    /// the depth limit. Returns `Err(GenjaError)` if any task fails to execute or if
+    /// Inserts the provided host's result into the shared `TaskResults` tree and
+    /// recursively does the same for any sub-tasks. Returns `Err(GenjaError)` if
     /// the maximum depth is exceeded.
     ///
     /// # Errors
     ///
     /// * Returns `GenjaError::Message` if the task nesting exceeds `max_depth`.
-    /// * Propagates any errors returned by the task's `start()` method or its sub-tasks.
-    pub fn start(&self, max_depth: usize) -> Result<(), crate::GenjaError> {
-        Self::start_with_depth(self.inner.as_ref(), 0, max_depth)
+    pub fn start(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        max_depth: usize,
+    ) -> Result<(), crate::GenjaError> {
+        Self::start_with_depth(self.inner.as_ref(), hostname, host, results, 0, max_depth)
     }
 
     fn start_with_depth(
         task: &dyn Task,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
         depth: usize,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
@@ -328,10 +337,24 @@ impl TaskDefinition {
             )));
         }
 
-        task.start()?;
+        results.insert_host_result(hostname, task.start(host));
 
         for sub in task.sub_tasks() {
-            Self::start_with_depth(sub.as_ref(), depth + 1, max_depth)?;
+            let sub_task_name = sub.name().to_string();
+            if results.sub_task(&sub_task_name).is_none() {
+                results.insert_sub_task(sub_task_name.clone(), TaskResults::new(&sub_task_name));
+            }
+            let sub_results = results
+                .sub_task_mut(&sub_task_name)
+                .expect("sub task results should exist after insertion");
+            Self::start_with_depth(
+                sub.as_ref(),
+                hostname,
+                host,
+                sub_results,
+                depth + 1,
+                max_depth,
+            )?;
         }
 
         Ok(())
@@ -392,7 +415,7 @@ impl DerefMut for Tasks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::ConnectionKey;
+    use crate::inventory::{BaseBuilderHost, ConnectionKey, Host};
     use serde_json::json;
     use std::fmt;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -439,9 +462,9 @@ mod tests {
     }
 
     impl Task for TestTask {
-        fn start(&self) -> Result<(), crate::GenjaError> {
+        fn start(&self, _host: &Host) -> HostTaskResult {
             self.counter.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+            HostTaskResult::passed(TaskSuccess::new())
         }
     }
 
@@ -471,9 +494,14 @@ mod tests {
             subs: vec![root],
             counter: counter.clone(),
         });
+        let host = Host::builder().hostname("router1").build();
 
-        task.start(4).expect("start should succeed");
+        let mut results = TaskResults::new("root");
+        task.start("router1", &host, &mut results, 4)
+            .expect("start should succeed");
         assert_eq!(counter.load(Ordering::SeqCst), 4);
+        assert!(results.host_result("router1").is_some());
+        assert!(results.sub_task("node").is_some());
     }
 
     #[test]
@@ -485,8 +513,12 @@ mod tests {
             subs: vec![root],
             counter: counter.clone(),
         });
+        let host = Host::builder().hostname("router1").build();
 
-        let err = task.start(4).expect_err("start should fail at depth > 4");
+        let mut results = TaskResults::new("root");
+        let err = task
+            .start("router1", &host, &mut results, 4)
+            .expect_err("start should fail at depth > 4");
         match err {
             crate::GenjaError::Message(msg) => {
                 assert!(msg.contains("max task depth exceeded"));
@@ -502,11 +534,9 @@ mod tests {
 
         assert_eq!(failure.message(), "task failure test error");
         assert_eq!(failure.error().to_string(), "task failure test error");
-        assert!(
-            failure
-                .error_type()
-                .ends_with("task::tests::TestTaskFailureError")
-        );
+        assert!(failure
+            .error_type()
+            .ends_with("task::tests::TestTaskFailureError"));
         assert!(failure.downcast_ref::<TestTaskFailureError>().is_some());
     }
 
@@ -559,14 +589,14 @@ mod tests {
             vec!["router2"]
         );
 
-        let validate = root.sub_task("validate").expect("validate sub task should exist");
+        let validate = root
+            .sub_task("validate")
+            .expect("validate sub task should exist");
         assert_eq!(validate.task_name(), "validate");
-        assert!(
-            validate
-                .host_result("router2")
-                .expect("router2 validate result should exist")
-                .is_skipped()
-        );
+        assert!(validate
+            .host_result("router2")
+            .expect("router2 validate result should exist")
+            .is_skipped());
 
         let collect_logs = validate
             .sub_task("collect_logs")

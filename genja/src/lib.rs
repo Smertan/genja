@@ -17,11 +17,11 @@
 //!
 //! // Or build manually
 //! let settings = Settings::from_file("config.yaml")?;
-//! 
+//!
 //! let inventory = genja_core::inventory::Inventory::builder()
 //!     .hosts(genja_core::inventory::Hosts::new())
 //!     .build();
-//! 
+//!
 //! let genja = Genja::builder(inventory)
 //!     .with_settings(settings)
 //!     .build()?;
@@ -36,10 +36,9 @@
 //!
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
-
-use genja_core::inventory::{Host, Inventory};
 pub use genja_core::GenjaError;
-use genja_core::task::{Task, TaskDefinition};
+use genja_core::inventory::{Host, Inventory};
+use genja_core::task::{Task, TaskDefinition, TaskInfo, TaskResults};
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
@@ -84,7 +83,6 @@ pub struct Genja {
 }
 
 pub mod plugins;
-
 
 impl Genja {
     /// Returns a builder that requires an inventory up front.
@@ -396,7 +394,7 @@ impl Genja {
     /// * [`host_count`](Self::host_count) - Get the number of selected hosts
     /// * [`filter_hosts`](Self::filter_hosts) - Filter hosts by predicate
     /// * [`iter_selected_hosts`](Self::iter_selected_hosts) - Get full host objects
-    /// 
+    ///
     /// # Examples
     ///
     /// ```
@@ -490,10 +488,13 @@ impl Genja {
             .host_ids
             .iter()
             .filter_map(|id| {
-                inventory
-                    .hosts()
-                    .get(id)
-                    .and_then(|host| if predicate_fn(&host) { Some(id.clone()) } else { None })
+                inventory.hosts().get(id).and_then(|host| {
+                    if predicate_fn(&host) {
+                        Some(id.clone())
+                    } else {
+                        None
+                    }
+                })
             })
             .collect();
 
@@ -525,12 +526,27 @@ impl Genja {
     // should be able to take any number of args, maybe serde_json::Value
     // There might need to be a TaskExecutor to handle failures and retries.
     // Run should use the selected PluginRunner to execute the tasks.
-    pub fn run<T: Task + 'static>(&self, _task: T) {
-        let task_def = TaskDefinition::new(_task);
-        let hosts = self.iter_inventory_hosts().unwrap();
-        for (hostname, host) in hosts {
-            println!("The host {} {:?}", hostname, host);
+    pub fn run<T: Task + 'static>(
+        &self,
+        task: T,
+        max_depth: usize,
+    ) -> Result<TaskResults, GenjaError> {
+        let inventory = self
+            .inventory
+            .as_ref()
+            .ok_or(GenjaError::InventoryNotLoaded)?;
+        let task_def = TaskDefinition::new(task);
+        let mut results = TaskResults::new(task_def.name());
+
+        for host_id in self.host_ids.iter() {
+            let host = inventory
+                .hosts()
+                .get(host_id)
+                .ok_or_else(|| GenjaError::Message(format!("host '{}' not found", host_id)))?;
+            task_def.start(host_id.as_str(), &host, &mut results, max_depth)?;
         }
+
+        Ok(results)
     }
 }
 
