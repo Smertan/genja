@@ -1712,11 +1712,6 @@ pub trait SubTasks {
 pub trait Task: TaskInfo + SubTasks {
     /// Start executing the task.
     fn start(&self, host: &Host) -> HostTaskResult;
-
-    // TODO: should have a function to execute the task with args,
-    // (host: Host, args, serde_json::value))
-    // fn start
-    // Based on a per host basis#
 }
 
 /// A task wrapper that enforces the task trait flow.
@@ -2003,6 +1998,101 @@ mod tests {
             .error_type()
             .ends_with("task::tests::TestTaskFailureError"));
         assert!(failure.downcast_ref::<TestTaskFailureError>().is_some());
+    }
+
+    #[test]
+    fn task_success_builders_expose_extended_metadata() {
+        let started_at = SystemTime::UNIX_EPOCH;
+        let finished_at = SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_secs(2))
+            .expect("valid timestamp");
+        let success = TaskSuccess::new()
+            .with_result(json!({"ok": true}))
+            .with_changed(true)
+            .with_diff("updated config")
+            .with_summary("task completed")
+            .with_warning("minor drift")
+            .with_message(
+                TaskMessage::new(MessageLevel::Info, "commit complete").with_code("commit_ok"),
+            )
+            .with_metadata(json!({"version": 1}))
+            .with_started_at(started_at)
+            .with_finished_at(finished_at)
+            .with_duration_ms(2000);
+
+        assert_eq!(success.result(), Some(&json!({"ok": true})));
+        assert!(success.changed());
+        assert_eq!(success.diff(), Some("updated config"));
+        assert_eq!(success.summary(), Some("task completed"));
+        assert_eq!(success.warnings(), ["minor drift"]);
+        assert_eq!(success.messages()[0].text(), "commit complete");
+        assert_eq!(success.messages()[0].code(), Some("commit_ok"));
+        assert!(matches!(success.messages()[0].level(), MessageLevel::Info));
+        assert_eq!(success.metadata(), Some(&json!({"version": 1})));
+        assert_eq!(success.started_at(), Some(started_at));
+        assert_eq!(success.finished_at(), Some(finished_at));
+        assert_eq!(success.duration_ms(), Some(2000));
+    }
+
+    #[test]
+    fn task_skip_and_host_task_result_expose_skip_metadata() {
+        let skipped = HostTaskResult::Skipped(
+            TaskSkip::new()
+                .with_reason("filtered")
+                .with_message("host excluded by selector"),
+        );
+
+        assert!(skipped.is_skipped());
+        assert_eq!(
+            skipped.skipped_detail().and_then(TaskSkip::reason),
+            Some("filtered")
+        );
+        assert_eq!(
+            skipped.skipped_detail().and_then(TaskSkip::message),
+            Some("host excluded by selector")
+        );
+
+        let skipped_with_reason = HostTaskResult::skipped_with_reason("parent_failed");
+        assert_eq!(
+            skipped_with_reason
+                .skipped_detail()
+                .and_then(TaskSkip::reason),
+            Some("parent_failed")
+        );
+    }
+
+    #[test]
+    fn task_message_builders_expose_message_metadata() {
+        let timestamp = SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_secs(1))
+            .expect("valid timestamp");
+        let message = TaskMessage::new(MessageLevel::Warning, "latency threshold exceeded")
+            .with_code("latency_warn")
+            .with_timestamp(timestamp);
+
+        assert!(matches!(message.level(), MessageLevel::Warning));
+        assert_eq!(message.text(), "latency threshold exceeded");
+        assert_eq!(message.code(), Some("latency_warn"));
+        assert_eq!(message.timestamp(), Some(timestamp));
+    }
+
+    #[test]
+    fn task_results_builders_expose_summary_and_timing_metadata() {
+        let started_at = SystemTime::UNIX_EPOCH;
+        let finished_at = SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_secs(3))
+            .expect("valid timestamp");
+        let results = TaskResults::new("deploy")
+            .with_summary("deploy finished")
+            .with_started_at(started_at)
+            .with_finished_at(finished_at)
+            .with_duration_ms(3000);
+
+        assert_eq!(results.task_name(), "deploy");
+        assert_eq!(results.summary(), Some("deploy finished"));
+        assert_eq!(results.started_at(), Some(started_at));
+        assert_eq!(results.finished_at(), Some(finished_at));
+        assert_eq!(results.duration_ms(), Some(3000));
     }
 
     #[test]
