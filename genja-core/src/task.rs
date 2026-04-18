@@ -7,12 +7,17 @@ use std::any::type_name;
 use std::error::Error;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 pub type TaskError = Arc<dyn Error + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TaskResults {
     task_name: String,
+    started_at: Option<SystemTime>,
+    finished_at: Option<SystemTime>,
+    duration_ms: Option<u128>,
+    summary: Option<String>,
     hosts: CustomTreeMap<HostTaskResult>,
     sub_tasks: CustomTreeMap<TaskResults>,
 }
@@ -21,6 +26,10 @@ impl TaskResults {
     pub fn new(task_name: impl Into<String>) -> Self {
         Self {
             task_name: task_name.into(),
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            summary: None,
             hosts: CustomTreeMap::new(),
             sub_tasks: CustomTreeMap::new(),
         }
@@ -28,6 +37,42 @@ impl TaskResults {
 
     pub fn task_name(&self) -> &str {
         &self.task_name
+    }
+
+    pub fn with_started_at(mut self, started_at: SystemTime) -> Self {
+        self.started_at = Some(started_at);
+        self
+    }
+
+    pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
+        self.finished_at = Some(finished_at);
+        self
+    }
+
+    pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
+        self.duration_ms = Some(duration_ms);
+        self
+    }
+
+    pub fn with_summary(mut self, summary: impl Into<String>) -> Self {
+        self.summary = Some(summary.into());
+        self
+    }
+
+    pub fn started_at(&self) -> Option<SystemTime> {
+        self.started_at
+    }
+
+    pub fn finished_at(&self) -> Option<SystemTime> {
+        self.finished_at
+    }
+
+    pub fn duration_ms(&self) -> Option<u128> {
+        self.duration_ms
+    }
+
+    pub fn summary(&self) -> Option<&str> {
+        self.summary.as_deref()
     }
 
     pub fn insert_host_result<K>(&mut self, hostname: K, result: HostTaskResult)
@@ -87,7 +132,7 @@ impl TaskResults {
 pub enum HostTaskResult {
     Passed(TaskSuccess),
     Failed(TaskFailure),
-    Skipped,
+    Skipped(TaskSkip),
 }
 
 impl HostTaskResult {
@@ -100,7 +145,11 @@ impl HostTaskResult {
     }
 
     pub fn skipped() -> Self {
-        Self::Skipped
+        Self::Skipped(TaskSkip::default())
+    }
+
+    pub fn skipped_with_reason(reason: impl Into<String>) -> Self {
+        Self::Skipped(TaskSkip::new().with_reason(reason))
     }
 
     pub fn is_passed(&self) -> bool {
@@ -112,20 +161,27 @@ impl HostTaskResult {
     }
 
     pub fn is_skipped(&self) -> bool {
-        matches!(self, Self::Skipped)
+        matches!(self, Self::Skipped(_))
     }
 
     pub fn success(&self) -> Option<&TaskSuccess> {
         match self {
             Self::Passed(success) => Some(success),
-            Self::Failed(_) | Self::Skipped => None,
+            Self::Failed(_) | Self::Skipped(_) => None,
         }
     }
 
     pub fn failure(&self) -> Option<&TaskFailure> {
         match self {
             Self::Failed(failure) => Some(failure),
-            Self::Passed(_) | Self::Skipped => None,
+            Self::Passed(_) | Self::Skipped(_) => None,
+        }
+    }
+
+    pub fn skipped_detail(&self) -> Option<&TaskSkip> {
+        match self {
+            Self::Skipped(skip) => Some(skip),
+            Self::Passed(_) | Self::Failed(_) => None,
         }
     }
 }
@@ -135,6 +191,13 @@ pub struct TaskSuccess {
     result: Option<Value>,
     changed: bool,
     diff: Option<String>,
+    summary: Option<String>,
+    warnings: Vec<String>,
+    messages: Vec<TaskMessage>,
+    metadata: Option<Value>,
+    started_at: Option<SystemTime>,
+    finished_at: Option<SystemTime>,
+    duration_ms: Option<u128>,
 }
 
 impl TaskSuccess {
@@ -157,6 +220,41 @@ impl TaskSuccess {
         self
     }
 
+    pub fn with_summary(mut self, summary: impl Into<String>) -> Self {
+        self.summary = Some(summary.into());
+        self
+    }
+
+    pub fn with_warning(mut self, warning: impl Into<String>) -> Self {
+        self.warnings.push(warning.into());
+        self
+    }
+
+    pub fn with_message(mut self, message: TaskMessage) -> Self {
+        self.messages.push(message);
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn with_started_at(mut self, started_at: SystemTime) -> Self {
+        self.started_at = Some(started_at);
+        self
+    }
+
+    pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
+        self.finished_at = Some(finished_at);
+        self
+    }
+
+    pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
+        self.duration_ms = Some(duration_ms);
+        self
+    }
+
     pub fn result(&self) -> Option<&Value> {
         self.result.as_ref()
     }
@@ -168,14 +266,50 @@ impl TaskSuccess {
     pub fn diff(&self) -> Option<&str> {
         self.diff.as_deref()
     }
+
+    pub fn summary(&self) -> Option<&str> {
+        self.summary.as_deref()
+    }
+
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    pub fn messages(&self) -> &[TaskMessage] {
+        &self.messages
+    }
+
+    pub fn metadata(&self) -> Option<&Value> {
+        self.metadata.as_ref()
+    }
+
+    pub fn started_at(&self) -> Option<SystemTime> {
+        self.started_at
+    }
+
+    pub fn finished_at(&self) -> Option<SystemTime> {
+        self.finished_at
+    }
+
+    pub fn duration_ms(&self) -> Option<u128> {
+        self.duration_ms
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskFailure {
     #[serde(skip)]
     error: TaskError,
+    kind: TaskFailureKind,
     error_type: String,
     message: String,
+    retryable: bool,
+    details: Option<Value>,
+    warnings: Vec<String>,
+    messages: Vec<TaskMessage>,
+    started_at: Option<SystemTime>,
+    finished_at: Option<SystemTime>,
+    duration_ms: Option<u128>,
 }
 
 impl TaskFailure {
@@ -184,10 +318,58 @@ impl TaskFailure {
         E: Error + Send + Sync + 'static,
     {
         Self {
+            kind: TaskFailureKind::Internal,
             error_type: type_name::<E>().to_string(),
             message: error.to_string(),
             error: Arc::new(error),
+            retryable: false,
+            details: None,
+            warnings: Vec::new(),
+            messages: Vec::new(),
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
         }
+    }
+
+    pub fn with_kind(mut self, kind: TaskFailureKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    pub fn with_retryable(mut self, retryable: bool) -> Self {
+        self.retryable = retryable;
+        self
+    }
+
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.details = Some(details);
+        self
+    }
+
+    pub fn with_warning(mut self, warning: impl Into<String>) -> Self {
+        self.warnings.push(warning.into());
+        self
+    }
+
+    pub fn with_message(mut self, message: TaskMessage) -> Self {
+        self.messages.push(message);
+        self
+    }
+
+    pub fn with_started_at(mut self, started_at: SystemTime) -> Self {
+        self.started_at = Some(started_at);
+        self
+    }
+
+    pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
+        self.finished_at = Some(finished_at);
+        self
+    }
+
+    pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
+        self.duration_ms = Some(duration_ms);
+        self
     }
 
     pub fn downcast_ref<E>(&self) -> Option<&E>
@@ -208,6 +390,132 @@ impl TaskFailure {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    pub fn kind(&self) -> &TaskFailureKind {
+        &self.kind
+    }
+
+    pub fn retryable(&self) -> bool {
+        self.retryable
+    }
+
+    pub fn details(&self) -> Option<&Value> {
+        self.details.as_ref()
+    }
+
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+
+    pub fn messages(&self) -> &[TaskMessage] {
+        &self.messages
+    }
+
+    pub fn started_at(&self) -> Option<SystemTime> {
+        self.started_at
+    }
+
+    pub fn finished_at(&self) -> Option<SystemTime> {
+        self.finished_at
+    }
+
+    pub fn duration_ms(&self) -> Option<u128> {
+        self.duration_ms
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TaskSkip {
+    reason: Option<String>,
+    message: Option<String>,
+}
+
+impl TaskSkip {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskMessage {
+    level: MessageLevel,
+    text: String,
+    code: Option<String>,
+    timestamp: Option<SystemTime>,
+}
+
+impl TaskMessage {
+    pub fn new(level: MessageLevel, text: impl Into<String>) -> Self {
+        Self {
+            level,
+            text: text.into(),
+            code: None,
+            timestamp: None,
+        }
+    }
+
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
+        self.code = Some(code.into());
+        self
+    }
+
+    pub fn with_timestamp(mut self, timestamp: SystemTime) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
+    pub fn level(&self) -> &MessageLevel {
+        &self.level
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn code(&self) -> Option<&str> {
+        self.code.as_deref()
+    }
+
+    pub fn timestamp(&self) -> Option<SystemTime> {
+        self.timestamp
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum MessageLevel {
+    Info,
+    Warning,
+    Error,
+    Debug,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum TaskFailureKind {
+    Connection,
+    Authentication,
+    Validation,
+    Timeout,
+    Command,
+    Unsupported,
+    Internal,
 }
 
 /// Task metadata required for execution.
@@ -530,10 +838,20 @@ mod tests {
 
     #[test]
     fn task_failure_preserves_metadata_and_supports_downcast() {
-        let failure = TaskFailure::new(TestTaskFailureError);
+        let failure = TaskFailure::new(TestTaskFailureError)
+            .with_kind(TaskFailureKind::Connection)
+            .with_retryable(true)
+            .with_details(json!({"port": 22}))
+            .with_warning("intermittent reachability")
+            .with_message(TaskMessage::new(MessageLevel::Error, "ssh session failed"));
 
         assert_eq!(failure.message(), "task failure test error");
         assert_eq!(failure.error().to_string(), "task failure test error");
+        assert!(matches!(failure.kind(), TaskFailureKind::Connection));
+        assert!(failure.retryable());
+        assert_eq!(failure.details(), Some(&json!({"port": 22})));
+        assert_eq!(failure.warnings(), ["intermittent reachability"]);
+        assert_eq!(failure.messages()[0].text(), "ssh session failed");
         assert!(failure
             .error_type()
             .ends_with("task::tests::TestTaskFailureError"));
@@ -542,18 +860,29 @@ mod tests {
 
     #[test]
     fn task_results_store_recursive_host_and_sub_task_results() {
-        let mut root = TaskResults::new("deploy");
+        let mut root = TaskResults::new("deploy").with_summary("deploy completed");
         root.insert_host_result(
             "router1",
             HostTaskResult::passed(
                 TaskSuccess::new()
                     .with_result(json!({"deployed": true}))
-                    .with_changed(true),
+                    .with_changed(true)
+                    .with_summary("config deployed")
+                    .with_warning("candidate config had comments")
+                    .with_message(TaskMessage::new(
+                        MessageLevel::Info,
+                        "candidate config committed",
+                    ))
+                    .with_metadata(json!({"version": "1.2.3"})),
             ),
         );
         root.insert_host_result(
             "router2",
-            HostTaskResult::failed(TaskFailure::new(TestTaskFailureError)),
+            HostTaskResult::failed(
+                TaskFailure::new(TestTaskFailureError)
+                    .with_kind(TaskFailureKind::Connection)
+                    .with_retryable(true),
+            ),
         );
 
         let mut validate = TaskResults::new("validate");
@@ -561,14 +890,24 @@ mod tests {
             "router1",
             HostTaskResult::passed(TaskSuccess::new().with_result(json!({"valid": true}))),
         );
-        validate.insert_host_result("router2", HostTaskResult::skipped());
+        validate.insert_host_result(
+            "router2",
+            HostTaskResult::Skipped(
+                TaskSkip::new()
+                    .with_reason("parent_failed")
+                    .with_message("validation skipped because deploy failed"),
+            ),
+        );
 
         let mut collect_logs = TaskResults::new("collect_logs");
         collect_logs.insert_host_result(
             "router1",
             HostTaskResult::passed(TaskSuccess::new().with_diff("captured logs")),
         );
-        collect_logs.insert_host_result("router2", HostTaskResult::skipped());
+        collect_logs.insert_host_result(
+            "router2",
+            HostTaskResult::skipped_with_reason("parent_failed"),
+        );
 
         validate.insert_sub_task("collect_logs", collect_logs);
         root.insert_sub_task("validate", validate);
@@ -593,10 +932,31 @@ mod tests {
             .sub_task("validate")
             .expect("validate sub task should exist");
         assert_eq!(validate.task_name(), "validate");
+        assert_eq!(root.summary(), Some("deploy completed"));
+        assert_eq!(
+            root.host_result("router1")
+                .and_then(HostTaskResult::success)
+                .and_then(TaskSuccess::summary),
+            Some("config deployed")
+        );
+        assert_eq!(
+            root.host_result("router1")
+                .and_then(HostTaskResult::success)
+                .map(TaskSuccess::warnings)
+                .map(|warnings| warnings.len()),
+            Some(1)
+        );
         assert!(validate
             .host_result("router2")
             .expect("router2 validate result should exist")
             .is_skipped());
+        assert_eq!(
+            validate
+                .host_result("router2")
+                .and_then(HostTaskResult::skipped_detail)
+                .and_then(TaskSkip::reason),
+            Some("parent_failed")
+        );
 
         let collect_logs = validate
             .sub_task("collect_logs")
@@ -608,6 +968,12 @@ mod tests {
                 .and_then(HostTaskResult::success)
                 .and_then(TaskSuccess::diff),
             Some("captured logs")
+        );
+        assert_eq!(
+            root.host_result("router2")
+                .and_then(HostTaskResult::failure)
+                .map(TaskFailure::retryable),
+            Some(true)
         );
     }
 }
