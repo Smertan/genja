@@ -1,3 +1,290 @@
+//! Task execution framework for Genja.
+//!
+//! This module provides the core task execution infrastructure for Genja, enabling
+//! structured task definition, execution, and result tracking across multiple hosts.
+//! It defines traits, types, and utilities for building task-based automation workflows
+//! with support for nested sub-tasks, rich result metadata, and flexible error handling.
+//!
+//! # Overview
+//!
+//! The task system is built around several key concepts:
+//!
+//! - **Task Definition**: Tasks implement the [`Task`] trait, which combines metadata
+//!   ([`TaskInfo`]) with execution logic and optional sub-tasks ([`SubTasks`]).
+//! - **Task Execution**: Tasks execute against hosts and return [`HostTaskResult`]
+//!   indicating success, failure, or skip status.
+//! - **Result Tracking**: The [`TaskResults`] structure maintains a hierarchical tree
+//!   of execution results for tasks and their sub-tasks across all hosts.
+//! - **Rich Metadata**: Tasks can attach detailed metadata including timing information,
+//!   warnings, messages, diffs, and custom data to their results.
+//!
+//! # Task Lifecycle
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                        Task Definition                          │
+//! │                    (implements Task trait)                      │
+//! └────────────────────────────┬────────────────────────────────────┘
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                      TaskDefinition Wrapper                     │
+//! │                  (provides execution control)                   │
+//! └────────────────────────────┬────────────────────────────────────┘
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                     Task Execution (start)                      │
+//! │              - Execute task.start() for each host               │
+//! │              - Store results in TaskResults tree                │
+//! │              - Recursively execute sub-tasks                    │
+//! └────────────────────────────┬────────────────────────────────────┘
+//!                              │
+//!                              ▼
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │                        HostTaskResult                           │
+//! │         - Passed (TaskSuccess with metadata)                    │
+//! │         - Failed (TaskFailure with error details)               │
+//! │         - Skipped (TaskSkip with reason)                        │
+//! └─────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Core Traits
+//!
+//! ## [`Task`]
+//!
+//! The primary trait that all tasks must implement. It combines [`TaskInfo`] for
+//! metadata, [`SubTasks`] for hierarchical task structures, and a `start()` method
+//! for execution logic.
+//!
+//! ```rust
+//! use genja_core::task::{Task, TaskInfo, SubTasks, HostTaskResult, TaskSuccess};
+//! use genja_core::inventory::{Host, ConnectionKey};
+//! use std::sync::Arc;
+//! use serde_json::Value;
+//!
+//! struct DeployTask {
+//!     name: String,
+//!     config_file: String,
+//! }
+//!
+//! impl TaskInfo for DeployTask {
+//!     fn name(&self) -> &str {
+//!         &self.name
+//!     }
+//!
+//!     fn plugin_name(&self) -> &str {
+//!         "ssh"
+//!     }
+//!
+//!     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+//!         ConnectionKey::new(hostname, "ssh")
+//!     }
+//!
+//!     fn options(&self) -> Option<&Value> {
+//!         None
+//!     }
+//! }
+//!
+//! impl SubTasks for DeployTask {
+//!     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+//!         Vec::new()
+//!     }
+//! }
+//!
+//! impl Task for DeployTask {
+//!     fn start(&self, host: &Host) -> HostTaskResult {
+//!         // Execute deployment logic
+//!         HostTaskResult::passed(
+//!             TaskSuccess::new()
+//!                 .with_changed(true)
+//!                 .with_summary("Configuration deployed successfully")
+//!         )
+//!     }
+//! }
+//! ```
+//!
+//! ## [`TaskInfo`]
+//!
+//! Provides metadata about a task including its name, associated plugin, connection
+//! requirements, and optional configuration. This trait is typically auto-implemented
+//! when using the `#[derive(Task)]` macro from `genja-core-derive`.
+//!
+//! ## [`SubTasks`]
+//!
+//! Enables hierarchical task structures by allowing tasks to define sub-tasks that
+//! execute after the parent task completes. Sub-tasks inherit the execution context
+//! and can be conditionally skipped based on parent task results.
+//!
+//! # Task Results
+//!
+//! ## [`HostTaskResult`]
+//!
+//! Represents the outcome of executing a task on a single host. It can be:
+//!
+//! - **Passed**: Task completed successfully with optional metadata in [`TaskSuccess`]
+//! - **Failed**: Task encountered an error with details in [`TaskFailure`]
+//! - **Skipped**: Task was not executed with reason in [`TaskSkip`]
+//!
+//! ```rust
+//! use genja_core::task::{HostTaskResult, TaskSuccess, TaskFailure, TaskFailureKind};
+//! use serde_json::json;
+//!
+//! // Success with metadata
+//! let success = HostTaskResult::passed(
+//!     TaskSuccess::new()
+//!         .with_result(json!({"status": "deployed"}))
+//!         .with_changed(true)
+//!         .with_diff("+ new_config_line")
+//! );
+//!
+//! // Failure with classification
+//! let failure = HostTaskResult::failed(
+//!     TaskFailure::new(std::io::Error::new(
+//!         std::io::ErrorKind::ConnectionRefused,
+//!         "connection refused"
+//!     ))
+//!     .with_kind(TaskFailureKind::Connection)
+//!     .with_retryable(true)
+//! );
+//!
+//! // Skipped with reason
+//! let skipped = HostTaskResult::skipped_with_reason("parent_failed");
+//! ```
+//!
+//! ## [`TaskResults`]
+//!
+//! A hierarchical structure that stores execution results for a task and all its
+//! sub-tasks across multiple hosts. It provides methods for querying results,
+//! tracking success/failure counts, and navigating the task tree.
+//!
+//! ```rust
+//! use genja_core::task::{TaskResults, HostTaskResult, TaskSuccess};
+//!
+//! let mut results = TaskResults::new("deploy")
+//!     .with_summary("Deployment completed");
+//!
+//! results.insert_host_result(
+//!     "router1",
+//!     HostTaskResult::passed(TaskSuccess::new().with_changed(true))
+//! );
+//!
+//! results.insert_host_result(
+//!     "router2",
+//!     HostTaskResult::skipped_with_reason("maintenance_mode")
+//! );
+//!
+//! // Query results
+//! assert_eq!(results.passed_hosts().len(), 1);
+//! assert!(results.host_result("router1").unwrap().is_passed());
+//! assert!(results.host_result("router2").unwrap().is_skipped());
+//! ```
+//!
+//! # Task Metadata
+//!
+//! ## [`TaskSuccess`]
+//!
+//! Contains rich metadata about successful task execution:
+//!
+//! - **result**: Structured data returned by the task (JSON)
+//! - **changed**: Whether the task modified the target system
+//! - **diff**: Text representation of changes made
+//! - **summary**: Human-readable summary of execution
+//! - **warnings**: Non-fatal issues encountered
+//! - **messages**: Structured log messages with levels and codes
+//! - **metadata**: Additional custom data
+//! - **timing**: Start time, finish time, and duration
+//!
+//! ## [`TaskFailure`]
+//!
+//! Contains detailed error information for failed tasks:
+//!
+//! - **error**: The underlying error that caused the failure
+//! - **kind**: Classification of the failure ([`TaskFailureKind`])
+//! - **retryable**: Whether the operation can be retried
+//! - **details**: Additional context about the failure (JSON)
+//! - **warnings**: Non-fatal issues that preceded the failure
+//! - **messages**: Structured log messages
+//!
+//! ## [`TaskSkip`]
+//!
+//! Contains information about why a task was skipped:
+//!
+//! - **reason**: Machine-readable skip reason
+//! - **message**: Human-readable explanation
+//!
+//! # Failure Classification
+//!
+//! The [`TaskFailureKind`] enum categorizes failures to enable appropriate error
+//! handling and retry logic:
+//!
+//! - **Connection**: Network or connectivity issues (often retryable)
+//! - **Authentication**: Credential or permission problems
+//! - **Validation**: Invalid input or configuration
+//! - **Timeout**: Operation exceeded time limit (often retryable)
+//! - **Command**: Remote command execution failed
+//! - **Unsupported**: Operation not supported by target
+//! - **Internal**: Framework or implementation error
+//!
+//! # Message System
+//!
+//! Tasks can emit structured messages during execution using [`TaskMessage`]:
+//!
+//! ```rust
+//! use genja_core::task::{TaskMessage, MessageLevel};
+//! use std::time::SystemTime;
+//!
+//! let message = TaskMessage::new(MessageLevel::Warning, "High latency detected")
+//!     .with_code("latency_warn")
+//!     .with_timestamp(SystemTime::now());
+//! ```
+//!
+//! Message levels include:
+//! - **Info**: Informational messages
+//! - **Warning**: Non-fatal issues
+//! - **Error**: Error details
+//! - **Debug**: Debugging information
+//!
+//! # Task Execution
+//!
+//! ## [`TaskDefinition`]
+//!
+//! A wrapper around task implementations that provides execution control and
+//! enforces the task execution flow. It handles recursive sub-task execution
+//! with depth limiting to prevent infinite recursion.
+//!
+//! ```rust
+//! use genja_core::task::{TaskDefinition, TaskResults};
+//! use genja_core::inventory::Host;
+//!
+//! // let task = TaskDefinition::new(my_task);
+//! // let host = Host::builder().hostname("router1").build();
+//! // let mut results = TaskResults::new("deploy");
+//! //
+//! // task.start("router1", &host, &mut results, 10)
+//! //     .expect("Task execution failed");
+//! ```
+//!
+//! ## [`Tasks`]
+//!
+//! A collection type for managing multiple task definitions. It provides a
+//! convenient way to build and execute task lists.
+//!
+//! ```rust
+//! use genja_core::task::Tasks;
+//!
+//! let mut tasks = Tasks::new();
+//! // tasks.add_task(deploy_task);
+//! // tasks.add_task(validate_task);
+//! // tasks.add_task(cleanup_task);
+//! ```
+//!
+//! # Advanced Usage
+//!
+//! ## Hierarchical Task Execution
+//!
+//! Tasks can define sub-tasks that execute after the parent task completes. This
+//!
 use crate::inventory::Host;
 use crate::types::{CustomTreeMap, NatString};
 use log::warn;
@@ -1714,7 +2001,69 @@ pub trait Task: TaskInfo + SubTasks {
     fn start(&self, host: &Host) -> HostTaskResult;
 }
 
-/// A task wrapper that enforces the task trait flow.
+/// A wrapper around a task implementation that enforces the task trait flow.
+///
+/// `TaskDefinition` encapsulates a task that implements the `Task` trait, providing
+/// a unified interface for task execution and management. This wrapper enables
+/// polymorphic task handling while maintaining type safety through trait objects.
+///
+/// The wrapper provides access to the underlying task through trait object references,
+/// allowing the task to be executed and queried without knowing its concrete type.
+/// This is particularly useful for storing heterogeneous collections of tasks and
+/// executing them uniformly.
+///
+/// # Fields
+///
+/// * `inner` - A boxed trait object containing the actual task implementation.
+///   The task must implement the `Task` trait, which includes `TaskInfo` and
+///   `SubTasks` traits, providing metadata, execution logic, and sub-task management.
+///
+/// # Example
+///
+/// ```rust
+/// use genja_core::task::{Task, TaskDefinition, TaskInfo, SubTasks, HostTaskResult, TaskSuccess};
+/// use genja_core::inventory::Host;
+/// use std::sync::Arc;
+/// use serde_json::Value;
+///
+/// struct MyTask {
+///     name: String,
+/// }
+///
+/// impl TaskInfo for MyTask {
+///     fn name(&self) -> &str {
+///         &self.name
+///     }
+///
+///     fn plugin_name(&self) -> &str {
+///         "ssh"
+///     }
+///
+///     fn get_connection_key(&self, hostname: &str) -> genja_core::inventory::ConnectionKey {
+///         genja_core::inventory::ConnectionKey::new(hostname, "ssh")
+///     }
+///
+///     fn options(&self) -> Option<&Value> {
+///         None
+///     }
+/// }
+///
+/// impl SubTasks for MyTask {
+///     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+///         Vec::new()
+///     }
+/// }
+///
+/// impl Task for MyTask {
+///     fn start(&self, _host: &Host) -> HostTaskResult {
+///         HostTaskResult::passed(TaskSuccess::new())
+///     }
+/// }
+///
+/// let task = MyTask { name: "deploy".to_string() };
+/// let definition = TaskDefinition::new(task);
+/// assert_eq!(definition.name(), "deploy");
+/// ```
 pub struct TaskDefinition {
     inner: Box<dyn Task>,
 }
@@ -1766,6 +2115,50 @@ impl TaskDefinition {
         Self::start_with_depth(self.inner.as_ref(), hostname, host, results, 0, max_depth)
     }
 
+    /// Recursively executes a task and its sub-tasks with depth tracking.
+    ///
+    /// This internal helper method performs the actual recursive task execution,
+    /// tracking the current depth to enforce the maximum depth limit. It executes
+    /// the task by calling its `start()` method, stores the result, then recursively
+    /// processes all sub-tasks returned by `sub_tasks()`.
+    ///
+    /// The method ensures that task nesting doesn't exceed the specified maximum
+    /// depth, preventing infinite recursion or excessive nesting that could lead
+    /// to stack overflow or performance issues.
+    ///
+    /// # Parameters
+    ///
+    /// * `task` - A reference to the task to execute, provided as a trait object.
+    ///   This allows handling any type that implements the `Task` trait.
+    ///
+    /// * `hostname` - The name of the host on which the task is being executed.
+    ///   Used as the key when storing task results.
+    ///
+    /// * `host` - A reference to the `Host` object representing the target system.
+    ///   This is passed to the task's `start()` method for execution.
+    ///
+    /// * `results` - A mutable reference to the `TaskResults` structure where
+    ///   execution results for this task and its sub-tasks will be stored.
+    ///
+    /// * `depth` - The current depth in the task execution tree. The root task
+    ///   starts at depth 0, its immediate sub-tasks are at depth 1, and so on.
+    ///
+    /// * `max_depth` - The maximum allowed depth for task nesting. If `depth`
+    ///   exceeds this value, the method returns an error and stops execution.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if the task and all its sub-tasks executed successfully within
+    ///   the depth limit.
+    ///
+    /// * `Err(GenjaError::Message)` if the current depth exceeds `max_depth`,
+    ///   indicating that the task nesting is too deep.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GenjaError::Message` with a descriptive error message if the
+    /// task nesting depth exceeds the specified `max_depth` limit. The error
+    /// message includes the maximum depth value that was exceeded.
     fn start_with_depth(
         task: &dyn Task,
         hostname: &str,
@@ -1812,18 +2205,56 @@ impl TaskDefinition {
 }
 
 impl TaskInfo for TaskDefinition {
+    /// Returns the name of the task.
+    ///
+    /// This method delegates to the inner task's `name()` implementation, providing
+    /// access to the task's identifier through the `TaskDefinition` wrapper.
+    ///
+    /// # Returns
+    ///
+    /// A string slice containing the task's name.
     fn name(&self) -> &str {
         self.inner.name()
     }
 
+    /// Returns the name of the plugin associated with this task.
+    ///
+    /// This method delegates to the inner task's `plugin_name()` implementation,
+    /// providing access to the plugin identifier that will handle the task's execution.
+    ///
+    /// # Returns
+    ///
+    /// A string slice containing the plugin's name (e.g., "ssh", "netconf", "restconf").
     fn plugin_name(&self) -> &str {
         self.inner.plugin_name()
     }
 
+    /// Builds a connection key for the specified host.
+    ///
+    /// This method delegates to the inner task's `get_connection_key()` implementation,
+    /// constructing a unique identifier that combines the hostname with the plugin name
+    /// to identify the connection to be used for task execution.
+    ///
+    /// # Parameters
+    ///
+    /// * `hostname` - The name of the host for which to build the connection key.
+    ///
+    /// # Returns
+    ///
+    /// A `ConnectionKey` that uniquely identifies the connection to the specified host
+    /// using this task's plugin.
     fn get_connection_key(&self, hostname: &str) -> crate::inventory::ConnectionKey {
         self.inner.get_connection_key(hostname)
     }
 
+    /// Returns the task's options payload, if available.
+    ///
+    /// This method delegates to the inner task's `options()` implementation, providing
+    /// access to any structured configuration or parameters associated with the task.
+    ///
+    /// # Returns
+    ///
+    /// `Some(&Value)` if the task has options configured, `None` otherwise.
     fn options(&self) -> Option<&Value> {
         self.inner.options()
     }
