@@ -57,6 +57,10 @@
 //! metadata, [`SubTasks`] for hierarchical task structures, and a `start()` method
 //! for execution logic.
 //!
+//! In the common derive-based workflow, `#[derive(Task)]` from `genja-core-derive`
+//! generates [`TaskInfo`] and [`SubTasks`], while you still implement [`Task`]
+//! manually to provide `start()`.
+//!
 //! ```rust
 //! use genja_core::task::{Task, TaskInfo, SubTasks, HostTaskResult, TaskSuccess};
 //! use genja_core::inventory::{Host, ConnectionKey};
@@ -109,12 +113,35 @@
 //! Provides metadata about a task including its name, associated plugin, connection
 //! requirements, and optional configuration. This trait is typically auto-implemented
 //! when using the `#[derive(Task)]` macro from `genja-core-derive`.
+//! That derive reads the task struct's `name`, optional `plugin_name`, and optional
+//! `options` fields to generate the corresponding trait methods.
 //!
 //! ## [`SubTasks`]
 //!
 //! Enables hierarchical task structures by allowing tasks to define sub-tasks that
 //! execute after the parent task completes. Sub-tasks inherit the execution context
 //! and can be conditionally skipped based on parent task results.
+//! With `#[derive(Task)]`, any field marked with `#[task(subtask)]` is included in
+//! [`SubTasks::sub_tasks()`] in declaration order.
+//!
+//! # Behavioral Rules
+//!
+//! The execution model is intentionally simple and deterministic:
+//!
+//! - The parent task's `start()` method runs before any of its sub-tasks.
+//! - The parent task's [`HostTaskResult`] is inserted into [`TaskResults`] before
+//!   sub-task execution begins.
+//! - Sub-tasks run in the order returned by [`SubTasks::sub_tasks()`]. For the
+//!   derive macro, that means declaration order of fields marked with `#[task(subtask)]`.
+//! - Each host is executed independently. When running through `Genja::run`, the
+//!   full task tree is executed once per selected host.
+//! - Sub-task results are grouped by sub-task name. The `TaskResults` node for a
+//!   given sub-task contains per-host results accumulated across all hosts.
+//! - The framework does not automatically skip sub-tasks when a parent fails or is
+//!   skipped. If you want that behavior, return an explicit [`HostTaskResult::Skipped`]
+//!   from the sub-task or encode the condition in the task itself.
+//! - `max_depth` is checked using `depth > max_depth`. This means `max_depth = 0`
+//!   still allows the root task at depth `0`, but rejects all sub-tasks at depth `1`.
 //!
 //! # Task Results
 //!
@@ -254,15 +281,58 @@
 //! with depth limiting to prevent infinite recursion.
 //!
 //! ```rust
-//! use genja_core::task::{TaskDefinition, TaskResults};
-//! use genja_core::inventory::Host;
+//! use std::sync::Arc;
 //!
-//! // let task = TaskDefinition::new(my_task);
-//! // let host = Host::builder().hostname("router1").build();
-//! // let mut results = TaskResults::new("deploy");
-//! //
-//! // task.start("router1", &host, &mut results, 10)
-//! //     .expect("Task execution failed");
+//! use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Host};
+//! use genja_core::task::{
+//!     HostTaskResult, Task, TaskDefinition, TaskInfo, TaskResults, TaskSuccess, SubTasks,
+//! };
+//! use serde_json::Value;
+//!
+//! struct DeployTask {
+//!     name: String,
+//! }
+//!
+//! impl TaskInfo for DeployTask {
+//!     fn name(&self) -> &str {
+//!         &self.name
+//!     }
+//!
+//!     fn plugin_name(&self) -> &str {
+//!         "ssh"
+//!     }
+//!
+//!     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+//!         ConnectionKey::new(hostname, self.plugin_name())
+//!     }
+//!
+//!     fn options(&self) -> Option<&Value> {
+//!         None
+//!     }
+//! }
+//!
+//! impl SubTasks for DeployTask {
+//!     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+//!         Vec::new()
+//!     }
+//! }
+//!
+//! impl Task for DeployTask {
+//!     fn start(&self, _host: &Host) -> HostTaskResult {
+//!         HostTaskResult::passed(TaskSuccess::new().with_summary("deploy complete"))
+//!     }
+//! }
+//!
+//! let task = TaskDefinition::new(DeployTask {
+//!     name: "deploy".to_string(),
+//! });
+//! let host = Host::builder().hostname("router1").build();
+//! let mut results = TaskResults::new("deploy");
+//!
+//! task.start("router1", &host, &mut results, 1)
+//!     .expect("task execution should succeed");
+//!
+//! assert!(results.host_result("router1").unwrap().is_passed());
 //! ```
 //!
 //! ## [`Tasks`]
@@ -2092,15 +2162,17 @@ impl TaskDefinition {
     ///
     /// # Parameters
     ///
-    /// * `max_depth` - The maximum depth of task nesting allowed. A depth of 1 means
-    ///   only the root task will execute. A depth of 2 allows the root task plus one
-    ///   level of sub-tasks, and so on.
+    /// * `max_depth` - The maximum depth of task nesting allowed. Depth is zero-based:
+    ///   the root task runs at depth `0`, its immediate sub-tasks at depth `1`, and so on.
+    ///   This means `max_depth = 0` allows only the root task, `max_depth = 1` allows
+    ///   the root task plus one level of sub-tasks, and so on.
     ///
     /// # Returns
     ///
     /// Inserts the provided host's result into the shared `TaskResults` tree and
-    /// recursively does the same for any sub-tasks. Returns `Err(GenjaError)` if
-    /// the maximum depth is exceeded.
+    /// recursively does the same for any sub-tasks. The parent task result is recorded
+    /// before sub-task execution starts. Returns `Err(GenjaError)` if the maximum depth
+    /// is exceeded.
     ///
     /// # Errors
     ///
@@ -2121,6 +2193,10 @@ impl TaskDefinition {
     /// tracking the current depth to enforce the maximum depth limit. It executes
     /// the task by calling its `start()` method, stores the result, then recursively
     /// processes all sub-tasks returned by `sub_tasks()`.
+    ///
+    /// Sub-tasks are executed in iteration order. Results are grouped by task name, so
+    /// a sub-task named `"validate"` produces a single `TaskResults` node containing
+    /// host results for every host on which that sub-task ran.
     ///
     /// The method ensures that task nesting doesn't exceed the specified maximum
     /// depth, preventing infinite recursion or excessive nesting that could lead
@@ -2145,6 +2221,8 @@ impl TaskDefinition {
     ///
     /// * `max_depth` - The maximum allowed depth for task nesting. If `depth`
     ///   exceeds this value, the method returns an error and stops execution.
+    ///   Because the check is `depth > max_depth`, a task at depth exactly equal
+    ///   to `max_depth` is still allowed to run.
     ///
     /// # Returns
     ///

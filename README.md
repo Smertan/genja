@@ -36,6 +36,24 @@ The recommended pattern is:
 3. Implement `genja_core::task::Task` and return a `HostTaskResult` from `start()`.
 4. Run the task with `Genja::run(task, max_depth)`.
 
+### Derive Macro
+
+`#[derive(TaskDerive)]` does not implement the full `Task` trait for you.
+It generates `TaskInfo` and `SubTasks`, then you provide the execution logic by manually implementing `Task`.
+
+The derive macro maps fields like this:
+
+- `name` is required and becomes `TaskInfo::name()`.
+- `plugin_name` is optional and becomes `TaskInfo::plugin_name()`.
+- `options` is optional and becomes `TaskInfo::options()`.
+- Fields marked with `#[task(subtask)]` are collected into `SubTasks::sub_tasks()` in declaration order.
+
+That means the usual pattern is:
+
+1. Add `#[derive(TaskDerive)]` to the task struct.
+2. Declare `name`, and optionally `plugin_name`, `options`, and `#[task(subtask)]` fields.
+3. Implement `Task::start(&self, host)` manually.
+
 ```rust
 use genja::Genja;
 use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
@@ -79,9 +97,21 @@ assert!(results.host_result("router1").unwrap().is_passed());
 Notes:
 
 - `max_depth` limits recursive sub-task execution. A task with no sub-tasks can use a small value like `1`.
-- `#[derive(TaskDerive)]` requires a `name` field. `plugin_name` is optional, but usually needed for real task execution.
+- `#[derive(TaskDerive)]` requires a `name` field and generates `TaskInfo` plus `SubTasks`, not `Task::start()`.
+- `plugin_name` is optional, but usually needed for real task execution.
 - Rich task output lives in `TaskSuccess`, `TaskFailure`, `TaskSkip`, and `TaskResults`.
 - The lower-level task API is documented in `genja-core/src/task.rs`.
+
+### Task Execution Rules
+
+- `Genja::run` executes the full task tree once per selected host.
+- The parent task runs before any of its sub-tasks.
+- The parent host result is recorded before sub-task execution starts.
+- Sub-tasks run in the order returned by `sub_tasks()`. With `#[derive(TaskDerive)]`, that is the declaration order of `#[task(subtask)]` fields.
+- Sub-task results are stored under `results.sub_task("<name>")` and grouped by sub-task name across hosts.
+- Sub-tasks are not automatically skipped when a parent fails or is skipped. If you need that behavior, encode it in the task and return a skipped result explicitly.
+- Depth is zero-based. The root task runs at depth `0`, its direct children at depth `1`, and so on.
+- Because the limit check is inclusive of the current depth, `max_depth = 0` allows only the root task, while `max_depth = 1` allows one level of sub-tasks.
 
 ### Sub-Tasks
 
