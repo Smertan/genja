@@ -777,7 +777,6 @@ impl DefaultsBuilder {
         self
     }
 
-
     pub fn build(self) -> Defaults {
         Defaults {
             hostname: self.hostname,
@@ -2611,8 +2610,8 @@ impl ConnectionKey {
     ///
     /// // Using owned strings
     /// let hostname = String::from("router1");
-/// let plugin_name = String::from("netconf");
-/// let key2 = ConnectionKey::new(hostname, plugin_name);
+    /// let plugin_name = String::from("netconf");
+    /// let key2 = ConnectionKey::new(hostname, plugin_name);
     ///
     /// // Mixed types
     /// let key3 = ConnectionKey::new("10.0.0.2", String::from("http"));
@@ -4390,16 +4389,13 @@ impl<'a> HostsView<'a> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&'a NatString, Host)> {
-        self.inventory
-            .hosts
-            .iter()
-            .filter_map(|(id, host)| {
-                if self.inventory.state.is_in_scope_key(id) {
-                    Some((id, self.inventory.cached_host_value(id, host)))
-                } else {
-                    None
-                }
-            })
+        self.inventory.hosts.iter().filter_map(|(id, host)| {
+            if self.inventory.state.is_in_scope_key(id) {
+                Some((id, self.inventory.cached_host_value(id, host)))
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -5391,18 +5387,12 @@ mod tests {
     fn resolve_connection_params_applies_priority_order() {
         let defaults = Defaults::builder()
             .port(10)
-            .connection_options(
-                "ssh",
-                ConnectionOptions::builder().port(11).build(),
-            )
+            .connection_options("ssh", ConnectionOptions::builder().port(11).build())
             .build();
 
         let group = Group::builder()
             .port(20)
-            .connection_options(
-                "ssh",
-                ConnectionOptions::builder().port(21).build(),
-            )
+            .connection_options("ssh", ConnectionOptions::builder().port(21).build())
             .build();
 
         let mut groups = Groups::new();
@@ -5413,10 +5403,7 @@ mod tests {
         let host = Host::builder()
             .port(30)
             .groups(parents)
-            .connection_options(
-                "ssh",
-                ConnectionOptions::builder().port(31).build(),
-            )
+            .connection_options("ssh", ConnectionOptions::builder().port(31).build())
             .build();
 
         let mut hosts = Hosts::new();
