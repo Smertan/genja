@@ -368,6 +368,27 @@ use std::time::SystemTime;
 
 pub type TaskError = Arc<dyn Error + Send + Sync + 'static>;
 
+fn format_timestamp_display(timestamp: SystemTime) -> String {
+    humantime::format_rfc3339_seconds(timestamp).to_string()
+}
+
+fn format_duration_display(duration_ns: u128) -> String {
+    if duration_ns < 1_000 {
+        return format!("{duration_ns}ns");
+    }
+
+    if duration_ns < 1_000_000 {
+        return format!("{}us", duration_ns / 1_000);
+    }
+
+    if duration_ns < 1_000_000_000 {
+        return format!("{}ms", duration_ns / 1_000_000);
+    }
+
+    let duration_ns = u64::try_from(duration_ns).unwrap_or(u64::MAX);
+    humantime::format_duration(std::time::Duration::from_nanos(duration_ns)).to_string()
+}
+
 /// Results of a task execution, including timing, host outcomes, and nested sub-task results.
 ///
 /// `TaskResults` captures the complete execution state of a task across multiple hosts,
@@ -445,12 +466,111 @@ struct TaskResultsHumanJson<'a> {
     finished_at: Option<String>,
     duration: Option<String>,
     summary: Option<&'a str>,
-    hosts: &'a CustomTreeMap<HostTaskResult>,
+    hosts: CustomTreeMap<HostTaskResultHumanJson<'a>>,
     sub_tasks: CustomTreeMap<TaskResultsHumanJson<'a>>,
+}
+
+#[derive(Serialize)]
+enum HostTaskResultHumanJson<'a> {
+    Passed(TaskSuccessHumanJson<'a>),
+    Failed(TaskFailureHumanJson<'a>),
+    Skipped(TaskSkipHumanJson<'a>),
+}
+
+#[derive(Serialize)]
+struct TaskSuccessHumanJson<'a> {
+    result: Option<&'a Value>,
+    changed: bool,
+    diff: Option<&'a str>,
+    summary: Option<&'a str>,
+    warnings: &'a [String],
+    messages: &'a [TaskMessage],
+    metadata: Option<&'a Value>,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    duration: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TaskFailureHumanJson<'a> {
+    kind: &'a TaskFailureKind,
+    error_type: &'a str,
+    message: &'a str,
+    retryable: bool,
+    details: Option<&'a Value>,
+    warnings: &'a [String],
+    messages: &'a [TaskMessage],
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    duration: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TaskSkipHumanJson<'a> {
+    reason: Option<&'a str>,
+    message: Option<&'a str>,
+}
+
+impl<'a> From<&'a HostTaskResult> for HostTaskResultHumanJson<'a> {
+    fn from(result: &'a HostTaskResult) -> Self {
+        match result {
+            HostTaskResult::Passed(success) => Self::Passed(TaskSuccessHumanJson::from(success)),
+            HostTaskResult::Failed(failure) => Self::Failed(TaskFailureHumanJson::from(failure)),
+            HostTaskResult::Skipped(skip) => Self::Skipped(TaskSkipHumanJson::from(skip)),
+        }
+    }
+}
+
+impl<'a> From<&'a TaskSuccess> for TaskSuccessHumanJson<'a> {
+    fn from(success: &'a TaskSuccess) -> Self {
+        Self {
+            result: success.result(),
+            changed: success.changed(),
+            diff: success.diff(),
+            summary: success.summary(),
+            warnings: success.warnings(),
+            messages: success.messages(),
+            metadata: success.metadata(),
+            started_at: success.started_at_display(),
+            finished_at: success.finished_at_display(),
+            duration: success.duration_display(),
+        }
+    }
+}
+
+impl<'a> From<&'a TaskFailure> for TaskFailureHumanJson<'a> {
+    fn from(failure: &'a TaskFailure) -> Self {
+        Self {
+            kind: failure.kind(),
+            error_type: failure.error_type(),
+            message: failure.message(),
+            retryable: failure.retryable(),
+            details: failure.details(),
+            warnings: failure.warnings(),
+            messages: failure.messages(),
+            started_at: failure.started_at_display(),
+            finished_at: failure.finished_at_display(),
+            duration: failure.duration_display(),
+        }
+    }
+}
+
+impl<'a> From<&'a TaskSkip> for TaskSkipHumanJson<'a> {
+    fn from(skip: &'a TaskSkip) -> Self {
+        Self {
+            reason: skip.reason(),
+            message: skip.message(),
+        }
+    }
 }
 
 impl<'a> From<&'a TaskResults> for TaskResultsHumanJson<'a> {
     fn from(results: &'a TaskResults) -> Self {
+        let mut hosts = CustomTreeMap::new();
+        for (hostname, host_result) in results.hosts().iter() {
+            hosts.insert(hostname, HostTaskResultHumanJson::from(host_result));
+        }
+
         let mut sub_tasks = CustomTreeMap::new();
         for (task_name, task_results) in results.sub_tasks().iter() {
             sub_tasks.insert(task_name, TaskResultsHumanJson::from(task_results));
@@ -462,7 +582,7 @@ impl<'a> From<&'a TaskResults> for TaskResultsHumanJson<'a> {
             finished_at: results.finished_at_display(),
             duration: results.duration_display(),
             summary: results.summary(),
-            hosts: results.hosts(),
+            hosts,
             sub_tasks,
         }
     }
@@ -621,34 +741,17 @@ impl TaskResults {
 
     /// Returns the task execution start timestamp in RFC 3339 format, if available.
     pub fn started_at_display(&self) -> Option<String> {
-        self.started_at
-            .map(|started_at| humantime::format_rfc3339_seconds(started_at).to_string())
+        self.started_at.map(format_timestamp_display)
     }
 
     /// Returns the task execution finish timestamp in RFC 3339 format, if available.
     pub fn finished_at_display(&self) -> Option<String> {
-        self.finished_at
-            .map(|finished_at| humantime::format_rfc3339_seconds(finished_at).to_string())
+        self.finished_at.map(format_timestamp_display)
     }
 
     /// Returns the task execution duration in a human-readable format, if available.
     pub fn duration_display(&self) -> Option<String> {
-        self.duration_ns().map(|duration_ns| {
-            if duration_ns < 1_000 {
-                return format!("{duration_ns}ns");
-            }
-
-            if duration_ns < 1_000_000 {
-                return format!("{}us", duration_ns / 1_000);
-            }
-
-            if duration_ns < 1_000_000_000 {
-                return format!("{}ms", duration_ns / 1_000_000);
-            }
-
-            let duration_ns = u64::try_from(duration_ns).unwrap_or(u64::MAX);
-            humantime::format_duration(std::time::Duration::from_nanos(duration_ns)).to_string()
-        })
+        self.duration_ns().map(format_duration_display)
     }
 
     /// Serializes task results as compact human-readable JSON.
@@ -1008,6 +1111,29 @@ impl HostTaskResult {
             Self::Passed(_) | Self::Failed(_) => None,
         }
     }
+
+    fn with_execution_timing(
+        self,
+        started_at: SystemTime,
+        finished_at: SystemTime,
+        duration_ns: u128,
+    ) -> Self {
+        match self {
+            Self::Passed(success) => Self::Passed(
+                success
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(duration_ns),
+            ),
+            Self::Failed(failure) => Self::Failed(
+                failure
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(duration_ns),
+            ),
+            Self::Skipped(skip) => Self::Skipped(skip),
+        }
+    }
 }
 
 /// Represents the successful execution of a task on a host.
@@ -1072,6 +1198,7 @@ pub struct TaskSuccess {
     metadata: Option<Value>,
     started_at: Option<SystemTime>,
     finished_at: Option<SystemTime>,
+    duration_ns: Option<u128>,
     duration_ms: Option<u128>,
 }
 
@@ -1272,7 +1399,15 @@ impl TaskSuccess {
     ///
     /// The modified `TaskSuccess` instance with the duration set.
     pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
+        self.duration_ns = Some(duration_ms.saturating_mul(1_000_000));
         self.duration_ms = Some(duration_ms);
+        self
+    }
+
+    /// Sets the task execution duration in nanoseconds.
+    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
+        self.duration_ns = Some(duration_ns);
+        self.duration_ms = Some(duration_ns / 1_000_000);
         self
     }
 
@@ -1365,7 +1500,32 @@ impl TaskSuccess {
     ///
     /// `Some(u128)` if the duration was set, `None` otherwise.
     pub fn duration_ms(&self) -> Option<u128> {
-        self.duration_ms
+        self.duration_ns
+            .map(|duration_ns| duration_ns / 1_000_000)
+            .or(self.duration_ms)
+    }
+
+    /// Returns the task execution duration in nanoseconds, if available.
+    pub fn duration_ns(&self) -> Option<u128> {
+        self.duration_ns.or_else(|| {
+            self.duration_ms
+                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
+        })
+    }
+
+    /// Returns the task execution start timestamp in RFC 3339 format, if available.
+    pub fn started_at_display(&self) -> Option<String> {
+        self.started_at.map(format_timestamp_display)
+    }
+
+    /// Returns the task execution finish timestamp in RFC 3339 format, if available.
+    pub fn finished_at_display(&self) -> Option<String> {
+        self.finished_at.map(format_timestamp_display)
+    }
+
+    /// Returns the task execution duration in a human-readable format, if available.
+    pub fn duration_display(&self) -> Option<String> {
+        self.duration_ns().map(format_duration_display)
     }
 }
 
@@ -1443,6 +1603,7 @@ pub struct TaskFailure {
     messages: Vec<TaskMessage>,
     started_at: Option<SystemTime>,
     finished_at: Option<SystemTime>,
+    duration_ns: Option<u128>,
     duration_ms: Option<u128>,
 }
 
@@ -1482,6 +1643,7 @@ impl TaskFailure {
             messages: Vec::new(),
             started_at: None,
             finished_at: None,
+            duration_ns: None,
             duration_ms: None,
         }
     }
@@ -1629,7 +1791,15 @@ impl TaskFailure {
     ///
     /// The modified `TaskFailure` instance with the duration set.
     pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
+        self.duration_ns = Some(duration_ms.saturating_mul(1_000_000));
         self.duration_ms = Some(duration_ms);
+        self
+    }
+
+    /// Sets the task execution duration in nanoseconds.
+    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
+        self.duration_ns = Some(duration_ns);
+        self.duration_ms = Some(duration_ns / 1_000_000);
         self
     }
 
@@ -1763,7 +1933,32 @@ impl TaskFailure {
     ///
     /// `Some(u128)` if the duration was set, `None` otherwise.
     pub fn duration_ms(&self) -> Option<u128> {
-        self.duration_ms
+        self.duration_ns
+            .map(|duration_ns| duration_ns / 1_000_000)
+            .or(self.duration_ms)
+    }
+
+    /// Returns the task execution duration in nanoseconds, if available.
+    pub fn duration_ns(&self) -> Option<u128> {
+        self.duration_ns.or_else(|| {
+            self.duration_ms
+                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
+        })
+    }
+
+    /// Returns the task execution start timestamp in RFC 3339 format, if available.
+    pub fn started_at_display(&self) -> Option<String> {
+        self.started_at.map(format_timestamp_display)
+    }
+
+    /// Returns the task execution finish timestamp in RFC 3339 format, if available.
+    pub fn finished_at_display(&self) -> Option<String> {
+        self.finished_at.map(format_timestamp_display)
+    }
+
+    /// Returns the task execution duration in a human-readable format, if available.
+    pub fn duration_display(&self) -> Option<String> {
+        self.duration_ns().map(format_duration_display)
     }
 }
 
@@ -2360,7 +2555,18 @@ impl TaskDefinition {
             )));
         }
 
-        results.insert_host_result(hostname, task.start(host));
+        let started_at = SystemTime::now();
+        let host_result = task.start(host);
+        let finished_at = SystemTime::now();
+        let duration_ns = finished_at
+            .duration_since(started_at)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+
+        results.insert_host_result(
+            hostname,
+            host_result.with_execution_timing(started_at, finished_at, duration_ns),
+        );
 
         for sub in task.sub_tasks() {
             let sub_task_name = sub.name().to_string();
@@ -2498,6 +2704,10 @@ mod tests {
         counter: Arc<AtomicUsize>,
     }
 
+    struct FailingTask;
+
+    struct SkippingTask;
+
     impl TaskInfo for TestTask {
         fn name(&self) -> &str {
             self.name
@@ -2526,6 +2736,66 @@ mod tests {
         fn start(&self, _host: &Host) -> HostTaskResult {
             self.counter.fetch_add(1, Ordering::SeqCst);
             HostTaskResult::passed(TaskSuccess::new())
+        }
+    }
+
+    impl TaskInfo for FailingTask {
+        fn name(&self) -> &str {
+            "failing"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "ssh"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, "ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for FailingTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for FailingTask {
+        fn start(&self, _host: &Host) -> HostTaskResult {
+            HostTaskResult::failed(TaskFailure::new(TestTaskFailureError))
+        }
+    }
+
+    impl TaskInfo for SkippingTask {
+        fn name(&self) -> &str {
+            "skipping"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "ssh"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, "ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for SkippingTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for SkippingTask {
+        fn start(&self, _host: &Host) -> HostTaskResult {
+            HostTaskResult::Skipped(TaskSkip::new().with_reason("filtered"))
         }
     }
 
@@ -2587,6 +2857,66 @@ mod tests {
             _ => panic!("unexpected error variant"),
         }
         assert_eq!(counter.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn start_attaches_timing_to_passed_host_results() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(TestTask {
+            name: "root",
+            subs: Vec::new(),
+            counter,
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should succeed");
+
+        let success = results
+            .host_result("router1")
+            .and_then(HostTaskResult::success)
+            .expect("host result should be passed");
+        assert!(success.started_at().is_some());
+        assert!(success.finished_at().is_some());
+        assert!(success.duration_ns().is_some());
+        assert!(success.duration_display().is_some());
+    }
+
+    #[test]
+    fn start_attaches_timing_to_failed_host_results() {
+        let task = TaskDefinition::new(FailingTask);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("failing");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should record a failed result");
+
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("host result should be failed");
+        assert!(failure.started_at().is_some());
+        assert!(failure.finished_at().is_some());
+        assert!(failure.duration_ns().is_some());
+        assert!(failure.duration_display().is_some());
+    }
+
+    #[test]
+    fn start_does_not_attach_timing_to_skipped_host_results() {
+        let task = TaskDefinition::new(SkippingTask);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("skipping");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should record a skipped result");
+
+        let skip = results
+            .host_result("router1")
+            .and_then(HostTaskResult::skipped_detail)
+            .expect("host result should be skipped");
+        assert_eq!(skip.reason(), Some("filtered"));
+        assert_eq!(skip.message(), None);
     }
 
     #[test]
@@ -2745,6 +3075,54 @@ mod tests {
         assert!(json.contains("\"sub_tasks\":{\"child\":{\"task_name\":\"child\""));
         assert!(json.contains("\"duration\":\"2s\""));
         assert!(json.contains("\"duration\":\"250ms\""));
+    }
+
+    #[test]
+    fn task_results_human_json_formats_host_timing_uniformly() {
+        let started_at = SystemTime::UNIX_EPOCH;
+        let finished_at = SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_millis(2))
+            .expect("valid timestamp");
+        let mut results = TaskResults::new("deploy");
+        results.insert_host_result(
+            "router1",
+            HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_summary("ok")
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(2_000_000),
+            ),
+        );
+        results.insert_host_result(
+            "router2",
+            HostTaskResult::failed(
+                TaskFailure::new(TestTaskFailureError)
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(250_000),
+            ),
+        );
+        results.insert_host_result(
+            "router3",
+            HostTaskResult::Skipped(TaskSkip::new().with_reason("filtered")),
+        );
+
+        let json = results
+            .to_json_string()
+            .expect("human json should serialize host timing");
+
+        assert!(json.contains("\"router1\":{\"Passed\":{"));
+        assert!(json.contains("\"summary\":\"ok\""));
+        assert!(json.contains("\"started_at\":\"1970-01-01T00:00:00Z\""));
+        assert!(json.contains("\"finished_at\":\"1970-01-01T00:00:00Z\""));
+        assert!(json.contains("\"duration\":\"2ms\""));
+        assert!(json.contains("\"router2\":{\"Failed\":"));
+        assert!(json.contains("\"duration\":\"250us\""));
+        assert!(json.contains("\"router3\":{\"Skipped\":{\"reason\":\"filtered\""));
+        assert!(!json.contains("\"router3\":{\"Skipped\":{\"started_at\""));
+        assert!(!json.contains("\"duration_ns\""));
+        assert!(!json.contains("\"duration_ms\""));
     }
 
     #[test]
