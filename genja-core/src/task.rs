@@ -702,6 +702,25 @@ impl TaskResults {
         self
     }
 
+    fn record_execution_timing(&mut self, started_at: SystemTime, finished_at: SystemTime) {
+        if self.started_at.is_none_or(|current| started_at < current) {
+            self.started_at = Some(started_at);
+        }
+
+        if self.finished_at.is_none_or(|current| finished_at > current) {
+            self.finished_at = Some(finished_at);
+        }
+
+        if let (Some(started_at), Some(finished_at)) = (self.started_at, self.finished_at) {
+            let duration_ns = finished_at
+                .duration_since(started_at)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            self.duration_ns = Some(duration_ns);
+            self.duration_ms = Some(duration_ns / 1_000_000);
+        }
+    }
+
     /// Returns the task execution start timestamp, if available.
     ///
     /// # Returns
@@ -2563,6 +2582,8 @@ impl TaskDefinition {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
 
+        results.record_execution_timing(started_at, finished_at);
+
         results.insert_host_result(
             hostname,
             host_result.with_execution_timing(started_at, finished_at, duration_ns),
@@ -2833,6 +2854,15 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 4);
         assert!(results.host_result("router1").is_some());
         assert!(results.sub_task("node").is_some());
+        assert!(results.started_at().is_some());
+        assert!(results.finished_at().is_some());
+        assert!(results.duration_display().is_some());
+        let node_results = results
+            .sub_task("node")
+            .expect("sub-task results should exist after execution");
+        assert!(node_results.started_at().is_some());
+        assert!(node_results.finished_at().is_some());
+        assert!(node_results.duration_display().is_some());
     }
 
     #[test]
@@ -3075,6 +3105,31 @@ mod tests {
         assert!(json.contains("\"sub_tasks\":{\"child\":{\"task_name\":\"child\""));
         assert!(json.contains("\"duration\":\"2s\""));
         assert!(json.contains("\"duration\":\"250ms\""));
+    }
+
+    #[test]
+    fn sub_task_results_human_json_includes_aggregate_timing() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let root = chain(2, counter.clone());
+        let task = TaskDefinition::new(TestTask {
+            name: "root",
+            subs: vec![root],
+            counter,
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+
+        task.start("router1", &host, &mut results, 3)
+            .expect("start should succeed");
+
+        let json = results
+            .to_json_string()
+            .expect("human json should serialize sub-task timing");
+
+        assert!(json.contains("\"sub_tasks\":{\"node\":{"));
+        assert!(json.contains("\"started_at\":\""));
+        assert!(json.contains("\"finished_at\":\""));
+        assert!(json.contains("\"duration\":\""));
     }
 
     #[test]
