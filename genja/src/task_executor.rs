@@ -43,14 +43,14 @@ impl<'a> TaskExecutor<'a> {
         }
 
         let finished_at = SystemTime::now();
-        let duration_ms = finished_at
+        let duration_ns = finished_at
             .duration_since(started_at)
-            .map(|duration| duration.as_millis())
+            .map(|duration| duration.as_nanos())
             .unwrap_or(0);
 
         Ok(results
             .with_finished_at(finished_at)
-            .with_duration_ms(duration_ms))
+            .with_duration_ns(duration_ns))
     }
 
     fn run_host(

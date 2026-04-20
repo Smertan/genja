@@ -431,10 +431,41 @@ pub struct TaskResults {
     task_name: String,
     started_at: Option<SystemTime>,
     finished_at: Option<SystemTime>,
+    duration_ns: Option<u128>,
     duration_ms: Option<u128>,
     summary: Option<String>,
     hosts: CustomTreeMap<HostTaskResult>,
     sub_tasks: CustomTreeMap<TaskResults>,
+}
+
+#[derive(Serialize)]
+struct TaskResultsHumanJson<'a> {
+    task_name: &'a str,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    duration: Option<String>,
+    summary: Option<&'a str>,
+    hosts: &'a CustomTreeMap<HostTaskResult>,
+    sub_tasks: CustomTreeMap<TaskResultsHumanJson<'a>>,
+}
+
+impl<'a> From<&'a TaskResults> for TaskResultsHumanJson<'a> {
+    fn from(results: &'a TaskResults) -> Self {
+        let mut sub_tasks = CustomTreeMap::new();
+        for (task_name, task_results) in results.sub_tasks().iter() {
+            sub_tasks.insert(task_name, TaskResultsHumanJson::from(task_results));
+        }
+
+        Self {
+            task_name: results.task_name(),
+            started_at: results.started_at_display(),
+            finished_at: results.finished_at_display(),
+            duration: results.duration_display(),
+            summary: results.summary(),
+            hosts: results.hosts(),
+            sub_tasks,
+        }
+    }
 }
 
 impl TaskResults {
@@ -457,6 +488,7 @@ impl TaskResults {
             task_name: task_name.into(),
             started_at: None,
             finished_at: None,
+            duration_ns: None,
             duration_ms: None,
             summary: None,
             hosts: CustomTreeMap::new(),
@@ -520,7 +552,15 @@ impl TaskResults {
     ///
     /// The modified `TaskResults` instance with the duration set.
     pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
+        self.duration_ns = Some(duration_ms.saturating_mul(1_000_000));
         self.duration_ms = Some(duration_ms);
+        self
+    }
+
+    /// Sets the task execution duration in nanoseconds.
+    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
+        self.duration_ns = Some(duration_ns);
+        self.duration_ms = Some(duration_ns / 1_000_000);
         self
     }
 
@@ -566,7 +606,69 @@ impl TaskResults {
     ///
     /// `Some(u128)` if the duration was set, `None` otherwise.
     pub fn duration_ms(&self) -> Option<u128> {
-        self.duration_ms
+        self.duration_ns
+            .map(|duration_ns| duration_ns / 1_000_000)
+            .or(self.duration_ms)
+    }
+
+    /// Returns the task execution duration in nanoseconds, if available.
+    pub fn duration_ns(&self) -> Option<u128> {
+        self.duration_ns.or_else(|| {
+            self.duration_ms
+                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
+        })
+    }
+
+    /// Returns the task execution start timestamp in RFC 3339 format, if available.
+    pub fn started_at_display(&self) -> Option<String> {
+        self.started_at
+            .map(|started_at| humantime::format_rfc3339_seconds(started_at).to_string())
+    }
+
+    /// Returns the task execution finish timestamp in RFC 3339 format, if available.
+    pub fn finished_at_display(&self) -> Option<String> {
+        self.finished_at
+            .map(|finished_at| humantime::format_rfc3339_seconds(finished_at).to_string())
+    }
+
+    /// Returns the task execution duration in a human-readable format, if available.
+    pub fn duration_display(&self) -> Option<String> {
+        self.duration_ns().map(|duration_ns| {
+            if duration_ns < 1_000 {
+                return format!("{duration_ns}ns");
+            }
+
+            if duration_ns < 1_000_000 {
+                return format!("{}us", duration_ns / 1_000);
+            }
+
+            if duration_ns < 1_000_000_000 {
+                return format!("{}ms", duration_ns / 1_000_000);
+            }
+
+            let duration_ns = u64::try_from(duration_ns).unwrap_or(u64::MAX);
+            humantime::format_duration(std::time::Duration::from_nanos(duration_ns)).to_string()
+        })
+    }
+
+    /// Serializes task results as compact human-readable JSON.
+    pub fn to_json_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&TaskResultsHumanJson::from(self))
+    }
+
+    /// Serializes task results as pretty-printed human-readable JSON.
+    pub fn to_pretty_json_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(&TaskResultsHumanJson::from(self))
+    }
+
+    /// Serializes task results as compact raw JSON using the struct's default serde representation.
+    pub fn to_raw_json_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Serializes task results as pretty-printed raw JSON using the struct's default serde representation.
+    pub fn to_raw_pretty_json_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
     }
 
     /// Returns the task summary message, if available.
@@ -2601,7 +2703,62 @@ mod tests {
         assert_eq!(results.summary(), Some("deploy finished"));
         assert_eq!(results.started_at(), Some(started_at));
         assert_eq!(results.finished_at(), Some(finished_at));
+        assert_eq!(results.duration_ns(), Some(3_000_000_000));
         assert_eq!(results.duration_ms(), Some(3000));
+        assert_eq!(
+            results.started_at_display(),
+            Some("1970-01-01T00:00:00Z".to_string())
+        );
+        assert_eq!(
+            results.finished_at_display(),
+            Some("1970-01-01T00:00:03Z".to_string())
+        );
+        assert_eq!(results.duration_display(), Some("3s".to_string()));
+
+        let json = results
+            .to_json_string()
+            .expect("human json should serialize");
+        assert!(json.contains("\"started_at\":\"1970-01-01T00:00:00Z\""));
+        assert!(json.contains("\"finished_at\":\"1970-01-01T00:00:03Z\""));
+        assert!(json.contains("\"duration\":\"3s\""));
+        assert!(!json.contains("\"duration_ns\":"));
+        assert!(!json.contains("\"duration_ms\":"));
+
+        let raw_json = results
+            .to_raw_json_string()
+            .expect("raw json should serialize");
+        assert!(!raw_json.contains("\"duration\":\"3s\""));
+        assert!(raw_json.contains("\"duration_ns\":3000000000"));
+    }
+
+    #[test]
+    fn task_results_human_json_serializes_recursive_sub_tasks() {
+        let child = TaskResults::new("child").with_duration_ms(250);
+        let mut root = TaskResults::new("root").with_duration_ms(2000);
+        root.insert_sub_task("child", child);
+
+        let json = root
+            .to_json_string()
+            .expect("human json should serialize recursively");
+
+        assert!(json.contains("\"task_name\":\"root\""));
+        assert!(json.contains("\"sub_tasks\":{\"child\":{\"task_name\":\"child\""));
+        assert!(json.contains("\"duration\":\"2s\""));
+        assert!(json.contains("\"duration\":\"250ms\""));
+    }
+
+    #[test]
+    fn task_results_duration_display_preserves_sub_millisecond_precision() {
+        let micros = TaskResults::new("micros").with_duration_ns(250_000);
+        let nanos = TaskResults::new("nanos").with_duration_ns(250);
+
+        assert_eq!(micros.duration_ns(), Some(250_000));
+        assert_eq!(micros.duration_ms(), Some(0));
+        assert_eq!(micros.duration_display(), Some("250us".to_string()));
+
+        assert_eq!(nanos.duration_ns(), Some(250));
+        assert_eq!(nanos.duration_ms(), Some(0));
+        assert_eq!(nanos.duration_display(), Some("250ns".to_string()));
     }
 
     #[test]
