@@ -29,9 +29,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{
-    DeriveInput, GenericArgument, Meta, PathArguments, Type, TypePath, parse_macro_input,
-};
+use syn::{DeriveInput, GenericArgument, Meta, PathArguments, Type, TypePath, parse_macro_input};
 
 /// Generates an implementation of the `Deref` trait for the given type.
 ///
@@ -97,17 +95,28 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// Derives the `Task` trait implementation for a struct.
+/// Derives task metadata and sub-task wiring for a struct.
 ///
 /// This procedural macro generates implementations of `TaskInfo` and `SubTasks` traits
 /// for structs that represent tasks in the task execution system. It validates the struct's
 /// fields and generates appropriate getter methods and subtask collection logic.
+///
+/// This macro does **not** generate the core `genja_core::task::Task` implementation.
+/// Users must still implement `Task` manually and provide the `start()` method that
+/// returns a `HostTaskResult`.
 ///
 /// The macro expects the struct to have:
 /// - A `name` field of type `String` or `&'static str` (required)
 /// - An optional `plugin_name` field of type `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`
 /// - An optional `options` field of type `Option<serde_json::Value>`
 /// - Zero or more fields marked with `#[task(subtask)]` attribute of type `Arc<dyn Task>`
+///
+/// After deriving, the generated behavior is:
+/// - `name()` reads from the struct's `name` field
+/// - `plugin_name()` reads from `plugin_name` if present, otherwise returns `""`
+/// - `options()` returns the `options` field if present, otherwise `None`
+/// - `sub_tasks()` returns all fields marked with `#[task(subtask)]` in declaration order
+/// - `get_connection_key(hostname)` builds a `ConnectionKey` from `hostname` and `plugin_name()`
 ///
 /// # Parameters
 ///
@@ -126,6 +135,10 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// # Examples
 ///
 /// ```ignore
+/// use std::sync::Arc;
+/// use genja_core::inventory::Host;
+/// use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+///
 /// #[derive(Task)]
 /// struct MyTask {
 ///     name: String,
@@ -133,6 +146,12 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///     options: Option<serde_json::Value>,
 ///     #[task(subtask)]
 ///     child_task: Arc<dyn Task>,
+/// }
+///
+/// impl Task for MyTask {
+///     fn start(&self, _host: &Host) -> HostTaskResult {
+///         HostTaskResult::passed(TaskSuccess::new())
+///     }
 /// }
 /// ```
 #[proc_macro_derive(Task, attributes(task))]
@@ -143,24 +162,18 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     let data = match input.data {
         syn::Data::Struct(data) => data,
         _ => {
-            return syn::Error::new_spanned(
-                name,
-                "Task can only be derived for structs",
-            )
-            .to_compile_error()
-            .into();
+            return syn::Error::new_spanned(name, "Task can only be derived for structs")
+                .to_compile_error()
+                .into();
         }
     };
 
     let fields = match data.fields {
         syn::Fields::Named(fields) => fields.named,
         _ => {
-            return syn::Error::new_spanned(
-                name,
-                "Task requires named fields",
-            )
-            .to_compile_error()
-            .into();
+            return syn::Error::new_spanned(name, "Task requires named fields")
+                .to_compile_error()
+                .into();
         }
     };
 
@@ -210,12 +223,9 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     };
 
     if !is_string_type(&name_ty) && !is_static_str_type(&name_ty) {
-        return syn::Error::new_spanned(
-            name_ty,
-            "`name` must be `String` or `&'static str`",
-        )
-        .to_compile_error()
-        .into();
+        return syn::Error::new_spanned(name_ty, "`name` must be `String` or `&'static str`")
+            .to_compile_error()
+            .into();
     }
 
     let plugin_name_ty = plugin_name_field.clone();
@@ -229,7 +239,6 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
             .into();
         }
     }
-
 
     if let Some(options_ty) = &options_field {
         if !is_option_of(options_ty, is_value_type) {
@@ -332,9 +341,11 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
 
 fn is_string_type(ty: &Type) -> bool {
     match ty {
-        Type::Path(TypePath { path, .. }) => {
-            path.segments.last().map(|seg| seg.ident == "String").unwrap_or(false)
-        }
+        Type::Path(TypePath { path, .. }) => path
+            .segments
+            .last()
+            .map(|seg| seg.ident == "String")
+            .unwrap_or(false),
         _ => false,
     }
 }

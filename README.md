@@ -26,6 +26,161 @@ let genja = Genja::builder(inventory)
     .build()?;
 ```
 
+## Running Tasks
+
+Tasks are defined in `genja_core::task` and executed through `Genja::run`.
+The recommended pattern is:
+
+1. Define a struct for the task.
+2. Derive `Task` to generate `TaskInfo` and `SubTasks`.
+3. Implement `genja_core::task::Task` and return a `HostTaskResult` from `start()`.
+4. Run the task with `Genja::run(task, max_depth)`.
+
+### Derive Macro
+
+`#[derive(TaskDerive)]` does not implement the full `Task` trait for you.
+It generates `TaskInfo` and `SubTasks`, then you provide the execution logic by manually implementing `Task`.
+
+The derive macro maps fields like this:
+
+- `name` is required and becomes `TaskInfo::name()`.
+- `plugin_name` is optional and becomes `TaskInfo::plugin_name()`.
+- `options` is optional and becomes `TaskInfo::options()`.
+- Fields marked with `#[task(subtask)]` are collected into `SubTasks::sub_tasks()` in declaration order.
+
+That means the usual pattern is:
+
+1. Add `#[derive(TaskDerive)]` to the task struct.
+2. Declare `name`, and optionally `plugin_name`, `options`, and `#[task(subtask)]` fields.
+3. Implement `Task::start(&self, host)` manually.
+
+```rust
+use genja::Genja;
+use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
+use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core_derive::Task as TaskDerive;
+
+#[derive(TaskDerive)]
+struct CheckConfigTask {
+    name: String,
+    plugin_name: Option<String>,
+}
+
+impl Task for CheckConfigTask {
+    fn start(&self, _host: &Host) -> HostTaskResult {
+        HostTaskResult::passed(
+            TaskSuccess::new()
+                .with_summary("configuration is present")
+                .with_changed(false),
+        )
+    }
+}
+
+let mut hosts = Hosts::new();
+hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+let inventory = Inventory::builder().hosts(hosts).build();
+
+let genja = Genja::builder(inventory).build()?;
+
+let results = genja.run(
+    CheckConfigTask {
+        name: "check_config".to_string(),
+        plugin_name: Some("ssh".to_string()),
+    },
+    10,
+)?;
+
+assert!(results.host_result("router1").unwrap().is_passed());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Notes:
+
+- `max_depth` limits recursive sub-task execution. A task with no sub-tasks can use a small value like `1`.
+- `#[derive(TaskDerive)]` requires a `name` field and generates `TaskInfo` plus `SubTasks`, not `Task::start()`.
+- `plugin_name` is optional, but usually needed for real task execution.
+- Rich task output lives in `TaskSuccess`, `TaskFailure`, `TaskSkip`, and `TaskResults`.
+- The lower-level task API is documented in `genja-core/src/task.rs`.
+
+### Task Execution Rules
+
+- `Genja::run` executes the full task tree once per selected host.
+- The parent task runs before any of its sub-tasks.
+- The parent host result is recorded before sub-task execution starts.
+- Sub-tasks run in the order returned by `sub_tasks()`. With `#[derive(TaskDerive)]`, that is the declaration order of `#[task(subtask)]` fields.
+- Sub-task results are stored under `results.sub_task("<name>")` and grouped by sub-task name across hosts.
+- Sub-tasks are not automatically skipped when a parent fails or is skipped. If you need that behavior, encode it in the task and return a skipped result explicitly.
+- Depth is zero-based. The root task runs at depth `0`, its direct children at depth `1`, and so on.
+- Because the limit check is inclusive of the current depth, `max_depth = 0` allows only the root task, while `max_depth = 1` allows one level of sub-tasks.
+
+### Sub-Tasks
+
+Sub-tasks are declared as `Arc<dyn Task>` fields marked with `#[task(subtask)]`.
+They execute after the parent task and their results are stored under `TaskResults::sub_task(...)`.
+
+```rust
+use std::sync::Arc;
+
+use genja::Genja;
+use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
+use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core_derive::Task as TaskDerive;
+
+#[derive(TaskDerive)]
+struct ValidateTask {
+    name: String,
+    plugin_name: Option<String>,
+}
+
+impl Task for ValidateTask {
+    fn start(&self, _host: &Host) -> HostTaskResult {
+        HostTaskResult::passed(TaskSuccess::new().with_summary("validation passed"))
+    }
+}
+
+#[derive(TaskDerive)]
+struct DeployTask {
+    name: String,
+    plugin_name: Option<String>,
+    #[task(subtask)]
+    validate: Arc<dyn Task>,
+}
+
+impl Task for DeployTask {
+    fn start(&self, _host: &Host) -> HostTaskResult {
+        HostTaskResult::passed(TaskSuccess::new().with_summary("deployment complete"))
+    }
+}
+
+let mut hosts = Hosts::new();
+hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+let inventory = Inventory::builder().hosts(hosts).build();
+let genja = Genja::builder(inventory).build()?;
+
+let task = DeployTask {
+    name: "deploy".to_string(),
+    plugin_name: Some("ssh".to_string()),
+    validate: Arc::new(ValidateTask {
+        name: "validate".to_string(),
+        plugin_name: Some("ssh".to_string()),
+    }),
+};
+
+let results = genja.run(task, 2)?;
+
+assert!(results.host_result("router1").unwrap().is_passed());
+assert!(results.sub_task("validate").is_some());
+assert!(
+    results
+        .sub_task("validate")
+        .unwrap()
+        .host_result("router1")
+        .unwrap()
+        .is_passed()
+);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 Example configuration files:
 
 - `examples/config.example.yaml`
