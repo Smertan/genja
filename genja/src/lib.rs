@@ -38,7 +38,7 @@
 
 pub use genja_core::GenjaError;
 use genja_core::inventory::{Host, Inventory};
-use genja_core::task::{Task, TaskDefinition, TaskInfo, TaskResults};
+use genja_core::task::{Task, TaskResults};
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
@@ -46,6 +46,9 @@ use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
 use std::sync::Arc;
 
 // GenjaError is re-exported from genja-core.
+
+mod task_executor;
+use task_executor::TaskExecutor;
 
 /// Runtime composition layer for `Genja`.
 ///
@@ -533,26 +536,107 @@ impl Genja {
     ) -> Result<TaskResults, GenjaError> {
         let inventory = self
             .inventory
-            .as_ref()
+            .as_deref()
             .ok_or(GenjaError::InventoryNotLoaded)?;
-        let task_def = TaskDefinition::new(task);
-        let mut results = TaskResults::new(task_def.name());
 
-        for host_id in self.host_ids.iter() {
-            let host = inventory
-                .hosts()
-                .get(host_id)
-                .ok_or_else(|| GenjaError::Message(format!("host '{}' not found", host_id)))?;
-            task_def.start(host_id.as_str(), &host, &mut results, max_depth)?;
-        }
-
-        Ok(results)
+        TaskExecutor::new(inventory, self.host_ids.as_ref(), max_depth).run(task)
     }
 }
 
 impl Default for Genja {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Genja;
+    use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Host, Hosts, Inventory};
+    use genja_core::task::{HostTaskResult, SubTasks, Task, TaskInfo, TaskSuccess};
+    use serde_json::Value;
+    use std::sync::Arc;
+
+    struct TestTask {
+        name: String,
+    }
+
+    impl TaskInfo for TestTask {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn plugin_name(&self) -> &str {
+            "test"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, self.plugin_name())
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for TestTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for TestTask {
+        fn start(&self, _host: &Host) -> HostTaskResult {
+            HostTaskResult::passed(TaskSuccess::new())
+        }
+    }
+
+    fn test_inventory() -> Inventory {
+        let mut hosts = Hosts::new();
+        hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+        hosts.add_host("router2", Host::builder().hostname("10.0.0.2").build());
+
+        Inventory::builder().hosts(hosts).build()
+    }
+
+    #[test]
+    fn run_executes_task_for_each_selected_host() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja
+            .run(
+                TestTask {
+                    name: "test-task".to_string(),
+                },
+                0,
+            )
+            .expect("task should execute for all hosts");
+
+        assert_eq!(results.task_name(), "test-task");
+        assert_eq!(results.passed_hosts().len(), 2);
+        assert!(results.host_result("router1").is_some());
+        assert!(results.host_result("router2").is_some());
+    }
+
+    #[test]
+    fn run_respects_filtered_hosts() {
+        let genja = Genja::from_inventory(test_inventory());
+        let filtered = genja
+            .filter_hosts(|host| host.hostname() == Some("10.0.0.1"))
+            .expect("host filtering should succeed");
+
+        let results = filtered
+            .run(
+                TestTask {
+                    name: "filtered-task".to_string(),
+                },
+                0,
+            )
+            .expect("task should execute for selected hosts");
+
+        assert_eq!(results.passed_hosts().len(), 1);
+        assert!(results.host_result("router1").is_some());
+        assert!(results.host_result("router2").is_none());
     }
 }
 

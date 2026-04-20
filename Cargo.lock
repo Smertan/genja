@@ -357,6 +357,7 @@ version = "0.1.0"
 dependencies = [
  "genja-core",
  "genja-plugin-manager",
+ "serde_json",
 ]
 
 [[package]]
