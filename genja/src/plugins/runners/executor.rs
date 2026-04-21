@@ -1,14 +1,9 @@
-use genja_core::GenjaError;
-use genja_core::NatString;
 use genja_core::inventory::{Host, Hosts};
 use genja_core::task::{TaskDefinition, TaskInfo, TaskResults};
+use genja_core::{GenjaError, NatString};
 use std::time::SystemTime;
 
-/// Executes a task against the selected hosts for a `Genja` runtime.
-///
-/// This centralizes host iteration and task dispatch so future execution
-/// policies like retries or failure handling can be added without inflating
-/// `Genja::run`.
+/// Shared execution helper for built-in runner plugins.
 #[derive(Debug)]
 pub(crate) struct TaskExecutor<'a> {
     hosts: &'a Hosts,

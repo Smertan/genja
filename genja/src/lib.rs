@@ -47,8 +47,6 @@ use std::sync::Arc;
 
 // GenjaError is re-exported from genja-core.
 
-mod task_executor;
-
 /// Runtime composition layer for `Genja`.
 ///
 /// This type owns the runtime inventory, settings, and plugin manager used to
