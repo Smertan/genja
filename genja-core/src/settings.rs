@@ -91,7 +91,7 @@ const ENV_INVENTORY_PLUGIN: &str = "GENJA_INVENTORY_PLUGIN";
 /// Environment variable name for specifying the runner plugin.
 ///
 /// This variable determines which runner plugin implementation should be used
-/// for executing tasks across hosts (e.g., "threaded", "sequential").
+/// for executing tasks across hosts (e.g., "threaded", "serial").
 ///
 /// Default: `"threaded"`
 const ENV_RUNNER_PLUGIN: &str = "GENJA_RUNNER_PLUGIN";

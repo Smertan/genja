@@ -45,7 +45,7 @@
 //!
 //! ```rust
 //! use genja_core::inventory::Hosts;
-//! use genja_core::task::{Task, Tasks};
+//! use genja_core::task::{TaskDefinition, TaskResults, Tasks};
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
 //!
 //! #[derive(Debug)]
@@ -58,12 +58,24 @@
 //! }
 //!
 //! impl PluginRunner for MyPlugin {
-//!     fn run(&self, _task: &dyn Task, _hosts: &Hosts) {
+//!     fn run(
+//!         &self,
+//!         _task: &TaskDefinition,
+//!         _hosts: &Hosts,
+//!         _max_depth: usize,
+//!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Task execution logic
+//!         Ok(TaskResults::new("my_plugin"))
 //!     }
 //!
-//!     fn run_tasks(&self, _tasks: Tasks, _hosts: &Hosts) {
+//!     fn run_tasks(
+//!         &self,
+//!         _tasks: &Tasks,
+//!         _hosts: &Hosts,
+//!         _max_depth: usize,
+//!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
 //!         // Batch task execution logic
+//!         Ok(Vec::new())
 //!     }
 //! }
 //!
@@ -213,7 +225,7 @@
 //! ```rust
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 //! use genja_core::inventory::Hosts;
-//! use genja_core::task::{Task, Tasks};
+//! use genja_core::task::{TaskDefinition, TaskResults, Tasks};
 //!
 //! #[derive(Debug)]
 //! struct SequentialRunner;
@@ -223,12 +235,26 @@
 //! }
 //!
 //! impl PluginRunner for SequentialRunner {
-//!     fn run(&self, task: &dyn Task, hosts: &Hosts) {
+//!     fn run(
+//!         &self,
+//!         task: &TaskDefinition,
+//!         hosts: &Hosts,
+//!         max_depth: usize,
+//!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Execute task on each host sequentially
+//!         let _ = (task, hosts, max_depth);
+//!         Ok(TaskResults::new("sequential"))
 //!     }
 //!
-//!     fn run_tasks(&self, tasks: Tasks, hosts: &Hosts) {
+//!     fn run_tasks(
+//!         &self,
+//!         tasks: &Tasks,
+//!         hosts: &Hosts,
+//!         max_depth: usize,
+//!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
 //!         // Execute all tasks sequentially
+//!         let _ = (tasks, hosts, max_depth);
+//!         Ok(Vec::new())
 //!     }
 //! }
 //! ```
@@ -735,7 +761,7 @@ mod tests {
     use genja_core::inventory::{
         ConnectionKey, Inventory, ResolvedConnectionParams, TransformFunction,
     };
-    use genja_core::task::{Task, Tasks};
+    use genja_core::task::Tasks;
     use genja_core::{InventoryLoadError, Settings};
 
     fn env_lock() -> MutexGuard<'static, ()> {
@@ -1239,9 +1265,23 @@ inventory_a = "../this/path/does/not/exist.so"
     }
 
     impl PluginRunner for DummyRunner {
-        fn run(&self, _task: &dyn Task, _hosts: &genja_core::inventory::Hosts) {}
+        fn run(
+            &self,
+            _task: &genja_core::task::TaskDefinition,
+            _hosts: &genja_core::inventory::Hosts,
+            _max_depth: usize,
+        ) -> Result<genja_core::task::TaskResults, genja_core::GenjaError> {
+            Ok(genja_core::task::TaskResults::new(self.name))
+        }
 
-        fn run_tasks(&self, _tasks: Tasks, _hosts: &genja_core::inventory::Hosts) {}
+        fn run_tasks(
+            &self,
+            _tasks: &Tasks,
+            _hosts: &genja_core::inventory::Hosts,
+            _max_depth: usize,
+        ) -> Result<Vec<genja_core::task::TaskResults>, genja_core::GenjaError> {
+            Ok(Vec::new())
+        }
     }
 
     #[derive(Debug)]

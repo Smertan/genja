@@ -562,7 +562,7 @@ mod tests {
     use crate::plugin_types::{Plugin, PluginConnection, PluginRunner};
     use genja_core::inventory::Connection;
     use genja_core::inventory::ConnectionManager;
-    use genja_core::task::{Task, Tasks};
+    use genja_core::task::Tasks;
 
     #[derive(Debug)]
     struct TestConnection {
@@ -619,9 +619,23 @@ mod tests {
     }
 
     impl PluginRunner for DummyRunner {
-        fn run(&self, _task: &dyn Task, _hosts: &genja_core::inventory::Hosts) {}
+        fn run(
+            &self,
+            _task: &genja_core::task::TaskDefinition,
+            _hosts: &genja_core::inventory::Hosts,
+            _max_depth: usize,
+        ) -> Result<genja_core::task::TaskResults, genja_core::GenjaError> {
+            Ok(genja_core::task::TaskResults::new("runner"))
+        }
 
-        fn run_tasks(&self, _tasks: Tasks, _hosts: &genja_core::inventory::Hosts) {}
+        fn run_tasks(
+            &self,
+            _tasks: &Tasks,
+            _hosts: &genja_core::inventory::Hosts,
+            _max_depth: usize,
+        ) -> Result<Vec<genja_core::task::TaskResults>, genja_core::GenjaError> {
+            Ok(Vec::new())
+        }
     }
 
     fn default_params() -> ResolvedConnectionParams {

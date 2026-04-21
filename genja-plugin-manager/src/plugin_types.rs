@@ -209,7 +209,7 @@
 //! ```rust
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 //! use genja_core::inventory::Hosts;
-//! use genja_core::task::{Task, Tasks};
+//! use genja_core::task::{TaskDefinition, TaskResults, Tasks};
 //!
 //! #[derive(Debug)]
 //! struct SequentialRunner;
@@ -221,18 +221,26 @@
 //! }
 //!
 //! impl PluginRunner for SequentialRunner {
-//!     fn run(&self, task: &dyn Task, hosts: &Hosts) {
+//!     fn run(
+//!         &self,
+//!         task: &TaskDefinition,
+//!         hosts: &Hosts,
+//!         max_depth: usize,
+//!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Execute task sequentially on each host
-//!         for (name, host) in hosts.iter() {
-//!             // Execute task on host
-//!         }
+//!         let _ = (task, hosts, max_depth);
+//!         Ok(TaskResults::new("sequential"))
 //!     }
 //!
-//!     fn run_tasks(&self, tasks: Tasks, hosts: &Hosts) {
+//!     fn run_tasks(
+//!         &self,
+//!         tasks: &Tasks,
+//!         hosts: &Hosts,
+//!         max_depth: usize,
+//!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
 //!         // Execute all tasks sequentially
-//!         for task in tasks.iter() {
-//!             self.run(task.as_task(), hosts);
-//!         }
+//!         let _ = (tasks, hosts, max_depth);
+//!         Ok(Vec::new())
 //!     }
 //! }
 //! ```
@@ -316,7 +324,7 @@ use crate::PluginManager;
 use genja_core::inventory::{
     ConnectionKey, Hosts, Inventory, ResolvedConnectionParams, TransformFunction,
 };
-use genja_core::task::{Task, Tasks};
+use genja_core::task::{TaskDefinition, TaskResults, Tasks};
 use genja_core::{InventoryLoadError, Settings};
 /// Filesystem path to a plugin or plugin metadata entry.
 pub type PathString = String;
@@ -416,10 +424,20 @@ impl Debug for dyn PluginConnection {
 /// mutating shared state without synchronization.
 pub trait PluginRunner: Plugin {
     /// Run a single task against the provided hosts.
-    fn run(&self, task: &dyn Task, hosts: &Hosts);
+    fn run(
+        &self,
+        task: &TaskDefinition,
+        hosts: &Hosts,
+        max_depth: usize,
+    ) -> Result<TaskResults, genja_core::GenjaError>;
 
     /// Run all tasks in the provided task list against the provided hosts.
-    fn run_tasks(&self, tasks: Tasks, hosts: &Hosts);
+    fn run_tasks(
+        &self,
+        tasks: &Tasks,
+        hosts: &Hosts,
+        max_depth: usize,
+    ) -> Result<Vec<TaskResults>, genja_core::GenjaError>;
 
     /// Returns the group name
     fn group(&self) -> String {
@@ -525,7 +543,7 @@ mod tests {
     use genja_core::inventory::{
         ConnectionKey, Hosts, ResolvedConnectionParams, TransformFunction,
     };
-    use genja_core::task::{Task, Tasks};
+    use genja_core::task::{TaskDefinition, TaskResults, Tasks};
     use serde_json::json;
 
     #[derive(Debug)]
@@ -590,9 +608,23 @@ mod tests {
     }
 
     impl PluginRunner for DummyRunner {
-        fn run(&self, _task: &dyn Task, _hosts: &Hosts) {}
+        fn run(
+            &self,
+            _task: &TaskDefinition,
+            _hosts: &Hosts,
+            _max_depth: usize,
+        ) -> Result<TaskResults, genja_core::GenjaError> {
+            Ok(TaskResults::new(self.name))
+        }
 
-        fn run_tasks(&self, _tasks: Tasks, _hosts: &Hosts) {}
+        fn run_tasks(
+            &self,
+            _tasks: &Tasks,
+            _hosts: &Hosts,
+            _max_depth: usize,
+        ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
+            Ok(Vec::new())
+        }
     }
 
     #[derive(Debug)]

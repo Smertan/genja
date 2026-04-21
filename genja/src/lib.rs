@@ -37,8 +37,8 @@
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
 pub use genja_core::GenjaError;
-use genja_core::inventory::{Host, Inventory};
-use genja_core::task::{Task, TaskResults};
+use genja_core::inventory::{Host, Hosts, Inventory};
+use genja_core::task::{Task, TaskDefinition, TaskResults};
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
@@ -48,7 +48,6 @@ use std::sync::Arc;
 // GenjaError is re-exported from genja-core.
 
 mod task_executor;
-use task_executor::TaskExecutor;
 
 /// Runtime composition layer for `Genja`.
 ///
@@ -114,8 +113,8 @@ impl Genja {
             inventory: None,
             host_ids: Arc::new(Vec::new()),
             settings: Arc::new(Settings::default()),
-            plugins: Arc::new(PluginManager::new()),
-            plugins_loaded: false,
+            plugins: Arc::new(crate::plugins::built_in_plugin_manager()),
+            plugins_loaded: true,
         }
     }
 
@@ -143,8 +142,8 @@ impl Genja {
             inventory: Some(Arc::new(inventory)),
             host_ids: Arc::new(host_ids),
             settings: Arc::new(Settings::default()),
-            plugins: Arc::new(PluginManager::new()),
-            plugins_loaded: false,
+            plugins: Arc::new(crate::plugins::built_in_plugin_manager()),
+            plugins_loaded: true,
         }
     }
 
@@ -247,16 +246,24 @@ impl Genja {
     /// Returns `Err(GenjaError::PluginLoad)` if plugin loading fails for reasons
     /// other than missing plugin metadata.
     fn load_plugins(&mut self) -> Result<(), GenjaError> {
-        let default_name = self.settings.inventory().plugin();
         match PluginManager::new().activate_plugins() {
             Ok(mut manager) => {
-                if default_name == "FileInventoryPlugin"
-                    && manager
-                        .get_inventory_plugin("FileInventoryPlugin")
-                        .is_none()
+                if manager
+                    .get_inventory_plugin("FileInventoryPlugin")
+                    .is_none()
                 {
                     manager.register_plugin(Plugins::Inventory(Box::new(
                         crate::plugins::DefaultInventoryPlugin,
+                    )));
+                }
+                if manager.get_runner_plugin("serial").is_none() {
+                    manager.register_plugin(Plugins::Runner(Box::new(
+                        crate::plugins::SerialRunnerPlugin,
+                    )));
+                }
+                if manager.get_runner_plugin("threaded").is_none() {
+                    manager.register_plugin(Plugins::Runner(Box::new(
+                        crate::plugins::ThreadedRunnerPlugin,
                     )));
                 }
                 self.plugins = Arc::new(manager);
@@ -266,16 +273,7 @@ impl Genja {
             Err(err) => {
                 let msg = err.to_string();
                 if msg.contains("No plugin metadata found in manifest") {
-                    let mut manager = PluginManager::new();
-                    if default_name == "FileInventoryPlugin"
-                        && manager
-                            .get_inventory_plugin("FileInventoryPlugin")
-                            .is_none()
-                    {
-                        manager.register_plugin(Plugins::Inventory(Box::new(
-                            crate::plugins::DefaultInventoryPlugin,
-                        )));
-                    }
+                    let manager = crate::plugins::built_in_plugin_manager();
                     self.plugins = Arc::new(manager);
                     self.plugins_loaded = true;
                     Ok(())
@@ -534,12 +532,30 @@ impl Genja {
         task: T,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
+        let hosts = self.selected_hosts()?;
+        let task_definition = TaskDefinition::new(task);
+        let runner = self.get_runner_plugin(self.settings.runner().plugin())?;
+        runner.run(&task_definition, &hosts, max_depth)
+    }
+}
+
+impl Genja {
+    fn selected_hosts(&self) -> Result<Hosts, GenjaError> {
         let inventory = self
             .inventory
-            .as_deref()
+            .as_ref()
             .ok_or(GenjaError::InventoryNotLoaded)?;
+        let mut hosts = Hosts::new();
 
-        TaskExecutor::new(inventory, self.host_ids.as_ref(), max_depth).run(task)
+        for host_id in self.host_ids.iter() {
+            let host = inventory
+                .hosts()
+                .get(host_id)
+                .ok_or_else(|| GenjaError::Message(format!("host '{}' not found", host_id)))?;
+            hosts.add_host(host_id.as_str(), host.clone());
+        }
+
+        Ok(hosts)
     }
 }
 

@@ -77,10 +77,14 @@
 //! - [`Settings::inventory`](genja_core::Settings::inventory) - Inventory configuration
 //! - [`PluginManager`](genja_plugin_manager::PluginManager) - Plugin management
 
+use genja_core::inventory::Hosts;
 use genja_core::inventory::Inventory;
-use genja_core::{InventoryLoadError, Settings};
+use genja_core::task::{TaskDefinition, TaskResults, Tasks};
+use genja_core::{GenjaError, InventoryLoadError, Settings};
 use genja_plugin_manager::PluginManager;
-use genja_plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
+use genja_plugin_manager::plugin_types::{Plugin, PluginInventory, PluginRunner, Plugins};
+
+use crate::task_executor::TaskExecutor;
 
 /// Default file-based inventory plugin.
 ///
@@ -137,9 +141,41 @@ use genja_plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
 /// ```
 pub struct DefaultInventoryPlugin;
 
+/// Built-in serial task runner.
+///
+/// This runner executes the provided task sequentially across the selected
+/// hosts. It is registered as an available built-in runner for Genja.
+pub struct SerialRunnerPlugin;
+
+/// Built-in threaded runner placeholder.
+///
+/// This currently reuses the serial executor path until a concurrent executor
+/// is implemented, but it preserves the configured default runner name.
+pub struct ThreadedRunnerPlugin;
+
+pub(crate) fn built_in_plugin_manager() -> PluginManager {
+    let mut manager = PluginManager::new();
+    manager.register_plugin(Plugins::Inventory(Box::new(DefaultInventoryPlugin)));
+    manager.register_plugin(Plugins::Runner(Box::new(SerialRunnerPlugin)));
+    manager.register_plugin(Plugins::Runner(Box::new(ThreadedRunnerPlugin)));
+    manager
+}
+
 impl Plugin for DefaultInventoryPlugin {
     fn name(&self) -> String {
         "FileInventoryPlugin".to_string()
+    }
+}
+
+impl Plugin for SerialRunnerPlugin {
+    fn name(&self) -> String {
+        "serial".to_string()
+    }
+}
+
+impl Plugin for ThreadedRunnerPlugin {
+    fn name(&self) -> String {
+        "threaded".to_string()
     }
 }
 
@@ -226,5 +262,51 @@ impl PluginInventory for DefaultInventoryPlugin {
         }
 
         Ok(builder.build())
+    }
+}
+
+impl PluginRunner for SerialRunnerPlugin {
+    fn run(
+        &self,
+        task: &TaskDefinition,
+        hosts: &Hosts,
+        max_depth: usize,
+    ) -> Result<TaskResults, GenjaError> {
+        TaskExecutor::new(hosts, max_depth).run_definition(task)
+    }
+
+    fn run_tasks(
+        &self,
+        tasks: &Tasks,
+        hosts: &Hosts,
+        max_depth: usize,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        tasks
+            .iter()
+            .map(|task| self.run(task, hosts, max_depth))
+            .collect()
+    }
+}
+
+impl PluginRunner for ThreadedRunnerPlugin {
+    fn run(
+        &self,
+        task: &TaskDefinition,
+        hosts: &Hosts,
+        max_depth: usize,
+    ) -> Result<TaskResults, GenjaError> {
+        TaskExecutor::new(hosts, max_depth).run_definition(task)
+    }
+
+    fn run_tasks(
+        &self,
+        tasks: &Tasks,
+        hosts: &Hosts,
+        max_depth: usize,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        tasks
+            .iter()
+            .map(|task| self.run(task, hosts, max_depth))
+            .collect()
     }
 }
