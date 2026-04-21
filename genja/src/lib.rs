@@ -566,9 +566,11 @@ impl Default for Genja {
 #[cfg(test)]
 mod tests {
     use super::Genja;
+    use genja_core::Settings;
     use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Host, Hosts, Inventory};
+    use genja_core::settings::RunnerConfig;
     use genja_core::task::{HostTaskResult, SubTasks, Task, TaskInfo, TaskSuccess};
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use std::sync::Arc;
 
     struct TestTask {
@@ -651,6 +653,38 @@ mod tests {
         assert_eq!(results.passed_hosts().len(), 1);
         assert!(results.host_result("router1").is_some());
         assert!(results.host_result("router2").is_none());
+    }
+
+    #[test]
+    fn run_uses_threaded_runner_plugin() {
+        let settings = Settings::builder()
+            .runner(
+                RunnerConfig::builder()
+                    .plugin("threaded")
+                    .options(json!({"num_of_workers": 2}))
+                    .build(),
+            )
+            .build();
+
+        let genja = Genja::builder(test_inventory())
+            .with_settings(settings)
+            .build()
+            .expect("genja should build with threaded runner settings");
+
+        let results = genja
+            .run(
+                TestTask {
+                    name: "threaded-task".to_string(),
+                },
+                0,
+            )
+            .expect("threaded runner should execute the task");
+
+        assert_eq!(results.task_name(), "threaded-task");
+        assert_eq!(results.passed_hosts().len(), 2);
+        assert!(results.started_at().is_some());
+        assert!(results.finished_at().is_some());
+        assert!(results.duration_ns().is_some());
     }
 }
 

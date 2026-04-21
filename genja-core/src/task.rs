@@ -702,6 +702,49 @@ impl TaskResults {
         self
     }
 
+    /// Merges another result tree for the same task into this one.
+    ///
+    /// Host results are inserted directly and sub-task trees are merged
+    /// recursively. Aggregate timing is widened to cover the full execution
+    /// window across both result trees.
+    pub fn merge(&mut self, other: TaskResults) {
+        let mut other = other;
+        debug_assert_eq!(self.task_name, other.task_name);
+
+        if let (Some(started_at), Some(finished_at)) = (other.started_at, other.finished_at) {
+            self.record_execution_timing(started_at, finished_at);
+        } else {
+            if self.started_at.is_none() {
+                self.started_at = other.started_at;
+            }
+            if self.finished_at.is_none() {
+                self.finished_at = other.finished_at;
+            }
+            if self.duration_ns.is_none() {
+                self.duration_ns = other.duration_ns;
+            }
+            if self.duration_ms.is_none() {
+                self.duration_ms = other.duration_ms;
+            }
+        }
+
+        if self.summary.is_none() {
+            self.summary = other.summary;
+        }
+
+        for (hostname, result) in std::mem::take(&mut *other.hosts).into_iter() {
+            self.insert_host_result(hostname, result);
+        }
+
+        for (task_name, sub_results) in std::mem::take(&mut *other.sub_tasks).into_iter() {
+            if let Some(existing) = self.sub_task_mut(task_name.as_str()) {
+                existing.merge(sub_results);
+            } else {
+                self.insert_sub_task(task_name, sub_results);
+            }
+        }
+    }
+
     fn record_execution_timing(&mut self, started_at: SystemTime, finished_at: SystemTime) {
         if self.started_at.is_none_or(|current| started_at < current) {
             self.started_at = Some(started_at);
@@ -2382,7 +2425,7 @@ pub trait SubTasks {
 ///     }
 /// }
 /// ```
-pub trait Task: TaskInfo + SubTasks {
+pub trait Task: TaskInfo + SubTasks + Send + Sync {
     /// Start executing the task.
     fn start(&self, host: &Host) -> HostTaskResult;
 }
@@ -2450,15 +2493,16 @@ pub trait Task: TaskInfo + SubTasks {
 /// let definition = TaskDefinition::new(task);
 /// assert_eq!(definition.name(), "deploy");
 /// ```
+#[derive(Clone)]
 pub struct TaskDefinition {
-    inner: Box<dyn Task>,
+    inner: Arc<dyn Task>,
 }
 
 impl TaskDefinition {
     /// Wrap a user-defined task that implements the Task trait.
     pub fn new<T: Task + 'static>(task: T) -> Self {
         Self {
-            inner: Box::new(task),
+            inner: Arc::new(task),
         }
     }
 

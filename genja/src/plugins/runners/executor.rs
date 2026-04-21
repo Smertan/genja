@@ -23,7 +23,12 @@ impl<'a> TaskExecutor<'a> {
         let mut results = TaskResults::new(task_definition.name()).with_started_at(started_at);
 
         for (host_id, host) in self.hosts.iter() {
-            self.run_host(task_definition, host_id, host, &mut results)?;
+            results.merge(Self::run_host(
+                task_definition,
+                host_id,
+                host,
+                self.max_depth,
+            )?);
         }
 
         let finished_at = SystemTime::now();
@@ -37,13 +42,14 @@ impl<'a> TaskExecutor<'a> {
             .with_duration_ns(duration_ns))
     }
 
-    fn run_host(
-        &self,
+    pub(crate) fn run_host(
         task_definition: &TaskDefinition,
         host_id: &NatString,
         host: &Host,
-        results: &mut TaskResults,
-    ) -> Result<(), GenjaError> {
-        task_definition.start(host_id.as_str(), host, results, self.max_depth)
+        max_depth: usize,
+    ) -> Result<TaskResults, GenjaError> {
+        let mut results = TaskResults::new(task_definition.name());
+        task_definition.start(host_id.as_str(), host, &mut results, max_depth)?;
+        Ok(results)
     }
 }
