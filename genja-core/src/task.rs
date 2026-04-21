@@ -378,15 +378,45 @@ fn format_duration_display(duration_ns: u128) -> String {
     }
 
     if duration_ns < 1_000_000 {
-        return format!("{}us", duration_ns / 1_000);
+        return format_decimal_unit(duration_ns as f64 / 1_000.0, "us");
     }
 
     if duration_ns < 1_000_000_000 {
-        return format!("{}ms", duration_ns / 1_000_000);
+        return format_decimal_unit(duration_ns as f64 / 1_000_000.0, "ms");
     }
 
-    let duration_ns = u64::try_from(duration_ns).unwrap_or(u64::MAX);
-    humantime::format_duration(std::time::Duration::from_nanos(duration_ns)).to_string()
+    if duration_ns < 60_000_000_000 {
+        return format_decimal_unit(duration_ns as f64 / 1_000_000_000.0, "s");
+    }
+
+    if duration_ns < 3_600_000_000_000 {
+        return format_decimal_unit(duration_ns as f64 / 60_000_000_000.0, "m");
+    }
+
+    format_decimal_unit(duration_ns as f64 / 3_600_000_000_000.0, "h")
+}
+
+fn format_decimal_unit(value: f64, unit: &str) -> String {
+    let precision = if value >= 100.0 {
+        0
+    } else if value >= 10.0 {
+        1
+    } else {
+        2
+    };
+
+    let formatted = format!("{value:.precision$}");
+    let trimmed = if let Some((whole, fractional)) = formatted.split_once('.') {
+        let fractional = fractional.trim_end_matches('0');
+        if fractional.is_empty() {
+            whole.to_string()
+        } else {
+            format!("{whole}.{fractional}")
+        }
+    } else {
+        formatted
+    };
+    format!("{trimmed}{unit}")
 }
 
 /// Results of a task execution, including timing, host outcomes, and nested sub-task results.
@@ -3228,6 +3258,8 @@ mod tests {
     fn task_results_duration_display_preserves_sub_millisecond_precision() {
         let micros = TaskResults::new("micros").with_duration_ns(250_000);
         let nanos = TaskResults::new("nanos").with_duration_ns(250);
+        let millis = TaskResults::new("millis").with_duration_ns(2_500_000);
+        let seconds = TaskResults::new("seconds").with_duration_ns(1_500_587_737);
 
         assert_eq!(micros.duration_ns(), Some(250_000));
         assert_eq!(micros.duration_ms(), Some(0));
@@ -3236,6 +3268,9 @@ mod tests {
         assert_eq!(nanos.duration_ns(), Some(250));
         assert_eq!(nanos.duration_ms(), Some(0));
         assert_eq!(nanos.duration_display(), Some("250ns".to_string()));
+
+        assert_eq!(millis.duration_display(), Some("2.5ms".to_string()));
+        assert_eq!(seconds.duration_display(), Some("1.5s".to_string()));
     }
 
     #[test]
