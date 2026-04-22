@@ -569,7 +569,7 @@ mod tests {
     use genja_core::Settings;
     use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Host, Hosts, Inventory};
     use genja_core::settings::RunnerConfig;
-    use genja_core::task::{HostTaskResult, SubTasks, Task, TaskInfo, TaskSuccess};
+    use genja_core::task::{HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskSuccess};
     use serde_json::{Value, json};
     use std::sync::Arc;
 
@@ -602,8 +602,8 @@ mod tests {
     }
 
     impl Task for TestTask {
-        fn start(&self, _host: &Host) -> HostTaskResult {
-            HostTaskResult::passed(TaskSuccess::new())
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
 

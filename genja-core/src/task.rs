@@ -97,13 +97,13 @@
 //! }
 //!
 //! impl Task for DeployTask {
-//!     fn start(&self, host: &Host) -> HostTaskResult {
+//!     fn start(&self, host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         // Execute deployment logic
-//!         HostTaskResult::passed(
+//!         Ok(HostTaskResult::passed(
 //!             TaskSuccess::new()
 //!                 .with_changed(true)
 //!                 .with_summary("Configuration deployed successfully")
-//!         )
+//!         ))
 //!     }
 //! }
 //! ```
@@ -251,7 +251,8 @@
 //! - **Timeout**: Operation exceeded time limit (often retryable)
 //! - **Command**: Remote command execution failed
 //! - **Unsupported**: Operation not supported by target
-//! - **Internal**: Framework or implementation error
+//! - **Internal**: Genja/framework implementation error
+//! - **External**: Error returned from a task, plugin, or external dependency
 //!
 //! # Message System
 //!
@@ -318,8 +319,10 @@
 //! }
 //!
 //! impl Task for DeployTask {
-//!     fn start(&self, _host: &Host) -> HostTaskResult {
-//!         HostTaskResult::passed(TaskSuccess::new().with_summary("deploy complete"))
+//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!         Ok(HostTaskResult::passed(
+//!             TaskSuccess::new().with_summary("deploy complete"),
+//!         ))
 //!     }
 //! }
 //!
@@ -360,13 +363,90 @@ use crate::types::{CustomTreeMap, NatString};
 use log::warn;
 use serde::Serialize;
 use serde_json::Value;
-use std::any::type_name;
+use std::any::{type_name, Any};
 use std::error::Error;
+use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-pub type TaskError = Arc<dyn Error + Send + Sync + 'static>;
+#[derive(Clone)]
+pub struct TaskError {
+    error: Arc<dyn Error + Send + Sync + 'static>,
+    error_type: String,
+    source: Option<Arc<dyn Any + Send + Sync + 'static>>,
+}
+
+type TaskFailureSource = Arc<dyn Any + Send + Sync + 'static>;
+
+impl TaskError {
+    pub fn new<E>(error: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        let error = Arc::new(error);
+        Self {
+            error_type: type_name::<E>().to_string(),
+            source: Some(error.clone()),
+            error,
+        }
+    }
+
+    pub fn from_arc(error: Arc<dyn Error + Send + Sync + 'static>) -> Self {
+        Self {
+            error,
+            error_type: "dyn core::error::Error".to_string(),
+            source: None,
+        }
+    }
+
+    pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self.error.as_ref()
+    }
+
+    pub fn error_type(&self) -> &str {
+        &self.error_type
+    }
+
+    pub fn downcast_ref<E>(&self) -> Option<&E>
+    where
+        E: 'static,
+    {
+        self.source
+            .as_ref()
+            .and_then(|source| source.downcast_ref::<E>())
+    }
+}
+
+impl fmt::Debug for TaskError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskError")
+            .field("error_type", &self.error_type)
+            .field("message", &self.error.to_string())
+            .finish()
+    }
+}
+
+impl fmt::Display for TaskError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.error)
+    }
+}
+
+impl Error for TaskError {}
+
+#[derive(Debug)]
+struct CapturedTaskFailure {
+    message: String,
+}
+
+impl fmt::Display for CapturedTaskFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl Error for CapturedTaskFailure {}
 
 fn format_timestamp_display(timestamp: SystemTime) -> String {
     humantime::format_rfc3339_seconds(timestamp).to_string()
@@ -1686,6 +1766,8 @@ impl TaskSuccess {
 pub struct TaskFailure {
     #[serde(skip)]
     error: TaskError,
+    #[serde(skip)]
+    source: Option<TaskFailureSource>,
     kind: TaskFailureKind,
     error_type: String,
     message: String,
@@ -1724,11 +1806,80 @@ impl TaskFailure {
     where
         E: Error + Send + Sync + 'static,
     {
+        let source = Arc::new(error);
+        let message = source.to_string();
+        let error_type = type_name::<E>().to_string();
+
         Self {
             kind: TaskFailureKind::Internal,
-            error_type: type_name::<E>().to_string(),
+            error_type: error_type.clone(),
+            message,
+            error: TaskError {
+                error: source.clone(),
+                error_type,
+                source: Some(source.clone()),
+            },
+            source: Some(source),
+            retryable: false,
+            details: None,
+            warnings: Vec::new(),
+            messages: Vec::new(),
+            started_at: None,
+            finished_at: None,
+            duration_ns: None,
+            duration_ms: None,
+        }
+    }
+
+    /// Creates a new `TaskFailure` from any thread-safe `'static` payload.
+    ///
+    /// This is useful when the failure value does not implement [`Error`] but
+    /// still carries meaningful type and display information that should be
+    /// stored with the task result.
+    pub fn capture<E>(error: E) -> Self
+    where
+        E: fmt::Debug + fmt::Display + Send + Sync + 'static,
+    {
+        let source = Arc::new(error);
+        let message = source.to_string();
+        let error_type = type_name::<E>().to_string();
+        let wrapped_error = Arc::new(CapturedTaskFailure {
+            message: message.clone(),
+        });
+
+        Self {
+            kind: TaskFailureKind::Internal,
+            error_type: error_type.clone(),
+            message,
+            error: TaskError {
+                error: wrapped_error,
+                error_type,
+                source: Some(source.clone()),
+            },
+            source: Some(source),
+            retryable: false,
+            details: None,
+            warnings: Vec::new(),
+            messages: Vec::new(),
+            started_at: None,
+            finished_at: None,
+            duration_ns: None,
+            duration_ms: None,
+        }
+    }
+
+    /// Creates a new `TaskFailure` from an already-erased task error.
+    ///
+    /// Failures captured through the task execution boundary default to
+    /// [`TaskFailureKind::External`], because the error originated outside the
+    /// Genja framework itself.
+    pub fn from_task_error(error: TaskError) -> Self {
+        Self {
+            kind: TaskFailureKind::External,
+            error_type: error.error_type().to_string(),
             message: error.to_string(),
-            error: Arc::new(error),
+            error: error.clone(),
+            source: error.source,
             retryable: false,
             details: None,
             warnings: Vec::new(),
@@ -1910,9 +2061,11 @@ impl TaskFailure {
     /// `Some(&E)` if the underlying error is of type `E`, `None` otherwise.
     pub fn downcast_ref<E>(&self) -> Option<&E>
     where
-        E: Error + 'static,
+        E: 'static,
     {
-        self.error.downcast_ref::<E>()
+        self.source
+            .as_ref()
+            .and_then(|source| source.downcast_ref::<E>())
     }
 
     /// Returns a reference to the underlying error as a trait object.
@@ -1925,7 +2078,7 @@ impl TaskFailure {
     /// A reference to the underlying error as a trait object implementing
     /// `Error + Send + Sync + 'static`.
     pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
-        self.error.as_ref()
+        self.error.error()
     }
 
     /// Returns the type name of the underlying error.
@@ -2375,9 +2528,12 @@ pub enum MessageLevel {
 ///   supported by the target system, plugin, or current configuration. This
 ///   typically indicates a permanent failure that won't succeed on retry.
 ///
-/// * `Internal` - The task failed due to an internal error in the task
-///   implementation or framework, such as a programming error, resource
-///   exhaustion, or unexpected state. This is the default classification.
+/// * `Internal` - The task failed due to a Genja/framework internal error, such
+///   as a programming error, resource exhaustion, or unexpected engine state.
+///
+/// * `External` - The task failed because a task implementation, plugin, or
+///   external dependency returned an error that Genja captured and stored as a
+///   host failure.
 ///
 /// # Example
 ///
@@ -2409,6 +2565,7 @@ pub enum TaskFailureKind {
     Command,
     Unsupported,
     Internal,
+    External,
 }
 
 /// Task metadata required for execution.
@@ -2450,14 +2607,19 @@ pub trait SubTasks {
 /// }
 ///
 /// impl Task for MyTask {
-///     fn start(&self, _host: &genja_core::inventory::Host) -> genja_core::task::HostTaskResult {
-///         genja_core::task::HostTaskResult::passed(genja_core::task::TaskSuccess::new())
+///     fn start(
+///         &self,
+///         _host: &genja_core::inventory::Host,
+///     ) -> Result<genja_core::task::HostTaskResult, genja_core::task::TaskError> {
+///         Ok(genja_core::task::HostTaskResult::passed(
+///             genja_core::task::TaskSuccess::new(),
+///         ))
 ///     }
 /// }
 /// ```
 pub trait Task: TaskInfo + SubTasks + Send + Sync {
     /// Start executing the task.
-    fn start(&self, host: &Host) -> HostTaskResult;
+    fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError>;
 }
 
 /// A wrapper around a task implementation that enforces the task trait flow.
@@ -2514,8 +2676,8 @@ pub trait Task: TaskInfo + SubTasks + Send + Sync {
 /// }
 ///
 /// impl Task for MyTask {
-///     fn start(&self, _host: &Host) -> HostTaskResult {
-///         HostTaskResult::passed(TaskSuccess::new())
+///     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(TaskSuccess::new()))
 ///     }
 /// }
 ///
@@ -2636,16 +2798,28 @@ impl TaskDefinition {
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
         if depth > max_depth {
+            let started_at = SystemTime::now();
+            let finished_at = started_at;
+            let error =
+                crate::GenjaError::Message(format!("max task depth exceeded: {}", max_depth));
             warn!(
                 "max task depth exceeded for task '{}' at depth {} with max_depth {}",
                 task.name(),
                 depth,
                 max_depth
             );
-            return Err(crate::GenjaError::Message(format!(
-                "max task depth exceeded: {}",
-                max_depth
-            )));
+            results.record_execution_timing(started_at, finished_at);
+            results.insert_host_result(
+                hostname,
+                HostTaskResult::failed(
+                    TaskFailure::new(error)
+                        .with_kind(TaskFailureKind::Internal)
+                        .with_started_at(started_at)
+                        .with_finished_at(finished_at)
+                        .with_duration_ns(0),
+                ),
+            );
+            return Ok(());
         }
 
         let started_at = SystemTime::now();
@@ -2657,6 +2831,18 @@ impl TaskDefinition {
             .unwrap_or(0);
 
         results.record_execution_timing(started_at, finished_at);
+
+        let host_result = match host_result {
+            Ok(host_result) => host_result,
+            Err(error) => {
+                let failure = TaskFailure::from_task_error(error)
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(duration_ns);
+                results.insert_host_result(hostname, HostTaskResult::failed(failure));
+                return Ok(());
+            }
+        };
 
         results.insert_host_result(
             hostname,
@@ -2793,6 +2979,17 @@ mod tests {
 
     impl Error for TestTaskFailureError {}
 
+    #[derive(Debug)]
+    struct ExternalFailurePayload {
+        code: u16,
+    }
+
+    impl fmt::Display for ExternalFailurePayload {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "external failure code {}", self.code)
+        }
+    }
+
     struct TestTask {
         name: &'static str,
         subs: Vec<Arc<dyn Task>>,
@@ -2828,9 +3025,9 @@ mod tests {
     }
 
     impl Task for TestTask {
-        fn start(&self, _host: &Host) -> HostTaskResult {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
             self.counter.fetch_add(1, Ordering::SeqCst);
-            HostTaskResult::passed(TaskSuccess::new())
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
 
@@ -2859,8 +3056,10 @@ mod tests {
     }
 
     impl Task for FailingTask {
-        fn start(&self, _host: &Host) -> HostTaskResult {
-            HostTaskResult::failed(TaskFailure::new(TestTaskFailureError))
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::failed(TaskFailure::new(
+                TestTaskFailureError,
+            )))
         }
     }
 
@@ -2889,8 +3088,10 @@ mod tests {
     }
 
     impl Task for SkippingTask {
-        fn start(&self, _host: &Host) -> HostTaskResult {
-            HostTaskResult::Skipped(TaskSkip::new().with_reason("filtered"))
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::Skipped(
+                TaskSkip::new().with_reason("filtered"),
+            ))
         }
     }
 
@@ -2940,7 +3141,7 @@ mod tests {
     }
 
     #[test]
-    fn start_fails_when_depth_exceeds_limit() {
+    fn start_captures_host_failure_when_depth_exceeds_limit() {
         let counter = Arc::new(AtomicUsize::new(0));
         let root = chain(5, counter.clone());
         let task = TaskDefinition::new(TestTask {
@@ -2951,16 +3152,36 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
 
         let mut results = TaskResults::new("root");
-        let err = task
-            .start("router1", &host, &mut results, 4)
-            .expect_err("start should fail at depth > 4");
-        match err {
-            crate::GenjaError::Message(msg) => {
-                assert!(msg.contains("max task depth exceeded"));
-            }
-            _ => panic!("unexpected error variant"),
-        }
+        task.start("router1", &host, &mut results, 4)
+            .expect("start should capture depth overflow as a host failure");
+
         assert_eq!(counter.load(Ordering::SeqCst), 5);
+
+        let level_one = results
+            .sub_task("node")
+            .expect("first nested node should exist");
+        let level_two = level_one
+            .sub_task("node")
+            .expect("second nested node should exist");
+        let level_three = level_two
+            .sub_task("node")
+            .expect("third nested node should exist");
+        let level_four = level_three
+            .sub_task("node")
+            .expect("fourth nested node should exist");
+        let level_five = level_four
+            .sub_task("leaf")
+            .expect("leaf task should capture failure");
+
+        let failure = level_five
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("depth overflow should be recorded as a host failure");
+        assert!(failure.message().contains("max task depth exceeded"));
+        assert!(matches!(failure.kind(), TaskFailureKind::Internal));
+        assert!(failure.started_at().is_some());
+        assert!(failure.finished_at().is_some());
+        assert_eq!(failure.duration_ns(), Some(0));
     }
 
     #[test]
@@ -3043,6 +3264,88 @@ mod tests {
             .error_type()
             .ends_with("task::tests::TestTaskFailureError"));
         assert!(failure.downcast_ref::<TestTaskFailureError>().is_some());
+    }
+
+    #[test]
+    fn task_failure_capture_supports_non_error_payloads() {
+        let failure = TaskFailure::capture(ExternalFailurePayload { code: 42 })
+            .with_kind(TaskFailureKind::Internal);
+
+        assert_eq!(failure.message(), "external failure code 42");
+        assert!(failure
+            .error()
+            .to_string()
+            .contains("external failure code 42"));
+        assert!(failure
+            .error_type()
+            .ends_with("task::tests::ExternalFailurePayload"));
+        let payload = failure
+            .downcast_ref::<ExternalFailurePayload>()
+            .expect("captured payload should be downcastable");
+        assert_eq!(payload.code, 42);
+    }
+
+    #[derive(Debug)]
+    struct ExternalTaskError;
+
+    impl fmt::Display for ExternalTaskError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "external task error")
+        }
+    }
+
+    impl Error for ExternalTaskError {}
+
+    struct ErroringTask;
+
+    impl TaskInfo for ErroringTask {
+        fn name(&self) -> &str {
+            "erroring"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "ssh"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, "ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for ErroringTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for ErroringTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Err(TaskError::new(ExternalTaskError))
+        }
+    }
+
+    #[test]
+    fn start_captures_task_errors_as_external_failures() {
+        let task = TaskDefinition::new(ErroringTask);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("erroring");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should capture task error as host failure");
+
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("task error should be recorded as failure");
+        assert_eq!(failure.message(), "external task error");
+        assert!(matches!(failure.kind(), TaskFailureKind::External));
+        assert!(failure
+            .error_type()
+            .ends_with("task::tests::ExternalTaskError"));
     }
 
     #[test]
