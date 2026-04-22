@@ -621,6 +621,70 @@ struct TaskSkipHumanJson<'a> {
     message: Option<&'a str>,
 }
 
+/// Aggregate host outcome counts for a task result node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+pub struct TaskHostSummary {
+    passed: usize,
+    failed: usize,
+    skipped: usize,
+}
+
+/// Recursive summary of a task result tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskResultsSummary {
+    task_name: String,
+    hosts: TaskHostSummary,
+    sub_tasks: CustomTreeMap<TaskResultsSummary>,
+}
+
+impl TaskHostSummary {
+    /// Creates a new aggregate host summary.
+    pub fn new(passed: usize, failed: usize, skipped: usize) -> Self {
+        Self {
+            passed,
+            failed,
+            skipped,
+        }
+    }
+
+    /// Returns the number of hosts that passed.
+    pub fn passed(&self) -> usize {
+        self.passed
+    }
+
+    /// Returns the number of hosts that failed.
+    pub fn failed(&self) -> usize {
+        self.failed
+    }
+
+    /// Returns the number of hosts that were skipped.
+    pub fn skipped(&self) -> usize {
+        self.skipped
+    }
+
+    /// Returns the total number of hosts represented in this summary.
+    pub fn total(&self) -> usize {
+        self.passed + self.failed + self.skipped
+    }
+}
+
+impl TaskResultsSummary {
+    /// Returns the task name for this summary node.
+    pub fn task_name(&self) -> &str {
+        &self.task_name
+    }
+
+    /// Returns the host outcome counts for this summary node.
+    pub fn hosts(&self) -> TaskHostSummary {
+        self.hosts
+    }
+
+    /// Returns recursive sub-task summaries keyed by task name.
+    pub fn sub_tasks(&self) -> &CustomTreeMap<TaskResultsSummary> {
+        &self.sub_tasks
+    }
+}
+
 impl<'a> From<&'a HostTaskResult> for HostTaskResultHumanJson<'a> {
     fn from(result: &'a HostTaskResult) -> Self {
         match result {
@@ -1085,6 +1149,37 @@ impl TaskResults {
             .iter()
             .filter_map(|(host, result)| result.is_failed().then_some(host))
             .collect()
+    }
+
+    /// Returns a list of hostnames for which the task execution was skipped.
+    pub fn skipped_hosts(&self) -> Vec<&NatString> {
+        self.hosts
+            .iter()
+            .filter_map(|(host, result)| result.is_skipped().then_some(host))
+            .collect()
+    }
+
+    /// Returns aggregate host counts for this task only.
+    pub fn host_summary(&self) -> TaskHostSummary {
+        TaskHostSummary::new(
+            self.passed_hosts().len(),
+            self.failed_hosts().len(),
+            self.skipped_hosts().len(),
+        )
+    }
+
+    /// Returns a recursive summary of this task and all sub-tasks.
+    pub fn task_summary(&self) -> TaskResultsSummary {
+        let mut sub_tasks = CustomTreeMap::new();
+        for (task_name, task_results) in self.sub_tasks().iter() {
+            sub_tasks.insert(task_name, task_results.task_summary());
+        }
+
+        TaskResultsSummary {
+            task_name: self.task_name.clone(),
+            hosts: self.host_summary(),
+            sub_tasks,
+        }
     }
 }
 
@@ -3693,5 +3788,30 @@ mod tests {
                 .map(TaskFailure::retryable),
             Some(true)
         );
+
+        let root_summary = root.task_summary();
+        assert_eq!(root_summary.task_name(), "deploy");
+        assert_eq!(root_summary.hosts().passed(), 1);
+        assert_eq!(root_summary.hosts().failed(), 1);
+        assert_eq!(root_summary.hosts().skipped(), 0);
+        assert_eq!(root_summary.hosts().total(), 2);
+
+        let validate_summary = root_summary
+            .sub_tasks()
+            .get("validate")
+            .expect("validate summary should exist");
+        assert_eq!(validate_summary.task_name(), "validate");
+        assert_eq!(validate_summary.hosts().passed(), 1);
+        assert_eq!(validate_summary.hosts().failed(), 0);
+        assert_eq!(validate_summary.hosts().skipped(), 1);
+
+        let collect_logs_summary = validate_summary
+            .sub_tasks()
+            .get("collect_logs")
+            .expect("collect_logs summary should exist");
+        assert_eq!(collect_logs_summary.task_name(), "collect_logs");
+        assert_eq!(collect_logs_summary.hosts().passed(), 1);
+        assert_eq!(collect_logs_summary.hosts().failed(), 0);
+        assert_eq!(collect_logs_summary.hosts().skipped(), 1);
     }
 }

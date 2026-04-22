@@ -38,11 +38,12 @@
 
 pub use genja_core::GenjaError;
 use genja_core::inventory::{Host, Hosts, Inventory};
-use genja_core::task::{Task, TaskDefinition, TaskResults};
+use genja_core::task::{Task, TaskDefinition, TaskInfo, TaskResults};
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
 use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
+use log::info;
 use std::sync::Arc;
 
 // GenjaError is re-exported from genja-core.
@@ -531,9 +532,25 @@ impl Genja {
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
         let hosts = self.selected_hosts()?;
+        let host_count = hosts.len();
         let task_definition = TaskDefinition::new(task);
+        info!(
+            "starting task '{}' for {} host(s)",
+            task_definition.name(),
+            host_count
+        );
         let runner = self.get_runner_plugin(self.settings.runner().plugin())?;
-        runner.run(&task_definition, &hosts, max_depth)
+        let results = runner.run(&task_definition, &hosts, max_depth)?;
+        let summary = results.host_summary();
+        info!(
+            "finished task '{}' for {} host(s): passed={}, failed={}, skipped={}",
+            task_definition.name(),
+            host_count,
+            summary.passed(),
+            summary.failed(),
+            summary.skipped()
+        );
+        Ok(results)
     }
 }
 
