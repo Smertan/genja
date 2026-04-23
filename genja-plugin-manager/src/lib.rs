@@ -45,6 +45,7 @@
 //!
 //! ```rust
 //! use genja_core::inventory::Hosts;
+//! use genja_core::settings::RunnerConfig;
 //! use genja_core::task::{TaskDefinition, TaskResults, Tasks};
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
 //!
@@ -62,6 +63,7 @@
 //!         &self,
 //!         _task: &TaskDefinition,
 //!         _hosts: &Hosts,
+//!         _runner_config: &RunnerConfig,
 //!         _max_depth: usize,
 //!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Task execution logic
@@ -72,6 +74,7 @@
 //!         &self,
 //!         _tasks: &Tasks,
 //!         _hosts: &Hosts,
+//!         _runner_config: &RunnerConfig,
 //!         _max_depth: usize,
 //!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
 //!         // Batch task execution logic
@@ -225,6 +228,7 @@
 //! ```rust
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 //! use genja_core::inventory::Hosts;
+//! use genja_core::settings::RunnerConfig;
 //! use genja_core::task::{TaskDefinition, TaskResults, Tasks};
 //!
 //! #[derive(Debug)]
@@ -239,10 +243,11 @@
 //!         &self,
 //!         task: &TaskDefinition,
 //!         hosts: &Hosts,
+//!         runner_config: &RunnerConfig,
 //!         max_depth: usize,
 //!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Execute task on each host sequentially
-//!         let _ = (task, hosts, max_depth);
+//!         let _ = (task, hosts, runner_config, max_depth);
 //!         Ok(TaskResults::new("sequential"))
 //!     }
 //!
@@ -250,10 +255,11 @@
 //!         &self,
 //!         tasks: &Tasks,
 //!         hosts: &Hosts,
+//!         runner_config: &RunnerConfig,
 //!         max_depth: usize,
 //!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
 //!         // Execute all tasks sequentially
-//!         let _ = (tasks, hosts, max_depth);
+//!         let _ = (tasks, hosts, runner_config, max_depth);
 //!         Ok(Vec::new())
 //!     }
 //! }
@@ -1269,6 +1275,7 @@ inventory_a = "../this/path/does/not/exist.so"
             &self,
             _task: &genja_core::task::TaskDefinition,
             _hosts: &genja_core::inventory::Hosts,
+            _runner_config: &genja_core::settings::RunnerConfig,
             _max_depth: usize,
         ) -> Result<genja_core::task::TaskResults, genja_core::GenjaError> {
             Ok(genja_core::task::TaskResults::new(self.name))
@@ -1278,6 +1285,7 @@ inventory_a = "../this/path/does/not/exist.so"
             &self,
             _tasks: &Tasks,
             _hosts: &genja_core::inventory::Hosts,
+            _runner_config: &genja_core::settings::RunnerConfig,
             _max_depth: usize,
         ) -> Result<Vec<genja_core::task::TaskResults>, genja_core::GenjaError> {
             Ok(Vec::new())

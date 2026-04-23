@@ -623,6 +623,7 @@ mod tests {
             &self,
             _task: &genja_core::task::TaskDefinition,
             _hosts: &genja_core::inventory::Hosts,
+            _runner_config: &genja_core::settings::RunnerConfig,
             _max_depth: usize,
         ) -> Result<genja_core::task::TaskResults, genja_core::GenjaError> {
             Ok(genja_core::task::TaskResults::new("runner"))
@@ -632,6 +633,7 @@ mod tests {
             &self,
             _tasks: &Tasks,
             _hosts: &genja_core::inventory::Hosts,
+            _runner_config: &genja_core::settings::RunnerConfig,
             _max_depth: usize,
         ) -> Result<Vec<genja_core::task::TaskResults>, genja_core::GenjaError> {
             Ok(Vec::new())

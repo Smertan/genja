@@ -17,9 +17,8 @@
   },
   "runner": {
     "plugin": "threaded",
-    "options": {
-      "num_of_workers": 10
-    }
+    "worker_count": 10,
+    "options": {}
   },
   "logging": {
     "enabled": true,

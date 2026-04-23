@@ -1,4 +1,5 @@
 use super::executor::TaskExecutor;
+use genja_core::settings::RunnerConfig;
 use genja_core::GenjaError;
 use genja_core::inventory::Hosts;
 use genja_core::task::{TaskDefinition, TaskResults, Tasks};
@@ -21,6 +22,7 @@ impl PluginRunner for SerialRunnerPlugin {
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
+        _runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
         TaskExecutor::new(hosts, max_depth).run_definition(task)
@@ -30,11 +32,12 @@ impl PluginRunner for SerialRunnerPlugin {
         &self,
         tasks: &Tasks,
         hosts: &Hosts,
+        runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         tasks
             .iter()
-            .map(|task| self.run(task, hosts, max_depth))
+            .map(|task| self.run(task, hosts, runner_config, max_depth))
             .collect()
     }
 }

@@ -110,8 +110,11 @@ Defaults supports the same fields as a group, minus `groups` and `defaults`.
   - Common values: `threaded`, `sequential`
 - `options` (object)
   - Plugin-specific settings.
-  - For `threaded`, use `num_of_workers` (number).
-  - Default: `{"num_of_workers": 10}`
+  - Default: `{}`
+- `worker_count` (number | null)
+  - Optional explicit worker count for runners that support fixed concurrency.
+  - For `threaded`, this is the preferred way to control the number of worker threads.
+  - Default: `null`
 
 ## Logging
 

@@ -363,12 +363,17 @@ impl Genja {
             return Err(GenjaError::NotRunnerPlugin(runner.to_string()));
         }
 
-        let runner_config = RunnerConfig::builder()
+        let mut runner_config = RunnerConfig::builder()
             .plugin(runner)
             .options(self.settings.runner().options().clone())
             .max_task_depth(self.settings.runner().max_task_depth())
-            .max_connection_attempts(self.settings.runner().max_connection_attempts())
-            .build();
+            .max_connection_attempts(self.settings.runner().max_connection_attempts());
+
+        if let Some(worker_count) = self.settings.runner().worker_count() {
+            runner_config = runner_config.worker_count(worker_count);
+        }
+
+        let runner_config = runner_config.build();
 
         let settings = Settings::builder()
             .core(self.settings.core().clone())
@@ -595,7 +600,7 @@ impl Genja {
             host_count
         );
         let runner = self.get_runner_plugin(runner_name)?;
-        let results = runner.run(&task_definition, &hosts, max_depth)?;
+        let results = runner.run(&task_definition, &hosts, self.settings.runner(), max_depth)?;
         let summary = results.task_summary();
         log_task_summary(&summary, host_count, 0);
         Ok(results)
@@ -749,7 +754,7 @@ mod tests {
             .runner(
                 RunnerConfig::builder()
                     .plugin("threaded")
-                    .options(json!({"num_of_workers": 2}))
+                    .worker_count(2)
                     .build(),
             )
             .build();
@@ -781,7 +786,8 @@ mod tests {
             .runner(
                 RunnerConfig::builder()
                     .plugin("threaded")
-                    .options(json!({"num_of_workers": 4}))
+                    .options(json!({"queue": "fast"}))
+                    .worker_count(3)
                     .max_task_depth(7)
                     .max_connection_attempts(5)
                     .build(),
@@ -799,7 +805,8 @@ mod tests {
 
         assert_eq!(genja.settings().runner().plugin(), "threaded");
         assert_eq!(updated.settings().runner().plugin(), "serial");
-        assert_eq!(updated.settings().runner().options(), &json!({"num_of_workers": 4}));
+        assert_eq!(updated.settings().runner().options(), &json!({"queue": "fast"}));
+        assert_eq!(updated.settings().runner().worker_count(), Some(3));
         assert_eq!(updated.settings().runner().max_task_depth(), 7);
         assert_eq!(updated.settings().runner().max_connection_attempts(), 5);
         assert_eq!(updated.host_ids().len(), genja.host_ids().len());

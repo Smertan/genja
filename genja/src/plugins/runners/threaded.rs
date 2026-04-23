@@ -2,6 +2,7 @@ use super::executor::TaskExecutor;
 use genja_core::GenjaError;
 use genja_core::NatString;
 use genja_core::inventory::{Host, Hosts};
+use genja_core::settings::RunnerConfig;
 use genja_core::task::{TaskDefinition, TaskInfo, TaskResults, Tasks};
 use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 use std::collections::VecDeque;
@@ -26,6 +27,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
+        runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
         if hosts.is_empty() {
@@ -37,7 +39,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         }
 
         let started_at = SystemTime::now();
-        let worker_count = worker_count_for(hosts.len());
+        let worker_count = worker_count_for(hosts.len(), runner_config.worker_count());
         let jobs = Arc::new(Mutex::new(collect_jobs(hosts)));
         let (tx, rx) = mpsc::channel();
         let mut handles = Vec::with_capacity(worker_count);
@@ -108,16 +110,21 @@ impl PluginRunner for ThreadedRunnerPlugin {
         &self,
         tasks: &Tasks,
         hosts: &Hosts,
+        runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         tasks
             .iter()
-            .map(|task| self.run(task, hosts, max_depth))
+            .map(|task| self.run(task, hosts, runner_config, max_depth))
             .collect()
     }
 }
 
-fn worker_count_for(host_count: usize) -> usize {
+fn worker_count_for(host_count: usize, configured_worker_count: Option<usize>) -> usize {
+    if let Some(worker_count) = configured_worker_count {
+        return worker_count.max(1).min(host_count.max(1));
+    }
+
     let available = thread::available_parallelism()
         .map(|parallelism| parallelism.get())
         .unwrap_or(1);
@@ -129,4 +136,24 @@ fn collect_jobs(hosts: &Hosts) -> VecDeque<(NatString, Host)> {
         .iter()
         .map(|(host_id, host)| (host_id.clone(), host.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worker_count_for;
+
+    #[test]
+    fn worker_count_uses_configured_value_when_present() {
+        assert_eq!(worker_count_for(10, Some(4)), 4);
+    }
+
+    #[test]
+    fn worker_count_caps_configured_value_to_host_count() {
+        assert_eq!(worker_count_for(2, Some(10)), 2);
+    }
+
+    #[test]
+    fn worker_count_clamps_configured_zero_to_one() {
+        assert_eq!(worker_count_for(5, Some(0)), 1);
+    }
 }
