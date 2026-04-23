@@ -614,15 +614,21 @@ fn log_task_summary(summary: &TaskResultsSummary, host_count: usize, depth: usiz
     } else {
         format!("{}↳ ", "  ".repeat(depth - 1))
     };
+    let duration_ms = summary.duration_ms().unwrap_or(0);
+    let duration = summary
+        .duration_display()
+        .unwrap_or_else(|| "unknown".to_string());
 
     info!(
-        "{}finished task '{}' for {} host(s): passed={}, failed={}, skipped={}",
+        "{}finished task '{}' for {} host(s): passed={}, failed={}, skipped={} duration_ms={} duration={}",
         prefix,
         summary.task_name(),
         host_count,
         hosts.passed(),
         hosts.failed(),
-        hosts.skipped()
+        hosts.skipped(),
+        duration_ms,
+        duration
     );
 
     for (_, sub_summary) in summary.sub_tasks().iter() {

@@ -634,6 +634,7 @@ pub struct TaskHostSummary {
 pub struct TaskResultsSummary {
     task_name: String,
     hosts: TaskHostSummary,
+    duration_ns: Option<u128>,
     sub_tasks: CustomTreeMap<TaskResultsSummary>,
 }
 
@@ -677,6 +678,16 @@ impl TaskResultsSummary {
     /// Returns the host outcome counts for this summary node.
     pub fn hosts(&self) -> TaskHostSummary {
         self.hosts
+    }
+
+    /// Returns the duration in milliseconds for this summary node, if available.
+    pub fn duration_ms(&self) -> Option<u128> {
+        self.duration_ns.map(|duration_ns| duration_ns / 1_000_000)
+    }
+
+    /// Returns the duration in a human-readable format for this summary node, if available.
+    pub fn duration_display(&self) -> Option<String> {
+        self.duration_ns.map(format_duration_display)
     }
 
     /// Returns recursive sub-task summaries keyed by task name.
@@ -1178,6 +1189,7 @@ impl TaskResults {
         TaskResultsSummary {
             task_name: self.task_name.clone(),
             hosts: self.host_summary(),
+            duration_ns: self.duration_ns(),
             sub_tasks,
         }
     }
@@ -3865,6 +3877,7 @@ mod tests {
         assert_eq!(root_summary.hosts().failed(), 1);
         assert_eq!(root_summary.hosts().skipped(), 0);
         assert_eq!(root_summary.hosts().total(), 2);
+        assert_eq!(root_summary.duration_ms(), None);
 
         let validate_summary = root_summary
             .sub_tasks()
@@ -3874,6 +3887,7 @@ mod tests {
         assert_eq!(validate_summary.hosts().passed(), 1);
         assert_eq!(validate_summary.hosts().failed(), 0);
         assert_eq!(validate_summary.hosts().skipped(), 1);
+        assert_eq!(validate_summary.duration_ms(), None);
 
         let collect_logs_summary = validate_summary
             .sub_tasks()
