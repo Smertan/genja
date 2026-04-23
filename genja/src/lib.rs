@@ -38,6 +38,7 @@
 
 pub use genja_core::GenjaError;
 use genja_core::inventory::{Host, Hosts, Inventory};
+use genja_core::settings::RunnerConfig;
 use genja_core::task::{Task, TaskDefinition, TaskInfo, TaskResults, TaskResultsSummary};
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
@@ -340,6 +341,52 @@ impl Genja {
         self.settings = Arc::new(settings);
     }
 
+    /// Returns a new `Genja` with the selected runner plugin activated.
+    ///
+    /// The named plugin must already be loaded in the current plugin manager and
+    /// must be registered as a runner plugin.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(GenjaError::PluginsNotLoaded)` if plugins are not loaded.
+    /// Returns `Err(GenjaError::PluginNotFound)` if no plugin with that name exists.
+    /// Returns `Err(GenjaError::NotRunnerPlugin)` if the named plugin is not a runner.
+    pub fn with_runner(&self, runner: &str) -> Result<Self, GenjaError> {
+        self.ensure_plugins_loaded()?;
+
+        let plugin = self
+            .plugins
+            .get_plugin(runner)
+            .ok_or_else(|| GenjaError::PluginNotFound(runner.to_string()))?;
+
+        if !matches!(plugin, Plugins::Runner(_)) {
+            return Err(GenjaError::NotRunnerPlugin(runner.to_string()));
+        }
+
+        let runner_config = RunnerConfig::builder()
+            .plugin(runner)
+            .options(self.settings.runner().options().clone())
+            .max_task_depth(self.settings.runner().max_task_depth())
+            .max_connection_attempts(self.settings.runner().max_connection_attempts())
+            .build();
+
+        let settings = Settings::builder()
+            .core(self.settings.core().clone())
+            .inventory(self.settings.inventory().clone())
+            .ssh(self.settings.ssh().clone())
+            .runner(runner_config)
+            .logging(self.settings.logging().clone())
+            .build();
+
+        Ok(Self {
+            inventory: self.inventory.clone(),
+            host_ids: Arc::clone(&self.host_ids),
+            settings: Arc::new(settings),
+            plugins: Arc::clone(&self.plugins),
+            plugins_loaded: self.plugins_loaded,
+        })
+    }
+
     /// Returns a reference to the plugin manager.
     pub fn plugin_manager(&self) -> &PluginManager {
         self.plugins.as_ref()
@@ -606,7 +653,7 @@ impl Default for Genja {
 
 #[cfg(test)]
 mod tests {
-    use super::Genja;
+    use super::{Genja, GenjaError};
     use genja_core::Settings;
     use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Host, Hosts, Inventory};
     use genja_core::settings::RunnerConfig;
@@ -726,6 +773,47 @@ mod tests {
         assert!(results.started_at().is_some());
         assert!(results.finished_at().is_some());
         assert!(results.duration_ns().is_some());
+    }
+
+    #[test]
+    fn with_runner_returns_updated_genja_for_loaded_runner_plugin() {
+        let settings = Settings::builder()
+            .runner(
+                RunnerConfig::builder()
+                    .plugin("threaded")
+                    .options(json!({"num_of_workers": 4}))
+                    .max_task_depth(7)
+                    .max_connection_attempts(5)
+                    .build(),
+            )
+            .build();
+
+        let genja = Genja::builder(test_inventory())
+            .with_settings(settings)
+            .build()
+            .expect("genja should build");
+
+        let updated = genja
+            .with_runner("serial")
+            .expect("serial runner should be available");
+
+        assert_eq!(genja.settings().runner().plugin(), "threaded");
+        assert_eq!(updated.settings().runner().plugin(), "serial");
+        assert_eq!(updated.settings().runner().options(), &json!({"num_of_workers": 4}));
+        assert_eq!(updated.settings().runner().max_task_depth(), 7);
+        assert_eq!(updated.settings().runner().max_connection_attempts(), 5);
+        assert_eq!(updated.host_ids().len(), genja.host_ids().len());
+    }
+
+    #[test]
+    fn with_runner_returns_error_for_unknown_runner_plugin() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let error = genja
+            .with_runner("missing-runner")
+            .expect_err("missing runner should return an error");
+
+        assert!(matches!(error, GenjaError::PluginNotFound(name) if name == "missing-runner"));
     }
 }
 
