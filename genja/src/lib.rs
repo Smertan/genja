@@ -706,6 +706,136 @@ mod tests {
         }
     }
 
+    struct FailedTask;
+
+    impl TaskInfo for FailedTask {
+        fn name(&self) -> &str {
+            "failed-task"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "test"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, self.plugin_name())
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for FailedTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for FailedTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::failed(genja_core::task::TaskFailure::new(
+                std::io::Error::other("boom"),
+            )))
+        }
+    }
+
+    struct SkippedTask;
+
+    impl TaskInfo for SkippedTask {
+        fn name(&self) -> &str {
+            "skipped-task"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "test"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, self.plugin_name())
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for SkippedTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for SkippedTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::skipped_with_reason("filtered"))
+        }
+    }
+
+    struct ChildTask;
+
+    impl TaskInfo for ChildTask {
+        fn name(&self) -> &str {
+            "child-task"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "test"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, self.plugin_name())
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for ChildTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for ChildTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    struct ParentTask;
+
+    impl TaskInfo for ParentTask {
+        fn name(&self) -> &str {
+            "parent-task"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "test"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, self.plugin_name())
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for ParentTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            vec![Arc::new(ChildTask)]
+        }
+    }
+
+    impl Task for ParentTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
     fn test_inventory() -> Inventory {
         let mut hosts = Hosts::new();
         hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
@@ -784,6 +914,60 @@ mod tests {
         assert!(results.started_at().is_some());
         assert!(results.finished_at().is_some());
         assert!(results.duration_ns().is_some());
+    }
+
+    #[test]
+    fn run_preserves_failed_host_outcomes_and_timing() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja.run(FailedTask, 0).expect("run should succeed");
+
+        assert_eq!(results.failed_hosts().len(), 2);
+        let failure = results
+            .host_result("router1")
+            .and_then(genja_core::task::HostTaskResult::failure)
+            .expect("router1 should have a failed result");
+        assert!(failure.duration_ns().is_some());
+        assert!(failure.duration_display().is_some());
+        assert!(results.duration_ns().is_some());
+    }
+
+    #[test]
+    fn run_preserves_skipped_host_outcomes_in_summary() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja.run(SkippedTask, 0).expect("run should succeed");
+
+        assert_eq!(results.skipped_hosts().len(), 2);
+        let summary = results.task_summary();
+        assert_eq!(summary.hosts().passed(), 0);
+        assert_eq!(summary.hosts().failed(), 0);
+        assert_eq!(summary.hosts().skipped(), 2);
+        assert!(results
+            .host_result("router1")
+            .expect("router1 result should exist")
+            .is_skipped());
+    }
+
+    #[test]
+    fn run_builds_recursive_sub_task_summary_with_duration() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja.run(ParentTask, 1).expect("run should succeed");
+
+        let summary = results.task_summary();
+        assert!(summary.duration_ms().is_some());
+        assert!(summary.duration_display().is_some());
+
+        let child = summary
+            .sub_tasks()
+            .get("child-task")
+            .expect("child summary should exist");
+        assert_eq!(child.hosts().passed(), 2);
+        assert_eq!(child.hosts().failed(), 0);
+        assert_eq!(child.hosts().skipped(), 0);
+        assert!(child.duration_ms().is_some());
+        assert!(child.duration_display().is_some());
     }
 
     #[test]

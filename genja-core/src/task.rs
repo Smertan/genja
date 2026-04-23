@@ -3141,7 +3141,9 @@ impl DerefMut for Tasks {
 mod tests {
     use super::*;
     use crate::inventory::{BaseBuilderHost, ConnectionKey, Host};
+    use log::{LevelFilter, Log, Metadata, Record};
     use serde_json::json;
+    use std::sync::{Mutex, OnceLock};
     use std::fmt;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -3270,6 +3272,56 @@ mod tests {
                 TaskSkip::new().with_reason("filtered"),
             ))
         }
+    }
+
+    #[derive(Default)]
+    struct TestLogger {
+        entries: Mutex<Vec<String>>,
+    }
+
+    impl TestLogger {
+        fn clear(&self) {
+            self.entries.lock().expect("logger lock should not be poisoned").clear();
+        }
+
+        fn entries(&self) -> Vec<String> {
+            self.entries
+                .lock()
+                .expect("logger lock should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl Log for TestLogger {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &Record<'_>) {
+            if self.enabled(record.metadata()) {
+                self.entries
+                    .lock()
+                    .expect("logger lock should not be poisoned")
+                    .push(format!("{} {}", record.level(), record.args()));
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    fn test_logger() -> &'static TestLogger {
+        static LOGGER: OnceLock<&'static TestLogger> = OnceLock::new();
+        LOGGER.get_or_init(|| {
+            let logger = Box::leak(Box::new(TestLogger::default()));
+            let _ = log::set_logger(logger);
+            log::set_max_level(LevelFilter::Debug);
+            logger
+        })
+    }
+
+    fn log_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn chain(depth: usize, counter: Arc<AtomicUsize>) -> Arc<dyn Task> {
@@ -3419,6 +3471,80 @@ mod tests {
             .expect("host result should be skipped");
         assert_eq!(skip.reason(), Some("filtered"));
         assert_eq!(skip.message(), None);
+    }
+
+    #[test]
+    fn start_logs_per_host_finish_for_passed_results() {
+        let _guard = log_lock().lock().expect("log lock should not be poisoned");
+        let logger = test_logger();
+        logger.clear();
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(TestTask {
+            name: "root",
+            subs: Vec::new(),
+            counter,
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should succeed");
+
+        let entries = logger.entries();
+        assert!(entries.iter().any(|entry| {
+            entry.contains("DEBUG starting task 'root' for host 'router1' parent_task='none' depth=0")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.contains("INFO finished task 'root' for host 'router1' with status=passed duration_ms=")
+                && entry.contains(" duration=")
+        }));
+    }
+
+    #[test]
+    fn start_logs_per_host_failure_warning_and_finish() {
+        let _guard = log_lock().lock().expect("log lock should not be poisoned");
+        let logger = test_logger();
+        logger.clear();
+
+        let task = TaskDefinition::new(FailingTask);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("failing");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should record a failed result");
+
+        let entries = logger.entries();
+        assert!(entries.iter().any(|entry| {
+            entry == "WARN task 'failing' failed for host 'router1': task failure test error"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.contains("INFO finished task 'failing' for host 'router1' with status=failed duration_ms=")
+                && entry.contains(" duration=")
+        }));
+    }
+
+    #[test]
+    fn start_logs_per_host_skip_event_and_finish() {
+        let _guard = log_lock().lock().expect("log lock should not be poisoned");
+        let logger = test_logger();
+        logger.clear();
+
+        let task = TaskDefinition::new(SkippingTask);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("skipping");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should record a skipped result");
+
+        let entries = logger.entries();
+        assert!(entries.iter().any(|entry| {
+            entry == "INFO task 'skipping' skipped for host 'router1' reason='filtered' message=''"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.contains("INFO finished task 'skipping' for host 'router1' with status=skipped duration_ms=")
+                && entry.contains(" duration=")
+        }));
     }
 
     #[test]
