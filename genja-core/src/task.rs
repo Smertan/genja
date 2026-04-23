@@ -360,7 +360,7 @@
 //!
 use crate::inventory::Host;
 use crate::types::{CustomTreeMap, NatString};
-use log::warn;
+use log::{debug, info, warn};
 use serde::Serialize;
 use serde_json::Value;
 use std::any::{type_name, Any};
@@ -2831,7 +2831,7 @@ impl TaskDefinition {
         results: &mut TaskResults,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
-        Self::start_with_depth(self.inner.as_ref(), hostname, host, results, 0, max_depth)
+        Self::start_with_depth(self.inner.as_ref(), hostname, host, results, None, 0, max_depth)
     }
 
     /// Recursively executes a task and its sub-tasks with depth tracking.
@@ -2889,6 +2889,7 @@ impl TaskDefinition {
         hostname: &str,
         host: &Host,
         results: &mut TaskResults,
+        parent_task_name: Option<&str>,
         depth: usize,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
@@ -2918,6 +2919,14 @@ impl TaskDefinition {
         }
 
         let started_at = SystemTime::now();
+        let parent_task = parent_task_name.unwrap_or("none");
+        debug!(
+            "starting task '{}' for host '{}' parent_task='{}' depth={}",
+            task.name(),
+            hostname,
+            parent_task,
+            depth
+        );
         let host_result = task.start(host);
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
@@ -2934,15 +2943,75 @@ impl TaskDefinition {
                     .with_started_at(started_at)
                     .with_finished_at(finished_at)
                     .with_duration_ns(duration_ns);
+                warn!(
+                    "task '{}' failed for host '{}': {}",
+                    task.name(),
+                    hostname,
+                    failure.message()
+                );
+                let duration_display = failure
+                    .duration_display()
+                    .unwrap_or_else(|| format_duration_display(duration_ns));
+                info!(
+                    "finished task '{}' for host '{}' with status=failed duration_ms={} duration={}",
+                    task.name(),
+                    hostname,
+                    duration_ns / 1_000_000,
+                    duration_display
+                );
                 results.insert_host_result(hostname, HostTaskResult::failed(failure));
                 return Ok(());
             }
         };
 
-        results.insert_host_result(
+        if let Some(failure) = host_result.failure() {
+            warn!(
+                "task '{}' failed for host '{}': {}",
+                task.name(),
+                hostname,
+                failure.message()
+            );
+        }
+
+        if let Some(skip) = host_result.skipped_detail() {
+            info!(
+                "task '{}' skipped for host '{}' reason='{}' message='{}'",
+                task.name(),
+                hostname,
+                skip.reason().unwrap_or("none"),
+                skip.message().unwrap_or("")
+            );
+        }
+
+        let status = if host_result.is_passed() {
+            "passed"
+        } else if host_result.is_failed() {
+            "failed"
+        } else {
+            "skipped"
+        };
+
+        let host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
+        let duration_display = match &host_result {
+            HostTaskResult::Passed(success) => success
+                .duration_display()
+                .unwrap_or_else(|| format_duration_display(duration_ns)),
+            HostTaskResult::Failed(failure) => failure
+                .duration_display()
+                .unwrap_or_else(|| format_duration_display(duration_ns)),
+            HostTaskResult::Skipped(_) => format_duration_display(duration_ns),
+        };
+
+        info!(
+            "finished task '{}' for host '{}' with status={} duration_ms={} duration={}",
+            task.name(),
             hostname,
-            host_result.with_execution_timing(started_at, finished_at, duration_ns),
+            status,
+            duration_ns / 1_000_000,
+            duration_display
         );
+
+        results.insert_host_result(hostname, host_result);
 
         for sub in task.sub_tasks() {
             let sub_task_name = sub.name().to_string();
@@ -2957,6 +3026,7 @@ impl TaskDefinition {
                 hostname,
                 host,
                 sub_results,
+                Some(task.name()),
                 depth + 1,
                 max_depth,
             )?;

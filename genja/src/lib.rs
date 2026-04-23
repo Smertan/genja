@@ -38,7 +38,7 @@
 
 pub use genja_core::GenjaError;
 use genja_core::inventory::{Host, Hosts, Inventory};
-use genja_core::task::{Task, TaskDefinition, TaskInfo, TaskResults};
+use genja_core::task::{Task, TaskDefinition, TaskInfo, TaskResults, TaskResultsSummary};
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
@@ -534,23 +534,47 @@ impl Genja {
         let hosts = self.selected_hosts()?;
         let host_count = hosts.len();
         let task_definition = TaskDefinition::new(task);
+        let runner_name = self.settings.runner().plugin();
+        info!(
+            "executing task '{}' with runner='{}' selected_hosts={} max_depth={}",
+            task_definition.name(),
+            runner_name,
+            host_count,
+            max_depth
+        );
         info!(
             "starting task '{}' for {} host(s)",
             task_definition.name(),
             host_count
         );
-        let runner = self.get_runner_plugin(self.settings.runner().plugin())?;
+        let runner = self.get_runner_plugin(runner_name)?;
         let results = runner.run(&task_definition, &hosts, max_depth)?;
-        let summary = results.host_summary();
-        info!(
-            "finished task '{}' for {} host(s): passed={}, failed={}, skipped={}",
-            task_definition.name(),
-            host_count,
-            summary.passed(),
-            summary.failed(),
-            summary.skipped()
-        );
+        let summary = results.task_summary();
+        log_task_summary(&summary, host_count, 0);
         Ok(results)
+    }
+}
+
+fn log_task_summary(summary: &TaskResultsSummary, host_count: usize, depth: usize) {
+    let hosts = summary.hosts();
+    let prefix = if depth == 0 {
+        String::new()
+    } else {
+        format!("{}↳ ", "  ".repeat(depth - 1))
+    };
+
+    info!(
+        "{}finished task '{}' for {} host(s): passed={}, failed={}, skipped={}",
+        prefix,
+        summary.task_name(),
+        host_count,
+        hosts.passed(),
+        hosts.failed(),
+        hosts.skipped()
+    );
+
+    for (_, sub_summary) in summary.sub_tasks().iter() {
+        log_task_summary(sub_summary, hosts.total(), depth + 1);
     }
 }
 
