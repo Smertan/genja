@@ -5,6 +5,7 @@ use genja_core::inventory::{Host, Hosts};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{TaskDefinition, TaskInfo, TaskResults, Tasks};
 use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
+use log::error;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -53,6 +54,10 @@ impl PluginRunner for ThreadedRunnerPlugin {
                 loop {
                     let next_job = {
                         let mut guard = jobs.lock().map_err(|_| {
+                            error!(
+                                "threaded runner queue lock poisoned for task '{}'",
+                                task.name()
+                            );
                             GenjaError::Message("threaded runner queue lock poisoned".to_string())
                         })?;
                         guard.pop_front()
@@ -65,6 +70,11 @@ impl PluginRunner for ThreadedRunnerPlugin {
                     let host_results = TaskExecutor::run_host(&task, &host_id, &host, max_depth)?;
 
                     tx.send(host_results).map_err(|err| {
+                        error!(
+                            "threaded runner failed to send host result for task '{}': {}",
+                            task.name(),
+                            err
+                        );
                         GenjaError::Message(format!(
                             "threaded runner failed to send host result: {}",
                             err
@@ -86,8 +96,12 @@ impl PluginRunner for ThreadedRunnerPlugin {
         for handle in handles {
             match handle.join() {
                 Ok(Ok(())) => {}
-                Ok(Err(err)) => return Err(err),
+                Ok(Err(err)) => {
+                    error!("threaded runner worker failed for task '{}': {}", task.name(), err);
+                    return Err(err);
+                }
                 Err(_) => {
+                    error!("threaded runner worker panicked for task '{}'", task.name());
                     return Err(GenjaError::Message(
                         "threaded runner worker panicked".to_string(),
                     ));
