@@ -137,7 +137,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// ```ignore
 /// use std::sync::Arc;
 /// use genja_core::inventory::Host;
-/// use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+/// use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
 ///
 /// #[derive(Task)]
 /// struct MyTask {
@@ -149,8 +149,8 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// }
 ///
 /// impl Task for MyTask {
-///     fn start(&self, _host: &Host) -> HostTaskResult {
-///         HostTaskResult::passed(TaskSuccess::new())
+///     fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+///         Ok(HostTaskResult::passed(TaskSuccess::new()))
 ///     }
 /// }
 /// ```

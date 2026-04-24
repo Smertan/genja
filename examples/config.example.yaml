@@ -26,9 +26,10 @@ ssh:
 runner:
   # Runner plugin name. Defaults to GENJA_RUNNER_PLUGIN or "threaded".
   plugin: threaded
-  # Plugin-specific options (JSON object). For "threaded", use num_of_workers.
-  options:
-    num_of_workers: 10
+  # Optional fixed worker count for runners that support concurrency control.
+  worker_count: 10
+  # Optional plugin-specific settings.
+  options: {}
 
 logging:
   # Enable/disable logging. Defaults to true.
