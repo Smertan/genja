@@ -356,6 +356,7 @@ name = "genja"
 version = "0.1.0"
 dependencies = [
  "genja-core",
+ "genja-core-derive",
  "genja-plugin-manager",
  "log",
  "serde_json",

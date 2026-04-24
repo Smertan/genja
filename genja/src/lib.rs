@@ -574,10 +574,84 @@ impl Genja {
             Err(GenjaError::InventoryNotLoaded)
         }
     }
-    // TODO: Create a run function which tasks a Task definition
-    // should be able to take any number of args, maybe serde_json::Value
-    // There might need to be a TaskExecutor to handle failures and retries.
-    // Run should use the selected PluginRunner to execute the tasks.
+
+    /// Executes a task against the currently selected hosts using the configured runner plugin.
+    ///
+    /// This method runs the provided task on all hosts that match the current selection
+    /// (after any filtering via [`filter_hosts`](Self::filter_hosts)). It uses the runner
+    /// plugin specified in the active settings and respects the maximum task depth for
+    /// nested sub-tasks.
+    ///
+    /// The execution flow:
+    /// 1. Retrieves the currently selected hosts
+    /// 2. Wraps the task in a `TaskDefinition`
+    /// 3. Obtains the configured runner plugin
+    /// 4. Executes the task across all selected hosts
+    /// 5. Logs a summary of the results
+    ///
+    /// # Parameters
+    ///
+    /// * `task` - The task to execute. Must implement the [`Task`] trait and be `'static`.
+    ///   The task will be executed once per selected host.
+    /// * `max_depth` - Maximum depth for recursive sub-task execution. A value of `0`
+    ///   means only the top-level task will run. Higher values allow nested sub-tasks
+    ///   to execute up to the specified depth.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(TaskResults)` containing the execution results for all hosts, including:
+    /// - Individual host results (passed, failed, or skipped)
+    /// - Timing information (start time, end time, duration)
+    /// - Sub-task results (if `max_depth > 0`)
+    /// - Aggregated summary statistics
+    ///
+    /// # Errors
+    ///
+    /// * `GenjaError::InventoryNotLoaded` - No inventory has been loaded
+    /// * `GenjaError::PluginsNotLoaded` - Plugins have not been loaded
+    /// * `GenjaError::PluginNotFound` - The configured runner plugin does not exist
+    /// * `GenjaError::NotRunnerPlugin` - The configured plugin is not a runner plugin
+    /// * Other errors from the runner plugin's execution
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use genja::Genja;
+    /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost, ConnectionKey};
+    /// use genja_core::task::{Task, TaskInfo, TaskError, HostTaskResult, TaskSuccess, SubTasks};
+    /// use serde_json::Value;
+    /// use std::sync::Arc;
+    ///
+    /// struct MyTask;
+    ///
+    /// impl TaskInfo for MyTask {
+    ///     fn name(&self) -> &str { "my-task" }
+    ///     fn plugin_name(&self) -> &str { "test" }
+    ///     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+    ///         ConnectionKey::new(hostname, self.plugin_name())
+    ///     }
+    ///     fn options(&self) -> Option<&Value> { None }
+    /// }
+    ///
+    /// impl SubTasks for MyTask {
+    ///     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> { Vec::new() }
+    /// }
+    ///
+    /// impl Task for MyTask {
+    ///     fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+    ///         Ok(HostTaskResult::passed(TaskSuccess::new()))
+    ///     }
+    /// }
+    ///
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+    /// let inventory = Inventory::builder().hosts(hosts).build();
+    /// let genja = Genja::from_inventory(inventory);
+    ///
+    /// let results = genja.run(MyTask, 0)?;
+    /// assert_eq!(results.passed_hosts().len(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn run<T: Task + 'static>(
         &self,
         task: T,

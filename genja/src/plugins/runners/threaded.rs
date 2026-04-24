@@ -161,7 +161,7 @@
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let runner = ThreadedRunnerPlugin;
 //! // let tasks = Tasks::new(vec![task1, task2, task3]);
-//! # let tasks = Tasks::new(vec![]);
+//! # let tasks = Tasks::new();
 //! # let hosts = Hosts::new();
 //! # let config = RunnerConfig::default();
 //!

@@ -27,13 +27,31 @@
 //!
 //! ```rust,no_run
 //! use genja_core::settings::RunnerConfig;
-//! use genja_core::inventory::Hosts;
-//! use genja_core::task::TaskDefinition;
+//! use genja_core::inventory::{Host, Hosts};
+//! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskSuccess, TaskInfo};
 //! use genja_plugin_manager::plugin_types::PluginRunner;
 //! # use genja::plugins::SerialRunnerPlugin;
+//! # use genja_core_derive::Task as TaskDerive;
+//!
+//! #[derive(TaskDerive)]
+//! struct ExampleTask {
+//!     name: String,
+//!     plugin_name: Option<String>,
+//!     options: Option<serde_json::Value>,
+//! }
+//!
+//! impl Task for ExampleTask {
+//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!         Ok(HostTaskResult::passed(TaskSuccess::new()))
+//!     }
+//! }
 //!
 //! let runner = SerialRunnerPlugin;
-//! let task = TaskDefinition::default();
+//! let task = TaskDefinition::new(ExampleTask {
+//!     name: "example".to_string(),
+//!     plugin_name: Some("ssh".to_string()),
+//!     options: None,
+//! });
 //! let hosts = Hosts::default();
 //! let config = RunnerConfig::default();
 //!
