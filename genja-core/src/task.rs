@@ -17,37 +17,150 @@
 //!   of execution results for tasks and their sub-tasks across all hosts.
 //! - **Rich Metadata**: Tasks can attach detailed metadata including timing information,
 //!   warnings, messages, diffs, and custom data to their results.
+//! - **Summaries and Serialization**: Task results can be aggregated with
+//!   [`TaskResults::host_summary`] and [`TaskResults::task_summary`], then exported in
+//!   either human-readable or raw JSON forms.
+//! - **Execution Logging**: Task execution emits structured log events for task start,
+//!   skip, failure, and finish states, including per-host duration information.
 //!
 //! # Task Lifecycle
+//! The following diagram illustrates the complete task execution flow:
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                        Task Definition                          │
-//! │                    (implements Task trait)                      │
-//! └────────────────────────────┬────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                      TaskDefinition Wrapper                     │
-//! │                  (provides execution control)                   │
-//! └────────────────────────────┬────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                     Task Execution (start)                      │
-//! │              - Execute task.start() for each host               │
-//! │              - Store results in TaskResults tree                │
-//! │              - Recursively execute sub-tasks                    │
-//! └────────────────────────────┬────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                        HostTaskResult                           │
-//! │         - Passed (TaskSuccess with metadata)                    │
-//! │         - Failed (TaskFailure with error details)               │
-//! │         - Skipped (TaskSkip with reason)                        │
-//! └─────────────────────────────────────────────────────────────────┘
+//! ┌─────────────────────────────────────────────────────────────────────────┐
+//! │                          Task Execution Flow                            │
+//! └─────────────────────────────────────────────────────────────────────────┘
+//!
+//! 1. Task Definition
+//!    ┌──────────────┐
+//!    │ User defines │
+//!    │ Task struct  │──────┐
+//!    └──────────────┘      │
+//!                          │ implements Task trait
+//!                          ▼
+//!                   ┌─────────────┐
+//!                   │ Task trait  │
+//!                   │ - TaskInfo  │
+//!                   │ - SubTasks  │
+//!                   │ - start()   │
+//!                   └─────────────┘
+//!
+//! 2. Task Wrapping
+//!    ┌──────────────────┐
+//!    │ TaskDefinition   │
+//!    │ wraps Task impl  │
+//!    └──────────────────┘
+//!           │
+//!           │ provides polymorphic interface
+//!           ▼
+//!
+//! 3. Task Execution (via Runner Plugin)
+//!    ┌─────────────────────────────────────────────────────────────┐
+//!    │ Runner Plugin (e.g., ThreadedRunner, SerialRunner)          │
+//!    │                                                             │
+//!    │  For each host in inventory:                                │
+//!    │    ┌──────────────────────────────────────────────┐         │
+//!    │    │ 1. Get/Create Connection                     │         │
+//!    │    │    - Via PluginConnection                    │         │
+//!    │    │    - Cached by ConnectionKey                 │         │
+//!    │    └──────────────────────────────────────────────┘         │
+//!    │                      │                                      │
+//!    │                      ▼                                      │
+//!    │    ┌──────────────────────────────────────────────┐         │
+//!    │    │ 2. Execute task.start(host)                  │         │
+//!    │    │    - Record start timestamp                  │         │
+//!    │    │    - Call task implementation                │         │
+//!    │    │    - Record finish timestamp                 │         │
+//!    │    └──────────────────────────────────────────────┘         │
+//!    │                      │                                      │
+//!    │                      ▼                                      │
+//!    │    ┌──────────────────────────────────────────────┐         │
+//!    │    │ 3. Capture Result                            │         │
+//!    │    │    - Success: TaskSuccess                    │         │
+//!    │    │    - Failure: TaskFailure                    │         │
+//!    │    │    - Skip: TaskSkip                          │         │
+//!    │    └──────────────────────────────────────────────┘         │
+//!    │                      │                                      │
+//!    │                      ▼                                      │
+//!    │    ┌──────────────────────────────────────────────┐         │
+//!    │    │ 4. Process Sub-tasks (if any)                │         │
+//!    │    │    - Recursively execute sub_tasks()         │         │
+//!    │    │    - Enforce max_depth limit                 │         │
+//!    │    │    - Group results by task name              │         │
+//!    │    └──────────────────────────────────────────────┘         │
+//!    └─────────────────────────────────────────────────────────────┘
+//!
+//! 4. Result Collection
+//!    ┌──────────────────────────────────────────────────────────┐
+//!    │ TaskResults (per task)                                   │
+//!    │                                                          │
+//!    │  ┌─────────────────────────────────────────┐             │
+//!    │  │ Host Results (Map<hostname, result>)    │             │
+//!    │  │  - router1 → HostTaskResult::Passed     │             │
+//!    │  │  - router2 → HostTaskResult::Failed     │             │
+//!    │  │  - router3 → HostTaskResult::Skipped    │             │
+//!    │  └─────────────────────────────────────────┘             │
+//!    │                                                          │
+//!    │  ┌───────────────────────────────────────────┐           │
+//!    │  │ Sub-task Results (Map<name, TaskResults>) │           │
+//!    │  │  - "validate" → TaskResults               │           │
+//!    │  │  - "deploy" → TaskResults                 │           │
+//!    │  └───────────────────────────────────────────┘           │
+//!    │                                                          │
+//!    │  ┌─────────────────────────────────────────┐             │
+//!    │  │ Execution Timing                        │             │
+//!    │  │  - started_at: SystemTime               │             │
+//!    │  │  - finished_at: SystemTime              │             │
+//!    │  │  - duration: calculated from timestamps │             │
+//!    │  └─────────────────────────────────────────┘             │
+//!    └──────────────────────────────────────────────────────────┘
+//!
+//! 5. Result Aggregation
+//!    ┌────────────────────────────────────────────────────────┐
+//!    │ Final TaskResults tree                                 │
+//!    │                                                        │
+//!    │  root_task                                             │
+//!    │  ├── host_results: {router1, router2, router3}         │
+//!    │  ├── timing: {started_at, finished_at, duration}       │
+//!    │  └── sub_tasks:                                        │
+//!    │      ├── validate                                      │
+//!    │      │   ├── host_results: {...}                       │
+//!    │      │   └── timing: {...}                             │
+//!    │      └── deploy                                        │
+//!    │          ├── host_results: {...}                       │
+//!    │          ├── timing: {...}                             │
+//!    │          └── sub_tasks:                                │
+//!    │              └── verify                                │
+//!    │                  ├── host_results: {...}               │
+//!    │                  └── timing: {...}                     │
+//!    └────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! ## Key Lifecycle Stages
+//!
+//! 1. **Definition**: A task struct implements the `Task` trait, providing metadata
+//!    (name, plugin), execution logic (`start()`), and optional sub-tasks.
+//!
+//! 2. **Wrapping**: The task is wrapped in a `TaskDefinition` for polymorphic handling,
+//!    allowing heterogeneous collections of tasks to be stored and executed uniformly.
+//!
+//! 3. **Execution**: A runner plugin (e.g., `ThreadedRunner`, `SerialRunner`) orchestrates
+//!    task execution across selected hosts:
+//!    - Obtains or creates connections via `PluginConnection`
+//!    - Calls `task.start(host)` for each host
+//!    - Records timing information (start, finish, duration)
+//!    - Captures results (success, failure, or skip)
+//!    - Recursively processes sub-tasks up to `max_depth`
+//!
+//! 4. **Result Collection**: Each host produces a `HostTaskResult` that is stored in
+//!    the task's `TaskResults` structure. Sub-tasks create nested `TaskResults` nodes,
+//!    forming a tree structure that mirrors the task hierarchy.
+//!
+//! 5. **Aggregation**: Results are collected into a `TaskResults` tree that provides:
+//!    - Per-host outcomes for each task
+//!    - Execution timing at each level
+//!    - Nested sub-task results
+//!    - Summary statistics and status
 //!
 //! # Core Traits
 //!
@@ -57,48 +170,27 @@
 //! metadata, [`SubTasks`] for hierarchical task structures, and a `start()` method
 //! for execution logic.
 //!
-//! In the common derive-based workflow, `#[derive(Task)]` from `genja-core-derive`
+//! In the common derive-based workflow, the derive macro from `genja-core-derive`
 //! generates [`TaskInfo`] and [`SubTasks`], while you still implement [`Task`]
-//! manually to provide `start()`.
+//! manually to provide `start()`. If you call generated metadata methods such as
+//! `name()` or `plugin_name()` directly, import [`TaskInfo`] so those trait methods
+//! are in scope.
 //!
 //! ```rust
-//! use genja_core::task::{Task, TaskInfo, SubTasks, HostTaskResult, TaskSuccess};
-//! use genja_core::inventory::{Host, ConnectionKey};
-//! use std::sync::Arc;
-//! use serde_json::Value;
+//! use genja_core::inventory::Host;
+//! use genja_core::task::{HostTaskResult, Task, TaskSuccess, TaskInfo};
+//! use genja_core_derive::Task as TaskDerive;
 //!
+//! #[derive(TaskDerive)]
 //! struct DeployTask {
 //!     name: String,
+//!     plugin_name: Option<String>,
+//!     options: Option<serde_json::Value>,
 //!     config_file: String,
 //! }
 //!
-//! impl TaskInfo for DeployTask {
-//!     fn name(&self) -> &str {
-//!         &self.name
-//!     }
-//!
-//!     fn plugin_name(&self) -> &str {
-//!         "ssh"
-//!     }
-//!
-//!     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-//!         ConnectionKey::new(hostname, "ssh")
-//!     }
-//!
-//!     fn options(&self) -> Option<&Value> {
-//!         None
-//!     }
-//! }
-//!
-//! impl SubTasks for DeployTask {
-//!     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-//!         Vec::new()
-//!     }
-//! }
-//!
 //! impl Task for DeployTask {
-//!     fn start(&self, host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
-//!         // Execute deployment logic
+//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(
 //!             TaskSuccess::new()
 //!                 .with_changed(true)
@@ -106,13 +198,23 @@
 //!         ))
 //!     }
 //! }
+//!
+//! let task = DeployTask {
+//!     name: "deploy".to_string(),
+//!     plugin_name: Some("ssh".to_string()),
+//!     options: None,
+//!     config_file: "router.conf".to_string(),
+//! };
+//!
+//! assert_eq!(task.name(), "deploy");
+//! assert_eq!(task.plugin_name(), "ssh");
 //! ```
 //!
 //! ## [`TaskInfo`]
 //!
 //! Provides metadata about a task including its name, associated plugin, connection
 //! requirements, and optional configuration. This trait is typically auto-implemented
-//! when using the `#[derive(Task)]` macro from `genja-core-derive`.
+//! when using the derive macro from `genja-core-derive`.
 //! That derive reads the task struct's `name`, optional `plugin_name`, and optional
 //! `options` fields to generate the corresponding trait methods.
 //!
@@ -121,7 +223,7 @@
 //! Enables hierarchical task structures by allowing tasks to define sub-tasks that
 //! execute after the parent task completes. Sub-tasks inherit the execution context
 //! and can be conditionally skipped based on parent task results.
-//! With `#[derive(Task)]`, any field marked with `#[task(subtask)]` is included in
+//! With the derive macro, any field marked with `#[task(subtask)]` is included in
 //! [`SubTasks::sub_tasks()`] in declaration order.
 //!
 //! # Behavioral Rules
@@ -142,6 +244,10 @@
 //!   from the sub-task or encode the condition in the task itself.
 //! - `max_depth` is checked using `depth > max_depth`. This means `max_depth = 0`
 //!   still allows the root task at depth `0`, but rejects all sub-tasks at depth `1`.
+//! - Exceeding `max_depth` records an internal [`HostTaskResult::Failed`] for the host
+//!   at that task node instead of returning an outer execution error.
+//! - If [`Task::start`] returns [`TaskError`], the framework captures it as a
+//!   [`TaskFailure`] with timing metadata and stores it in the host results tree.
 //!
 //! # Task Results
 //!
@@ -183,7 +289,8 @@
 //!
 //! A hierarchical structure that stores execution results for a task and all its
 //! sub-tasks across multiple hosts. It provides methods for querying results,
-//! tracking success/failure counts, and navigating the task tree.
+//! tracking success/failure counts, computing summaries, serializing output, and
+//! navigating the task tree.
 //!
 //! ```rust
 //! use genja_core::task::{TaskResults, HostTaskResult, TaskSuccess};
@@ -206,6 +313,15 @@
 //! assert!(results.host_result("router1").unwrap().is_passed());
 //! assert!(results.host_result("router2").unwrap().is_skipped());
 //! ```
+//!
+//! In addition to raw host and sub-task access, [`TaskResults`] supports:
+//!
+//! - aggregate host counts via [`TaskResults::host_summary`]
+//! - recursive task-tree summaries via [`TaskResults::task_summary`]
+//! - human-readable JSON via [`TaskResults::to_json_string`] and
+//!   [`TaskResults::to_pretty_json_string`]
+//! - raw serde JSON via [`TaskResults::to_raw_json_string`] and
+//!   [`TaskResults::to_raw_pretty_json_string`]
 //!
 //! # Task Metadata
 //!
@@ -273,6 +389,10 @@
 //! - **Error**: Error details
 //! - **Debug**: Debugging information
 //!
+//! The task framework itself also emits log records through the `log` crate during
+//! execution, including task start, skip, failure, and finish events with host and
+//! duration context.
+//!
 //! # Task Execution
 //!
 //! ## [`TaskDefinition`]
@@ -282,40 +402,15 @@
 //! with depth limiting to prevent infinite recursion.
 //!
 //! ```rust
-//! use std::sync::Arc;
+//! use genja_core::inventory::{BaseBuilderHost, Host};
+//! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskResults, TaskSuccess};
+//! use genja_core_derive::Task as TaskDerive;
 //!
-//! use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Host};
-//! use genja_core::task::{
-//!     HostTaskResult, Task, TaskDefinition, TaskInfo, TaskResults, TaskSuccess, SubTasks,
-//! };
-//! use serde_json::Value;
-//!
+//! #[derive(TaskDerive)]
 //! struct DeployTask {
 //!     name: String,
-//! }
-//!
-//! impl TaskInfo for DeployTask {
-//!     fn name(&self) -> &str {
-//!         &self.name
-//!     }
-//!
-//!     fn plugin_name(&self) -> &str {
-//!         "ssh"
-//!     }
-//!
-//!     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-//!         ConnectionKey::new(hostname, self.plugin_name())
-//!     }
-//!
-//!     fn options(&self) -> Option<&Value> {
-//!         None
-//!     }
-//! }
-//!
-//! impl SubTasks for DeployTask {
-//!     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-//!         Vec::new()
-//!     }
+//!     plugin_name: Option<String>,
+//!     options: Option<serde_json::Value>,
 //! }
 //!
 //! impl Task for DeployTask {
@@ -328,6 +423,8 @@
 //!
 //! let task = TaskDefinition::new(DeployTask {
 //!     name: "deploy".to_string(),
+//!     plugin_name: Some("ssh".to_string()),
+//!     options: None,
 //! });
 //! let host = Host::builder().hostname("router1").build();
 //! let mut results = TaskResults::new("deploy");
@@ -370,6 +467,41 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+/// Represents an error that occurred during task execution.
+///
+/// `TaskError` wraps an underlying error and preserves both the error itself and its
+/// concrete type information. This allows for type-safe error handling and downcasting
+/// while maintaining thread safety through `Arc` wrapping.
+///
+/// The error type stores:
+/// - The actual error as a trait object (`dyn Error + Send + Sync`)
+/// - The original error's type name as a string for debugging and logging
+/// - An optional source reference to the original concrete error for downcasting
+///
+/// # Thread Safety
+///
+/// `TaskError` is designed to be safely shared across threads, with all internal
+/// references wrapped in `Arc` and requiring `Send + Sync` bounds.
+///
+/// # Example
+///
+/// ```rust
+/// use genja_core::task::TaskError;
+/// use std::io;
+///
+/// // Create a TaskError from a standard error
+/// let io_error = io::Error::new(io::ErrorKind::NotFound, "file not found");
+/// let task_error = TaskError::new(io_error);
+///
+/// // Access error information
+/// println!("Error: {}", task_error.error());
+/// println!("Error type: {}", task_error.error_type());
+///
+/// // Attempt to downcast to the original error type
+/// if let Some(io_err) = task_error.downcast_ref::<io::Error>() {
+///     println!("Original IO error kind: {:?}", io_err.kind());
+/// }
+/// ```
 #[derive(Clone)]
 pub struct TaskError {
     error: Arc<dyn Error + Send + Sync + 'static>,
@@ -2830,12 +2962,13 @@ impl TaskDefinition {
     ///
     /// Inserts the provided host's result into the shared `TaskResults` tree and
     /// recursively does the same for any sub-tasks. The parent task result is recorded
-    /// before sub-task execution starts. Returns `Err(GenjaError)` if the maximum depth
-    /// is exceeded.
+    /// before sub-task execution starts.
     ///
     /// # Errors
     ///
-    /// * Returns `GenjaError::Message` if the task nesting exceeds `max_depth`.
+    /// This method currently does not return an error for depth overflow. When task
+    /// nesting exceeds `max_depth`, it records an internal failed host result for that
+    /// task node and returns `Ok(())`.
     pub fn start(
         &self,
         hostname: &str,
@@ -2886,16 +3019,13 @@ impl TaskDefinition {
     /// # Returns
     ///
     /// * `Ok(())` if the task and all its sub-tasks executed successfully within
-    ///   the depth limit.
-    ///
-    /// * `Err(GenjaError::Message)` if the current depth exceeds `max_depth`,
-    ///   indicating that the task nesting is too deep.
+    ///   the depth limit, or if any depth overflow was captured as a failed host result.
     ///
     /// # Errors
     ///
-    /// Returns `GenjaError::Message` with a descriptive error message if the
-    /// task nesting depth exceeds the specified `max_depth` limit. The error
-    /// message includes the maximum depth value that was exceeded.
+    /// Depth overflow is handled by inserting a failed host result with
+    /// [`TaskFailureKind::Internal`]. This helper only returns an error if a future
+    /// implementation path introduces one explicitly.
     fn start_with_depth(
         task: &dyn Task,
         hostname: &str,
