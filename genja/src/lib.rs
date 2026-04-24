@@ -37,12 +37,14 @@
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
 pub use genja_core::GenjaError;
-use genja_core::inventory::{Host, Inventory};
-use genja_core::task::{Task, TaskDefinition, TaskInfo, TaskResults};
+use genja_core::inventory::{Host, Hosts, Inventory};
+use genja_core::settings::RunnerConfig;
+use genja_core::task::{Task, TaskDefinition, TaskInfo, TaskResults, TaskResultsSummary};
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
 use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
+use log::info;
 use std::sync::Arc;
 
 // GenjaError is re-exported from genja-core.
@@ -111,8 +113,8 @@ impl Genja {
             inventory: None,
             host_ids: Arc::new(Vec::new()),
             settings: Arc::new(Settings::default()),
-            plugins: Arc::new(PluginManager::new()),
-            plugins_loaded: false,
+            plugins: Arc::new(crate::plugins::built_in_plugin_manager()),
+            plugins_loaded: true,
         }
     }
 
@@ -140,8 +142,8 @@ impl Genja {
             inventory: Some(Arc::new(inventory)),
             host_ids: Arc::new(host_ids),
             settings: Arc::new(Settings::default()),
-            plugins: Arc::new(PluginManager::new()),
-            plugins_loaded: false,
+            plugins: Arc::new(crate::plugins::built_in_plugin_manager()),
+            plugins_loaded: true,
         }
     }
 
@@ -244,16 +246,24 @@ impl Genja {
     /// Returns `Err(GenjaError::PluginLoad)` if plugin loading fails for reasons
     /// other than missing plugin metadata.
     fn load_plugins(&mut self) -> Result<(), GenjaError> {
-        let default_name = self.settings.inventory().plugin();
         match PluginManager::new().activate_plugins() {
             Ok(mut manager) => {
-                if default_name == "FileInventoryPlugin"
-                    && manager
-                        .get_inventory_plugin("FileInventoryPlugin")
-                        .is_none()
+                if manager
+                    .get_inventory_plugin("FileInventoryPlugin")
+                    .is_none()
                 {
                     manager.register_plugin(Plugins::Inventory(Box::new(
                         crate::plugins::DefaultInventoryPlugin,
+                    )));
+                }
+                if manager.get_runner_plugin("serial").is_none() {
+                    manager.register_plugin(Plugins::Runner(Box::new(
+                        crate::plugins::SerialRunnerPlugin,
+                    )));
+                }
+                if manager.get_runner_plugin("threaded").is_none() {
+                    manager.register_plugin(Plugins::Runner(Box::new(
+                        crate::plugins::ThreadedRunnerPlugin,
                     )));
                 }
                 self.plugins = Arc::new(manager);
@@ -263,16 +273,7 @@ impl Genja {
             Err(err) => {
                 let msg = err.to_string();
                 if msg.contains("No plugin metadata found in manifest") {
-                    let mut manager = PluginManager::new();
-                    if default_name == "FileInventoryPlugin"
-                        && manager
-                            .get_inventory_plugin("FileInventoryPlugin")
-                            .is_none()
-                    {
-                        manager.register_plugin(Plugins::Inventory(Box::new(
-                            crate::plugins::DefaultInventoryPlugin,
-                        )));
-                    }
+                    let manager = crate::plugins::built_in_plugin_manager();
                     self.plugins = Arc::new(manager);
                     self.plugins_loaded = true;
                     Ok(())
@@ -338,6 +339,57 @@ impl Genja {
     /// Replaces the current settings with the provided configuration.
     pub fn set_settings(&mut self, settings: Settings) {
         self.settings = Arc::new(settings);
+    }
+
+    /// Returns a new `Genja` with the selected runner plugin activated.
+    ///
+    /// The named plugin must already be loaded in the current plugin manager and
+    /// must be registered as a runner plugin.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(GenjaError::PluginsNotLoaded)` if plugins are not loaded.
+    /// Returns `Err(GenjaError::PluginNotFound)` if no plugin with that name exists.
+    /// Returns `Err(GenjaError::NotRunnerPlugin)` if the named plugin is not a runner.
+    pub fn with_runner(&self, runner: &str) -> Result<Self, GenjaError> {
+        self.ensure_plugins_loaded()?;
+
+        let plugin = self
+            .plugins
+            .get_plugin(runner)
+            .ok_or_else(|| GenjaError::PluginNotFound(runner.to_string()))?;
+
+        if !matches!(plugin, Plugins::Runner(_)) {
+            return Err(GenjaError::NotRunnerPlugin(runner.to_string()));
+        }
+
+        let mut runner_config = RunnerConfig::builder()
+            .plugin(runner)
+            .options(self.settings.runner().options().clone())
+            .max_task_depth(self.settings.runner().max_task_depth())
+            .max_connection_attempts(self.settings.runner().max_connection_attempts());
+
+        if let Some(worker_count) = self.settings.runner().worker_count() {
+            runner_config = runner_config.worker_count(worker_count);
+        }
+
+        let runner_config = runner_config.build();
+
+        let settings = Settings::builder()
+            .core(self.settings.core().clone())
+            .inventory(self.settings.inventory().clone())
+            .ssh(self.settings.ssh().clone())
+            .runner(runner_config)
+            .logging(self.settings.logging().clone())
+            .build();
+
+        Ok(Self {
+            inventory: self.inventory.clone(),
+            host_ids: Arc::clone(&self.host_ids),
+            settings: Arc::new(settings),
+            plugins: Arc::clone(&self.plugins),
+            plugins_loaded: self.plugins_loaded,
+        })
     }
 
     /// Returns a reference to the plugin manager.
@@ -522,37 +574,517 @@ impl Genja {
             Err(GenjaError::InventoryNotLoaded)
         }
     }
-    // TODO: Create a run function which tasks a Task definition
-    // should be able to take any number of args, maybe serde_json::Value
-    // There might need to be a TaskExecutor to handle failures and retries.
-    // Run should use the selected PluginRunner to execute the tasks.
+
+    /// Executes a task against the currently selected hosts using the configured runner plugin.
+    ///
+    /// This method runs the provided task on all hosts that match the current selection
+    /// (after any filtering via [`filter_hosts`](Self::filter_hosts)). It uses the runner
+    /// plugin specified in the active settings and respects the maximum task depth for
+    /// nested sub-tasks.
+    ///
+    /// The execution flow:
+    /// 1. Retrieves the currently selected hosts
+    /// 2. Wraps the task in a `TaskDefinition`
+    /// 3. Obtains the configured runner plugin
+    /// 4. Executes the task across all selected hosts
+    /// 5. Logs a summary of the results
+    ///
+    /// # Parameters
+    ///
+    /// * `task` - The task to execute. Must implement the [`Task`] trait and be `'static`.
+    ///   The task will be executed once per selected host.
+    /// * `max_depth` - Maximum depth for recursive sub-task execution. A value of `0`
+    ///   means only the top-level task will run. Higher values allow nested sub-tasks
+    ///   to execute up to the specified depth.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(TaskResults)` containing the execution results for all hosts, including:
+    /// - Individual host results (passed, failed, or skipped)
+    /// - Timing information (start time, end time, duration)
+    /// - Sub-task results (if `max_depth > 0`)
+    /// - Aggregated summary statistics
+    ///
+    /// # Errors
+    ///
+    /// * `GenjaError::InventoryNotLoaded` - No inventory has been loaded
+    /// * `GenjaError::PluginsNotLoaded` - Plugins have not been loaded
+    /// * `GenjaError::PluginNotFound` - The configured runner plugin does not exist
+    /// * `GenjaError::NotRunnerPlugin` - The configured plugin is not a runner plugin
+    /// * Other errors from the runner plugin's execution
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use genja::Genja;
+    /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost, ConnectionKey};
+    /// use genja_core::task::{Task, TaskInfo, TaskError, HostTaskResult, TaskSuccess, SubTasks};
+    /// use serde_json::Value;
+    /// use std::sync::Arc;
+    ///
+    /// struct MyTask;
+    ///
+    /// impl TaskInfo for MyTask {
+    ///     fn name(&self) -> &str { "my-task" }
+    ///     fn plugin_name(&self) -> &str { "test" }
+    ///     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+    ///         ConnectionKey::new(hostname, self.plugin_name())
+    ///     }
+    ///     fn options(&self) -> Option<&Value> { None }
+    /// }
+    ///
+    /// impl SubTasks for MyTask {
+    ///     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> { Vec::new() }
+    /// }
+    ///
+    /// impl Task for MyTask {
+    ///     fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+    ///         Ok(HostTaskResult::passed(TaskSuccess::new()))
+    ///     }
+    /// }
+    ///
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+    /// let inventory = Inventory::builder().hosts(hosts).build();
+    /// let genja = Genja::from_inventory(inventory);
+    ///
+    /// let results = genja.run(MyTask, 0)?;
+    /// assert_eq!(results.passed_hosts().len(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn run<T: Task + 'static>(
         &self,
         task: T,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
+        let hosts = self.selected_hosts()?;
+        let host_count = hosts.len();
+        let task_definition = TaskDefinition::new(task);
+        let runner_name = self.settings.runner().plugin();
+        info!(
+            "executing task '{}' with runner='{}' selected_hosts={} max_depth={}",
+            task_definition.name(),
+            runner_name,
+            host_count,
+            max_depth
+        );
+        info!(
+            "starting task '{}' for {} host(s)",
+            task_definition.name(),
+            host_count
+        );
+        let runner = self.get_runner_plugin(runner_name)?;
+        let results = runner.run(&task_definition, &hosts, self.settings.runner(), max_depth)?;
+        let summary = results.task_summary();
+        log_task_summary(&summary, host_count, 0);
+        Ok(results)
+    }
+}
+
+fn log_task_summary(summary: &TaskResultsSummary, host_count: usize, depth: usize) {
+    let hosts = summary.hosts();
+    let prefix = if depth == 0 {
+        String::new()
+    } else {
+        format!("{}↳ ", "  ".repeat(depth - 1))
+    };
+    let duration_ms = summary.duration_ms().unwrap_or(0);
+    let duration = summary
+        .duration_display()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    info!(
+        "{}finished task '{}' for {} host(s): passed={}, failed={}, skipped={} duration_ms={} duration={}",
+        prefix,
+        summary.task_name(),
+        host_count,
+        hosts.passed(),
+        hosts.failed(),
+        hosts.skipped(),
+        duration_ms,
+        duration
+    );
+
+    for (_, sub_summary) in summary.sub_tasks().iter() {
+        log_task_summary(sub_summary, hosts.total(), depth + 1);
+    }
+}
+
+impl Genja {
+    fn selected_hosts(&self) -> Result<Hosts, GenjaError> {
         let inventory = self
             .inventory
             .as_ref()
             .ok_or(GenjaError::InventoryNotLoaded)?;
-        let task_def = TaskDefinition::new(task);
-        let mut results = TaskResults::new(task_def.name());
+        let mut hosts = Hosts::new();
 
         for host_id in self.host_ids.iter() {
             let host = inventory
                 .hosts()
                 .get(host_id)
                 .ok_or_else(|| GenjaError::Message(format!("host '{}' not found", host_id)))?;
-            task_def.start(host_id.as_str(), &host, &mut results, max_depth)?;
+            hosts.add_host(host_id.as_str(), host.clone());
         }
 
-        Ok(results)
+        Ok(hosts)
     }
 }
 
 impl Default for Genja {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Genja, GenjaError};
+    use genja_core::Settings;
+    use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Host, Hosts, Inventory};
+    use genja_core::settings::RunnerConfig;
+    use genja_core::task::{HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskSuccess};
+    use serde_json::{Value, json};
+    use std::sync::Arc;
+
+    struct TestTask {
+        name: String,
+    }
+
+    impl TaskInfo for TestTask {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn plugin_name(&self) -> &str {
+            "test"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, self.plugin_name())
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for TestTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for TestTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    struct FailedTask;
+
+    impl TaskInfo for FailedTask {
+        fn name(&self) -> &str {
+            "failed-task"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "test"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, self.plugin_name())
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for FailedTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for FailedTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::failed(genja_core::task::TaskFailure::new(
+                std::io::Error::other("boom"),
+            )))
+        }
+    }
+
+    struct SkippedTask;
+
+    impl TaskInfo for SkippedTask {
+        fn name(&self) -> &str {
+            "skipped-task"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "test"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, self.plugin_name())
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for SkippedTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for SkippedTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::skipped_with_reason("filtered"))
+        }
+    }
+
+    struct ChildTask;
+
+    impl TaskInfo for ChildTask {
+        fn name(&self) -> &str {
+            "child-task"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "test"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, self.plugin_name())
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for ChildTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for ChildTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    struct ParentTask;
+
+    impl TaskInfo for ParentTask {
+        fn name(&self) -> &str {
+            "parent-task"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "test"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, self.plugin_name())
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for ParentTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            vec![Arc::new(ChildTask)]
+        }
+    }
+
+    impl Task for ParentTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    fn test_inventory() -> Inventory {
+        let mut hosts = Hosts::new();
+        hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+        hosts.add_host("router2", Host::builder().hostname("10.0.0.2").build());
+
+        Inventory::builder().hosts(hosts).build()
+    }
+
+    #[test]
+    fn run_executes_task_for_each_selected_host() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja
+            .run(
+                TestTask {
+                    name: "test-task".to_string(),
+                },
+                0,
+            )
+            .expect("task should execute for all hosts");
+
+        assert_eq!(results.task_name(), "test-task");
+        assert_eq!(results.passed_hosts().len(), 2);
+        assert!(results.host_result("router1").is_some());
+        assert!(results.host_result("router2").is_some());
+    }
+
+    #[test]
+    fn run_respects_filtered_hosts() {
+        let genja = Genja::from_inventory(test_inventory());
+        let filtered = genja
+            .filter_hosts(|host| host.hostname() == Some("10.0.0.1"))
+            .expect("host filtering should succeed");
+
+        let results = filtered
+            .run(
+                TestTask {
+                    name: "filtered-task".to_string(),
+                },
+                0,
+            )
+            .expect("task should execute for selected hosts");
+
+        assert_eq!(results.passed_hosts().len(), 1);
+        assert!(results.host_result("router1").is_some());
+        assert!(results.host_result("router2").is_none());
+    }
+
+    #[test]
+    fn run_uses_threaded_runner_plugin() {
+        let settings = Settings::builder()
+            .runner(
+                RunnerConfig::builder()
+                    .plugin("threaded")
+                    .worker_count(2)
+                    .build(),
+            )
+            .build();
+
+        let genja = Genja::builder(test_inventory())
+            .with_settings(settings)
+            .build()
+            .expect("genja should build with threaded runner settings");
+
+        let results = genja
+            .run(
+                TestTask {
+                    name: "threaded-task".to_string(),
+                },
+                0,
+            )
+            .expect("threaded runner should execute the task");
+
+        assert_eq!(results.task_name(), "threaded-task");
+        assert_eq!(results.passed_hosts().len(), 2);
+        assert!(results.started_at().is_some());
+        assert!(results.finished_at().is_some());
+        assert!(results.duration_ns().is_some());
+    }
+
+    #[test]
+    fn run_preserves_failed_host_outcomes_and_timing() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja.run(FailedTask, 0).expect("run should succeed");
+
+        assert_eq!(results.failed_hosts().len(), 2);
+        let failure = results
+            .host_result("router1")
+            .and_then(genja_core::task::HostTaskResult::failure)
+            .expect("router1 should have a failed result");
+        assert!(failure.duration_ns().is_some());
+        assert!(failure.duration_display().is_some());
+        assert!(results.duration_ns().is_some());
+    }
+
+    #[test]
+    fn run_preserves_skipped_host_outcomes_in_summary() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja.run(SkippedTask, 0).expect("run should succeed");
+
+        assert_eq!(results.skipped_hosts().len(), 2);
+        let summary = results.task_summary();
+        assert_eq!(summary.hosts().passed(), 0);
+        assert_eq!(summary.hosts().failed(), 0);
+        assert_eq!(summary.hosts().skipped(), 2);
+        assert!(results
+            .host_result("router1")
+            .expect("router1 result should exist")
+            .is_skipped());
+    }
+
+    #[test]
+    fn run_builds_recursive_sub_task_summary_with_duration() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja.run(ParentTask, 1).expect("run should succeed");
+
+        let summary = results.task_summary();
+        assert!(summary.duration_ms().is_some());
+        assert!(summary.duration_display().is_some());
+
+        let child = summary
+            .sub_tasks()
+            .get("child-task")
+            .expect("child summary should exist");
+        assert_eq!(child.hosts().passed(), 2);
+        assert_eq!(child.hosts().failed(), 0);
+        assert_eq!(child.hosts().skipped(), 0);
+        assert!(child.duration_ms().is_some());
+        assert!(child.duration_display().is_some());
+    }
+
+    #[test]
+    fn with_runner_returns_updated_genja_for_loaded_runner_plugin() {
+        let settings = Settings::builder()
+            .runner(
+                RunnerConfig::builder()
+                    .plugin("threaded")
+                    .options(json!({"queue": "fast"}))
+                    .worker_count(3)
+                    .max_task_depth(7)
+                    .max_connection_attempts(5)
+                    .build(),
+            )
+            .build();
+
+        let genja = Genja::builder(test_inventory())
+            .with_settings(settings)
+            .build()
+            .expect("genja should build");
+
+        let updated = genja
+            .with_runner("serial")
+            .expect("serial runner should be available");
+
+        assert_eq!(genja.settings().runner().plugin(), "threaded");
+        assert_eq!(updated.settings().runner().plugin(), "serial");
+        assert_eq!(updated.settings().runner().options(), &json!({"queue": "fast"}));
+        assert_eq!(updated.settings().runner().worker_count(), Some(3));
+        assert_eq!(updated.settings().runner().max_task_depth(), 7);
+        assert_eq!(updated.settings().runner().max_connection_attempts(), 5);
+        assert_eq!(updated.host_ids().len(), genja.host_ids().len());
+    }
+
+    #[test]
+    fn with_runner_returns_error_for_unknown_runner_plugin() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let error = genja
+            .with_runner("missing-runner")
+            .expect_err("missing runner should return an error");
+
+        assert!(matches!(error, GenjaError::PluginNotFound(name) if name == "missing-runner"));
     }
 }
 

@@ -17,37 +17,150 @@
 //!   of execution results for tasks and their sub-tasks across all hosts.
 //! - **Rich Metadata**: Tasks can attach detailed metadata including timing information,
 //!   warnings, messages, diffs, and custom data to their results.
+//! - **Summaries and Serialization**: Task results can be aggregated with
+//!   [`TaskResults::host_summary`] and [`TaskResults::task_summary`], then exported in
+//!   either human-readable or raw JSON forms.
+//! - **Execution Logging**: Task execution emits structured log events for task start,
+//!   skip, failure, and finish states, including per-host duration information.
 //!
 //! # Task Lifecycle
+//! The following diagram illustrates the complete task execution flow:
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                        Task Definition                          │
-//! │                    (implements Task trait)                      │
-//! └────────────────────────────┬────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                      TaskDefinition Wrapper                     │
-//! │                  (provides execution control)                   │
-//! └────────────────────────────┬────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                     Task Execution (start)                      │
-//! │              - Execute task.start() for each host               │
-//! │              - Store results in TaskResults tree                │
-//! │              - Recursively execute sub-tasks                    │
-//! └────────────────────────────┬────────────────────────────────────┘
-//!                              │
-//!                              ▼
-//! ┌─────────────────────────────────────────────────────────────────┐
-//! │                        HostTaskResult                           │
-//! │         - Passed (TaskSuccess with metadata)                    │
-//! │         - Failed (TaskFailure with error details)               │
-//! │         - Skipped (TaskSkip with reason)                        │
-//! └─────────────────────────────────────────────────────────────────┘
+//! ┌─────────────────────────────────────────────────────────────────────────┐
+//! │                          Task Execution Flow                            │
+//! └─────────────────────────────────────────────────────────────────────────┘
+//!
+//! 1. Task Definition
+//!    ┌──────────────┐
+//!    │ User defines │
+//!    │ Task struct  │──────┐
+//!    └──────────────┘      │
+//!                          │ implements Task trait
+//!                          ▼
+//!                   ┌─────────────┐
+//!                   │ Task trait  │
+//!                   │ - TaskInfo  │
+//!                   │ - SubTasks  │
+//!                   │ - start()   │
+//!                   └─────────────┘
+//!
+//! 2. Task Wrapping
+//!    ┌──────────────────┐
+//!    │ TaskDefinition   │
+//!    │ wraps Task impl  │
+//!    └──────────────────┘
+//!           │
+//!           │ provides polymorphic interface
+//!           ▼
+//!
+//! 3. Task Execution (via Runner Plugin)
+//!    ┌─────────────────────────────────────────────────────────────┐
+//!    │ Runner Plugin (e.g., ThreadedRunner, SerialRunner)          │
+//!    │                                                             │
+//!    │  For each host in inventory:                                │
+//!    │    ┌──────────────────────────────────────────────┐         │
+//!    │    │ 1. Get/Create Connection                     │         │
+//!    │    │    - Via PluginConnection                    │         │
+//!    │    │    - Cached by ConnectionKey                 │         │
+//!    │    └──────────────────────────────────────────────┘         │
+//!    │                      │                                      │
+//!    │                      ▼                                      │
+//!    │    ┌──────────────────────────────────────────────┐         │
+//!    │    │ 2. Execute task.start(host)                  │         │
+//!    │    │    - Record start timestamp                  │         │
+//!    │    │    - Call task implementation                │         │
+//!    │    │    - Record finish timestamp                 │         │
+//!    │    └──────────────────────────────────────────────┘         │
+//!    │                      │                                      │
+//!    │                      ▼                                      │
+//!    │    ┌──────────────────────────────────────────────┐         │
+//!    │    │ 3. Capture Result                            │         │
+//!    │    │    - Success: TaskSuccess                    │         │
+//!    │    │    - Failure: TaskFailure                    │         │
+//!    │    │    - Skip: TaskSkip                          │         │
+//!    │    └──────────────────────────────────────────────┘         │
+//!    │                      │                                      │
+//!    │                      ▼                                      │
+//!    │    ┌──────────────────────────────────────────────┐         │
+//!    │    │ 4. Process Sub-tasks (if any)                │         │
+//!    │    │    - Recursively execute sub_tasks()         │         │
+//!    │    │    - Enforce max_depth limit                 │         │
+//!    │    │    - Group results by task name              │         │
+//!    │    └──────────────────────────────────────────────┘         │
+//!    └─────────────────────────────────────────────────────────────┘
+//!
+//! 4. Result Collection
+//!    ┌──────────────────────────────────────────────────────────┐
+//!    │ TaskResults (per task)                                   │
+//!    │                                                          │
+//!    │  ┌─────────────────────────────────────────┐             │
+//!    │  │ Host Results (Map<hostname, result>)    │             │
+//!    │  │  - router1 → HostTaskResult::Passed     │             │
+//!    │  │  - router2 → HostTaskResult::Failed     │             │
+//!    │  │  - router3 → HostTaskResult::Skipped    │             │
+//!    │  └─────────────────────────────────────────┘             │
+//!    │                                                          │
+//!    │  ┌───────────────────────────────────────────┐           │
+//!    │  │ Sub-task Results (Map<name, TaskResults>) │           │
+//!    │  │  - "validate" → TaskResults               │           │
+//!    │  │  - "deploy" → TaskResults                 │           │
+//!    │  └───────────────────────────────────────────┘           │
+//!    │                                                          │
+//!    │  ┌─────────────────────────────────────────┐             │
+//!    │  │ Execution Timing                        │             │
+//!    │  │  - started_at: SystemTime               │             │
+//!    │  │  - finished_at: SystemTime              │             │
+//!    │  │  - duration: calculated from timestamps │             │
+//!    │  └─────────────────────────────────────────┘             │
+//!    └──────────────────────────────────────────────────────────┘
+//!
+//! 5. Result Aggregation
+//!    ┌────────────────────────────────────────────────────────┐
+//!    │ Final TaskResults tree                                 │
+//!    │                                                        │
+//!    │  root_task                                             │
+//!    │  ├── host_results: {router1, router2, router3}         │
+//!    │  ├── timing: {started_at, finished_at, duration}       │
+//!    │  └── sub_tasks:                                        │
+//!    │      ├── validate                                      │
+//!    │      │   ├── host_results: {...}                       │
+//!    │      │   └── timing: {...}                             │
+//!    │      └── deploy                                        │
+//!    │          ├── host_results: {...}                       │
+//!    │          ├── timing: {...}                             │
+//!    │          └── sub_tasks:                                │
+//!    │              └── verify                                │
+//!    │                  ├── host_results: {...}               │
+//!    │                  └── timing: {...}                     │
+//!    └────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! ## Key Lifecycle Stages
+//!
+//! 1. **Definition**: A task struct implements the `Task` trait, providing metadata
+//!    (name, plugin), execution logic (`start()`), and optional sub-tasks.
+//!
+//! 2. **Wrapping**: The task is wrapped in a `TaskDefinition` for polymorphic handling,
+//!    allowing heterogeneous collections of tasks to be stored and executed uniformly.
+//!
+//! 3. **Execution**: A runner plugin (e.g., `ThreadedRunner`, `SerialRunner`) orchestrates
+//!    task execution across selected hosts:
+//!    - Obtains or creates connections via `PluginConnection`
+//!    - Calls `task.start(host)` for each host
+//!    - Records timing information (start, finish, duration)
+//!    - Captures results (success, failure, or skip)
+//!    - Recursively processes sub-tasks up to `max_depth`
+//!
+//! 4. **Result Collection**: Each host produces a `HostTaskResult` that is stored in
+//!    the task's `TaskResults` structure. Sub-tasks create nested `TaskResults` nodes,
+//!    forming a tree structure that mirrors the task hierarchy.
+//!
+//! 5. **Aggregation**: Results are collected into a `TaskResults` tree that provides:
+//!    - Per-host outcomes for each task
+//!    - Execution timing at each level
+//!    - Nested sub-task results
+//!    - Summary statistics and status
 //!
 //! # Core Traits
 //!
@@ -57,62 +170,51 @@
 //! metadata, [`SubTasks`] for hierarchical task structures, and a `start()` method
 //! for execution logic.
 //!
-//! In the common derive-based workflow, `#[derive(Task)]` from `genja-core-derive`
+//! In the common derive-based workflow, the derive macro from `genja-core-derive`
 //! generates [`TaskInfo`] and [`SubTasks`], while you still implement [`Task`]
-//! manually to provide `start()`.
+//! manually to provide `start()`. If you call generated metadata methods such as
+//! `name()` or `plugin_name()` directly, import [`TaskInfo`] so those trait methods
+//! are in scope.
 //!
 //! ```rust
-//! use genja_core::task::{Task, TaskInfo, SubTasks, HostTaskResult, TaskSuccess};
-//! use genja_core::inventory::{Host, ConnectionKey};
-//! use std::sync::Arc;
-//! use serde_json::Value;
+//! use genja_core::inventory::Host;
+//! use genja_core::task::{HostTaskResult, Task, TaskSuccess, TaskInfo};
+//! use genja_core_derive::Task as TaskDerive;
 //!
+//! #[derive(TaskDerive)]
 //! struct DeployTask {
 //!     name: String,
+//!     plugin_name: Option<String>,
+//!     options: Option<serde_json::Value>,
 //!     config_file: String,
 //! }
 //!
-//! impl TaskInfo for DeployTask {
-//!     fn name(&self) -> &str {
-//!         &self.name
-//!     }
-//!
-//!     fn plugin_name(&self) -> &str {
-//!         "ssh"
-//!     }
-//!
-//!     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-//!         ConnectionKey::new(hostname, "ssh")
-//!     }
-//!
-//!     fn options(&self) -> Option<&Value> {
-//!         None
-//!     }
-//! }
-//!
-//! impl SubTasks for DeployTask {
-//!     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-//!         Vec::new()
-//!     }
-//! }
-//!
 //! impl Task for DeployTask {
-//!     fn start(&self, host: &Host) -> HostTaskResult {
-//!         // Execute deployment logic
-//!         HostTaskResult::passed(
+//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!         Ok(HostTaskResult::passed(
 //!             TaskSuccess::new()
 //!                 .with_changed(true)
 //!                 .with_summary("Configuration deployed successfully")
-//!         )
+//!         ))
 //!     }
 //! }
+//!
+//! let task = DeployTask {
+//!     name: "deploy".to_string(),
+//!     plugin_name: Some("ssh".to_string()),
+//!     options: None,
+//!     config_file: "router.conf".to_string(),
+//! };
+//!
+//! assert_eq!(task.name(), "deploy");
+//! assert_eq!(task.plugin_name(), "ssh");
 //! ```
 //!
 //! ## [`TaskInfo`]
 //!
 //! Provides metadata about a task including its name, associated plugin, connection
 //! requirements, and optional configuration. This trait is typically auto-implemented
-//! when using the `#[derive(Task)]` macro from `genja-core-derive`.
+//! when using the derive macro from `genja-core-derive`.
 //! That derive reads the task struct's `name`, optional `plugin_name`, and optional
 //! `options` fields to generate the corresponding trait methods.
 //!
@@ -121,7 +223,7 @@
 //! Enables hierarchical task structures by allowing tasks to define sub-tasks that
 //! execute after the parent task completes. Sub-tasks inherit the execution context
 //! and can be conditionally skipped based on parent task results.
-//! With `#[derive(Task)]`, any field marked with `#[task(subtask)]` is included in
+//! With the derive macro, any field marked with `#[task(subtask)]` is included in
 //! [`SubTasks::sub_tasks()`] in declaration order.
 //!
 //! # Behavioral Rules
@@ -142,6 +244,10 @@
 //!   from the sub-task or encode the condition in the task itself.
 //! - `max_depth` is checked using `depth > max_depth`. This means `max_depth = 0`
 //!   still allows the root task at depth `0`, but rejects all sub-tasks at depth `1`.
+//! - Exceeding `max_depth` records an internal [`HostTaskResult::Failed`] for the host
+//!   at that task node instead of returning an outer execution error.
+//! - If [`Task::start`] returns [`TaskError`], the framework captures it as a
+//!   [`TaskFailure`] with timing metadata and stores it in the host results tree.
 //!
 //! # Task Results
 //!
@@ -183,7 +289,8 @@
 //!
 //! A hierarchical structure that stores execution results for a task and all its
 //! sub-tasks across multiple hosts. It provides methods for querying results,
-//! tracking success/failure counts, and navigating the task tree.
+//! tracking success/failure counts, computing summaries, serializing output, and
+//! navigating the task tree.
 //!
 //! ```rust
 //! use genja_core::task::{TaskResults, HostTaskResult, TaskSuccess};
@@ -206,6 +313,15 @@
 //! assert!(results.host_result("router1").unwrap().is_passed());
 //! assert!(results.host_result("router2").unwrap().is_skipped());
 //! ```
+//!
+//! In addition to raw host and sub-task access, [`TaskResults`] supports:
+//!
+//! - aggregate host counts via [`TaskResults::host_summary`]
+//! - recursive task-tree summaries via [`TaskResults::task_summary`]
+//! - human-readable JSON via [`TaskResults::to_json_string`] and
+//!   [`TaskResults::to_pretty_json_string`]
+//! - raw serde JSON via [`TaskResults::to_raw_json_string`] and
+//!   [`TaskResults::to_raw_pretty_json_string`]
 //!
 //! # Task Metadata
 //!
@@ -251,7 +367,8 @@
 //! - **Timeout**: Operation exceeded time limit (often retryable)
 //! - **Command**: Remote command execution failed
 //! - **Unsupported**: Operation not supported by target
-//! - **Internal**: Framework or implementation error
+//! - **Internal**: Genja/framework implementation error
+//! - **External**: Error returned from a task, plugin, or external dependency
 //!
 //! # Message System
 //!
@@ -272,6 +389,10 @@
 //! - **Error**: Error details
 //! - **Debug**: Debugging information
 //!
+//! The task framework itself also emits log records through the `log` crate during
+//! execution, including task start, skip, failure, and finish events with host and
+//! duration context.
+//!
 //! # Task Execution
 //!
 //! ## [`TaskDefinition`]
@@ -281,50 +402,29 @@
 //! with depth limiting to prevent infinite recursion.
 //!
 //! ```rust
-//! use std::sync::Arc;
+//! use genja_core::inventory::{BaseBuilderHost, Host};
+//! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskResults, TaskSuccess};
+//! use genja_core_derive::Task as TaskDerive;
 //!
-//! use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Host};
-//! use genja_core::task::{
-//!     HostTaskResult, Task, TaskDefinition, TaskInfo, TaskResults, TaskSuccess, SubTasks,
-//! };
-//! use serde_json::Value;
-//!
+//! #[derive(TaskDerive)]
 //! struct DeployTask {
 //!     name: String,
-//! }
-//!
-//! impl TaskInfo for DeployTask {
-//!     fn name(&self) -> &str {
-//!         &self.name
-//!     }
-//!
-//!     fn plugin_name(&self) -> &str {
-//!         "ssh"
-//!     }
-//!
-//!     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-//!         ConnectionKey::new(hostname, self.plugin_name())
-//!     }
-//!
-//!     fn options(&self) -> Option<&Value> {
-//!         None
-//!     }
-//! }
-//!
-//! impl SubTasks for DeployTask {
-//!     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-//!         Vec::new()
-//!     }
+//!     plugin_name: Option<String>,
+//!     options: Option<serde_json::Value>,
 //! }
 //!
 //! impl Task for DeployTask {
-//!     fn start(&self, _host: &Host) -> HostTaskResult {
-//!         HostTaskResult::passed(TaskSuccess::new().with_summary("deploy complete"))
+//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!         Ok(HostTaskResult::passed(
+//!             TaskSuccess::new().with_summary("deploy complete"),
+//!         ))
 //!     }
 //! }
 //!
 //! let task = TaskDefinition::new(DeployTask {
 //!     name: "deploy".to_string(),
+//!     plugin_name: Some("ssh".to_string()),
+//!     options: None,
 //! });
 //! let host = Host::builder().hostname("router1").build();
 //! let mut results = TaskResults::new("deploy");
@@ -357,16 +457,179 @@
 //!
 use crate::inventory::Host;
 use crate::types::{CustomTreeMap, NatString};
-use log::warn;
+use log::{debug, info, warn};
 use serde::Serialize;
 use serde_json::Value;
-use std::any::type_name;
+use std::any::{type_name, Any};
 use std::error::Error;
+use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-pub type TaskError = Arc<dyn Error + Send + Sync + 'static>;
+/// Represents an error that occurred during task execution.
+///
+/// `TaskError` wraps an underlying error and preserves both the error itself and its
+/// concrete type information. This allows for type-safe error handling and downcasting
+/// while maintaining thread safety through `Arc` wrapping.
+///
+/// The error type stores:
+/// - The actual error as a trait object (`dyn Error + Send + Sync`)
+/// - The original error's type name as a string for debugging and logging
+/// - An optional source reference to the original concrete error for downcasting
+///
+/// # Thread Safety
+///
+/// `TaskError` is designed to be safely shared across threads, with all internal
+/// references wrapped in `Arc` and requiring `Send + Sync` bounds.
+///
+/// # Example
+///
+/// ```rust
+/// use genja_core::task::TaskError;
+/// use std::io;
+///
+/// // Create a TaskError from a standard error
+/// let io_error = io::Error::new(io::ErrorKind::NotFound, "file not found");
+/// let task_error = TaskError::new(io_error);
+///
+/// // Access error information
+/// println!("Error: {}", task_error.error());
+/// println!("Error type: {}", task_error.error_type());
+///
+/// // Attempt to downcast to the original error type
+/// if let Some(io_err) = task_error.downcast_ref::<io::Error>() {
+///     println!("Original IO error kind: {:?}", io_err.kind());
+/// }
+/// ```
+#[derive(Clone)]
+pub struct TaskError {
+    error: Arc<dyn Error + Send + Sync + 'static>,
+    error_type: String,
+    source: Option<Arc<dyn Any + Send + Sync + 'static>>,
+}
+
+type TaskFailureSource = Arc<dyn Any + Send + Sync + 'static>;
+
+impl TaskError {
+    pub fn new<E>(error: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        let error = Arc::new(error);
+        Self {
+            error_type: type_name::<E>().to_string(),
+            source: Some(error.clone()),
+            error,
+        }
+    }
+
+    pub fn from_arc(error: Arc<dyn Error + Send + Sync + 'static>) -> Self {
+        Self {
+            error,
+            error_type: "dyn core::error::Error".to_string(),
+            source: None,
+        }
+    }
+
+    pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self.error.as_ref()
+    }
+
+    pub fn error_type(&self) -> &str {
+        &self.error_type
+    }
+
+    pub fn downcast_ref<E>(&self) -> Option<&E>
+    where
+        E: 'static,
+    {
+        self.source
+            .as_ref()
+            .and_then(|source| source.downcast_ref::<E>())
+    }
+}
+
+impl fmt::Debug for TaskError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskError")
+            .field("error_type", &self.error_type)
+            .field("message", &self.error.to_string())
+            .finish()
+    }
+}
+
+impl fmt::Display for TaskError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.error)
+    }
+}
+
+impl Error for TaskError {}
+
+#[derive(Debug)]
+struct CapturedTaskFailure {
+    message: String,
+}
+
+impl fmt::Display for CapturedTaskFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl Error for CapturedTaskFailure {}
+
+fn format_timestamp_display(timestamp: SystemTime) -> String {
+    humantime::format_rfc3339_seconds(timestamp).to_string()
+}
+
+fn format_duration_display(duration_ns: u128) -> String {
+    if duration_ns < 1_000 {
+        return format!("{duration_ns}ns");
+    }
+
+    if duration_ns < 1_000_000 {
+        return format_decimal_unit(duration_ns as f64 / 1_000.0, "us");
+    }
+
+    if duration_ns < 1_000_000_000 {
+        return format_decimal_unit(duration_ns as f64 / 1_000_000.0, "ms");
+    }
+
+    if duration_ns < 60_000_000_000 {
+        return format_decimal_unit(duration_ns as f64 / 1_000_000_000.0, "s");
+    }
+
+    if duration_ns < 3_600_000_000_000 {
+        return format_decimal_unit(duration_ns as f64 / 60_000_000_000.0, "m");
+    }
+
+    format_decimal_unit(duration_ns as f64 / 3_600_000_000_000.0, "h")
+}
+
+fn format_decimal_unit(value: f64, unit: &str) -> String {
+    let precision = if value >= 100.0 {
+        0
+    } else if value >= 10.0 {
+        1
+    } else {
+        2
+    };
+
+    let formatted = format!("{value:.precision$}");
+    let trimmed = if let Some((whole, fractional)) = formatted.split_once('.') {
+        let fractional = fractional.trim_end_matches('0');
+        if fractional.is_empty() {
+            whole.to_string()
+        } else {
+            format!("{whole}.{fractional}")
+        }
+    } else {
+        formatted
+    };
+    format!("{trimmed}{unit}")
+}
 
 /// Results of a task execution, including timing, host outcomes, and nested sub-task results.
 ///
@@ -431,10 +694,215 @@ pub struct TaskResults {
     task_name: String,
     started_at: Option<SystemTime>,
     finished_at: Option<SystemTime>,
+    duration_ns: Option<u128>,
     duration_ms: Option<u128>,
     summary: Option<String>,
     hosts: CustomTreeMap<HostTaskResult>,
     sub_tasks: CustomTreeMap<TaskResults>,
+}
+
+#[derive(Serialize)]
+struct TaskResultsHumanJson<'a> {
+    task_name: &'a str,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    duration: Option<String>,
+    summary: Option<&'a str>,
+    hosts: CustomTreeMap<HostTaskResultHumanJson<'a>>,
+    sub_tasks: CustomTreeMap<TaskResultsHumanJson<'a>>,
+}
+
+#[derive(Serialize)]
+enum HostTaskResultHumanJson<'a> {
+    Passed(TaskSuccessHumanJson<'a>),
+    Failed(TaskFailureHumanJson<'a>),
+    Skipped(TaskSkipHumanJson<'a>),
+}
+
+#[derive(Serialize)]
+struct TaskSuccessHumanJson<'a> {
+    result: Option<&'a Value>,
+    changed: bool,
+    diff: Option<&'a str>,
+    summary: Option<&'a str>,
+    warnings: &'a [String],
+    messages: &'a [TaskMessage],
+    metadata: Option<&'a Value>,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    duration: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TaskFailureHumanJson<'a> {
+    kind: &'a TaskFailureKind,
+    error_type: &'a str,
+    message: &'a str,
+    retryable: bool,
+    details: Option<&'a Value>,
+    warnings: &'a [String],
+    messages: &'a [TaskMessage],
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    duration: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TaskSkipHumanJson<'a> {
+    reason: Option<&'a str>,
+    message: Option<&'a str>,
+}
+
+/// Aggregate host outcome counts for a task result node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+pub struct TaskHostSummary {
+    passed: usize,
+    failed: usize,
+    skipped: usize,
+}
+
+/// Recursive summary of a task result tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaskResultsSummary {
+    task_name: String,
+    hosts: TaskHostSummary,
+    duration_ns: Option<u128>,
+    sub_tasks: CustomTreeMap<TaskResultsSummary>,
+}
+
+impl TaskHostSummary {
+    /// Creates a new aggregate host summary.
+    pub fn new(passed: usize, failed: usize, skipped: usize) -> Self {
+        Self {
+            passed,
+            failed,
+            skipped,
+        }
+    }
+
+    /// Returns the number of hosts that passed.
+    pub fn passed(&self) -> usize {
+        self.passed
+    }
+
+    /// Returns the number of hosts that failed.
+    pub fn failed(&self) -> usize {
+        self.failed
+    }
+
+    /// Returns the number of hosts that were skipped.
+    pub fn skipped(&self) -> usize {
+        self.skipped
+    }
+
+    /// Returns the total number of hosts represented in this summary.
+    pub fn total(&self) -> usize {
+        self.passed + self.failed + self.skipped
+    }
+}
+
+impl TaskResultsSummary {
+    /// Returns the task name for this summary node.
+    pub fn task_name(&self) -> &str {
+        &self.task_name
+    }
+
+    /// Returns the host outcome counts for this summary node.
+    pub fn hosts(&self) -> TaskHostSummary {
+        self.hosts
+    }
+
+    /// Returns the duration in milliseconds for this summary node, if available.
+    pub fn duration_ms(&self) -> Option<u128> {
+        self.duration_ns.map(|duration_ns| duration_ns / 1_000_000)
+    }
+
+    /// Returns the duration in a human-readable format for this summary node, if available.
+    pub fn duration_display(&self) -> Option<String> {
+        self.duration_ns.map(format_duration_display)
+    }
+
+    /// Returns recursive sub-task summaries keyed by task name.
+    pub fn sub_tasks(&self) -> &CustomTreeMap<TaskResultsSummary> {
+        &self.sub_tasks
+    }
+}
+
+impl<'a> From<&'a HostTaskResult> for HostTaskResultHumanJson<'a> {
+    fn from(result: &'a HostTaskResult) -> Self {
+        match result {
+            HostTaskResult::Passed(success) => Self::Passed(TaskSuccessHumanJson::from(success)),
+            HostTaskResult::Failed(failure) => Self::Failed(TaskFailureHumanJson::from(failure)),
+            HostTaskResult::Skipped(skip) => Self::Skipped(TaskSkipHumanJson::from(skip)),
+        }
+    }
+}
+
+impl<'a> From<&'a TaskSuccess> for TaskSuccessHumanJson<'a> {
+    fn from(success: &'a TaskSuccess) -> Self {
+        Self {
+            result: success.result(),
+            changed: success.changed(),
+            diff: success.diff(),
+            summary: success.summary(),
+            warnings: success.warnings(),
+            messages: success.messages(),
+            metadata: success.metadata(),
+            started_at: success.started_at_display(),
+            finished_at: success.finished_at_display(),
+            duration: success.duration_display(),
+        }
+    }
+}
+
+impl<'a> From<&'a TaskFailure> for TaskFailureHumanJson<'a> {
+    fn from(failure: &'a TaskFailure) -> Self {
+        Self {
+            kind: failure.kind(),
+            error_type: failure.error_type(),
+            message: failure.message(),
+            retryable: failure.retryable(),
+            details: failure.details(),
+            warnings: failure.warnings(),
+            messages: failure.messages(),
+            started_at: failure.started_at_display(),
+            finished_at: failure.finished_at_display(),
+            duration: failure.duration_display(),
+        }
+    }
+}
+
+impl<'a> From<&'a TaskSkip> for TaskSkipHumanJson<'a> {
+    fn from(skip: &'a TaskSkip) -> Self {
+        Self {
+            reason: skip.reason(),
+            message: skip.message(),
+        }
+    }
+}
+
+impl<'a> From<&'a TaskResults> for TaskResultsHumanJson<'a> {
+    fn from(results: &'a TaskResults) -> Self {
+        let mut hosts = CustomTreeMap::new();
+        for (hostname, host_result) in results.hosts().iter() {
+            hosts.insert(hostname, HostTaskResultHumanJson::from(host_result));
+        }
+
+        let mut sub_tasks = CustomTreeMap::new();
+        for (task_name, task_results) in results.sub_tasks().iter() {
+            sub_tasks.insert(task_name, TaskResultsHumanJson::from(task_results));
+        }
+
+        Self {
+            task_name: results.task_name(),
+            started_at: results.started_at_display(),
+            finished_at: results.finished_at_display(),
+            duration: results.duration_display(),
+            summary: results.summary(),
+            hosts,
+            sub_tasks,
+        }
+    }
 }
 
 impl TaskResults {
@@ -457,6 +925,7 @@ impl TaskResults {
             task_name: task_name.into(),
             started_at: None,
             finished_at: None,
+            duration_ns: None,
             duration_ms: None,
             summary: None,
             hosts: CustomTreeMap::new(),
@@ -520,7 +989,15 @@ impl TaskResults {
     ///
     /// The modified `TaskResults` instance with the duration set.
     pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
+        self.duration_ns = Some(duration_ms.saturating_mul(1_000_000));
         self.duration_ms = Some(duration_ms);
+        self
+    }
+
+    /// Sets the task execution duration in nanoseconds.
+    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
+        self.duration_ns = Some(duration_ns);
+        self.duration_ms = Some(duration_ns / 1_000_000);
         self
     }
 
@@ -540,6 +1017,68 @@ impl TaskResults {
     pub fn with_summary(mut self, summary: impl Into<String>) -> Self {
         self.summary = Some(summary.into());
         self
+    }
+
+    /// Merges another result tree for the same task into this one.
+    ///
+    /// Host results are inserted directly and sub-task trees are merged
+    /// recursively. Aggregate timing is widened to cover the full execution
+    /// window across both result trees.
+    pub fn merge(&mut self, other: TaskResults) {
+        let mut other = other;
+        debug_assert_eq!(self.task_name, other.task_name);
+
+        if let (Some(started_at), Some(finished_at)) = (other.started_at, other.finished_at) {
+            self.record_execution_timing(started_at, finished_at);
+        } else {
+            if self.started_at.is_none() {
+                self.started_at = other.started_at;
+            }
+            if self.finished_at.is_none() {
+                self.finished_at = other.finished_at;
+            }
+            if self.duration_ns.is_none() {
+                self.duration_ns = other.duration_ns;
+            }
+            if self.duration_ms.is_none() {
+                self.duration_ms = other.duration_ms;
+            }
+        }
+
+        if self.summary.is_none() {
+            self.summary = other.summary;
+        }
+
+        for (hostname, result) in std::mem::take(&mut *other.hosts).into_iter() {
+            self.insert_host_result(hostname, result);
+        }
+
+        for (task_name, sub_results) in std::mem::take(&mut *other.sub_tasks).into_iter() {
+            if let Some(existing) = self.sub_task_mut(task_name.as_str()) {
+                existing.merge(sub_results);
+            } else {
+                self.insert_sub_task(task_name, sub_results);
+            }
+        }
+    }
+
+    fn record_execution_timing(&mut self, started_at: SystemTime, finished_at: SystemTime) {
+        if self.started_at.is_none_or(|current| started_at < current) {
+            self.started_at = Some(started_at);
+        }
+
+        if self.finished_at.is_none_or(|current| finished_at > current) {
+            self.finished_at = Some(finished_at);
+        }
+
+        if let (Some(started_at), Some(finished_at)) = (self.started_at, self.finished_at) {
+            let duration_ns = finished_at
+                .duration_since(started_at)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            self.duration_ns = Some(duration_ns);
+            self.duration_ms = Some(duration_ns / 1_000_000);
+        }
     }
 
     /// Returns the task execution start timestamp, if available.
@@ -566,7 +1105,52 @@ impl TaskResults {
     ///
     /// `Some(u128)` if the duration was set, `None` otherwise.
     pub fn duration_ms(&self) -> Option<u128> {
-        self.duration_ms
+        self.duration_ns
+            .map(|duration_ns| duration_ns / 1_000_000)
+            .or(self.duration_ms)
+    }
+
+    /// Returns the task execution duration in nanoseconds, if available.
+    pub fn duration_ns(&self) -> Option<u128> {
+        self.duration_ns.or_else(|| {
+            self.duration_ms
+                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
+        })
+    }
+
+    /// Returns the task execution start timestamp in RFC 3339 format, if available.
+    pub fn started_at_display(&self) -> Option<String> {
+        self.started_at.map(format_timestamp_display)
+    }
+
+    /// Returns the task execution finish timestamp in RFC 3339 format, if available.
+    pub fn finished_at_display(&self) -> Option<String> {
+        self.finished_at.map(format_timestamp_display)
+    }
+
+    /// Returns the task execution duration in a human-readable format, if available.
+    pub fn duration_display(&self) -> Option<String> {
+        self.duration_ns().map(format_duration_display)
+    }
+
+    /// Serializes task results as compact human-readable JSON.
+    pub fn to_json_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&TaskResultsHumanJson::from(self))
+    }
+
+    /// Serializes task results as pretty-printed human-readable JSON.
+    pub fn to_pretty_json_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(&TaskResultsHumanJson::from(self))
+    }
+
+    /// Serializes task results as compact raw JSON using the struct's default serde representation.
+    pub fn to_raw_json_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Serializes task results as pretty-printed raw JSON using the struct's default serde representation.
+    pub fn to_raw_pretty_json_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
     }
 
     /// Returns the task summary message, if available.
@@ -708,6 +1292,38 @@ impl TaskResults {
             .iter()
             .filter_map(|(host, result)| result.is_failed().then_some(host))
             .collect()
+    }
+
+    /// Returns a list of hostnames for which the task execution was skipped.
+    pub fn skipped_hosts(&self) -> Vec<&NatString> {
+        self.hosts
+            .iter()
+            .filter_map(|(host, result)| result.is_skipped().then_some(host))
+            .collect()
+    }
+
+    /// Returns aggregate host counts for this task only.
+    pub fn host_summary(&self) -> TaskHostSummary {
+        TaskHostSummary::new(
+            self.passed_hosts().len(),
+            self.failed_hosts().len(),
+            self.skipped_hosts().len(),
+        )
+    }
+
+    /// Returns a recursive summary of this task and all sub-tasks.
+    pub fn task_summary(&self) -> TaskResultsSummary {
+        let mut sub_tasks = CustomTreeMap::new();
+        for (task_name, task_results) in self.sub_tasks().iter() {
+            sub_tasks.insert(task_name, task_results.task_summary());
+        }
+
+        TaskResultsSummary {
+            task_name: self.task_name.clone(),
+            hosts: self.host_summary(),
+            duration_ns: self.duration_ns(),
+            sub_tasks,
+        }
     }
 }
 
@@ -906,6 +1522,29 @@ impl HostTaskResult {
             Self::Passed(_) | Self::Failed(_) => None,
         }
     }
+
+    fn with_execution_timing(
+        self,
+        started_at: SystemTime,
+        finished_at: SystemTime,
+        duration_ns: u128,
+    ) -> Self {
+        match self {
+            Self::Passed(success) => Self::Passed(
+                success
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(duration_ns),
+            ),
+            Self::Failed(failure) => Self::Failed(
+                failure
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(duration_ns),
+            ),
+            Self::Skipped(skip) => Self::Skipped(skip),
+        }
+    }
 }
 
 /// Represents the successful execution of a task on a host.
@@ -970,6 +1609,7 @@ pub struct TaskSuccess {
     metadata: Option<Value>,
     started_at: Option<SystemTime>,
     finished_at: Option<SystemTime>,
+    duration_ns: Option<u128>,
     duration_ms: Option<u128>,
 }
 
@@ -1170,7 +1810,15 @@ impl TaskSuccess {
     ///
     /// The modified `TaskSuccess` instance with the duration set.
     pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
+        self.duration_ns = Some(duration_ms.saturating_mul(1_000_000));
         self.duration_ms = Some(duration_ms);
+        self
+    }
+
+    /// Sets the task execution duration in nanoseconds.
+    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
+        self.duration_ns = Some(duration_ns);
+        self.duration_ms = Some(duration_ns / 1_000_000);
         self
     }
 
@@ -1263,7 +1911,32 @@ impl TaskSuccess {
     ///
     /// `Some(u128)` if the duration was set, `None` otherwise.
     pub fn duration_ms(&self) -> Option<u128> {
-        self.duration_ms
+        self.duration_ns
+            .map(|duration_ns| duration_ns / 1_000_000)
+            .or(self.duration_ms)
+    }
+
+    /// Returns the task execution duration in nanoseconds, if available.
+    pub fn duration_ns(&self) -> Option<u128> {
+        self.duration_ns.or_else(|| {
+            self.duration_ms
+                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
+        })
+    }
+
+    /// Returns the task execution start timestamp in RFC 3339 format, if available.
+    pub fn started_at_display(&self) -> Option<String> {
+        self.started_at.map(format_timestamp_display)
+    }
+
+    /// Returns the task execution finish timestamp in RFC 3339 format, if available.
+    pub fn finished_at_display(&self) -> Option<String> {
+        self.finished_at.map(format_timestamp_display)
+    }
+
+    /// Returns the task execution duration in a human-readable format, if available.
+    pub fn duration_display(&self) -> Option<String> {
+        self.duration_ns().map(format_duration_display)
     }
 }
 
@@ -1332,6 +2005,8 @@ impl TaskSuccess {
 pub struct TaskFailure {
     #[serde(skip)]
     error: TaskError,
+    #[serde(skip)]
+    source: Option<TaskFailureSource>,
     kind: TaskFailureKind,
     error_type: String,
     message: String,
@@ -1341,6 +2016,7 @@ pub struct TaskFailure {
     messages: Vec<TaskMessage>,
     started_at: Option<SystemTime>,
     finished_at: Option<SystemTime>,
+    duration_ns: Option<u128>,
     duration_ms: Option<u128>,
 }
 
@@ -1369,17 +2045,87 @@ impl TaskFailure {
     where
         E: Error + Send + Sync + 'static,
     {
+        let source = Arc::new(error);
+        let message = source.to_string();
+        let error_type = type_name::<E>().to_string();
+
         Self {
             kind: TaskFailureKind::Internal,
-            error_type: type_name::<E>().to_string(),
-            message: error.to_string(),
-            error: Arc::new(error),
+            error_type: error_type.clone(),
+            message,
+            error: TaskError {
+                error: source.clone(),
+                error_type,
+                source: Some(source.clone()),
+            },
+            source: Some(source),
             retryable: false,
             details: None,
             warnings: Vec::new(),
             messages: Vec::new(),
             started_at: None,
             finished_at: None,
+            duration_ns: None,
+            duration_ms: None,
+        }
+    }
+
+    /// Creates a new `TaskFailure` from any thread-safe `'static` payload.
+    ///
+    /// This is useful when the failure value does not implement [`Error`] but
+    /// still carries meaningful type and display information that should be
+    /// stored with the task result.
+    pub fn capture<E>(error: E) -> Self
+    where
+        E: fmt::Debug + fmt::Display + Send + Sync + 'static,
+    {
+        let source = Arc::new(error);
+        let message = source.to_string();
+        let error_type = type_name::<E>().to_string();
+        let wrapped_error = Arc::new(CapturedTaskFailure {
+            message: message.clone(),
+        });
+
+        Self {
+            kind: TaskFailureKind::Internal,
+            error_type: error_type.clone(),
+            message,
+            error: TaskError {
+                error: wrapped_error,
+                error_type,
+                source: Some(source.clone()),
+            },
+            source: Some(source),
+            retryable: false,
+            details: None,
+            warnings: Vec::new(),
+            messages: Vec::new(),
+            started_at: None,
+            finished_at: None,
+            duration_ns: None,
+            duration_ms: None,
+        }
+    }
+
+    /// Creates a new `TaskFailure` from an already-erased task error.
+    ///
+    /// Failures captured through the task execution boundary default to
+    /// [`TaskFailureKind::External`], because the error originated outside the
+    /// Genja framework itself.
+    pub fn from_task_error(error: TaskError) -> Self {
+        Self {
+            kind: TaskFailureKind::External,
+            error_type: error.error_type().to_string(),
+            message: error.to_string(),
+            error: error.clone(),
+            source: error.source,
+            retryable: false,
+            details: None,
+            warnings: Vec::new(),
+            messages: Vec::new(),
+            started_at: None,
+            finished_at: None,
+            duration_ns: None,
             duration_ms: None,
         }
     }
@@ -1527,7 +2273,15 @@ impl TaskFailure {
     ///
     /// The modified `TaskFailure` instance with the duration set.
     pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
+        self.duration_ns = Some(duration_ms.saturating_mul(1_000_000));
         self.duration_ms = Some(duration_ms);
+        self
+    }
+
+    /// Sets the task execution duration in nanoseconds.
+    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
+        self.duration_ns = Some(duration_ns);
+        self.duration_ms = Some(duration_ns / 1_000_000);
         self
     }
 
@@ -1546,9 +2300,11 @@ impl TaskFailure {
     /// `Some(&E)` if the underlying error is of type `E`, `None` otherwise.
     pub fn downcast_ref<E>(&self) -> Option<&E>
     where
-        E: Error + 'static,
+        E: 'static,
     {
-        self.error.downcast_ref::<E>()
+        self.source
+            .as_ref()
+            .and_then(|source| source.downcast_ref::<E>())
     }
 
     /// Returns a reference to the underlying error as a trait object.
@@ -1561,7 +2317,7 @@ impl TaskFailure {
     /// A reference to the underlying error as a trait object implementing
     /// `Error + Send + Sync + 'static`.
     pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
-        self.error.as_ref()
+        self.error.error()
     }
 
     /// Returns the type name of the underlying error.
@@ -1661,7 +2417,32 @@ impl TaskFailure {
     ///
     /// `Some(u128)` if the duration was set, `None` otherwise.
     pub fn duration_ms(&self) -> Option<u128> {
-        self.duration_ms
+        self.duration_ns
+            .map(|duration_ns| duration_ns / 1_000_000)
+            .or(self.duration_ms)
+    }
+
+    /// Returns the task execution duration in nanoseconds, if available.
+    pub fn duration_ns(&self) -> Option<u128> {
+        self.duration_ns.or_else(|| {
+            self.duration_ms
+                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
+        })
+    }
+
+    /// Returns the task execution start timestamp in RFC 3339 format, if available.
+    pub fn started_at_display(&self) -> Option<String> {
+        self.started_at.map(format_timestamp_display)
+    }
+
+    /// Returns the task execution finish timestamp in RFC 3339 format, if available.
+    pub fn finished_at_display(&self) -> Option<String> {
+        self.finished_at.map(format_timestamp_display)
+    }
+
+    /// Returns the task execution duration in a human-readable format, if available.
+    pub fn duration_display(&self) -> Option<String> {
+        self.duration_ns().map(format_duration_display)
     }
 }
 
@@ -1986,9 +2767,12 @@ pub enum MessageLevel {
 ///   supported by the target system, plugin, or current configuration. This
 ///   typically indicates a permanent failure that won't succeed on retry.
 ///
-/// * `Internal` - The task failed due to an internal error in the task
-///   implementation or framework, such as a programming error, resource
-///   exhaustion, or unexpected state. This is the default classification.
+/// * `Internal` - The task failed due to a Genja/framework internal error, such
+///   as a programming error, resource exhaustion, or unexpected engine state.
+///
+/// * `External` - The task failed because a task implementation, plugin, or
+///   external dependency returned an error that Genja captured and stored as a
+///   host failure.
 ///
 /// # Example
 ///
@@ -2020,6 +2804,7 @@ pub enum TaskFailureKind {
     Command,
     Unsupported,
     Internal,
+    External,
 }
 
 /// Task metadata required for execution.
@@ -2061,14 +2846,19 @@ pub trait SubTasks {
 /// }
 ///
 /// impl Task for MyTask {
-///     fn start(&self, _host: &genja_core::inventory::Host) -> genja_core::task::HostTaskResult {
-///         genja_core::task::HostTaskResult::passed(genja_core::task::TaskSuccess::new())
+///     fn start(
+///         &self,
+///         _host: &genja_core::inventory::Host,
+///     ) -> Result<genja_core::task::HostTaskResult, genja_core::task::TaskError> {
+///         Ok(genja_core::task::HostTaskResult::passed(
+///             genja_core::task::TaskSuccess::new(),
+///         ))
 ///     }
 /// }
 /// ```
-pub trait Task: TaskInfo + SubTasks {
+pub trait Task: TaskInfo + SubTasks + Send + Sync {
     /// Start executing the task.
-    fn start(&self, host: &Host) -> HostTaskResult;
+    fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError>;
 }
 
 /// A wrapper around a task implementation that enforces the task trait flow.
@@ -2125,8 +2915,8 @@ pub trait Task: TaskInfo + SubTasks {
 /// }
 ///
 /// impl Task for MyTask {
-///     fn start(&self, _host: &Host) -> HostTaskResult {
-///         HostTaskResult::passed(TaskSuccess::new())
+///     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(TaskSuccess::new()))
 ///     }
 /// }
 ///
@@ -2134,15 +2924,16 @@ pub trait Task: TaskInfo + SubTasks {
 /// let definition = TaskDefinition::new(task);
 /// assert_eq!(definition.name(), "deploy");
 /// ```
+#[derive(Clone)]
 pub struct TaskDefinition {
-    inner: Box<dyn Task>,
+    inner: Arc<dyn Task>,
 }
 
 impl TaskDefinition {
     /// Wrap a user-defined task that implements the Task trait.
     pub fn new<T: Task + 'static>(task: T) -> Self {
         Self {
-            inner: Box::new(task),
+            inner: Arc::new(task),
         }
     }
 
@@ -2171,12 +2962,13 @@ impl TaskDefinition {
     ///
     /// Inserts the provided host's result into the shared `TaskResults` tree and
     /// recursively does the same for any sub-tasks. The parent task result is recorded
-    /// before sub-task execution starts. Returns `Err(GenjaError)` if the maximum depth
-    /// is exceeded.
+    /// before sub-task execution starts.
     ///
     /// # Errors
     ///
-    /// * Returns `GenjaError::Message` if the task nesting exceeds `max_depth`.
+    /// This method currently does not return an error for depth overflow. When task
+    /// nesting exceeds `max_depth`, it records an internal failed host result for that
+    /// task node and returns `Ok(())`.
     pub fn start(
         &self,
         hostname: &str,
@@ -2184,7 +2976,7 @@ impl TaskDefinition {
         results: &mut TaskResults,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
-        Self::start_with_depth(self.inner.as_ref(), hostname, host, results, 0, max_depth)
+        Self::start_with_depth(self.inner.as_ref(), hostname, host, results, None, 0, max_depth)
     }
 
     /// Recursively executes a task and its sub-tasks with depth tracking.
@@ -2227,38 +3019,141 @@ impl TaskDefinition {
     /// # Returns
     ///
     /// * `Ok(())` if the task and all its sub-tasks executed successfully within
-    ///   the depth limit.
-    ///
-    /// * `Err(GenjaError::Message)` if the current depth exceeds `max_depth`,
-    ///   indicating that the task nesting is too deep.
+    ///   the depth limit, or if any depth overflow was captured as a failed host result.
     ///
     /// # Errors
     ///
-    /// Returns `GenjaError::Message` with a descriptive error message if the
-    /// task nesting depth exceeds the specified `max_depth` limit. The error
-    /// message includes the maximum depth value that was exceeded.
+    /// Depth overflow is handled by inserting a failed host result with
+    /// [`TaskFailureKind::Internal`]. This helper only returns an error if a future
+    /// implementation path introduces one explicitly.
     fn start_with_depth(
         task: &dyn Task,
         hostname: &str,
         host: &Host,
         results: &mut TaskResults,
+        parent_task_name: Option<&str>,
         depth: usize,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
         if depth > max_depth {
+            let started_at = SystemTime::now();
+            let finished_at = started_at;
+            let error =
+                crate::GenjaError::Message(format!("max task depth exceeded: {}", max_depth));
             warn!(
                 "max task depth exceeded for task '{}' at depth {} with max_depth {}",
                 task.name(),
                 depth,
                 max_depth
             );
-            return Err(crate::GenjaError::Message(format!(
-                "max task depth exceeded: {}",
-                max_depth
-            )));
+            results.record_execution_timing(started_at, finished_at);
+            results.insert_host_result(
+                hostname,
+                HostTaskResult::failed(
+                    TaskFailure::new(error)
+                        .with_kind(TaskFailureKind::Internal)
+                        .with_started_at(started_at)
+                        .with_finished_at(finished_at)
+                        .with_duration_ns(0),
+                ),
+            );
+            return Ok(());
         }
 
-        results.insert_host_result(hostname, task.start(host));
+        let started_at = SystemTime::now();
+        let parent_task = parent_task_name.unwrap_or("none");
+        debug!(
+            "starting task '{}' for host '{}' parent_task='{}' depth={}",
+            task.name(),
+            hostname,
+            parent_task,
+            depth
+        );
+        let host_result = task.start(host);
+        let finished_at = SystemTime::now();
+        let duration_ns = finished_at
+            .duration_since(started_at)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+
+        results.record_execution_timing(started_at, finished_at);
+
+        let host_result = match host_result {
+            Ok(host_result) => host_result,
+            Err(error) => {
+                let failure = TaskFailure::from_task_error(error)
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(duration_ns);
+                warn!(
+                    "task '{}' failed for host '{}': {}",
+                    task.name(),
+                    hostname,
+                    failure.message()
+                );
+                let duration_display = failure
+                    .duration_display()
+                    .unwrap_or_else(|| format_duration_display(duration_ns));
+                info!(
+                    "finished task '{}' for host '{}' with status=failed duration_ms={} duration={}",
+                    task.name(),
+                    hostname,
+                    duration_ns / 1_000_000,
+                    duration_display
+                );
+                results.insert_host_result(hostname, HostTaskResult::failed(failure));
+                return Ok(());
+            }
+        };
+
+        if let Some(failure) = host_result.failure() {
+            warn!(
+                "task '{}' failed for host '{}': {}",
+                task.name(),
+                hostname,
+                failure.message()
+            );
+        }
+
+        if let Some(skip) = host_result.skipped_detail() {
+            info!(
+                "task '{}' skipped for host '{}' reason='{}' message='{}'",
+                task.name(),
+                hostname,
+                skip.reason().unwrap_or("none"),
+                skip.message().unwrap_or("")
+            );
+        }
+
+        let status = if host_result.is_passed() {
+            "passed"
+        } else if host_result.is_failed() {
+            "failed"
+        } else {
+            "skipped"
+        };
+
+        let host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
+        let duration_display = match &host_result {
+            HostTaskResult::Passed(success) => success
+                .duration_display()
+                .unwrap_or_else(|| format_duration_display(duration_ns)),
+            HostTaskResult::Failed(failure) => failure
+                .duration_display()
+                .unwrap_or_else(|| format_duration_display(duration_ns)),
+            HostTaskResult::Skipped(_) => format_duration_display(duration_ns),
+        };
+
+        info!(
+            "finished task '{}' for host '{}' with status={} duration_ms={} duration={}",
+            task.name(),
+            hostname,
+            status,
+            duration_ns / 1_000_000,
+            duration_display
+        );
+
+        results.insert_host_result(hostname, host_result);
 
         for sub in task.sub_tasks() {
             let sub_task_name = sub.name().to_string();
@@ -2273,6 +3168,7 @@ impl TaskDefinition {
                 hostname,
                 host,
                 sub_results,
+                Some(task.name()),
                 depth + 1,
                 max_depth,
             )?;
@@ -2375,7 +3271,9 @@ impl DerefMut for Tasks {
 mod tests {
     use super::*;
     use crate::inventory::{BaseBuilderHost, ConnectionKey, Host};
+    use log::{LevelFilter, Log, Metadata, Record};
     use serde_json::json;
+    use std::sync::{Mutex, OnceLock};
     use std::fmt;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2390,11 +3288,26 @@ mod tests {
 
     impl Error for TestTaskFailureError {}
 
+    #[derive(Debug)]
+    struct ExternalFailurePayload {
+        code: u16,
+    }
+
+    impl fmt::Display for ExternalFailurePayload {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "external failure code {}", self.code)
+        }
+    }
+
     struct TestTask {
         name: &'static str,
         subs: Vec<Arc<dyn Task>>,
         counter: Arc<AtomicUsize>,
     }
+
+    struct FailingTask;
+
+    struct SkippingTask;
 
     impl TaskInfo for TestTask {
         fn name(&self) -> &str {
@@ -2421,10 +3334,124 @@ mod tests {
     }
 
     impl Task for TestTask {
-        fn start(&self, _host: &Host) -> HostTaskResult {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
             self.counter.fetch_add(1, Ordering::SeqCst);
-            HostTaskResult::passed(TaskSuccess::new())
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
+    }
+
+    impl TaskInfo for FailingTask {
+        fn name(&self) -> &str {
+            "failing"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "ssh"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, "ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for FailingTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for FailingTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::failed(TaskFailure::new(
+                TestTaskFailureError,
+            )))
+        }
+    }
+
+    impl TaskInfo for SkippingTask {
+        fn name(&self) -> &str {
+            "skipping"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "ssh"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, "ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for SkippingTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for SkippingTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::Skipped(
+                TaskSkip::new().with_reason("filtered"),
+            ))
+        }
+    }
+
+    #[derive(Default)]
+    struct TestLogger {
+        entries: Mutex<Vec<String>>,
+    }
+
+    impl TestLogger {
+        fn clear(&self) {
+            self.entries.lock().expect("logger lock should not be poisoned").clear();
+        }
+
+        fn entries(&self) -> Vec<String> {
+            self.entries
+                .lock()
+                .expect("logger lock should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl Log for TestLogger {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &Record<'_>) {
+            if self.enabled(record.metadata()) {
+                self.entries
+                    .lock()
+                    .expect("logger lock should not be poisoned")
+                    .push(format!("{} {}", record.level(), record.args()));
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    fn test_logger() -> &'static TestLogger {
+        static LOGGER: OnceLock<&'static TestLogger> = OnceLock::new();
+        LOGGER.get_or_init(|| {
+            let logger = Box::leak(Box::new(TestLogger::default()));
+            let _ = log::set_logger(logger);
+            log::set_max_level(LevelFilter::Debug);
+            logger
+        })
+    }
+
+    fn log_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn chain(depth: usize, counter: Arc<AtomicUsize>) -> Arc<dyn Task> {
@@ -2461,10 +3488,19 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 4);
         assert!(results.host_result("router1").is_some());
         assert!(results.sub_task("node").is_some());
+        assert!(results.started_at().is_some());
+        assert!(results.finished_at().is_some());
+        assert!(results.duration_display().is_some());
+        let node_results = results
+            .sub_task("node")
+            .expect("sub-task results should exist after execution");
+        assert!(node_results.started_at().is_some());
+        assert!(node_results.finished_at().is_some());
+        assert!(node_results.duration_display().is_some());
     }
 
     #[test]
-    fn start_fails_when_depth_exceeds_limit() {
+    fn start_captures_host_failure_when_depth_exceeds_limit() {
         let counter = Arc::new(AtomicUsize::new(0));
         let root = chain(5, counter.clone());
         let task = TaskDefinition::new(TestTask {
@@ -2475,16 +3511,170 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
 
         let mut results = TaskResults::new("root");
-        let err = task
-            .start("router1", &host, &mut results, 4)
-            .expect_err("start should fail at depth > 4");
-        match err {
-            crate::GenjaError::Message(msg) => {
-                assert!(msg.contains("max task depth exceeded"));
-            }
-            _ => panic!("unexpected error variant"),
-        }
+        task.start("router1", &host, &mut results, 4)
+            .expect("start should capture depth overflow as a host failure");
+
         assert_eq!(counter.load(Ordering::SeqCst), 5);
+
+        let level_one = results
+            .sub_task("node")
+            .expect("first nested node should exist");
+        let level_two = level_one
+            .sub_task("node")
+            .expect("second nested node should exist");
+        let level_three = level_two
+            .sub_task("node")
+            .expect("third nested node should exist");
+        let level_four = level_three
+            .sub_task("node")
+            .expect("fourth nested node should exist");
+        let level_five = level_four
+            .sub_task("leaf")
+            .expect("leaf task should capture failure");
+
+        let failure = level_five
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("depth overflow should be recorded as a host failure");
+        assert!(failure.message().contains("max task depth exceeded"));
+        assert!(matches!(failure.kind(), TaskFailureKind::Internal));
+        assert!(failure.started_at().is_some());
+        assert!(failure.finished_at().is_some());
+        assert_eq!(failure.duration_ns(), Some(0));
+    }
+
+    #[test]
+    fn start_attaches_timing_to_passed_host_results() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(TestTask {
+            name: "root",
+            subs: Vec::new(),
+            counter,
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should succeed");
+
+        let success = results
+            .host_result("router1")
+            .and_then(HostTaskResult::success)
+            .expect("host result should be passed");
+        assert!(success.started_at().is_some());
+        assert!(success.finished_at().is_some());
+        assert!(success.duration_ns().is_some());
+        assert!(success.duration_display().is_some());
+    }
+
+    #[test]
+    fn start_attaches_timing_to_failed_host_results() {
+        let task = TaskDefinition::new(FailingTask);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("failing");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should record a failed result");
+
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("host result should be failed");
+        assert!(failure.started_at().is_some());
+        assert!(failure.finished_at().is_some());
+        assert!(failure.duration_ns().is_some());
+        assert!(failure.duration_display().is_some());
+    }
+
+    #[test]
+    fn start_does_not_attach_timing_to_skipped_host_results() {
+        let task = TaskDefinition::new(SkippingTask);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("skipping");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should record a skipped result");
+
+        let skip = results
+            .host_result("router1")
+            .and_then(HostTaskResult::skipped_detail)
+            .expect("host result should be skipped");
+        assert_eq!(skip.reason(), Some("filtered"));
+        assert_eq!(skip.message(), None);
+    }
+
+    #[test]
+    fn start_logs_per_host_finish_for_passed_results() {
+        let _guard = log_lock().lock().expect("log lock should not be poisoned");
+        let logger = test_logger();
+        logger.clear();
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(TestTask {
+            name: "root",
+            subs: Vec::new(),
+            counter,
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should succeed");
+
+        let entries = logger.entries();
+        assert!(entries.iter().any(|entry| {
+            entry.contains("DEBUG starting task 'root' for host 'router1' parent_task='none' depth=0")
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.contains("INFO finished task 'root' for host 'router1' with status=passed duration_ms=")
+                && entry.contains(" duration=")
+        }));
+    }
+
+    #[test]
+    fn start_logs_per_host_failure_warning_and_finish() {
+        let _guard = log_lock().lock().expect("log lock should not be poisoned");
+        let logger = test_logger();
+        logger.clear();
+
+        let task = TaskDefinition::new(FailingTask);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("failing");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should record a failed result");
+
+        let entries = logger.entries();
+        assert!(entries.iter().any(|entry| {
+            entry == "WARN task 'failing' failed for host 'router1': task failure test error"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.contains("INFO finished task 'failing' for host 'router1' with status=failed duration_ms=")
+                && entry.contains(" duration=")
+        }));
+    }
+
+    #[test]
+    fn start_logs_per_host_skip_event_and_finish() {
+        let _guard = log_lock().lock().expect("log lock should not be poisoned");
+        let logger = test_logger();
+        logger.clear();
+
+        let task = TaskDefinition::new(SkippingTask);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("skipping");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should record a skipped result");
+
+        let entries = logger.entries();
+        assert!(entries.iter().any(|entry| {
+            entry == "INFO task 'skipping' skipped for host 'router1' reason='filtered' message=''"
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.contains("INFO finished task 'skipping' for host 'router1' with status=skipped duration_ms=")
+                && entry.contains(" duration=")
+        }));
     }
 
     #[test]
@@ -2507,6 +3697,88 @@ mod tests {
             .error_type()
             .ends_with("task::tests::TestTaskFailureError"));
         assert!(failure.downcast_ref::<TestTaskFailureError>().is_some());
+    }
+
+    #[test]
+    fn task_failure_capture_supports_non_error_payloads() {
+        let failure = TaskFailure::capture(ExternalFailurePayload { code: 42 })
+            .with_kind(TaskFailureKind::Internal);
+
+        assert_eq!(failure.message(), "external failure code 42");
+        assert!(failure
+            .error()
+            .to_string()
+            .contains("external failure code 42"));
+        assert!(failure
+            .error_type()
+            .ends_with("task::tests::ExternalFailurePayload"));
+        let payload = failure
+            .downcast_ref::<ExternalFailurePayload>()
+            .expect("captured payload should be downcastable");
+        assert_eq!(payload.code, 42);
+    }
+
+    #[derive(Debug)]
+    struct ExternalTaskError;
+
+    impl fmt::Display for ExternalTaskError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "external task error")
+        }
+    }
+
+    impl Error for ExternalTaskError {}
+
+    struct ErroringTask;
+
+    impl TaskInfo for ErroringTask {
+        fn name(&self) -> &str {
+            "erroring"
+        }
+
+        fn plugin_name(&self) -> &str {
+            "ssh"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, "ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for ErroringTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for ErroringTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Err(TaskError::new(ExternalTaskError))
+        }
+    }
+
+    #[test]
+    fn start_captures_task_errors_as_external_failures() {
+        let task = TaskDefinition::new(ErroringTask);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("erroring");
+
+        task.start("router1", &host, &mut results, 0)
+            .expect("start should capture task error as host failure");
+
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("task error should be recorded as failure");
+        assert_eq!(failure.message(), "external task error");
+        assert!(matches!(failure.kind(), TaskFailureKind::External));
+        assert!(failure
+            .error_type()
+            .ends_with("task::tests::ExternalTaskError"));
     }
 
     #[test]
@@ -2601,7 +3873,140 @@ mod tests {
         assert_eq!(results.summary(), Some("deploy finished"));
         assert_eq!(results.started_at(), Some(started_at));
         assert_eq!(results.finished_at(), Some(finished_at));
+        assert_eq!(results.duration_ns(), Some(3_000_000_000));
         assert_eq!(results.duration_ms(), Some(3000));
+        assert_eq!(
+            results.started_at_display(),
+            Some("1970-01-01T00:00:00Z".to_string())
+        );
+        assert_eq!(
+            results.finished_at_display(),
+            Some("1970-01-01T00:00:03Z".to_string())
+        );
+        assert_eq!(results.duration_display(), Some("3s".to_string()));
+
+        let json = results
+            .to_json_string()
+            .expect("human json should serialize");
+        assert!(json.contains("\"started_at\":\"1970-01-01T00:00:00Z\""));
+        assert!(json.contains("\"finished_at\":\"1970-01-01T00:00:03Z\""));
+        assert!(json.contains("\"duration\":\"3s\""));
+        assert!(!json.contains("\"duration_ns\":"));
+        assert!(!json.contains("\"duration_ms\":"));
+
+        let raw_json = results
+            .to_raw_json_string()
+            .expect("raw json should serialize");
+        assert!(!raw_json.contains("\"duration\":\"3s\""));
+        assert!(raw_json.contains("\"duration_ns\":3000000000"));
+    }
+
+    #[test]
+    fn task_results_human_json_serializes_recursive_sub_tasks() {
+        let child = TaskResults::new("child").with_duration_ms(250);
+        let mut root = TaskResults::new("root").with_duration_ms(2000);
+        root.insert_sub_task("child", child);
+
+        let json = root
+            .to_json_string()
+            .expect("human json should serialize recursively");
+
+        assert!(json.contains("\"task_name\":\"root\""));
+        assert!(json.contains("\"sub_tasks\":{\"child\":{\"task_name\":\"child\""));
+        assert!(json.contains("\"duration\":\"2s\""));
+        assert!(json.contains("\"duration\":\"250ms\""));
+    }
+
+    #[test]
+    fn sub_task_results_human_json_includes_aggregate_timing() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let root = chain(2, counter.clone());
+        let task = TaskDefinition::new(TestTask {
+            name: "root",
+            subs: vec![root],
+            counter,
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+
+        task.start("router1", &host, &mut results, 3)
+            .expect("start should succeed");
+
+        let json = results
+            .to_json_string()
+            .expect("human json should serialize sub-task timing");
+
+        assert!(json.contains("\"sub_tasks\":{\"node\":{"));
+        assert!(json.contains("\"started_at\":\""));
+        assert!(json.contains("\"finished_at\":\""));
+        assert!(json.contains("\"duration\":\""));
+    }
+
+    #[test]
+    fn task_results_human_json_formats_host_timing_uniformly() {
+        let started_at = SystemTime::UNIX_EPOCH;
+        let finished_at = SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_millis(2))
+            .expect("valid timestamp");
+        let mut results = TaskResults::new("deploy");
+        results.insert_host_result(
+            "router1",
+            HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_summary("ok")
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(2_000_000),
+            ),
+        );
+        results.insert_host_result(
+            "router2",
+            HostTaskResult::failed(
+                TaskFailure::new(TestTaskFailureError)
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(250_000),
+            ),
+        );
+        results.insert_host_result(
+            "router3",
+            HostTaskResult::Skipped(TaskSkip::new().with_reason("filtered")),
+        );
+
+        let json = results
+            .to_json_string()
+            .expect("human json should serialize host timing");
+
+        assert!(json.contains("\"router1\":{\"Passed\":{"));
+        assert!(json.contains("\"summary\":\"ok\""));
+        assert!(json.contains("\"started_at\":\"1970-01-01T00:00:00Z\""));
+        assert!(json.contains("\"finished_at\":\"1970-01-01T00:00:00Z\""));
+        assert!(json.contains("\"duration\":\"2ms\""));
+        assert!(json.contains("\"router2\":{\"Failed\":"));
+        assert!(json.contains("\"duration\":\"250us\""));
+        assert!(json.contains("\"router3\":{\"Skipped\":{\"reason\":\"filtered\""));
+        assert!(!json.contains("\"router3\":{\"Skipped\":{\"started_at\""));
+        assert!(!json.contains("\"duration_ns\""));
+        assert!(!json.contains("\"duration_ms\""));
+    }
+
+    #[test]
+    fn task_results_duration_display_preserves_sub_millisecond_precision() {
+        let micros = TaskResults::new("micros").with_duration_ns(250_000);
+        let nanos = TaskResults::new("nanos").with_duration_ns(250);
+        let millis = TaskResults::new("millis").with_duration_ns(2_500_000);
+        let seconds = TaskResults::new("seconds").with_duration_ns(1_500_587_737);
+
+        assert_eq!(micros.duration_ns(), Some(250_000));
+        assert_eq!(micros.duration_ms(), Some(0));
+        assert_eq!(micros.duration_display(), Some("250us".to_string()));
+
+        assert_eq!(nanos.duration_ns(), Some(250));
+        assert_eq!(nanos.duration_ms(), Some(0));
+        assert_eq!(nanos.duration_display(), Some("250ns".to_string()));
+
+        assert_eq!(millis.duration_display(), Some("2.5ms".to_string()));
+        assert_eq!(seconds.duration_display(), Some("1.5s".to_string()));
     }
 
     #[test]
@@ -2721,5 +4126,32 @@ mod tests {
                 .map(TaskFailure::retryable),
             Some(true)
         );
+
+        let root_summary = root.task_summary();
+        assert_eq!(root_summary.task_name(), "deploy");
+        assert_eq!(root_summary.hosts().passed(), 1);
+        assert_eq!(root_summary.hosts().failed(), 1);
+        assert_eq!(root_summary.hosts().skipped(), 0);
+        assert_eq!(root_summary.hosts().total(), 2);
+        assert_eq!(root_summary.duration_ms(), None);
+
+        let validate_summary = root_summary
+            .sub_tasks()
+            .get("validate")
+            .expect("validate summary should exist");
+        assert_eq!(validate_summary.task_name(), "validate");
+        assert_eq!(validate_summary.hosts().passed(), 1);
+        assert_eq!(validate_summary.hosts().failed(), 0);
+        assert_eq!(validate_summary.hosts().skipped(), 1);
+        assert_eq!(validate_summary.duration_ms(), None);
+
+        let collect_logs_summary = validate_summary
+            .sub_tasks()
+            .get("collect_logs")
+            .expect("collect_logs summary should exist");
+        assert_eq!(collect_logs_summary.task_name(), "collect_logs");
+        assert_eq!(collect_logs_summary.hosts().passed(), 1);
+        assert_eq!(collect_logs_summary.hosts().failed(), 0);
+        assert_eq!(collect_logs_summary.hosts().skipped(), 1);
     }
 }

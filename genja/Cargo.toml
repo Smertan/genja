@@ -6,3 +6,8 @@ edition = "2024"
 [dependencies]
 genja-core = { path = "../genja-core" }
 genja-plugin-manager = { path = "../genja-plugin-manager" }
+log = "0.4.27"
+
+[dev-dependencies]
+genja-core-derive = { path = "../genja-core-derive" }
+serde_json = "1.0.142"

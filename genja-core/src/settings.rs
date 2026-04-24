@@ -91,7 +91,7 @@ const ENV_INVENTORY_PLUGIN: &str = "GENJA_INVENTORY_PLUGIN";
 /// Environment variable name for specifying the runner plugin.
 ///
 /// This variable determines which runner plugin implementation should be used
-/// for executing tasks across hosts (e.g., "threaded", "sequential").
+/// for executing tasks across hosts (e.g., "threaded", "serial").
 ///
 /// Default: `"threaded"`
 const ENV_RUNNER_PLUGIN: &str = "GENJA_RUNNER_PLUGIN";
@@ -215,9 +215,7 @@ fn get_runner_plugin_default() -> String {
 ///
 /// See tests in this module for behavioral verification.
 fn get_runner_options_default() -> serde_json::Value {
-    serde_json::json!({
-        "num_of_workers": 10
-    })
+    serde_json::json!({})
 }
 
 /// Returns the default max task depth for runner execution.
@@ -1144,9 +1142,11 @@ impl Default for SSHConfigBuilder {
 ///   or "threaded" if not set. Common values include "threaded" for concurrent
 ///   execution or "sequential" for one-at-a-time execution.
 /// * `options` - A JSON object containing plugin-specific configuration options.
-///   The structure and available options depend on the selected plugin. For the
-///   default "threaded" plugin, this typically includes `num_of_workers` to control
-///   the thread pool size. Defaults to `{"num_of_workers": 10}`.
+///   The structure and available options depend on the selected plugin. Defaults
+///   to an empty object.
+/// * `worker_count` - Optional worker count for runner implementations that support
+///   a fixed concurrency setting. For the built-in `"threaded"` runner, this is the
+///   canonical way to control the number of worker threads.
 /// * `max_task_depth` - Maximum recursion depth for task/sub-task execution.
 ///   Defaults to `10`.
 /// * `max_connection_attempts` - Maximum number of connection attempts before retries
@@ -1156,7 +1156,8 @@ impl Default for SSHConfigBuilder {
 ///
 /// - Missing fields use their default values (see `Default` impl)
 /// - The `plugin` field defaults to `GENJA_RUNNER_PLUGIN` env var or "threaded"
-/// - The `options` field defaults to `{"num_of_workers": 10}`
+/// - The `options` field defaults to `{}`
+/// - The `worker_count` field defaults to `None`
 /// - Invalid field values cause deserialization to fail
 ///
 /// # Examples
@@ -1170,7 +1171,7 @@ impl Default for SSHConfigBuilder {
 /// // Create with custom configuration
 /// let config = RunnerConfig::builder()
 ///     .plugin("threaded")
-///     .options(serde_json::json!({"num_of_workers": 5}))
+///     .worker_count(5)
 ///     .build();
 ///
 /// println!("Using runner plugin: {}", config.plugin());
@@ -1181,6 +1182,7 @@ pub struct RunnerConfig {
     plugin: String,
     // #[serde(default = "get_runner_options_default")]_runner_options_default")]
     options: serde_json::Value,
+    worker_count: Option<usize>,
     max_task_depth: usize,
     max_connection_attempts: usize,
 }
@@ -1190,6 +1192,7 @@ impl Default for RunnerConfig {
         Self {
             plugin: get_runner_plugin_default(),
             options: get_runner_options_default(),
+            worker_count: None,
             max_task_depth: get_runner_max_task_depth_default(),
             max_connection_attempts: get_runner_max_connection_attempts_default(),
         }
@@ -1207,6 +1210,10 @@ impl RunnerConfig {
 
     pub fn options(&self) -> &serde_json::Value {
         &self.options
+    }
+
+    pub fn worker_count(&self) -> Option<usize> {
+        self.worker_count
     }
 
     pub fn max_task_depth(&self) -> usize {
@@ -1231,8 +1238,10 @@ impl RunnerConfig {
 ///   the `GENJA_RUNNER_PLUGIN` environment variable or "threaded" will be used.
 /// * `options` - Optional JSON object containing plugin-specific configuration options.
 ///   When set to `Some(value)`, the specified options will be used. If `None`, the default
-///   value of `{"num_of_workers": 10}` will be used. The structure and available options
-///   depend on the selected plugin.
+///   value of `{}` will be used. The structure and available options depend on the
+///   selected plugin.
+/// * `worker_count` - Optional worker count for runner implementations that support a
+///   fixed concurrency setting. If `None`, the runner decides an appropriate default.
 /// * `max_task_depth` - Optional maximum recursion depth for task/sub-task execution. When set to
 ///   `Some(value)`, the specified depth will be used. If `None`, defaults to `10`.
 /// * `max_connection_attempts` - Optional maximum number of connection attempts before retries
@@ -1247,7 +1256,7 @@ impl RunnerConfig {
 /// // Build with custom plugin and options
 /// let config = RunnerConfig::builder()
 ///     .plugin("threaded")
-///     .options(serde_json::json!({"num_of_workers": 5}))
+///     .worker_count(5)
 ///     .build();
 ///
 /// // Build with defaults
@@ -1256,6 +1265,7 @@ impl RunnerConfig {
 pub struct RunnerConfigBuilder {
     plugin: Option<String>,
     options: Option<serde_json::Value>,
+    worker_count: Option<usize>,
     max_task_depth: Option<usize>,
     max_connection_attempts: Option<usize>,
 }
@@ -1268,6 +1278,11 @@ impl RunnerConfigBuilder {
 
     pub fn options(mut self, options: serde_json::Value) -> Self {
         self.options = Some(options);
+        self
+    }
+
+    pub fn worker_count(mut self, worker_count: usize) -> Self {
+        self.worker_count = Some(worker_count);
         self
     }
 
@@ -1285,6 +1300,7 @@ impl RunnerConfigBuilder {
         RunnerConfig {
             plugin: self.plugin.unwrap_or_else(get_runner_plugin_default),
             options: self.options.unwrap_or_else(get_runner_options_default),
+            worker_count: self.worker_count,
             max_task_depth: self
                 .max_task_depth
                 .unwrap_or_else(get_runner_max_task_depth_default),
@@ -1300,6 +1316,7 @@ impl Default for RunnerConfigBuilder {
         Self {
             plugin: None,
             options: None,
+            worker_count: None,
             max_task_depth: None,
             max_connection_attempts: None,
         }
@@ -1727,7 +1744,7 @@ impl Settings {
 ///         .build())
 ///     .runner(RunnerConfig::builder()
 ///         .plugin("threaded")
-///         .options(serde_json::json!({"num_of_workers": 5}))
+///         .worker_count(5)
 ///         .build())
 ///     .build();
 ///
@@ -1972,7 +1989,8 @@ mod tests {
     fn runner_config_default_values() {
         let runner = RunnerConfig::default();
         assert_eq!(runner.plugin, "threaded");
-        assert_eq!(runner.options, json!({"num_of_workers": 10}));
+        assert_eq!(runner.options, json!({}));
+        assert_eq!(runner.worker_count, None);
         assert_eq!(runner.max_task_depth, 10);
         assert_eq!(runner.max_connection_attempts, 3);
     }
@@ -1981,7 +1999,8 @@ mod tests {
     fn runner_config_deserializes_empty_object_to_defaults() {
         let runner: RunnerConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(runner.plugin, "threaded");
-        assert_eq!(runner.options, json!({"num_of_workers": 10}));
+        assert_eq!(runner.options, json!({}));
+        assert_eq!(runner.worker_count, None);
         assert_eq!(runner.max_task_depth, 10);
         assert_eq!(runner.max_connection_attempts, 3);
     }
@@ -1990,7 +2009,8 @@ mod tests {
     fn runner_config_deserializes_with_values() {
         let json = r#"{
             "plugin": "custom",
-            "options": {"num_of_workers": 3, "queue": "fast"},
+            "options": {"queue": "fast", "strategy": "burst"},
+            "worker_count": 6,
             "max_task_depth": 5,
             "max_connection_attempts": 7
         }"#;
@@ -1998,8 +2018,9 @@ mod tests {
         assert_eq!(runner.plugin, "custom");
         assert_eq!(
             runner.options,
-            json!({"num_of_workers": 3, "queue": "fast"})
+            json!({"queue": "fast", "strategy": "burst"})
         );
+        assert_eq!(runner.worker_count, Some(6));
         assert_eq!(runner.max_task_depth, 5);
         assert_eq!(runner.max_connection_attempts, 7);
     }
@@ -2009,6 +2030,13 @@ mod tests {
         let runner = RunnerConfig::builder().max_connection_attempts(9).build();
 
         assert_eq!(runner.max_connection_attempts(), 9);
+    }
+
+    #[test]
+    fn runner_config_builder_sets_worker_count() {
+        let runner = RunnerConfig::builder().worker_count(4).build();
+
+        assert_eq!(runner.worker_count(), Some(4));
     }
 
     #[test]
