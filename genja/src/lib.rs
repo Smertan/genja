@@ -153,9 +153,8 @@ impl Genja {
     ///
     /// Loads settings, initializes plugins, and loads inventory based on the
     /// settings file. This is equivalent to calling [`Settings::from_file`],
-    /// then [`Genja::new`], [`set_settings`](Self::set_settings),
-    /// [`load_plugins`](Self::load_plugins), and
-    /// [`load_inventory_from_settings`](Self::load_inventory_from_settings).
+    /// then [`Genja::new`], [`set_settings`](Self::set_settings), and the
+    /// internal plugin and inventory loading steps.
     ///
     /// For more control over the construction process, use [`Genja::builder`]
     ///
@@ -561,12 +560,70 @@ impl Genja {
         })
     }
 
-    /// Returns a new `Genja` with hosts filtered by a key and regex-compatible value.
+    /// Returns a new `Genja` with hosts filtered by a key/path and regex-compatible value.
     ///
     /// The key is searched recursively through fixed host fields and arbitrary
     /// nested `data` values. Plain keys match at any object level; dot paths
     /// such as `data.site.role` match from the root or any nested object.
-    pub fn filter_by_value(&self, key: &str, value_pattern: &str) -> Result<Self, GenjaError> {
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - The key or dot-separated path to search for in host data. Can be a simple
+    ///   key name (e.g., `"role"`) which matches at any nesting level, or a dot path
+    ///   (e.g., `"data.site.role"`) which matches from the root or any nested object.
+    /// * `value_pattern` - A regex-compatible pattern to match against the value found at
+    ///   the specified key. The pattern follows standard regex syntax and is case-sensitive
+    ///   unless specified otherwise in the pattern itself.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Self)` containing a new `Genja` instance with the same inventory,
+    /// settings, and plugins, but with `host_ids` filtered to only include hosts where
+    /// the specified key exists and its value matches the provided pattern.
+    ///
+    /// # Errors
+    ///
+    /// * `GenjaError::InventoryNotLoaded` - No inventory has been loaded
+    /// * `GenjaError::Message` - Invalid regex pattern in `value_pattern`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use genja::Genja;
+    /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost, Data};
+    /// use serde_json::json;
+    ///
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host(
+    ///     "router1",
+    ///     Host::builder()
+    ///         .hostname("10.0.0.1")
+    ///         .data(Data::new(json!({"site": {"role": "core"}})))
+    ///         .build()
+    /// );
+    /// hosts.add_host(
+    ///     "router2",
+    ///     Host::builder()
+    ///         .hostname("10.0.0.2")
+    ///         .data(Data::new(json!({"site": {"role": "edge"}})))
+    ///         .build()
+    /// );
+    ///
+    /// let inventory = Inventory::builder().hosts(hosts).build();
+    /// let genja = Genja::from_inventory(inventory);
+    ///
+    /// // Filter by nested key with regex
+    /// let filtered = genja.filter_by_key_value("role", "^core$")?;
+    /// assert_eq!(filtered.host_ids().len(), 1);
+    /// assert_eq!(filtered.host_ids()[0].as_str(), "router1");
+    ///
+    /// // Filter by dot path
+    /// let filtered = genja.filter_by_key_value("data.site.role", "edge")?;
+    /// assert_eq!(filtered.host_ids().len(), 1);
+    /// assert_eq!(filtered.host_ids()[0].as_str(), "router2");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn filter_by_key_value(&self, key: &str, value_pattern: &str) -> Result<Self, GenjaError> {
         let value_filter = filter::ValueFilter::new(key, value_pattern)?;
         self.filter_hosts(|host| value_filter.matches(host))
     }
@@ -1003,11 +1060,11 @@ mod tests {
     }
 
     #[test]
-    fn filter_by_value_filters_hosts_by_nested_key_and_regex_value() {
+    fn filter_by_key_value_filters_hosts_by_nested_key_and_regex_value() {
         let genja = Genja::from_inventory(test_inventory_with_data());
 
         let filtered = genja
-            .filter_by_value("role", "^(core|distribution)$")
+            .filter_by_key_value("role", "^(core|distribution)$")
             .expect("value filtering should succeed");
 
         assert_eq!(filtered.host_ids().len(), 1);
@@ -1015,11 +1072,11 @@ mod tests {
     }
 
     #[test]
-    fn filter_by_value_filters_hosts_by_dot_path() {
+    fn filter_by_key_value_filters_hosts_by_dot_path() {
         let genja = Genja::from_inventory(test_inventory_with_data());
 
         let filtered = genja
-            .filter_by_value("data.site.name", "lab-b")
+            .filter_by_key_value("data.site.name", "lab-b")
             .expect("value filtering should succeed");
 
         assert_eq!(filtered.host_ids().len(), 1);
