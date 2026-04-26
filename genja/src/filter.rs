@@ -522,6 +522,7 @@ fn json_value_match_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{KeyFilter, ValueFilter};
+    use genja_core::GenjaError;
     use genja_core::inventory::{BaseBuilderHost, Data, Host};
     use serde_json::json;
 
@@ -542,7 +543,9 @@ mod tests {
                         "name": "network-team"
                     },
                     "tag": null
-                }
+                },
+                "enabled": true,
+                "priority": 10
             })))
             .build()
     }
@@ -597,6 +600,13 @@ mod tests {
     }
 
     #[test]
+    fn key_filter_does_not_match_empty_key() {
+        let filter = KeyFilter::new("");
+
+        assert!(!filter.matches(&matching_host()));
+    }
+
+    #[test]
     fn matches_nested_data_key_at_any_level() {
         let filter =
             ValueFilter::new("role", "^(core|distribution)$").expect("regex should compile");
@@ -615,6 +625,53 @@ mod tests {
     #[test]
     fn matches_dot_path_inside_arrays() {
         let filter = ValueFilter::new("site.devices.role", "edge").expect("regex should compile");
+
+        assert!(filter.matches(&matching_host()));
+    }
+
+    #[test]
+    fn value_filter_returns_error_for_invalid_regex() {
+        let error = match ValueFilter::new("role", "*") {
+            Ok(_) => panic!("regex should be invalid"),
+            Err(error) => error,
+        };
+
+        assert!(
+            matches!(error, GenjaError::Message(message) if message.contains("invalid value regex"))
+        );
+    }
+
+    #[test]
+    fn value_filter_does_not_match_empty_key() {
+        let filter = ValueFilter::new("", ".*").expect("regex should compile");
+
+        assert!(!filter.matches(&matching_host()));
+    }
+
+    #[test]
+    fn value_filter_matches_null_bool_and_number_values() {
+        let host = matching_host();
+
+        assert!(
+            ValueFilter::new("metadata.tag", "^null$")
+                .expect("regex should compile")
+                .matches(&host)
+        );
+        assert!(
+            ValueFilter::new("enabled", "^true$")
+                .expect("regex should compile")
+                .matches(&host)
+        );
+        assert!(
+            ValueFilter::new("priority", "^10$")
+                .expect("regex should compile")
+                .matches(&host)
+        );
+    }
+
+    #[test]
+    fn value_filter_matches_object_value_text() {
+        let filter = ValueFilter::new("site", "lab-a").expect("regex should compile");
 
         assert!(filter.matches(&matching_host()));
     }

@@ -1066,7 +1066,9 @@ mod tests {
                     },
                     "metadata": {
                         "owner": null
-                    }
+                    },
+                    "enabled": true,
+                    "priority": 10
                 })))
                 .build(),
         );
@@ -1208,6 +1210,17 @@ mod tests {
     }
 
     #[test]
+    fn filter_by_key_with_empty_key_matches_no_hosts() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key("")
+            .expect("key filtering should succeed");
+
+        assert!(filtered.host_ids().is_empty());
+    }
+
+    #[test]
     fn filter_by_key_value_filters_hosts_by_nested_key_and_regex_value() {
         let genja = Genja::from_inventory(test_inventory_with_data());
 
@@ -1225,6 +1238,78 @@ mod tests {
 
         let filtered = genja
             .filter_by_key_value("data.site.name", "lab-b")
+            .expect("value filtering should succeed");
+
+        assert_eq!(filtered.host_ids().len(), 1);
+        assert_eq!(filtered.host_ids()[0].as_str(), "router2");
+    }
+
+    #[test]
+    fn filter_by_key_value_returns_error_for_invalid_regex() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let error = genja
+            .filter_by_key_value("role", "*")
+            .expect_err("invalid regex should return an error");
+
+        assert!(
+            matches!(error, GenjaError::Message(message) if message.contains("invalid value regex"))
+        );
+    }
+
+    #[test]
+    fn filter_by_key_value_with_empty_key_matches_no_hosts() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key_value("", ".*")
+            .expect("value filtering should succeed");
+
+        assert!(filtered.host_ids().is_empty());
+    }
+
+    #[test]
+    fn filter_by_key_value_matches_scalar_values() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let enabled = genja
+            .filter_by_key_value("enabled", "^true$")
+            .expect("value filtering should succeed");
+        let priority = genja
+            .filter_by_key_value("priority", "^10$")
+            .expect("value filtering should succeed");
+        let owner = genja
+            .filter_by_key_value("metadata.owner", "^null$")
+            .expect("value filtering should succeed");
+
+        assert_eq!(enabled.host_ids().len(), 1);
+        assert_eq!(enabled.host_ids()[0].as_str(), "router1");
+        assert_eq!(priority.host_ids().len(), 1);
+        assert_eq!(priority.host_ids()[0].as_str(), "router1");
+        assert_eq!(owner.host_ids().len(), 1);
+        assert_eq!(owner.host_ids()[0].as_str(), "router1");
+    }
+
+    #[test]
+    fn filter_by_key_value_matches_object_value_text() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key_value("site", "lab-b")
+            .expect("value filtering should succeed");
+
+        assert_eq!(filtered.host_ids().len(), 1);
+        assert_eq!(filtered.host_ids()[0].as_str(), "router2");
+    }
+
+    #[test]
+    fn filters_can_be_chained() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key("site")
+            .expect("key filtering should succeed")
+            .filter_by_key_value("role", "edge")
             .expect("value filtering should succeed");
 
         assert_eq!(filtered.host_ids().len(), 1);
