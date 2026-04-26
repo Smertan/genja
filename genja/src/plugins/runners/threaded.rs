@@ -349,7 +349,11 @@ impl PluginRunner for ThreadedRunnerPlugin {
             match handle.join() {
                 Ok(Ok(())) => {}
                 Ok(Err(err)) => {
-                    error!("threaded runner worker failed for task '{}': {}", task.name(), err);
+                    error!(
+                        "threaded runner worker failed for task '{}': {}",
+                        task.name(),
+                        err
+                    );
                     return Err(err);
                 }
                 Err(_) => {

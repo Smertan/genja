@@ -36,14 +36,14 @@
 //!
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
+pub use genja_core::GenjaError;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{Task, TaskDefinition, TaskInfo, TaskResults, TaskResultsSummary};
-pub use genja_core::GenjaError;
 use genja_core::{NatString, Settings};
+use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
 use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
-use genja_plugin_manager::PluginManager;
 use log::info;
 use std::sync::Arc;
 
@@ -688,11 +688,7 @@ impl Genja {
     /// assert_eq!(filtered.host_ids()[0].as_str(), "router2");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn filter_by_key_value(
-        &self,
-        key: &str,
-        value_pattern: &str,
-    ) -> Result<Self, GenjaError> {
+    pub fn filter_by_key_value(&self, key: &str, value_pattern: &str) -> Result<Self, GenjaError> {
         let value_filter = filter::ValueFilter::new(key, value_pattern)?;
         self.filter_hosts(|host| value_filter.matches(host))
     }
@@ -877,11 +873,11 @@ impl Default for Genja {
 #[cfg(test)]
 mod tests {
     use super::{Genja, GenjaError};
+    use genja_core::Settings;
     use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Data, Host, Hosts, Inventory};
     use genja_core::settings::RunnerConfig;
     use genja_core::task::{HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskSuccess};
-    use genja_core::Settings;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::sync::Arc;
 
     struct TestTask {
@@ -1294,10 +1290,12 @@ mod tests {
         assert_eq!(summary.hosts().passed(), 0);
         assert_eq!(summary.hosts().failed(), 0);
         assert_eq!(summary.hosts().skipped(), 2);
-        assert!(results
-            .host_result("router1")
-            .expect("router1 result should exist")
-            .is_skipped());
+        assert!(
+            results
+                .host_result("router1")
+                .expect("router1 result should exist")
+                .is_skipped()
+        );
     }
 
     #[test]
