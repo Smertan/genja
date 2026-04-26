@@ -49,6 +49,8 @@ use std::sync::Arc;
 
 // GenjaError is re-exported from genja-core.
 
+mod filter;
+
 /// Runtime composition layer for `Genja`.
 ///
 /// This type owns the runtime inventory, settings, and plugin manager used to
@@ -151,9 +153,8 @@ impl Genja {
     ///
     /// Loads settings, initializes plugins, and loads inventory based on the
     /// settings file. This is equivalent to calling [`Settings::from_file`],
-    /// then [`Genja::new`], [`set_settings`](Self::set_settings),
-    /// [`load_plugins`](Self::load_plugins), and
-    /// [`load_inventory_from_settings`](Self::load_inventory_from_settings).
+    /// then [`Genja::new`], [`set_settings`](Self::set_settings), and the
+    /// internal plugin and inventory loading steps.
     ///
     /// For more control over the construction process, use [`Genja::builder`]
     ///
@@ -559,6 +560,139 @@ impl Genja {
         })
     }
 
+    /// Returns a new `Genja` with hosts filtered by key/path existence.
+    ///
+    /// The key is searched recursively through fixed host fields and arbitrary
+    /// nested `data` values. Plain keys match at any object level; dot paths
+    /// such as `data.site.role` match from the root or any nested object.
+    ///
+    /// A key with a `null` value still counts as existing.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - The key or dot-separated path to search for in host data. Can be a simple
+    ///   key name (e.g., `"role"`) which matches at any nesting level, or a dot path
+    ///   (e.g., `"data.site.role"`) which matches from the root or any nested object.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Self)` containing a new `Genja` instance with the same inventory,
+    /// settings, and plugins, but with `host_ids` filtered to only include hosts where
+    /// the specified key exists.
+    ///
+    /// # Errors
+    ///
+    /// * `GenjaError::InventoryNotLoaded` - No inventory has been loaded
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use genja::Genja;
+    /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost, Data};
+    /// use serde_json::json;
+    ///
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host(
+    ///     "router1",
+    ///     Host::builder()
+    ///         .hostname("10.0.0.1")
+    ///         .data(Data::new(json!({"site": {"role": "core"}})))
+    ///         .build()
+    /// );
+    /// hosts.add_host(
+    ///     "router2",
+    ///     Host::builder()
+    ///         .hostname("10.0.0.2")
+    ///         .data(Data::new(json!({"rack": "r1"})))
+    ///         .build()
+    /// );
+    ///
+    /// let inventory = Inventory::builder().hosts(hosts).build();
+    /// let genja = Genja::from_inventory(inventory);
+    ///
+    /// // Filter by nested key
+    /// let filtered = genja.filter_by_key("site")?;
+    /// assert_eq!(filtered.host_ids().len(), 1);
+    /// assert_eq!(filtered.host_ids()[0].as_str(), "router1");
+    ///
+    /// // Filter by dot path
+    /// let filtered = genja.filter_by_key("data.site.role")?;
+    /// assert_eq!(filtered.host_ids().len(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn filter_by_key(&self, key: &str) -> Result<Self, GenjaError> {
+        let key_filter = filter::KeyFilter::new(key);
+        self.filter_hosts(|host| key_filter.matches(host))
+    }
+
+    /// Returns a new `Genja` with hosts filtered by a key/path and regex-compatible value.
+    ///
+    /// The key is searched recursively through fixed host fields and arbitrary
+    /// nested `data` values. Plain keys match at any object level; dot paths
+    /// such as `data.site.role` match from the root or any nested object.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - The key or dot-separated path to search for in host data. Can be a simple
+    ///   key name (e.g., `"role"`) which matches at any nesting level, or a dot path
+    ///   (e.g., `"data.site.role"`) which matches from the root or any nested object.
+    /// * `value_pattern` - A regex-compatible pattern to match against the value found at
+    ///   the specified key. The pattern follows standard regex syntax and is case-sensitive
+    ///   unless specified otherwise in the pattern itself.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Self)` containing a new `Genja` instance with the same inventory,
+    /// settings, and plugins, but with `host_ids` filtered to only include hosts where
+    /// the specified key exists and its value matches the provided pattern.
+    ///
+    /// # Errors
+    ///
+    /// * `GenjaError::InventoryNotLoaded` - No inventory has been loaded
+    /// * `GenjaError::Message` - Invalid regex pattern in `value_pattern`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use genja::Genja;
+    /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost, Data};
+    /// use serde_json::json;
+    ///
+    /// let mut hosts = Hosts::new();
+    /// hosts.add_host(
+    ///     "router1",
+    ///     Host::builder()
+    ///         .hostname("10.0.0.1")
+    ///         .data(Data::new(json!({"site": {"role": "core"}})))
+    ///         .build()
+    /// );
+    /// hosts.add_host(
+    ///     "router2",
+    ///     Host::builder()
+    ///         .hostname("10.0.0.2")
+    ///         .data(Data::new(json!({"site": {"role": "edge"}})))
+    ///         .build()
+    /// );
+    ///
+    /// let inventory = Inventory::builder().hosts(hosts).build();
+    /// let genja = Genja::from_inventory(inventory);
+    ///
+    /// // Filter by nested key with regex
+    /// let filtered = genja.filter_by_key_value("role", "^core$")?;
+    /// assert_eq!(filtered.host_ids().len(), 1);
+    /// assert_eq!(filtered.host_ids()[0].as_str(), "router1");
+    ///
+    /// // Filter by dot path
+    /// let filtered = genja.filter_by_key_value("data.site.role", "edge")?;
+    /// assert_eq!(filtered.host_ids().len(), 1);
+    /// assert_eq!(filtered.host_ids()[0].as_str(), "router2");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn filter_by_key_value(&self, key: &str, value_pattern: &str) -> Result<Self, GenjaError> {
+        let value_filter = filter::ValueFilter::new(key, value_pattern)?;
+        self.filter_hosts(|host| value_filter.matches(host))
+    }
+
     fn ensure_plugins_loaded(&self) -> Result<(), GenjaError> {
         if self.plugins_loaded {
             Ok(())
@@ -740,7 +874,7 @@ impl Default for Genja {
 mod tests {
     use super::{Genja, GenjaError};
     use genja_core::Settings;
-    use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Host, Hosts, Inventory};
+    use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Data, Host, Hosts, Inventory};
     use genja_core::settings::RunnerConfig;
     use genja_core::task::{HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskSuccess};
     use serde_json::{Value, json};
@@ -918,6 +1052,73 @@ mod tests {
         Inventory::builder().hosts(hosts).build()
     }
 
+    fn test_inventory_with_data() -> Inventory {
+        let mut hosts = Hosts::new();
+        hosts.add_host(
+            "router1",
+            Host::builder()
+                .hostname("10.0.0.1")
+                .platform("ios-xe")
+                .data(Data::new(json!({
+                    "site": {
+                        "name": "lab-a",
+                        "role": "core"
+                    },
+                    "metadata": {
+                        "owner": null
+                    },
+                    "enabled": true,
+                    "priority": 10
+                })))
+                .build(),
+        );
+        hosts.add_host(
+            "router2",
+            Host::builder()
+                .hostname("10.0.0.2")
+                .platform("junos")
+                .data(Data::new(json!({
+                    "site": {
+                        "name": "lab-b",
+                        "role": "edge"
+                    },
+                    "rack": "r1"
+                })))
+                .build(),
+        );
+        hosts.add_host(
+            "router3",
+            Host::builder()
+                .hostname("10.0.0.3")
+                .platform("linux")
+                .data(Data::new(json!({
+                    "rack": "r2"
+                })))
+                .build(),
+        );
+
+        Inventory::builder().hosts(hosts).build()
+    }
+
+    fn test_inventory_with_nested_array_data() -> Inventory {
+        let mut hosts = Hosts::new();
+        hosts.add_host(
+            "router1",
+            Host::builder()
+                .data(Data::new(json!({
+                    "site": {
+                        "devices": [
+                            {"role": "core"},
+                            {"role": "edge"}
+                        ]
+                    }
+                })))
+                .build(),
+        );
+
+        Inventory::builder().hosts(hosts).build()
+    }
+
     #[test]
     fn run_executes_task_for_each_selected_host() {
         let genja = Genja::from_inventory(test_inventory());
@@ -956,6 +1157,163 @@ mod tests {
         assert_eq!(results.passed_hosts().len(), 1);
         assert!(results.host_result("router1").is_some());
         assert!(results.host_result("router2").is_none());
+    }
+
+    #[test]
+    fn filter_by_key_filters_hosts_by_nested_key_existence() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key("site")
+            .expect("key filtering should succeed");
+
+        assert_eq!(filtered.host_ids().len(), 2);
+        assert_eq!(filtered.host_ids()[0].as_str(), "router1");
+        assert_eq!(filtered.host_ids()[1].as_str(), "router2");
+    }
+
+    #[test]
+    fn filter_by_key_filters_hosts_by_dot_path_existence() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key("data.site.name")
+            .expect("key filtering should succeed");
+
+        assert_eq!(filtered.host_ids().len(), 2);
+        assert_eq!(filtered.host_ids()[0].as_str(), "router1");
+        assert_eq!(filtered.host_ids()[1].as_str(), "router2");
+    }
+
+    #[test]
+    fn filter_by_key_counts_null_as_existing() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key("metadata.owner")
+            .expect("key filtering should succeed");
+
+        assert_eq!(filtered.host_ids().len(), 1);
+        assert_eq!(filtered.host_ids()[0].as_str(), "router1");
+    }
+
+    #[test]
+    fn filter_by_key_filters_hosts_by_dot_path_inside_arrays() {
+        let genja = Genja::from_inventory(test_inventory_with_nested_array_data());
+
+        let filtered = genja
+            .filter_by_key("site.devices.role")
+            .expect("key filtering should succeed");
+
+        assert_eq!(filtered.host_ids().len(), 1);
+        assert_eq!(filtered.host_ids()[0].as_str(), "router1");
+    }
+
+    #[test]
+    fn filter_by_key_with_empty_key_matches_no_hosts() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key("")
+            .expect("key filtering should succeed");
+
+        assert!(filtered.host_ids().is_empty());
+    }
+
+    #[test]
+    fn filter_by_key_value_filters_hosts_by_nested_key_and_regex_value() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key_value("role", "^(core|distribution)$")
+            .expect("value filtering should succeed");
+
+        assert_eq!(filtered.host_ids().len(), 1);
+        assert_eq!(filtered.host_ids()[0].as_str(), "router1");
+    }
+
+    #[test]
+    fn filter_by_key_value_filters_hosts_by_dot_path() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key_value("data.site.name", "lab-b")
+            .expect("value filtering should succeed");
+
+        assert_eq!(filtered.host_ids().len(), 1);
+        assert_eq!(filtered.host_ids()[0].as_str(), "router2");
+    }
+
+    #[test]
+    fn filter_by_key_value_returns_error_for_invalid_regex() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let error = genja
+            .filter_by_key_value("role", "*")
+            .expect_err("invalid regex should return an error");
+
+        assert!(
+            matches!(error, GenjaError::Message(message) if message.contains("invalid value regex"))
+        );
+    }
+
+    #[test]
+    fn filter_by_key_value_with_empty_key_matches_no_hosts() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key_value("", ".*")
+            .expect("value filtering should succeed");
+
+        assert!(filtered.host_ids().is_empty());
+    }
+
+    #[test]
+    fn filter_by_key_value_matches_scalar_values() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let enabled = genja
+            .filter_by_key_value("enabled", "^true$")
+            .expect("value filtering should succeed");
+        let priority = genja
+            .filter_by_key_value("priority", "^10$")
+            .expect("value filtering should succeed");
+        let owner = genja
+            .filter_by_key_value("metadata.owner", "^null$")
+            .expect("value filtering should succeed");
+
+        assert_eq!(enabled.host_ids().len(), 1);
+        assert_eq!(enabled.host_ids()[0].as_str(), "router1");
+        assert_eq!(priority.host_ids().len(), 1);
+        assert_eq!(priority.host_ids()[0].as_str(), "router1");
+        assert_eq!(owner.host_ids().len(), 1);
+        assert_eq!(owner.host_ids()[0].as_str(), "router1");
+    }
+
+    #[test]
+    fn filter_by_key_value_matches_object_value_text() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key_value("site", "lab-b")
+            .expect("value filtering should succeed");
+
+        assert_eq!(filtered.host_ids().len(), 1);
+        assert_eq!(filtered.host_ids()[0].as_str(), "router2");
+    }
+
+    #[test]
+    fn filters_can_be_chained() {
+        let genja = Genja::from_inventory(test_inventory_with_data());
+
+        let filtered = genja
+            .filter_by_key("site")
+            .expect("key filtering should succeed")
+            .filter_by_key_value("role", "edge")
+            .expect("value filtering should succeed");
+
+        assert_eq!(filtered.host_ids().len(), 1);
+        assert_eq!(filtered.host_ids()[0].as_str(), "router2");
     }
 
     #[test]
@@ -1017,10 +1375,12 @@ mod tests {
         assert_eq!(summary.hosts().passed(), 0);
         assert_eq!(summary.hosts().failed(), 0);
         assert_eq!(summary.hosts().skipped(), 2);
-        assert!(results
-            .host_result("router1")
-            .expect("router1 result should exist")
-            .is_skipped());
+        assert!(
+            results
+                .host_result("router1")
+                .expect("router1 result should exist")
+                .is_skipped()
+        );
     }
 
     #[test]
@@ -1069,7 +1429,10 @@ mod tests {
 
         assert_eq!(genja.settings().runner().plugin(), "threaded");
         assert_eq!(updated.settings().runner().plugin(), "serial");
-        assert_eq!(updated.settings().runner().options(), &json!({"queue": "fast"}));
+        assert_eq!(
+            updated.settings().runner().options(),
+            &json!({"queue": "fast"})
+        );
         assert_eq!(updated.settings().runner().worker_count(), Some(3));
         assert_eq!(updated.settings().runner().max_task_depth(), 7);
         assert_eq!(updated.settings().runner().max_connection_attempts(), 5);

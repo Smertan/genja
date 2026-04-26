@@ -2976,7 +2976,15 @@ impl TaskDefinition {
         results: &mut TaskResults,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
-        Self::start_with_depth(self.inner.as_ref(), hostname, host, results, None, 0, max_depth)
+        Self::start_with_depth(
+            self.inner.as_ref(),
+            hostname,
+            host,
+            results,
+            None,
+            0,
+            max_depth,
+        )
     }
 
     /// Recursively executes a task and its sub-tasks with depth tracking.
@@ -3273,9 +3281,9 @@ mod tests {
     use crate::inventory::{BaseBuilderHost, ConnectionKey, Host};
     use log::{LevelFilter, Log, Metadata, Record};
     use serde_json::json;
-    use std::sync::{Mutex, OnceLock};
     use std::fmt;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, OnceLock};
 
     #[derive(Debug)]
     struct TestTaskFailureError;
@@ -3411,7 +3419,10 @@ mod tests {
 
     impl TestLogger {
         fn clear(&self) {
-            self.entries.lock().expect("logger lock should not be poisoned").clear();
+            self.entries
+                .lock()
+                .expect("logger lock should not be poisoned")
+                .clear();
         }
 
         fn entries(&self) -> Vec<String> {
@@ -3623,11 +3634,14 @@ mod tests {
 
         let entries = logger.entries();
         assert!(entries.iter().any(|entry| {
-            entry.contains("DEBUG starting task 'root' for host 'router1' parent_task='none' depth=0")
+            entry.contains(
+                "DEBUG starting task 'root' for host 'router1' parent_task='none' depth=0",
+            )
         }));
         assert!(entries.iter().any(|entry| {
-            entry.contains("INFO finished task 'root' for host 'router1' with status=passed duration_ms=")
-                && entry.contains(" duration=")
+            entry.contains(
+                "INFO finished task 'root' for host 'router1' with status=passed duration_ms=",
+            ) && entry.contains(" duration=")
         }));
     }
 
@@ -3649,8 +3663,9 @@ mod tests {
             entry == "WARN task 'failing' failed for host 'router1': task failure test error"
         }));
         assert!(entries.iter().any(|entry| {
-            entry.contains("INFO finished task 'failing' for host 'router1' with status=failed duration_ms=")
-                && entry.contains(" duration=")
+            entry.contains(
+                "INFO finished task 'failing' for host 'router1' with status=failed duration_ms=",
+            ) && entry.contains(" duration=")
         }));
     }
 
@@ -3672,8 +3687,9 @@ mod tests {
             entry == "INFO task 'skipping' skipped for host 'router1' reason='filtered' message=''"
         }));
         assert!(entries.iter().any(|entry| {
-            entry.contains("INFO finished task 'skipping' for host 'router1' with status=skipped duration_ms=")
-                && entry.contains(" duration=")
+            entry.contains(
+                "INFO finished task 'skipping' for host 'router1' with status=skipped duration_ms=",
+            ) && entry.contains(" duration=")
         }));
     }
 
