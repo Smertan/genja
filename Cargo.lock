@@ -359,6 +359,7 @@ dependencies = [
  "genja-core-derive",
  "genja-plugin-manager",
  "log",
+ "regex",
  "serde_json",
 ]
 

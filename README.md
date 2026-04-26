@@ -26,6 +26,58 @@ let genja = Genja::builder(inventory)
     .build()?;
 ```
 
+## Filtering Hosts
+
+`Genja` keeps the inventory immutable and returns a new instance with a reduced
+host selection when filtering. Use `filter_by_key` when a key only needs to
+exist, and `filter_by_key_value` when the value must match a regex.
+
+Plain keys are searched recursively across host fields and nested `data`.
+Dot paths can be used to target a specific path.
+
+```rust
+use genja::Genja;
+use genja_core::inventory::{BaseBuilderHost, Data, Host, Hosts, Inventory};
+use serde_json::json;
+
+let mut hosts = Hosts::new();
+hosts.add_host(
+    "router1",
+    Host::builder()
+        .hostname("10.0.0.1")
+        .data(Data::new(json!({
+            "site": {
+                "name": "data_center",
+                "role": "core"
+            }
+        })))
+        .build(),
+);
+hosts.add_host(
+    "router2",
+    Host::builder()
+        .hostname("10.0.0.2")
+        .data(Data::new(json!({
+            "site": {
+                "name": "branch",
+                "role": "edge"
+            }
+        })))
+        .build(),
+);
+
+let inventory = Inventory::builder().hosts(hosts).build();
+let genja = Genja::from_inventory(inventory);
+
+let with_site = genja.filter_by_key("site")?;
+assert_eq!(with_site.host_ids().len(), 2);
+
+let data_center = genja.filter_by_key_value("data.site.name", "^data_center$")?;
+assert_eq!(data_center.host_ids().len(), 1);
+assert_eq!(data_center.host_ids()[0].as_str(), "router1");
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
 ## Running Tasks
 
 Tasks are defined in `genja_core::task` and executed through `Genja::run`.

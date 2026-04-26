@@ -72,9 +72,9 @@
 //! `threaded` runner plugin instead.
 
 use super::executor::TaskExecutor;
-use genja_core::settings::RunnerConfig;
 use genja_core::GenjaError;
 use genja_core::inventory::Hosts;
+use genja_core::settings::RunnerConfig;
 use genja_core::task::{TaskDefinition, TaskResults, Tasks};
 use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 
