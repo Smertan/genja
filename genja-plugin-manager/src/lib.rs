@@ -15,7 +15,7 @@
 //! - Plugin lifecycle management (registration, deregistration)
 //! - Type-safe plugin registry access
 //! - Metadata-driven plugin configuration
-//! - Support for multiple plugin types (Connection, Inventory, Runner, Transform)
+//! - Support for multiple plugin types (Connection, Inventory, Runner, Processor, Transform)
 //!
 //! ## Architecture
 //!
@@ -34,6 +34,7 @@
 //! │                         Plugins Enum                            │
 //! │  - Connection(Box<dyn PluginConnection>)                        │
 //! │  - Inventory(Box<dyn PluginInventory>)                          │
+//! │  - Processor(Box<dyn PluginProcessor>)                          │
 //! │  - Runner(Box<dyn PluginRunner>)                                │
 //! │  - TransformFunction(Box<dyn PluginTransformFunction>)          │
 //! └─────────────────────────────────────────────────────────────────┘
@@ -120,7 +121,7 @@
 //!
 //! Plugins are configured in the `Cargo.toml` file of the end-user project using
 //! package metadata. You can register plugins as individual entries or grouped
-//! by plugin type (e.g., `inventory`, `connection`, `runner`, `transform`):
+//! by plugin type (e.g., `inventory`, `connection`, `runner`, `processor`, `transform`):
 //!
 //! ```toml
 //! # Individual plugins
@@ -142,6 +143,9 @@
 //!
 //! [package.metadata.plugins.runner]
 //! threaded = "/path/to/libthreaded.so"
+//!
+//! [package.metadata.plugins.processor]
+//! audit = "/path/to/libaudit_processor.so"
 //!
 //! [package.metadata.plugins.transform]
 //! normalize = "/path/to/libnormalize.so"
@@ -265,6 +269,42 @@
 //! }
 //! ```
 //!
+//! ### Processor Plugins
+//!
+//! Process task lifecycle results selected by task processor names:
+//!
+//! ```rust
+//! use genja_core::task::{TaskProcessor, TaskProcessorContext, TaskResults};
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor};
+//! use std::sync::Arc;
+//!
+//! #[derive(Debug)]
+//! struct AuditProcessorPlugin;
+//!
+//! impl Plugin for AuditProcessorPlugin {
+//!     fn name(&self) -> String { "audit".to_string() }
+//! }
+//!
+//! impl PluginProcessor for AuditProcessorPlugin {
+//!     fn processor(&self) -> Arc<dyn TaskProcessor> {
+//!         Arc::new(AuditProcessor)
+//!     }
+//! }
+//!
+//! struct AuditProcessor;
+//!
+//! impl TaskProcessor for AuditProcessor {
+//!     fn on_task_finish(
+//!         &self,
+//!         context: &TaskProcessorContext,
+//!         results: &mut TaskResults,
+//!     ) -> Result<(), genja_core::GenjaError> {
+//!         let _ = (context, results);
+//!         Ok(())
+//!     }
+//! }
+//! ```
+//!
 //! ### Transform Function Plugins
 //!
 //! Provide inventory transformation functions:
@@ -340,7 +380,7 @@
 //! genja-plugin-manager = "0.1.0"
 //! ```
 //!
-//! ### Plugin Project (Connection/Runner/Inventory/Transform)
+//! ### Plugin Project (Connection/Runner/Inventory/Processor/Transform)
 //!
 //! ```toml
 //! [package]
@@ -375,6 +415,9 @@
 //!
 //! [package.metadata.plugins.runner]
 //! threaded = "/path/to/libthreaded.so"
+//!
+//! [package.metadata.plugins.processor]
+//! audit = "/path/to/libaudit_processor.so"
 //!
 //! [package.metadata.plugins.transform]
 //! normalize = "/path/to/libnormalize.so"
