@@ -285,10 +285,13 @@ impl PluginRunner for ThreadedRunnerPlugin {
     ) -> Result<TaskResults, GenjaError> {
         if hosts.is_empty() {
             let started_at = SystemTime::now();
-            return Ok(TaskResults::new(task.name())
+            let mut results = TaskResults::new(task.name())
                 .with_started_at(started_at)
                 .with_finished_at(started_at)
-                .with_duration_ns(0));
+                .with_duration_ns(0);
+            task.process_task_start(&mut results)?;
+            task.process_task_finish(&mut results)?;
+            return Ok(results);
         }
 
         let started_at = SystemTime::now();
@@ -341,6 +344,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         drop(tx);
 
         let mut results = TaskResults::new(task.name()).with_started_at(started_at);
+        task.process_task_start(&mut results)?;
         for host_results in rx {
             results.merge(host_results);
         }
@@ -371,9 +375,11 @@ impl PluginRunner for ThreadedRunnerPlugin {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
 
-        Ok(results
+        results = results
             .with_finished_at(finished_at)
-            .with_duration_ns(duration_ns))
+            .with_duration_ns(duration_ns);
+        task.process_task_finish(&mut results)?;
+        Ok(results)
     }
 
     fn run_tasks(

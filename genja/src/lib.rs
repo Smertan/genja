@@ -39,7 +39,9 @@
 pub use genja_core::GenjaError;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
-use genja_core::task::{Task, TaskDefinition, TaskInfo, TaskResults, TaskResultsSummary};
+use genja_core::task::{
+    Task, TaskDefinition, TaskInfo, TaskProcessorResolver, TaskResults, TaskResultsSummary,
+};
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
@@ -793,7 +795,8 @@ impl Genja {
     ) -> Result<TaskResults, GenjaError> {
         let hosts = self.selected_hosts()?;
         let host_count = hosts.len();
-        let task_definition = TaskDefinition::new(task);
+        let processor_resolver: Arc<dyn TaskProcessorResolver> = self.plugins.clone();
+        let task_definition = TaskDefinition::new(task).with_processor_resolver(processor_resolver);
         let runner_name = self.settings.runner().plugin();
         info!(
             "executing task '{}' with runner='{}' selected_hosts={} max_depth={}",
@@ -1014,6 +1017,18 @@ mod tests {
 
     struct ParentTask;
 
+    #[derive(genja_core_derive::Task)]
+    struct DerivedProcessorTask {
+        name: &'static str,
+        processor_names: Vec<String>,
+    }
+
+    #[derive(genja_core_derive::Task)]
+    #[task(processors = ["audit", "metrics"])]
+    struct DerivedAttributeProcessorTask {
+        name: &'static str,
+    }
+
     impl TaskInfo for ParentTask {
         fn name(&self) -> &str {
             "parent-task"
@@ -1039,6 +1054,18 @@ mod tests {
     }
 
     impl Task for ParentTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    impl Task for DerivedProcessorTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    impl Task for DerivedAttributeProcessorTask {
         fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
@@ -1136,6 +1163,25 @@ mod tests {
         assert_eq!(results.passed_hosts().len(), 2);
         assert!(results.host_result("router1").is_some());
         assert!(results.host_result("router2").is_some());
+    }
+
+    #[test]
+    fn derive_task_exposes_processor_names() {
+        let task = DerivedProcessorTask {
+            name: "derived",
+            processor_names: Vec::new(),
+        }
+        .with_processor("audit")
+        .with_processors(["metrics"]);
+        let no_processors = DerivedProcessorTask {
+            name: "none",
+            processor_names: Vec::new(),
+        };
+        let attribute_task = DerivedAttributeProcessorTask { name: "attribute" };
+
+        assert_eq!(task.processor_names(), ["audit", "metrics"]);
+        assert_eq!(attribute_task.processor_names(), ["audit", "metrics"]);
+        assert!(no_processors.processor_names().is_empty());
     }
 
     #[test]

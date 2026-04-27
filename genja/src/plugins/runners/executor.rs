@@ -21,6 +21,7 @@ impl<'a> TaskExecutor<'a> {
     ) -> Result<TaskResults, GenjaError> {
         let started_at = SystemTime::now();
         let mut results = TaskResults::new(task_definition.name()).with_started_at(started_at);
+        task_definition.process_task_start(&mut results)?;
 
         for (host_id, host) in self.hosts.iter() {
             results.merge(Self::run_host(
@@ -37,9 +38,11 @@ impl<'a> TaskExecutor<'a> {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
 
-        Ok(results
+        results = results
             .with_finished_at(finished_at)
-            .with_duration_ns(duration_ns))
+            .with_duration_ns(duration_ns);
+        task_definition.process_task_finish(&mut results)?;
+        Ok(results)
     }
 
     pub(crate) fn run_host(

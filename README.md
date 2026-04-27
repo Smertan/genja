@@ -98,12 +98,14 @@ The derive macro maps fields like this:
 - `name` is required and becomes `TaskInfo::name()`.
 - `plugin_name` is optional and becomes `TaskInfo::plugin_name()`.
 - `options` is optional and becomes `TaskInfo::options()`.
+- `processor_names` is optional and becomes `TaskInfo::processor_names()`.
+- `#[task(processors = ["audit"])]` can be used when processor names are fixed at compile time.
 - Fields marked with `#[task(subtask)]` are collected into `SubTasks::sub_tasks()` in declaration order.
 
 That means the usual pattern is:
 
 1. Add `#[derive(TaskDerive)]` to the task struct.
-2. Declare `name`, and optionally `plugin_name`, `options`, and `#[task(subtask)]` fields.
+2. Declare `name`, and optionally `plugin_name`, `options`, `processor_names`, and `#[task(subtask)]` fields.
 3. Implement `Task::start(&self, host)` manually.
 
 ```rust
@@ -153,6 +155,72 @@ Notes:
 - `plugin_name` is optional, but usually needed for real task execution.
 - Rich task output lives in `TaskSuccess`, `TaskFailure`, `TaskSkip`, and `TaskResults`.
 - The lower-level task API is documented in `genja-core/src/task.rs`.
+
+### Task Processor Plugins
+
+Processor plugins run lifecycle hooks before and after selected tasks and task instances.
+Processor names are resolved by `PluginManager`, and invalid names return `GenjaError::PluginNotFound`.
+Tasks opt into processors by name:
+
+```rust
+use genja_core::inventory::Host;
+use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core_derive::Task as TaskDerive;
+
+#[derive(TaskDerive)]
+#[task(processors = ["audit"])]
+struct DeployTask {
+    name: &'static str,
+    plugin_name: Option<String>,
+}
+
+impl Task for DeployTask {
+    fn start(&self, _host: &Host) -> HostTaskResult {
+        HostTaskResult::passed(TaskSuccess::new())
+    }
+}
+```
+
+A processor plugin returns a `TaskProcessor` implementation:
+
+```rust
+use genja_core::task::{TaskProcessor, TaskProcessorContext, TaskResults};
+use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct AuditProcessorPlugin;
+
+impl Plugin for AuditProcessorPlugin {
+    fn name(&self) -> String {
+        "audit".to_string()
+    }
+}
+
+impl PluginProcessor for AuditProcessorPlugin {
+    fn processor(&self) -> Arc<dyn TaskProcessor> {
+        Arc::new(AuditProcessor)
+    }
+}
+
+struct AuditProcessor;
+
+impl TaskProcessor for AuditProcessor {
+    fn on_task_finish(
+        &self,
+        context: &TaskProcessorContext,
+        results: &mut TaskResults,
+    ) -> Result<(), genja_core::GenjaError> {
+        let _ = (context, results);
+        Ok(())
+    }
+}
+
+#[unsafe(no_mangle)]
+pub fn create_plugins() -> Vec<Plugins> {
+    vec![Plugins::Processor(Box::new(AuditProcessorPlugin))]
+}
+```
 
 ### Task Execution Rules
 
