@@ -2824,6 +2824,11 @@ pub trait TaskInfo {
 
     /// Return the task's options payload, if set.
     fn options(&self) -> Option<&Value>;
+
+    /// Return processor plugin names selected for this task.
+    fn processor_names(&self) -> Vec<&str> {
+        Vec::new()
+    }
 }
 
 /// Sub-task provider interface.
@@ -2859,6 +2864,115 @@ pub trait SubTasks {
 pub trait Task: TaskInfo + SubTasks + Send + Sync {
     /// Start executing the task.
     fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError>;
+}
+
+/// Execution context passed to task processors.
+///
+/// Processors receive this context for both aggregate task lifecycle events and
+/// per-host task instance events. Each task selects processors with
+/// [`TaskInfo::processor_names`], so deeply nested sub-tasks can opt into their
+/// own processing without relying on parent-name rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskProcessorContext {
+    task_name: String,
+    parent_task_name: Option<String>,
+    depth: usize,
+    hostname: Option<String>,
+}
+
+impl TaskProcessorContext {
+    pub fn new(
+        task_name: impl Into<String>,
+        parent_task_name: Option<impl Into<String>>,
+        depth: usize,
+        hostname: Option<impl Into<String>>,
+    ) -> Self {
+        Self {
+            task_name: task_name.into(),
+            parent_task_name: parent_task_name.map(Into::into),
+            depth,
+            hostname: hostname.map(Into::into),
+        }
+    }
+
+    pub fn task_name(&self) -> &str {
+        &self.task_name
+    }
+
+    pub fn parent_task_name(&self) -> Option<&str> {
+        self.parent_task_name.as_deref()
+    }
+
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    pub fn hostname(&self) -> Option<&str> {
+        self.hostname.as_deref()
+    }
+
+    pub fn is_sub_task(&self) -> bool {
+        self.parent_task_name.is_some()
+    }
+}
+
+/// Processes task results during aggregate and per-host task lifecycles.
+///
+/// All methods are no-ops by default. Implementers can override only the hooks
+/// they need. Returning an error aborts the current runner path.
+pub trait TaskProcessor: Send + Sync {
+    /// Called when a task result tree starts.
+    fn on_task_start(
+        &self,
+        _context: &TaskProcessorContext,
+        _results: &mut TaskResults,
+    ) -> Result<(), crate::GenjaError> {
+        Ok(())
+    }
+
+    /// Called after a task result tree is complete.
+    fn on_task_finish(
+        &self,
+        _context: &TaskProcessorContext,
+        _results: &mut TaskResults,
+    ) -> Result<(), crate::GenjaError> {
+        Ok(())
+    }
+
+    /// Called immediately before a task runs on a host.
+    fn on_instance_start(&self, _context: &TaskProcessorContext) -> Result<(), crate::GenjaError> {
+        Ok(())
+    }
+
+    /// Called after a task has produced its host result and execution timing has
+    /// been attached, before that result is inserted into [`TaskResults`].
+    fn on_instance_finish(
+        &self,
+        _context: &TaskProcessorContext,
+        _result: &mut HostTaskResult,
+    ) -> Result<(), crate::GenjaError> {
+        Ok(())
+    }
+}
+
+impl fmt::Debug for dyn TaskProcessor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TaskProcessor")
+    }
+}
+
+/// Resolves named task processors at execution time.
+///
+/// This keeps `genja-core` independent from the plugin manager while allowing
+/// the runtime to pass its existing plugin registry into a [`TaskDefinition`].
+pub trait TaskProcessorResolver: Send + Sync {
+    fn resolve_task_processor(&self, name: &str) -> Option<Arc<dyn TaskProcessor>>;
+}
+
+impl fmt::Debug for dyn TaskProcessorResolver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TaskProcessorResolver")
+    }
 }
 
 /// A wrapper around a task implementation that enforces the task trait flow.
@@ -2927,6 +3041,8 @@ pub trait Task: TaskInfo + SubTasks + Send + Sync {
 #[derive(Clone)]
 pub struct TaskDefinition {
     inner: Arc<dyn Task>,
+    processor_resolver: Option<Arc<dyn TaskProcessorResolver>>,
+    processor_names: Arc<Vec<String>>,
 }
 
 impl TaskDefinition {
@@ -2934,12 +3050,94 @@ impl TaskDefinition {
     pub fn new<T: Task + 'static>(task: T) -> Self {
         Self {
             inner: Arc::new(task),
+            processor_resolver: None,
+            processor_names: Arc::new(Vec::new()),
         }
     }
 
     /// Borrow the inner task as a trait object.
     pub fn as_task(&self) -> &dyn Task {
         self.inner.as_ref()
+    }
+
+    /// Select a processor for the root task definition.
+    ///
+    /// Sub-tasks do not inherit this selection. They select processors through
+    /// their own [`TaskInfo::processor_names`] implementation.
+    pub fn with_processor(mut self, processor_name: impl Into<String>) -> Self {
+        Arc::make_mut(&mut self.processor_names).push(processor_name.into());
+        self
+    }
+
+    /// Select multiple processors for the root task definition.
+    pub fn with_processors<I, S>(mut self, processor_names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Arc::make_mut(&mut self.processor_names)
+            .extend(processor_names.into_iter().map(Into::into));
+        self
+    }
+
+    /// Attach the processor resolver used during execution.
+    pub fn with_processor_resolver(
+        mut self,
+        processor_resolver: Arc<dyn TaskProcessorResolver>,
+    ) -> Self {
+        self.processor_resolver = Some(processor_resolver);
+        self
+    }
+
+    /// Returns the root task's selected processor names.
+    pub fn processor_names(&self) -> Vec<&str> {
+        if self.processor_names.is_empty() {
+            self.inner.processor_names()
+        } else {
+            self.processor_names.iter().map(String::as_str).collect()
+        }
+    }
+
+    fn processors_for(
+        &self,
+        task: &dyn Task,
+    ) -> Result<Vec<Arc<dyn TaskProcessor>>, crate::GenjaError> {
+        Self::resolve_processors(
+            self.processor_resolver.as_deref(),
+            &self.processor_names_for(task),
+        )
+    }
+
+    fn processor_names_for<'a>(&'a self, task: &'a dyn Task) -> Vec<&'a str> {
+        if std::ptr::eq(task, self.inner.as_ref()) && !self.processor_names.is_empty() {
+            self.processor_names.iter().map(String::as_str).collect()
+        } else {
+            task.processor_names()
+        }
+    }
+
+    fn resolve_processors(
+        processor_resolver: Option<&dyn TaskProcessorResolver>,
+        processor_names: &[&str],
+    ) -> Result<Vec<Arc<dyn TaskProcessor>>, crate::GenjaError> {
+        let Some(processor_resolver) = processor_resolver else {
+            if processor_names.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            return Err(crate::GenjaError::PluginNotFound(
+                processor_names[0].to_string(),
+            ));
+        };
+
+        processor_names
+            .iter()
+            .map(|name| {
+                processor_resolver
+                    .resolve_task_processor(name)
+                    .ok_or_else(|| crate::GenjaError::PluginNotFound((*name).to_string()))
+            })
+            .collect()
     }
 }
 
@@ -2981,10 +3179,30 @@ impl TaskDefinition {
             hostname,
             host,
             results,
+            self.processor_resolver.as_deref(),
+            self.processor_names(),
             None,
             0,
             max_depth,
         )
+    }
+
+    /// Run aggregate task-start processors for this definition.
+    pub fn process_task_start(&self, results: &mut TaskResults) -> Result<(), crate::GenjaError> {
+        let context = TaskProcessorContext::new(self.name(), None::<&str>, 0, None::<&str>);
+        for processor in self.processors_for(self.inner.as_ref())? {
+            processor.on_task_start(&context, results)?;
+        }
+        Ok(())
+    }
+
+    /// Run aggregate task-finish processors for this definition.
+    pub fn process_task_finish(&self, results: &mut TaskResults) -> Result<(), crate::GenjaError> {
+        let context = TaskProcessorContext::new(self.name(), None::<&str>, 0, None::<&str>);
+        for processor in self.processors_for(self.inner.as_ref())? {
+            processor.on_task_finish(&context, results)?;
+        }
+        Ok(())
     }
 
     /// Recursively executes a task and its sub-tasks with depth tracking.
@@ -3039,6 +3257,8 @@ impl TaskDefinition {
         hostname: &str,
         host: &Host,
         results: &mut TaskResults,
+        processor_resolver: Option<&dyn TaskProcessorResolver>,
+        processor_names: Vec<&str>,
         parent_task_name: Option<&str>,
         depth: usize,
         max_depth: usize,
@@ -3077,6 +3297,13 @@ impl TaskDefinition {
             parent_task,
             depth
         );
+        let processor_context =
+            TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
+        let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
+        for processor in &processors {
+            processor.on_instance_start(&processor_context)?;
+        }
+
         let host_result = task.start(host);
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
@@ -3109,7 +3336,11 @@ impl TaskDefinition {
                     duration_ns / 1_000_000,
                     duration_display
                 );
-                results.insert_host_result(hostname, HostTaskResult::failed(failure));
+                let mut host_result = HostTaskResult::failed(failure);
+                for processor in &processors {
+                    processor.on_instance_finish(&processor_context, &mut host_result)?;
+                }
+                results.insert_host_result(hostname, host_result);
                 return Ok(());
             }
         };
@@ -3141,7 +3372,8 @@ impl TaskDefinition {
             "skipped"
         };
 
-        let host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
+        let mut host_result =
+            host_result.with_execution_timing(started_at, finished_at, duration_ns);
         let duration_display = match &host_result {
             HostTaskResult::Passed(success) => success
                 .duration_display()
@@ -3161,6 +3393,9 @@ impl TaskDefinition {
             duration_display
         );
 
+        for processor in &processors {
+            processor.on_instance_finish(&processor_context, &mut host_result)?;
+        }
         results.insert_host_result(hostname, host_result);
 
         for sub in task.sub_tasks() {
@@ -3171,15 +3406,47 @@ impl TaskDefinition {
             let sub_results = results
                 .sub_task_mut(&sub_task_name)
                 .expect("sub task results should exist after insertion");
+            let sub_processor_names = sub.processor_names();
+            let sub_processors =
+                Self::resolve_processors(processor_resolver, &sub_processor_names)?;
+            let mut sub_task_started = false;
+            if !sub_processors.is_empty()
+                && sub_results.hosts().is_empty()
+                && sub_results.sub_tasks().is_empty()
+            {
+                let sub_context = TaskProcessorContext::new(
+                    sub_task_name.as_str(),
+                    Some(task.name()),
+                    depth + 1,
+                    None::<&str>,
+                );
+                for processor in &sub_processors {
+                    processor.on_task_start(&sub_context, sub_results)?;
+                }
+                sub_task_started = true;
+            }
             Self::start_with_depth(
                 sub.as_ref(),
                 hostname,
                 host,
                 sub_results,
+                processor_resolver,
+                sub_processor_names,
                 Some(task.name()),
                 depth + 1,
                 max_depth,
             )?;
+            if sub_task_started {
+                let sub_context = TaskProcessorContext::new(
+                    sub_task_name.as_str(),
+                    Some(task.name()),
+                    depth + 1,
+                    None::<&str>,
+                );
+                for processor in &sub_processors {
+                    processor.on_task_finish(&sub_context, sub_results)?;
+                }
+            }
         }
 
         Ok(())
@@ -3240,6 +3507,10 @@ impl TaskInfo for TaskDefinition {
     fn options(&self) -> Option<&Value> {
         self.inner.options()
     }
+
+    fn processor_names(&self) -> Vec<&str> {
+        self.processor_names()
+    }
 }
 
 impl SubTasks for TaskDefinition {
@@ -3283,7 +3554,7 @@ mod tests {
     use serde_json::json;
     use std::fmt;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Arc, Mutex, OnceLock};
 
     #[derive(Debug)]
     struct TestTaskFailureError;
@@ -3311,6 +3582,19 @@ mod tests {
         name: &'static str,
         subs: Vec<Arc<dyn Task>>,
         counter: Arc<AtomicUsize>,
+    }
+
+    struct ProcessorTask {
+        name: &'static str,
+        processors: Vec<String>,
+    }
+
+    struct CountingProcessor {
+        calls: Arc<AtomicUsize>,
+    }
+
+    struct TestProcessorResolver {
+        processor: Arc<dyn TaskProcessor>,
     }
 
     struct FailingTask;
@@ -3345,6 +3629,83 @@ mod tests {
         fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
             self.counter.fetch_add(1, Ordering::SeqCst);
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    impl TaskInfo for ProcessorTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn plugin_name(&self) -> &str {
+            "ssh"
+        }
+
+        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
+            ConnectionKey::new(hostname, "ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+
+        fn processor_names(&self) -> Vec<&str> {
+            self.processors.iter().map(String::as_str).collect()
+        }
+    }
+
+    impl SubTasks for ProcessorTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for ProcessorTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    impl TaskProcessor for CountingProcessor {
+        fn on_task_start(
+            &self,
+            _context: &TaskProcessorContext,
+            _results: &mut TaskResults,
+        ) -> Result<(), crate::GenjaError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn on_task_finish(
+            &self,
+            _context: &TaskProcessorContext,
+            _results: &mut TaskResults,
+        ) -> Result<(), crate::GenjaError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn on_instance_start(
+            &self,
+            _context: &TaskProcessorContext,
+        ) -> Result<(), crate::GenjaError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn on_instance_finish(
+            &self,
+            _context: &TaskProcessorContext,
+            _result: &mut HostTaskResult,
+        ) -> Result<(), crate::GenjaError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    impl TaskProcessorResolver for TestProcessorResolver {
+        fn resolve_task_processor(&self, name: &str) -> Option<Arc<dyn TaskProcessor>> {
+            (name == "selected").then(|| Arc::clone(&self.processor))
         }
     }
 
@@ -3956,6 +4317,35 @@ mod tests {
         assert!(json.contains("\"started_at\":\""));
         assert!(json.contains("\"finished_at\":\""));
         assert!(json.contains("\"duration\":\""));
+    }
+
+    #[test]
+    fn processors_are_selected_per_task_not_inherited_by_sub_tasks() {
+        let task_counter = Arc::new(AtomicUsize::new(0));
+        let processor_calls = Arc::new(AtomicUsize::new(0));
+        let child = Arc::new(ProcessorTask {
+            name: "child",
+            processors: vec!["selected".to_string()],
+        });
+        let root = TestTask {
+            name: "root",
+            subs: vec![child],
+            counter: task_counter,
+        };
+        let processor = Arc::new(CountingProcessor {
+            calls: Arc::clone(&processor_calls),
+        });
+        let resolver = Arc::new(TestProcessorResolver { processor });
+        let task = TaskDefinition::new(root).with_processor_resolver(resolver);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+
+        task.start("router1", &host, &mut results, 3)
+            .expect("task execution should succeed");
+
+        assert_eq!(processor_calls.load(Ordering::SeqCst), 4);
+        assert!(results.host_result("router1").is_some());
+        assert!(results.sub_task("child").is_some());
     }
 
     #[test]

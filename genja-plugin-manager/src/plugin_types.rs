@@ -290,6 +290,9 @@
 //!         Plugins::Inventory(inv) => {
 //!             println!("Inventory plugin: {}", inv.name());
 //!         }
+//!         Plugins::Processor(processor) => {
+//!             println!("Processor plugin: {}", processor.name());
+//!         }
 //!         Plugins::Runner(runner) => {
 //!             println!("Runner plugin: {}", runner.name());
 //!         }
@@ -328,8 +331,9 @@ use genja_core::inventory::{
     ConnectionKey, Hosts, Inventory, ResolvedConnectionParams, TransformFunction,
 };
 use genja_core::settings::RunnerConfig;
-use genja_core::task::{TaskDefinition, TaskResults, Tasks};
+use genja_core::task::{TaskDefinition, TaskProcessor, TaskResults, Tasks};
 use genja_core::{InventoryLoadError, Settings};
+use std::sync::Arc;
 /// Filesystem path to a plugin or plugin metadata entry.
 pub type PathString = String;
 /// Shared alias for a group name or plugin name key.
@@ -486,6 +490,33 @@ impl Debug for dyn PluginTransformFunction {
         )
     }
 }
+
+/// Provides task-result processing hooks.
+///
+/// Processor plugins are registered by name and made available before runner
+/// execution. Each task selects the processor names it wants. Sub-tasks select
+/// their own processors, which keeps deeply nested task behavior explicit.
+pub trait PluginProcessor: Plugin {
+    /// Returns the processor implementation used during task execution.
+    fn processor(&self) -> Arc<dyn TaskProcessor>;
+
+    /// Returns the group name
+    fn group(&self) -> String {
+        String::from("ProcessorPlugin")
+    }
+}
+
+impl Debug for dyn PluginProcessor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {{ name: {} }}",
+            PluginProcessor::group(self),
+            self.name()
+        )
+    }
+}
+
 /// Manages device connections for plugins that need an explicit session.
 ///
 /// Connection plugins provide lifecycle hooks for establishing and tearing down
@@ -517,6 +548,7 @@ pub trait PluginConnection: Plugin {
 pub enum Plugins {
     Connection(Box<dyn PluginConnection>),
     Inventory(Box<dyn PluginInventory>),
+    Processor(Box<dyn PluginProcessor>),
     Runner(Box<dyn PluginRunner>),
     TransformFunction(Box<dyn PluginTransformFunction>),
 }
@@ -527,6 +559,7 @@ impl Plugins {
         match self {
             Plugins::Connection(connection) => connection.name(),
             Plugins::Inventory(inventory) => inventory.name(),
+            Plugins::Processor(processor) => processor.name(),
             Plugins::Runner(runner) => runner.name(),
             Plugins::TransformFunction(transform) => transform.name(),
         }
@@ -537,6 +570,7 @@ impl Plugins {
         match self {
             Plugins::Connection(_) => String::from("Connection"),
             Plugins::Inventory(_) => String::from("Inventory"),
+            Plugins::Processor(_) => String::from("Processor"),
             Plugins::Runner(_) => String::from("Runner"),
             Plugins::TransformFunction(_) => String::from("TransformFunction"),
         }

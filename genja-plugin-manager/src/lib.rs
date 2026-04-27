@@ -384,14 +384,16 @@ pub mod plugin_types;
 // pub use plugin_types;
 pub mod connection_factory;
 
+use genja_core::task::{TaskProcessor, TaskProcessorResolver};
 use libloading::{Library, Symbol};
 use plugin_types::{
     GroupOrName, PluginConnection, PluginCreatePlugins, PluginEntry, PluginInventory, PluginName,
-    PluginResultPlugins, PluginRunner, PluginTransformFunction, Plugins,
+    PluginProcessor, PluginResultPlugins, PluginRunner, PluginTransformFunction, Plugins,
 };
 use serde::Deserialize;
 use std::collections::{HashMap, hash_map};
 use std::path::Path;
+use std::sync::Arc;
 // use std::error::Error;
 use std::io::{Error, ErrorKind};
 
@@ -632,6 +634,15 @@ impl PluginManager {
         })
     }
 
+    #[allow(clippy::borrowed_box)]
+    /// Gets a processor plugin, returns None if the plugin is not a Processor variant
+    pub fn get_processor_plugin(&self, name: &str) -> Option<&Box<dyn PluginProcessor>> {
+        self.plugins.get(name).and_then(|plugin| match plugin {
+            Plugins::Processor(processor) => Some(processor),
+            _ => None,
+        })
+    }
+
     /// Generic method to get plugins by variant type with a mapper function
     pub fn get_plugins_by_variant<'a, T>(
         &'a self,
@@ -666,6 +677,12 @@ impl PluginManager {
     #[allow(clippy::borrowed_box)]
     pub fn get_plugins_by_type_inventory(&self) -> Vec<(&String, &Box<dyn PluginInventory>)> {
         get_plugins_by_variant!(self, Plugins::Inventory, &Box<dyn PluginInventory>)
+    }
+
+    /// Gets all Processor plugins with their trait objects
+    #[allow(clippy::borrowed_box)]
+    pub fn get_plugins_by_type_processor(&self) -> Vec<(&String, &Box<dyn PluginProcessor>)> {
+        get_plugins_by_variant!(self, Plugins::Processor, &Box<dyn PluginProcessor>)
     }
 
     /// Gets all TransformFunction plugins with their trait objects
@@ -750,6 +767,13 @@ impl PluginManager {
                 format!("FileNotFoundError: {:?}", path.as_os_str()),
             ))
         }
+    }
+}
+
+impl TaskProcessorResolver for PluginManager {
+    fn resolve_task_processor(&self, name: &str) -> Option<Arc<dyn TaskProcessor>> {
+        self.get_processor_plugin(name)
+            .map(|processor| processor.processor())
     }
 }
 
