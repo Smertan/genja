@@ -16,17 +16,17 @@
 //! │                   - group() -> String                         │
 //! └───────────────────────────┬───────────────────────────────────┘
 //!                             │
-//!           ┌─────────────────┼─────────────────┬────────────────┐
-//!           │                 │                 │                │
-//!           ▼                 ▼                 ▼                ▼
-//! ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
-//! │PluginConnection│  │PluginInventory │  │ PluginRunner   │  │PluginTransform │
-//! │                │  │                │  │                │  │  Function      │
-//! │ - create()     │  │ - load()       │  │ - run()        │  │ - transform_   │
-//! │ - open()       │  │                │  │ - run_tasks()  │  │   function()   │
-//! │ - close()      │  │                │  │                │  │                │
-//! │ - is_alive()   │  │                │  │                │  │                │
-//! └────────────────┘  └────────────────┘  └────────────────┘  └────────────────┘
+//!           ┌─────────────────┼─────────────────┬────────────────┬────────────────┐
+//!           │                 │                 │                │                │
+//!           ▼                 ▼                 ▼                ▼                ▼
+//! ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
+//! │PluginConnection│  │PluginInventory │  │ PluginRunner   │  │PluginTransform │  │PluginProcessor │
+//! │                │  │                │  │                │  │  Function      │  │                │
+//! │ - create()     │  │ - load()       │  │ - run()        │  │ - transform_   │  │ - processor()  │
+//! │ - open()       │  │                │  │ - run_tasks()  │  │   function()   │  │                │
+//! │ - close()      │  │                │  │                │  │                │  │                │
+//! │ - is_alive()   │  │                │  │                │  │                │  │                │
+//! └────────────────┘  └────────────────┘  └────────────────┘  └────────────────┘  └────────────────┘
 //! ```
 //!
 //! # Plugin Types
@@ -71,6 +71,14 @@
 //! **Key Methods:**
 //! - `transform_function()` - Returns the transform function implementation
 //!
+//! ### [`PluginProcessor`]
+//! Provides task-result lifecycle hooks. Processor plugins are registered by
+//! name, and tasks opt into them by listing processor names on the task or with
+//! `#[task(processors = ["name"])]` when using the derive macro.
+//!
+//! **Key Methods:**
+//! - `processor()` - Returns the task processor implementation
+//!
 //! # Type Aliases
 //!
 //! The module provides several type aliases for common patterns:
@@ -93,6 +101,7 @@
 //! let plugins: Vec<Plugins> = vec![
 //!     // Plugins::Connection(Box::new(ssh_plugin)),
 //!     // Plugins::Inventory(Box::new(file_plugin)),
+//!     // Plugins::Processor(Box::new(audit_processor_plugin)),
 //!     // Plugins::Runner(Box::new(threaded_runner)),
 //! ];
 //! ```
@@ -112,6 +121,10 @@
 //! [package.metadata.plugins.network]
 //! ssh = "/path/to/libssh.so"
 //! telnet = "/path/to/libtelnet.so"
+//!
+//! # Grouped by plugin type
+//! [package.metadata.plugins.processor]
+//! audit = "/path/to/libaudit_processor.so"
 //! ```
 //!
 //! ## PluginInfo
@@ -248,6 +261,53 @@
 //! }
 //! ```
 //!
+//! ## Implementing a Processor Plugin
+//!
+//! ```rust
+//! use genja_core::task::{
+//!     HostTaskResult, TaskProcessor, TaskProcessorContext, TaskResults,
+//! };
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor};
+//! use std::sync::Arc;
+//!
+//! #[derive(Debug)]
+//! struct AuditProcessorPlugin;
+//!
+//! impl Plugin for AuditProcessorPlugin {
+//!     fn name(&self) -> String {
+//!         "audit".to_string()
+//!     }
+//! }
+//!
+//! impl PluginProcessor for AuditProcessorPlugin {
+//!     fn processor(&self) -> Arc<dyn TaskProcessor> {
+//!         Arc::new(AuditProcessor)
+//!     }
+//! }
+//!
+//! struct AuditProcessor;
+//!
+//! impl TaskProcessor for AuditProcessor {
+//!     fn on_task_finish(
+//!         &self,
+//!         context: &TaskProcessorContext,
+//!         results: &mut TaskResults,
+//!     ) -> Result<(), genja_core::GenjaError> {
+//!         let _ = (context, results);
+//!         Ok(())
+//!     }
+//!
+//!     fn on_instance_finish(
+//!         &self,
+//!         context: &TaskProcessorContext,
+//!         result: &mut HostTaskResult,
+//!     ) -> Result<(), genja_core::GenjaError> {
+//!         let _ = (context, result);
+//!         Ok(())
+//!     }
+//! }
+//! ```
+//!
 //! ## Implementing a Transform Function Plugin
 //!
 //! ```rust
@@ -290,6 +350,9 @@
 //!         Plugins::Inventory(inv) => {
 //!             println!("Inventory plugin: {}", inv.name());
 //!         }
+//!         Plugins::Processor(processor) => {
+//!             println!("Processor plugin: {}", processor.name());
+//!         }
 //!         Plugins::Runner(runner) => {
 //!             println!("Runner plugin: {}", runner.name());
 //!         }
@@ -311,6 +374,7 @@
 //! pub fn create_plugins() -> Vec<Plugins> {
 //!     vec![
 //!         // Plugins::Connection(Box::new(SshPlugin::new())),
+//!         // Plugins::Processor(Box::new(AuditProcessorPlugin)),
 //!         // Plugins::Runner(Box::new(SequentialRunner)),
 //!     ]
 //! }
@@ -328,8 +392,9 @@ use genja_core::inventory::{
     ConnectionKey, Hosts, Inventory, ResolvedConnectionParams, TransformFunction,
 };
 use genja_core::settings::RunnerConfig;
-use genja_core::task::{TaskDefinition, TaskResults, Tasks};
+use genja_core::task::{TaskDefinition, TaskProcessor, TaskResults, Tasks};
 use genja_core::{InventoryLoadError, Settings};
+use std::sync::Arc;
 /// Filesystem path to a plugin or plugin metadata entry.
 pub type PathString = String;
 /// Shared alias for a group name or plugin name key.
@@ -486,6 +551,33 @@ impl Debug for dyn PluginTransformFunction {
         )
     }
 }
+
+/// Provides task-result processing hooks.
+///
+/// Processor plugins are registered by name and made available before runner
+/// execution. Each task selects the processor names it wants. Sub-tasks select
+/// their own processors, which keeps deeply nested task behavior explicit.
+pub trait PluginProcessor: Plugin {
+    /// Returns the processor implementation used during task execution.
+    fn processor(&self) -> Arc<dyn TaskProcessor>;
+
+    /// Returns the group name
+    fn group(&self) -> String {
+        String::from("ProcessorPlugin")
+    }
+}
+
+impl Debug for dyn PluginProcessor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {{ name: {} }}",
+            PluginProcessor::group(self),
+            self.name()
+        )
+    }
+}
+
 /// Manages device connections for plugins that need an explicit session.
 ///
 /// Connection plugins provide lifecycle hooks for establishing and tearing down
@@ -517,6 +609,7 @@ pub trait PluginConnection: Plugin {
 pub enum Plugins {
     Connection(Box<dyn PluginConnection>),
     Inventory(Box<dyn PluginInventory>),
+    Processor(Box<dyn PluginProcessor>),
     Runner(Box<dyn PluginRunner>),
     TransformFunction(Box<dyn PluginTransformFunction>),
 }
@@ -527,6 +620,7 @@ impl Plugins {
         match self {
             Plugins::Connection(connection) => connection.name(),
             Plugins::Inventory(inventory) => inventory.name(),
+            Plugins::Processor(processor) => processor.name(),
             Plugins::Runner(runner) => runner.name(),
             Plugins::TransformFunction(transform) => transform.name(),
         }
@@ -537,6 +631,7 @@ impl Plugins {
         match self {
             Plugins::Connection(_) => String::from("Connection"),
             Plugins::Inventory(_) => String::from("Inventory"),
+            Plugins::Processor(_) => String::from("Processor"),
             Plugins::Runner(_) => String::from("Runner"),
             Plugins::TransformFunction(_) => String::from("TransformFunction"),
         }

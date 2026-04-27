@@ -29,7 +29,12 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, GenericArgument, Meta, PathArguments, Type, TypePath, parse_macro_input};
+use syn::{
+    DeriveInput, GenericArgument, LitStr, Meta, PathArguments, Token, Type, TypePath, bracketed,
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    punctuated::Punctuated,
+};
 
 /// Generates an implementation of the `Deref` trait for the given type.
 ///
@@ -109,12 +114,16 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// - A `name` field of type `String` or `&'static str` (required)
 /// - An optional `plugin_name` field of type `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`
 /// - An optional `options` field of type `Option<serde_json::Value>`
+/// - An optional `processor_names` field of type `Vec<String>`
+/// - Or a struct-level `#[task(processors = ["processor_name"])]` attribute
 /// - Zero or more fields marked with `#[task(subtask)]` attribute of type `Arc<dyn Task>`
 ///
 /// After deriving, the generated behavior is:
 /// - `name()` reads from the struct's `name` field
 /// - `plugin_name()` reads from `plugin_name` if present, otherwise returns `""`
 /// - `options()` returns the `options` field if present, otherwise `None`
+/// - `processor_names()` returns the configured processor names if present, otherwise an empty vector
+/// - `with_processor()` and `with_processors()` are generated when `processor_names` is present
 /// - `sub_tasks()` returns all fields marked with `#[task(subtask)]` in declaration order
 /// - `get_connection_key(hostname)` builds a `ConnectionKey` from `hostname` and `plugin_name()`
 ///
@@ -158,6 +167,10 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 pub fn derive_task(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
+    let attr_processor_names = match task_processor_attrs(&input.attrs) {
+        Ok(processor_names) => processor_names,
+        Err(error) => return error.to_compile_error().into(),
+    };
 
     let data = match input.data {
         syn::Data::Struct(data) => data,
@@ -180,6 +193,7 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     let mut name_field = None;
     let mut plugin_name_field = None;
     let mut options_field = None;
+    let mut processor_names_field: Option<(syn::Ident, Type)> = None;
     let mut subtask_fields: Vec<(syn::Ident, SubtaskKind)> = Vec::new();
 
     for field in fields.iter() {
@@ -206,6 +220,17 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
             "name" => name_field = Some(field.ty.clone()),
             "plugin_name" => plugin_name_field = Some(field.ty.clone()),
             "options" => options_field = Some(field.ty.clone()),
+            "processor_names" => {
+                processor_names_field = Some((ident.clone(), field.ty.clone()));
+            }
+            "processors" => {
+                return syn::Error::new_spanned(
+                    ident,
+                    "use `processor_names: Vec<String>` to select processor plugins by name",
+                )
+                .to_compile_error()
+                .into();
+            }
             _ => {}
         }
     }
@@ -251,6 +276,26 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
         }
     }
 
+    if let Some((_, processor_names_ty)) = &processor_names_field {
+        if !attr_processor_names.is_empty() {
+            return syn::Error::new_spanned(
+                processor_names_ty,
+                "use either `processor_names: Vec<String>` or `#[task(processors = [...])]`, not both",
+            )
+            .to_compile_error()
+            .into();
+        }
+
+        if !is_vec_of(processor_names_ty, is_string_type) {
+            return syn::Error::new_spanned(
+                processor_names_ty,
+                "`processor_names` must be `Vec<String>`",
+            )
+            .to_compile_error()
+            .into();
+        }
+    }
+
     let name_getter = if is_string_type(&name_ty) {
         quote! { self.name.as_str() }
     } else {
@@ -268,6 +313,33 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
         quote! { self.options.as_ref() }
     } else {
         quote! { None }
+    };
+
+    let processor_names_getter = match processor_names_field.as_ref() {
+        Some((ident, _)) => quote! { self.#ident.iter().map(String::as_str).collect() },
+        None if !attr_processor_names.is_empty() => quote! { vec![#(#attr_processor_names),*] },
+        None => quote! { Vec::new() },
+    };
+
+    let processor_setters = match processor_names_field.as_ref() {
+        Some((ident, _)) => quote! {
+            impl #name {
+                pub fn with_processor(mut self, processor_name: impl Into<String>) -> Self {
+                    self.#ident.push(processor_name.into());
+                    self
+                }
+
+                pub fn with_processors<I, S>(mut self, processor_names: I) -> Self
+                where
+                    I: IntoIterator<Item = S>,
+                    S: Into<String>,
+                {
+                    self.#ident.extend(processor_names.into_iter().map(Into::into));
+                    self
+                }
+            }
+        },
+        None => quote! {},
     };
 
     // Generates token streams for pushing subtask fields into a task vector.
@@ -315,6 +387,10 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
             fn options(&self) -> Option<&serde_json::Value> {
                 #options_getter
             }
+
+            fn processor_names(&self) -> Vec<&str> {
+                #processor_names_getter
+            }
         }
 
         /// Implementation of the `SubTasks` trait for the derived type.
@@ -334,6 +410,8 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
                 tasks
             }
         }
+
+        #processor_setters
     };
 
     TokenStream::from(expanded)
@@ -392,6 +470,32 @@ fn is_option_of(ty: &Type, inner_check: fn(&Type) -> bool) -> bool {
     }
 }
 
+fn is_vec_of(ty: &Type, inner_check: fn(&Type) -> bool) -> bool {
+    match ty {
+        Type::Path(TypePath { path, .. }) => {
+            let seg = match path.segments.last() {
+                Some(seg) => seg,
+                None => return false,
+            };
+            if seg.ident != "Vec" {
+                return false;
+            }
+            match &seg.arguments {
+                PathArguments::AngleBracketed(args) => args
+                    .args
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        GenericArgument::Type(ty) => Some(ty),
+                        _ => None,
+                    })
+                    .any(inner_check),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 fn is_value_type(ty: &Type) -> bool {
     match ty {
         Type::Path(TypePath { path, .. }) => {
@@ -411,6 +515,46 @@ fn is_value_type(ty: &Type) -> bool {
 
 fn is_string_or_static_str(ty: &Type) -> bool {
     is_string_type(ty) || is_static_str_type(ty)
+}
+
+struct ProcessorList {
+    names: Punctuated<LitStr, Token![,]>,
+}
+
+impl Parse for ProcessorList {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let content;
+        bracketed!(content in input);
+        Ok(Self {
+            names: content.parse_terminated(|input| input.parse::<LitStr>(), Token![,])?,
+        })
+    }
+}
+
+fn task_processor_attrs(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::LitStr>> {
+    let mut processor_names = Vec::new();
+
+    for attr in attrs {
+        if !attr.path().is_ident("task") {
+            continue;
+        }
+
+        attr.parse_nested_meta(|meta| {
+            if !meta.path.is_ident("processors") {
+                return Ok(());
+            }
+
+            let value = meta.value()?;
+            let processor_list = value.parse::<ProcessorList>()?;
+            for processor_name in processor_list.names {
+                processor_names.push(processor_name);
+            }
+
+            Ok(())
+        })?;
+    }
+
+    Ok(processor_names)
 }
 
 #[derive(Copy, Clone)]

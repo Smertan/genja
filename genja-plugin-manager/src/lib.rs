@@ -15,7 +15,7 @@
 //! - Plugin lifecycle management (registration, deregistration)
 //! - Type-safe plugin registry access
 //! - Metadata-driven plugin configuration
-//! - Support for multiple plugin types (Connection, Inventory, Runner, Transform)
+//! - Support for multiple plugin types (Connection, Inventory, Runner, Processor, Transform)
 //!
 //! ## Architecture
 //!
@@ -34,6 +34,7 @@
 //! │                         Plugins Enum                            │
 //! │  - Connection(Box<dyn PluginConnection>)                        │
 //! │  - Inventory(Box<dyn PluginInventory>)                          │
+//! │  - Processor(Box<dyn PluginProcessor>)                          │
 //! │  - Runner(Box<dyn PluginRunner>)                                │
 //! │  - TransformFunction(Box<dyn PluginTransformFunction>)          │
 //! └─────────────────────────────────────────────────────────────────┘
@@ -120,7 +121,7 @@
 //!
 //! Plugins are configured in the `Cargo.toml` file of the end-user project using
 //! package metadata. You can register plugins as individual entries or grouped
-//! by plugin type (e.g., `inventory`, `connection`, `runner`, `transform`):
+//! by plugin type (e.g., `inventory`, `connection`, `runner`, `processor`, `transform`):
 //!
 //! ```toml
 //! # Individual plugins
@@ -142,6 +143,9 @@
 //!
 //! [package.metadata.plugins.runner]
 //! threaded = "/path/to/libthreaded.so"
+//!
+//! [package.metadata.plugins.processor]
+//! audit = "/path/to/libaudit_processor.so"
 //!
 //! [package.metadata.plugins.transform]
 //! normalize = "/path/to/libnormalize.so"
@@ -265,6 +269,42 @@
 //! }
 //! ```
 //!
+//! ### Processor Plugins
+//!
+//! Process task lifecycle results selected by task processor names:
+//!
+//! ```rust
+//! use genja_core::task::{TaskProcessor, TaskProcessorContext, TaskResults};
+//! use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor};
+//! use std::sync::Arc;
+//!
+//! #[derive(Debug)]
+//! struct AuditProcessorPlugin;
+//!
+//! impl Plugin for AuditProcessorPlugin {
+//!     fn name(&self) -> String { "audit".to_string() }
+//! }
+//!
+//! impl PluginProcessor for AuditProcessorPlugin {
+//!     fn processor(&self) -> Arc<dyn TaskProcessor> {
+//!         Arc::new(AuditProcessor)
+//!     }
+//! }
+//!
+//! struct AuditProcessor;
+//!
+//! impl TaskProcessor for AuditProcessor {
+//!     fn on_task_finish(
+//!         &self,
+//!         context: &TaskProcessorContext,
+//!         results: &mut TaskResults,
+//!     ) -> Result<(), genja_core::GenjaError> {
+//!         let _ = (context, results);
+//!         Ok(())
+//!     }
+//! }
+//! ```
+//!
 //! ### Transform Function Plugins
 //!
 //! Provide inventory transformation functions:
@@ -340,7 +380,7 @@
 //! genja-plugin-manager = "0.1.0"
 //! ```
 //!
-//! ### Plugin Project (Connection/Runner/Inventory/Transform)
+//! ### Plugin Project (Connection/Runner/Inventory/Processor/Transform)
 //!
 //! ```toml
 //! [package]
@@ -376,6 +416,9 @@
 //! [package.metadata.plugins.runner]
 //! threaded = "/path/to/libthreaded.so"
 //!
+//! [package.metadata.plugins.processor]
+//! audit = "/path/to/libaudit_processor.so"
+//!
 //! [package.metadata.plugins.transform]
 //! normalize = "/path/to/libnormalize.so"
 //! ```
@@ -384,14 +427,16 @@ pub mod plugin_types;
 // pub use plugin_types;
 pub mod connection_factory;
 
+use genja_core::task::{TaskProcessor, TaskProcessorResolver};
 use libloading::{Library, Symbol};
 use plugin_types::{
     GroupOrName, PluginConnection, PluginCreatePlugins, PluginEntry, PluginInventory, PluginName,
-    PluginResultPlugins, PluginRunner, PluginTransformFunction, Plugins,
+    PluginProcessor, PluginResultPlugins, PluginRunner, PluginTransformFunction, Plugins,
 };
 use serde::Deserialize;
 use std::collections::{HashMap, hash_map};
 use std::path::Path;
+use std::sync::Arc;
 // use std::error::Error;
 use std::io::{Error, ErrorKind};
 
@@ -632,6 +677,15 @@ impl PluginManager {
         })
     }
 
+    #[allow(clippy::borrowed_box)]
+    /// Gets a processor plugin, returns None if the plugin is not a Processor variant
+    pub fn get_processor_plugin(&self, name: &str) -> Option<&Box<dyn PluginProcessor>> {
+        self.plugins.get(name).and_then(|plugin| match plugin {
+            Plugins::Processor(processor) => Some(processor),
+            _ => None,
+        })
+    }
+
     /// Generic method to get plugins by variant type with a mapper function
     pub fn get_plugins_by_variant<'a, T>(
         &'a self,
@@ -666,6 +720,12 @@ impl PluginManager {
     #[allow(clippy::borrowed_box)]
     pub fn get_plugins_by_type_inventory(&self) -> Vec<(&String, &Box<dyn PluginInventory>)> {
         get_plugins_by_variant!(self, Plugins::Inventory, &Box<dyn PluginInventory>)
+    }
+
+    /// Gets all Processor plugins with their trait objects
+    #[allow(clippy::borrowed_box)]
+    pub fn get_plugins_by_type_processor(&self) -> Vec<(&String, &Box<dyn PluginProcessor>)> {
+        get_plugins_by_variant!(self, Plugins::Processor, &Box<dyn PluginProcessor>)
     }
 
     /// Gets all TransformFunction plugins with their trait objects
@@ -753,21 +813,29 @@ impl PluginManager {
     }
 }
 
+impl TaskProcessorResolver for PluginManager {
+    fn resolve_task_processor(&self, name: &str) -> Option<Arc<dyn TaskProcessor>> {
+        self.get_processor_plugin(name)
+            .map(|processor| processor.processor())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
     use crate::plugin_types::{
-        Plugin, PluginConnection, PluginInventory, PluginRunner, PluginTransformFunction,
+        Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
+        PluginTransformFunction,
     };
     use genja_core::inventory::{
         ConnectionKey, Inventory, ResolvedConnectionParams, TransformFunction,
     };
-    use genja_core::task::Tasks;
+    use genja_core::task::{TaskProcessor, Tasks};
     use genja_core::{InventoryLoadError, Settings};
 
     fn env_lock() -> MutexGuard<'static, ()> {
@@ -1309,6 +1377,27 @@ inventory_a = "../this/path/does/not/exist.so"
         }
     }
 
+    #[derive(Debug)]
+    struct DummyProcessorPlugin {
+        name: &'static str,
+    }
+
+    impl Plugin for DummyProcessorPlugin {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginProcessor for DummyProcessorPlugin {
+        fn processor(&self) -> Arc<dyn TaskProcessor> {
+            Arc::new(DummyProcessor)
+        }
+    }
+
+    struct DummyProcessor;
+
+    impl TaskProcessor for DummyProcessor {}
+
     #[test]
     fn get_plugin_and_typed_getters_match_variants() {
         let mut manager = PluginManager::new();
@@ -1346,6 +1435,30 @@ inventory_a = "../this/path/does/not/exist.so"
         assert!(manager.get_transform_function_plugin("conn").is_none());
         assert!(manager.get_transform_function_plugin("inv").is_none());
         assert!(manager.get_transform_function_plugin("run").is_none());
+    }
+
+    #[test]
+    fn processor_plugin_getters_and_resolver_match_processor_variant() {
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection {
+            name: "conn",
+        })));
+        manager.register_plugin(Plugins::Processor(Box::new(DummyProcessorPlugin {
+            name: "audit",
+        })));
+
+        assert!(manager.get_processor_plugin("audit").is_some());
+        assert!(manager.get_processor_plugin("conn").is_none());
+        assert!(manager.get_processor_plugin("missing").is_none());
+
+        let processors = manager.get_plugins_by_type_processor();
+        assert_eq!(processors.len(), 1);
+        assert_eq!(processors[0].0.as_str(), "audit");
+        assert_eq!(processors[0].1.name(), "audit");
+
+        assert!(manager.resolve_task_processor("audit").is_some());
+        assert!(manager.resolve_task_processor("conn").is_none());
+        assert!(manager.resolve_task_processor("missing").is_none());
     }
 
     #[test]
