@@ -58,35 +58,50 @@
 //!    ┌─────────────────────────────────────────────────────────────┐
 //!    │ Runner Plugin (e.g., ThreadedRunner, SerialRunner)          │
 //!    │                                                             │
-//!    │  For each host in inventory:                                │
+//!    │  For each task result tree:                                 │
 //!    │    ┌──────────────────────────────────────────────┐         │
-//!    │    │ 1. Get/Create Connection                     │         │
-//!    │    │    - Via PluginConnection                    │         │
-//!    │    │    - Cached by ConnectionKey                 │         │
+//!    │    │ 1. Resolve selected PluginProcessor values   │         │
+//!    │    │    - From TaskInfo::processor_names()        │         │
+//!    │    │    - Via TaskProcessorResolver               │         │
 //!    │    └──────────────────────────────────────────────┘         │
 //!    │                      │                                      │
 //!    │                      ▼                                      │
 //!    │    ┌──────────────────────────────────────────────┐         │
-//!    │    │ 2. Execute task.start(host)                  │         │
-//!    │    │    - Record start timestamp                  │         │
-//!    │    │    - Call task implementation                │         │
-//!    │    │    - Record finish timestamp                 │         │
+//!    │    │ 2. PluginProcessor hook: on_task_start       │         │
+//!    │    │    - Runs before host results are collected  │         │
+//!    │    │    - Can initialize or modify TaskResults    │         │
 //!    │    └──────────────────────────────────────────────┘         │
 //!    │                      │                                      │
 //!    │                      ▼                                      │
 //!    │    ┌──────────────────────────────────────────────┐         │
-//!    │    │ 3. Capture Result                            │         │
-//!    │    │    - Success: TaskSuccess                    │         │
-//!    │    │    - Failure: TaskFailure                    │         │
-//!    │    │    - Skip: TaskSkip                          │         │
+//!    │    │ 3. For each host in inventory                │         │
+//!    │    │                                              │         │
+//!    │    │    PluginProcessor hook:                     │         │
+//!    │    │      on_instance_start                       │         │
+//!    │    │      - Receives task, parent, depth, host    │         │
+//!    │    │                                              │         │
+//!    │    │    Execute task.start(host)                  │         │
+//!    │    │      - Record start timestamp                │         │
+//!    │    │      - Call task implementation              │         │
+//!    │    │      - Record finish timestamp               │         │
+//!    │    │                                              │         │
+//!    │    │    Capture Result                            │         │
+//!    │    │      - Success, failure, or skip             │         │
+//!    │    │                                              │         │
+//!    │    │    PluginProcessor hook:                     │         │
+//!    │    │      on_instance_finish                      │         │
+//!    │    │      - Can inspect or mutate HostTaskResult  │         │
+//!    │    │                                              │         │
+//!    │    │    Process sub-tasks, if any                 │         │
+//!    │    │      - Each sub-task selects own processors  │         │
+//!    │    │      - Recursively execute sub_tasks()       │         │
 //!    │    └──────────────────────────────────────────────┘         │
 //!    │                      │                                      │
 //!    │                      ▼                                      │
 //!    │    ┌──────────────────────────────────────────────┐         │
-//!    │    │ 4. Process Sub-tasks (if any)                │         │
-//!    │    │    - Recursively execute sub_tasks()         │         │
-//!    │    │    - Enforce max_depth limit                 │         │
-//!    │    │    - Group results by task name              │         │
+//!    │    │ 4. PluginProcessor hook: on_task_finish      │         │
+//!    │    │    - Runs after host results are collected   │         │
+//!    │    │    - Can finalize or modify TaskResults      │         │
 //!    │    └──────────────────────────────────────────────┘         │
 //!    └─────────────────────────────────────────────────────────────┘
 //!
@@ -216,7 +231,63 @@
 //! requirements, and optional configuration. This trait is typically auto-implemented
 //! when using the derive macro from `genja-core-derive`.
 //! That derive reads the task struct's `name`, optional `plugin_name`, and optional
-//! `options` fields to generate the corresponding trait methods.
+//! `options` fields to generate the corresponding trait methods. Tasks can select
+//! processor plugins by returning names from [`TaskInfo::processor_names`]. The
+//! derive macro supports either a `processor_names: Vec<String>` field or
+//! a compile-time attribute such as `#[task(processors = ["audit"])]`.
+//!
+//! ## Task Processors
+//!
+//! [`TaskProcessor`] provides lifecycle hooks for processing task results without
+//! changing the task's `start()` implementation. A task selects processors by name,
+//! and the runtime resolves those names through a [`TaskProcessorResolver`]. In the
+//! full Genja runtime, the plugin manager implements the resolver, so invalid
+//! processor names fail with `GenjaError::PluginNotFound`.
+//!
+//! Processors can be selected in three ways:
+//!
+//! ```rust
+//! use genja_core::inventory::Host;
+//! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskSuccess};
+//! use genja_core_derive::Task as TaskDerive;
+//!
+//! #[derive(TaskDerive)]
+//! #[task(processors = ["audit"])]
+//! struct AttributeTask {
+//!     name: &'static str,
+//! }
+//!
+//! #[derive(TaskDerive)]
+//! struct FieldTask {
+//!     name: &'static str,
+//!     processor_names: Vec<String>,
+//! }
+//!
+//! impl Task for AttributeTask {
+//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!         Ok(HostTaskResult::passed(TaskSuccess::new()))
+//!     }
+//! }
+//!
+//! impl Task for FieldTask {
+//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!         Ok(HostTaskResult::passed(TaskSuccess::new()))
+//!     }
+//! }
+//!
+//! let _attribute_task = AttributeTask { name: "attribute" };
+//! let _field_task = FieldTask {
+//!     name: "field",
+//!     processor_names: Vec::new(),
+//! }
+//! .with_processor("audit");
+//!
+//! let _root_override = TaskDefinition::new(AttributeTask { name: "root" })
+//!     .with_processor("metrics");
+//! ```
+//!
+//! Processor selection is per task. Sub-tasks do not inherit their parent's
+//! processor list unless the sub-task itself returns the same processor names.
 //!
 //! ## [`SubTasks`]
 //!
@@ -242,6 +313,16 @@
 //! - The framework does not automatically skip sub-tasks when a parent fails or is
 //!   skipped. If you want that behavior, return an explicit [`HostTaskResult::Skipped`]
 //!   from the sub-task or encode the condition in the task itself.
+//! - Processor hooks run only for tasks that selected processor names. The root
+//!   task can also be given processor names through [`TaskDefinition::with_processor`]
+//!   or [`TaskDefinition::with_processors`].
+//! - For a task result tree, processor order is:
+//!   `on_task_start`, then for each selected host `on_instance_start`,
+//!   [`Task::start`], `on_instance_finish`, then any sub-task trees, then
+//!   `on_task_finish`.
+//! - If processor name resolution fails, execution returns
+//!   `GenjaError::PluginNotFound`. If a processor hook returns an error, execution
+//!   stops and propagates that error.
 //! - `max_depth` is checked using `depth > max_depth`. This means `max_depth = 0`
 //!   still allows the root task at depth `0`, but rejects all sub-tasks at depth `1`.
 //! - Exceeding `max_depth` records an internal [`HostTaskResult::Failed`] for the host
