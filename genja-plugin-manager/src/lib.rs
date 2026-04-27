@@ -824,17 +824,18 @@ impl TaskProcessorResolver for PluginManager {
 mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
     use crate::plugin_types::{
-        Plugin, PluginConnection, PluginInventory, PluginRunner, PluginTransformFunction,
+        Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
+        PluginTransformFunction,
     };
     use genja_core::inventory::{
         ConnectionKey, Inventory, ResolvedConnectionParams, TransformFunction,
     };
-    use genja_core::task::Tasks;
+    use genja_core::task::{TaskProcessor, Tasks};
     use genja_core::{InventoryLoadError, Settings};
 
     fn env_lock() -> MutexGuard<'static, ()> {
@@ -1376,6 +1377,27 @@ inventory_a = "../this/path/does/not/exist.so"
         }
     }
 
+    #[derive(Debug)]
+    struct DummyProcessorPlugin {
+        name: &'static str,
+    }
+
+    impl Plugin for DummyProcessorPlugin {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    impl PluginProcessor for DummyProcessorPlugin {
+        fn processor(&self) -> Arc<dyn TaskProcessor> {
+            Arc::new(DummyProcessor)
+        }
+    }
+
+    struct DummyProcessor;
+
+    impl TaskProcessor for DummyProcessor {}
+
     #[test]
     fn get_plugin_and_typed_getters_match_variants() {
         let mut manager = PluginManager::new();
@@ -1413,6 +1435,30 @@ inventory_a = "../this/path/does/not/exist.so"
         assert!(manager.get_transform_function_plugin("conn").is_none());
         assert!(manager.get_transform_function_plugin("inv").is_none());
         assert!(manager.get_transform_function_plugin("run").is_none());
+    }
+
+    #[test]
+    fn processor_plugin_getters_and_resolver_match_processor_variant() {
+        let mut manager = PluginManager::new();
+        manager.register_plugin(Plugins::Connection(Box::new(DummyConnection {
+            name: "conn",
+        })));
+        manager.register_plugin(Plugins::Processor(Box::new(DummyProcessorPlugin {
+            name: "audit",
+        })));
+
+        assert!(manager.get_processor_plugin("audit").is_some());
+        assert!(manager.get_processor_plugin("conn").is_none());
+        assert!(manager.get_processor_plugin("missing").is_none());
+
+        let processors = manager.get_plugins_by_type_processor();
+        assert_eq!(processors.len(), 1);
+        assert_eq!(processors[0].0.as_str(), "audit");
+        assert_eq!(processors[0].1.name(), "audit");
+
+        assert!(manager.resolve_task_processor("audit").is_some());
+        assert!(manager.resolve_task_processor("conn").is_none());
+        assert!(manager.resolve_task_processor("missing").is_none());
     }
 
     #[test]
