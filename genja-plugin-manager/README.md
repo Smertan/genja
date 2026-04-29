@@ -134,10 +134,10 @@ genja-plugin-manager = "0.1.0"
 genja-plugin-manager = "0.1.0"
 
 [package.metadata.plugins]
-hostname_ip_transform = "../target/{PROFILE}/libhostname_ip_transform.so"
+hostname_ip_transform = "target/{PROFILE}/libhostname_ip_transform.so"
 
 [package.metadata.plugins.inventory]
-host_loader = "../target/{PROFILE}/libhost_loader.so"
+host_loader = "target/{PROFILE}/libhost_loader.so"
 ```
 
 Notes:
@@ -187,13 +187,13 @@ Both individual and grouped entries are supported.
 
 ```toml
 [package.metadata.plugins]
-plugin_a = "../target/{PROFILE}/libplugin_a.so"
+plugin_a = "target/{PROFILE}/libplugin_a.so"
 
 [package.metadata.plugins.inventory]
-inventory_a = "../target/{PROFILE}/libinventory_a.so"
+inventory_a = "target/{PROFILE}/libinventory_a.so"
 
 [package.metadata.plugins.runner]
-threaded_ext = "../target/{PROFILE}/libthreaded_ext.so"
+threaded_ext = "target/{PROFILE}/libthreaded_ext.so"
 ```
 
 ## Workspace Notes

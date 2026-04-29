@@ -133,34 +133,52 @@
 //! [`build_support::copy_plugins_from_manifest`] during the application's build,
 //! which copies the referenced shared libraries into `target/{PROFILE}/plugins`.
 //!
-//! Individual and grouped plugin entries are supported:
+//! Paths are resolved relative to the consuming application's `Cargo.toml`.
+//! That means the correct plugin path depends on whether the application is a
+//! standalone crate or a workspace member.
+//!
+//! Standalone application example:
+//!
+//! ```toml
+//! [package.metadata.plugins]
+//! my_plugin = "target/{PROFILE}/libmy_plugin.so"
+//! ```
+//!
+//! Workspace member application example:
+//!
+//! ```toml
+//! [package.metadata.plugins]
+//! my_plugin = "../target/{PROFILE}/libmy_plugin.so"
+//! ```
+//!
+//! Individual and grouped plugin entries are also supported:
 //!
 //! ```toml
 //! # Individual plugins
 //! [package.metadata.plugins]
-//! my_plugin = "../target/{PROFILE}/libmy_plugin.so"
+//! my_plugin = "target/{PROFILE}/libmy_plugin.so"
 //!
 //! # Grouped plugins
 //! [package.metadata.plugins.network]
-//! ssh = "../target/{PROFILE}/libssh.so"
-//! telnet = "../target/{PROFILE}/libtelnet.so"
+//! ssh = "target/{PROFILE}/libssh.so"
+//! telnet = "target/{PROFILE}/libtelnet.so"
 //!
 //! # Grouped by plugin type (recommended)
 //! [package.metadata.plugins.inventory]
-//! inventory_a = "../target/{PROFILE}/libinventory.so"
+//! inventory_a = "target/{PROFILE}/libinventory.so"
 //!
 //! [package.metadata.plugins.connection]
-//! ssh = "../target/{PROFILE}/libssh.so"
-//! netconf = "../target/{PROFILE}/libnetconf.so"
+//! ssh = "target/{PROFILE}/libssh.so"
+//! netconf = "target/{PROFILE}/libnetconf.so"
 //!
 //! [package.metadata.plugins.runner]
-//! threaded = "../target/{PROFILE}/libthreaded.so"
+//! threaded = "target/{PROFILE}/libthreaded.so"
 //!
 //! [package.metadata.plugins.processor]
-//! audit = "../target/{PROFILE}/libaudit_processor.so"
+//! audit = "target/{PROFILE}/libaudit_processor.so"
 //!
 //! [package.metadata.plugins.transform]
-//! normalize = "../target/{PROFILE}/libnormalize.so"
+//! normalize = "target/{PROFILE}/libnormalize.so"
 //! ```
 //!
 //! ## Plugin Types
@@ -422,22 +440,26 @@
 //! [build-dependencies]
 //! genja-plugin-manager = "0.1.0"
 //!
+//! # Standalone application paths.
 //! # Grouped by plugin type (recommended)
 //! [package.metadata.plugins.connection]
-//! ssh = "../target/{PROFILE}/libssh.so"
+//! ssh = "target/{PROFILE}/libssh.so"
 //!
 //! [package.metadata.plugins.inventory]
-//! inventory_a = "../target/{PROFILE}/libinventory.so"
+//! inventory_a = "target/{PROFILE}/libinventory.so"
 //!
 //! [package.metadata.plugins.runner]
-//! threaded = "../target/{PROFILE}/libthreaded.so"
+//! threaded = "target/{PROFILE}/libthreaded.so"
 //!
 //! [package.metadata.plugins.processor]
-//! audit = "../target/{PROFILE}/libaudit_processor.so"
+//! audit = "target/{PROFILE}/libaudit_processor.so"
 //!
 //! [package.metadata.plugins.transform]
-//! normalize = "../target/{PROFILE}/libnormalize.so"
+//! normalize = "target/{PROFILE}/libnormalize.so"
 //! ```
+//!
+//! If the application is a workspace member and the workspace target directory
+//! is one level up, use `../target/{PROFILE}/...` instead.
 //!
 //! Example `build.rs` for the end-user project:
 //!
