@@ -1,0 +1,15 @@
+core:
+  raise_on_error: false
+
+inventory:
+  plugin: FileInventoryPlugin
+  options:
+    hosts_file: ./inventory/hosts.yaml
+
+runner:
+  plugin: threaded
+  worker_count: 10
+
+logging:
+  level: info
+  max_file_count: 10

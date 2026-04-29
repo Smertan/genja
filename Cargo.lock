@@ -373,7 +373,6 @@ dependencies = [
  "humantime",
  "log",
  "natord",
- "pyo3",
  "regex",
  "schemars",
  "serde",
@@ -392,6 +391,14 @@ version = "0.1.0"
 dependencies = [
  "quote",
  "syn",
+]
+
+[[package]]
+name = "genja-core-python"
+version = "0.1.0"
+dependencies = [
+ "genja-core",
+ "pyo3",
 ]
 
 [[package]]

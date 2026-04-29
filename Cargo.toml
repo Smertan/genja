@@ -2,6 +2,7 @@
 resolver = "3"
 members = ["genja",
     "genja-core",
+    "genja-core-python",
     "genja-core-derive",
     "genja-plugin-manager",
     "genja-plugin-manager/tests/plugin_inventory",

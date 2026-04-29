@@ -1,0 +1,12 @@
+[package]
+name = "genja-core-python"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "genja_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+genja-core = { path = "../genja-core" }
+pyo3 = "0.24.0"
