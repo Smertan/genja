@@ -398,7 +398,9 @@ name = "genja-core-python"
 version = "0.1.0"
 dependencies = [
  "genja-core",
+ "humantime",
  "pyo3",
+ "serde_json",
 ]
 
 [[package]]

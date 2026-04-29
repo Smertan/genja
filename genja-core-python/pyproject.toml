@@ -9,6 +9,7 @@ classifiers = [
 # dynamic = ["version"]
 dependencies = [
     "pip>=25.0.1",
+    "pydantic>=2.11.0",
 ]
 version = "0.1.0"
 description = "Default template for PDM package"
@@ -26,13 +27,14 @@ features = ["pyo3/extension-module"]
 distribution = false
 
 [tool.pdm.scripts]
-test = "pytest tests/"
+test = { shell = "maturin develop && pytest -v python/tests" }
 
 [dependency-groups]
 dev = [
+    "patchelf>=0.17.2.4",
     "pytest>=9.0.3",
 ]
 
 [build-system]
-requires = ["maturin>=1,<2"]
+requires = ["maturin[patchelf]>=1,<2"]
 build-backend = "maturin"
