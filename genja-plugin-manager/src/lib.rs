@@ -92,16 +92,13 @@
 //!
 //! ### Using the Plugin Manager
 //!
-//! ```rust
-//! # unsafe {
-//! #     std::env::set_var("CARGO_MANIFEST_PATH", "../tests/plugin_mods/Cargo.toml");
-//! # }
+//! ```no_run
 //! use genja_plugin_manager::PluginManager;
 //!
 //! # fn doc_test() -> Result<(), Box<dyn std::error::Error>> {
-//! // Create and activate plugins
-//! let mut plugin_manager = PluginManager::new();
-//! plugin_manager = plugin_manager.activate_plugins()?;
+//! // Load plugins from a runtime plugin directory.
+//! let plugin_manager = PluginManager::new()
+//!     .load_plugins_from_directory("plugins")?;
 //!
 //! // Access plugins by type
 //! if let Some(runner) = plugin_manager.get_runner_plugin("my_plugin") {
@@ -117,38 +114,53 @@
 //! # }
 //! ```
 //!
+//! ### Build Script Helper
+//!
+//! End-user applications that declare plugin artifacts in
+//! `[package.metadata.plugins]` can copy them into the profile-specific runtime
+//! plugin directory from `build.rs`:
+//!
+//! ```no_run
+//! fn main() {
+//!     genja_plugin_manager::build_support::copy_plugins_from_manifest().unwrap();
+//! }
+//! ```
+//!
 //! ## Plugin Configuration
 //!
-//! Plugins are configured in the `Cargo.toml` file of the end-user project using
-//! package metadata. You can register plugins as individual entries or grouped
-//! by plugin type (e.g., `inventory`, `connection`, `runner`, `processor`, `transform`):
+//! Plugin artifacts are declared in the `Cargo.toml` file of the end-user project
+//! using package metadata. Those entries are consumed by
+//! [`build_support::copy_plugins_from_manifest`] during the application's build,
+//! which copies the referenced shared libraries into `target/{PROFILE}/plugins`.
+//!
+//! Individual and grouped plugin entries are supported:
 //!
 //! ```toml
 //! # Individual plugins
 //! [package.metadata.plugins]
-//! my_plugin = "/path/to/libmy_plugin.so"
+//! my_plugin = "../target/{PROFILE}/libmy_plugin.so"
 //!
 //! # Grouped plugins
 //! [package.metadata.plugins.network]
-//! ssh = "/path/to/libssh.so"
-//! telnet = "/path/to/libtelnet.so"
+//! ssh = "../target/{PROFILE}/libssh.so"
+//! telnet = "../target/{PROFILE}/libtelnet.so"
 //!
 //! # Grouped by plugin type (recommended)
 //! [package.metadata.plugins.inventory]
-//! inventory_a = "/path/to/libinventory.so"
+//! inventory_a = "../target/{PROFILE}/libinventory.so"
 //!
 //! [package.metadata.plugins.connection]
-//! ssh = "/path/to/libssh.so"
-//! netconf = "/path/to/libnetconf.so"
+//! ssh = "../target/{PROFILE}/libssh.so"
+//! netconf = "../target/{PROFILE}/libnetconf.so"
 //!
 //! [package.metadata.plugins.runner]
-//! threaded = "/path/to/libthreaded.so"
+//! threaded = "../target/{PROFILE}/libthreaded.so"
 //!
 //! [package.metadata.plugins.processor]
-//! audit = "/path/to/libaudit_processor.so"
+//! audit = "../target/{PROFILE}/libaudit_processor.so"
 //!
 //! [package.metadata.plugins.transform]
-//! normalize = "/path/to/libnormalize.so"
+//! normalize = "../target/{PROFILE}/libnormalize.so"
 //! ```
 //!
 //! ## Plugin Types
@@ -405,24 +417,37 @@
 //!
 //! [dependencies]
 //! genja = "0.1.0"
+//! genja-plugin-manager = "0.1.0"
+//!
+//! [build-dependencies]
+//! genja-plugin-manager = "0.1.0"
 //!
 //! # Grouped by plugin type (recommended)
 //! [package.metadata.plugins.connection]
-//! ssh = "/path/to/libssh.so"
+//! ssh = "../target/{PROFILE}/libssh.so"
 //!
 //! [package.metadata.plugins.inventory]
-//! inventory_a = "/path/to/libinventory.so"
+//! inventory_a = "../target/{PROFILE}/libinventory.so"
 //!
 //! [package.metadata.plugins.runner]
-//! threaded = "/path/to/libthreaded.so"
+//! threaded = "../target/{PROFILE}/libthreaded.so"
 //!
 //! [package.metadata.plugins.processor]
-//! audit = "/path/to/libaudit_processor.so"
+//! audit = "../target/{PROFILE}/libaudit_processor.so"
 //!
 //! [package.metadata.plugins.transform]
-//! normalize = "/path/to/libnormalize.so"
+//! normalize = "../target/{PROFILE}/libnormalize.so"
+//! ```
+//!
+//! Example `build.rs` for the end-user project:
+//!
+//! ```no_run
+//! fn main() {
+//!     genja_plugin_manager::build_support::copy_plugins_from_manifest().unwrap();
+//! }
 //! ```
 
+pub mod build_support;
 pub mod plugin_types;
 // pub use plugin_types;
 pub mod connection_factory;
@@ -435,7 +460,8 @@ use plugin_types::{
 };
 use serde::Deserialize;
 use std::collections::{HashMap, hash_map};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 // use std::error::Error;
 use std::io::{Error, ErrorKind};
@@ -623,6 +649,52 @@ impl PluginManager {
         log::debug!("Plugin created successfully");
 
         Ok((library, plugins))
+    }
+
+    /// Load all plugin libraries from a directory.
+    ///
+    /// This scans the directory for files matching the current platform's
+    /// dynamic-library extension and attempts to load each one.
+    pub fn load_plugins_from_directory(
+        mut self,
+        directory: impl AsRef<Path>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let directory = directory.as_ref();
+
+        if !directory.exists() {
+            return Ok(self);
+        }
+
+        if !directory.is_dir() {
+            return Err(format!("plugin path is not a directory: {}", directory.display()).into());
+        }
+
+        let extension = std::env::consts::DLL_EXTENSION;
+        let mut entries: Vec<PathBuf> = fs::read_dir(directory)?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .extension()
+                        .and_then(|value| value.to_str())
+                        .map(|value| value == extension)
+                        .unwrap_or(false)
+            })
+            .collect();
+        entries.sort();
+
+        for path in entries {
+            let filename = path
+                .to_str()
+                .ok_or_else(|| format!("path contains invalid Unicode: {}", path.display()))?;
+            let (library, plugins) = self.load_plugin(filename)?;
+            self.libraries.push(library);
+            for plugin in plugins {
+                self.register_plugin(plugin);
+            }
+        }
+
+        Ok(self)
     }
 
     /// Insert a plugin into the registry by name.

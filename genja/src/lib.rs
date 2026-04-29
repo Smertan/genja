@@ -34,6 +34,25 @@
 //! - **Plugins**: Extensible plugin system for inventory sources and task runners
 //! - **Settings**: Configuration loaded from files or environment variables
 //!
+//! ## Plugin Runtime Layout
+//!
+//! Built-in plugins are always available. Dynamic plugins are loaded from a
+//! `plugins` directory beside the running executable. A typical build output
+//! layout looks like:
+//!
+//! ```text
+//! target/
+//!   debug/
+//!     your_app
+//!     plugins/
+//!       libyour_plugin.so
+//! ```
+//!
+//! When using `genja_plugin_manager::build_support::copy_plugins_from_manifest()`
+//! from an end-user application's `build.rs`, plugin artifacts declared in that
+//! application's `[package.metadata.plugins]` are copied into this
+//! profile-specific `plugins` directory automatically.
+//!
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
 pub use genja_core::GenjaError;
@@ -47,6 +66,7 @@ use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
 use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
 use log::info;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 // GenjaError is re-exported from genja-core.
@@ -238,53 +258,20 @@ impl Genja {
         Err(GenjaError::PluginNotFound(default_name.to_string()))
     }
 
-    /// Loads plugins from the plugin directory or registers default plugins.
+    /// Loads plugins from the executable-relative plugin directory.
     ///
-    /// This method attempts to activate plugins using the plugin manager. If no
-    /// plugins are found in the manifest, it falls back to registering the default
-    /// `FileInventoryPlugin`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(GenjaError::PluginLoad)` if plugin loading fails for reasons
-    /// other than missing plugin metadata.
+    /// Built-in plugins are always registered first. Then any dynamic plugin
+    /// libraries found in a sibling `plugins` directory next to the current
+    /// executable are loaded and registered.
     fn load_plugins(&mut self) -> Result<(), GenjaError> {
-        match PluginManager::new().activate_plugins() {
-            Ok(mut manager) => {
-                if manager
-                    .get_inventory_plugin("FileInventoryPlugin")
-                    .is_none()
-                {
-                    manager.register_plugin(Plugins::Inventory(Box::new(
-                        crate::plugins::DefaultInventoryPlugin,
-                    )));
-                }
-                if manager.get_runner_plugin("serial").is_none() {
-                    manager.register_plugin(Plugins::Runner(Box::new(
-                        crate::plugins::SerialRunnerPlugin,
-                    )));
-                }
-                if manager.get_runner_plugin("threaded").is_none() {
-                    manager.register_plugin(Plugins::Runner(Box::new(
-                        crate::plugins::ThreadedRunnerPlugin,
-                    )));
-                }
-                self.plugins = Arc::new(manager);
-                self.plugins_loaded = true;
-                Ok(())
-            }
-            Err(err) => {
-                let msg = err.to_string();
-                if msg.contains("No plugin metadata found in manifest") {
-                    let manager = crate::plugins::built_in_plugin_manager();
-                    self.plugins = Arc::new(manager);
-                    self.plugins_loaded = true;
-                    Ok(())
-                } else {
-                    Err(GenjaError::PluginLoad(err.to_string()))
-                }
-            }
-        }
+        let plugin_dir = current_plugin_directory()
+            .map_err(|err| GenjaError::PluginLoad(err.to_string()))?;
+        let manager = crate::plugins::built_in_plugin_manager()
+            .load_plugins_from_directory(&plugin_dir)
+            .map_err(|err| GenjaError::PluginLoad(err.to_string()))?;
+        self.plugins = Arc::new(manager);
+        self.plugins_loaded = true;
+        Ok(())
     }
 
     /// Loads an `Inventory` into the runtime and caches host identifiers.
@@ -816,6 +803,14 @@ impl Genja {
         log_task_summary(&summary, host_count, 0);
         Ok(results)
     }
+}
+
+fn current_plugin_directory() -> Result<PathBuf, std::io::Error> {
+    let executable = std::env::current_exe()?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| std::io::Error::other("executable has no parent directory"))?;
+    Ok(directory.join("plugins"))
 }
 
 fn log_task_summary(summary: &TaskResultsSummary, host_count: usize, depth: usize) {

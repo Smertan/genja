@@ -118,7 +118,7 @@
 //! ssh_plugin = "/path/to/libssh_plugin.so"
 //!
 //! # Grouped plugins
-//! [package.metadata.plugins.network]
+//! [package.metadata.plugins.connection]
 //! ssh = "/path/to/libssh.so"
 //! telnet = "/path/to/libtelnet.so"
 //!
