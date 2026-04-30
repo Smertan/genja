@@ -7,6 +7,15 @@ for compatibility, but new code should prefer:
 """
 
 from .genja_core import *
+from .settings import (
+    CoreConfig,
+    InventoryConfig,
+    LoggingConfig,
+    OptionsConfig,
+    RunnerConfig,
+    SSHConfig,
+    Settings,
+)
 from .task import (
     GenjaTaskProtocol,
     Host,
@@ -26,6 +35,13 @@ if hasattr(genja_core, "__all__"):
 
 __all__ = list(__all__) + [
     "task",
+    "Settings",
+    "CoreConfig",
+    "InventoryConfig",
+    "OptionsConfig",
+    "SSHConfig",
+    "RunnerConfig",
+    "LoggingConfig",
     "GenjaTaskProtocol",
     "TaskInfo",
     "Host",
