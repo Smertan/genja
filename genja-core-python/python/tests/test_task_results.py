@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 import genja_core
+import pytest
 from genja_core.task import (
     TaskFailureResult,
     TaskMessage,
@@ -71,3 +72,13 @@ def test_host_task_result_from_python_skip_result_round_trips():
     assert host_result.status == "skipped"
     assert data["reason"] == "maintenance_mode"
     assert data["message"] == "host is in maintenance mode"
+
+
+def test_host_task_result_from_python_result_rejects_missing_status():
+    with pytest.raises(ValueError, match="missing 'status'"):
+        genja_core.HostTaskResult.from_python_result({"summary": "backup complete"})
+
+
+def test_host_task_result_from_python_result_rejects_unknown_status():
+    with pytest.raises(ValueError, match="unsupported python task result status 'unknown'"):
+        genja_core.HostTaskResult.from_python_result({"status": "unknown"})

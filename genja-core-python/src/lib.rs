@@ -355,12 +355,29 @@ impl Task for PythonBackedTask {
         Python::with_gil(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
             let instance = class.call0().map_err(python_task_error)?;
-            let task_payload = python_task_spec_to_py_dict(py, &self.spec).map_err(python_task_error)?;
-            let host_payload = host_to_py_dict(py, host).map_err(python_task_error)?;
-            let context = PyDict::new(py);
+            let task_payload =
+                build_python_task_model(
+                    py,
+                    "TaskInfo",
+                    python_task_spec_to_py_dict(py, &self.spec).map_err(python_task_error)?,
+                )
+                .map_err(python_task_error)?;
+            let host_payload =
+                build_python_task_model(
+                    py,
+                    "Host",
+                    host_to_py_dict(py, host).map_err(python_task_error)?,
+                )
+                .map_err(python_task_error)?;
+            let context_payload = {
+                let context = PyDict::new(py);
+                context.set_item("current_depth", 0).map_err(python_task_error)?;
+                context.set_item("max_depth", py.None()).map_err(python_task_error)?;
+                build_python_task_model(py, "TaskContext", context).map_err(python_task_error)?
+            };
 
             let result = instance
-                .call_method1("run", (task_payload, host_payload, context))
+                .call_method1("run", (task_payload, host_payload, context_payload))
                 .map_err(python_task_error)?;
 
             python_result_to_host_task_result(result).map_err(python_task_error)
@@ -671,10 +688,20 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         .get_item("name")?
         .ok_or_else(|| PyValueError::new_err("python task metadata is missing 'name'"))?
         .extract()?;
+    if name.trim().is_empty() {
+        return Err(PyValueError::new_err(
+            "python task metadata field 'name' must not be empty",
+        ));
+    }
     let plugin_name: String = info
         .get_item("plugin_name")?
         .ok_or_else(|| PyValueError::new_err("python task metadata is missing 'plugin_name'"))?
         .extract()?;
+    if plugin_name.trim().is_empty() {
+        return Err(PyValueError::new_err(
+            "python task metadata field 'plugin_name' must not be empty",
+        ));
+    }
 
     let mut sub_tasks = Vec::new();
     if let Some(sub_task) = info.get_item("sub_task")? {
@@ -727,6 +754,16 @@ fn python_task_spec_to_py_dict<'py>(
         task.set_item("sub_task", py.None())?;
     }
     Ok(task)
+}
+
+fn build_python_task_model<'py>(
+    py: Python<'py>,
+    class_name: &str,
+    kwargs: Bound<'py, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    let task_module = PyModule::import(py, "genja_core.task")?;
+    let class = task_module.getattr(class_name)?;
+    Ok(class.call((), Some(&kwargs))?.unbind())
 }
 
 fn host_to_py_dict<'py>(py: Python<'py>, host: &Host) -> PyResult<Bound<'py, PyDict>> {
