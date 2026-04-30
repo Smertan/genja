@@ -85,3 +85,103 @@ fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
 
     Ok(Inventory::builder().hosts(hosts).build())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyString;
+    use std::sync::Once;
+
+    fn init_python() {
+        static INIT: Once = Once::new();
+        INIT.call_once(pyo3::prepare_freethreaded_python);
+    }
+
+    #[test]
+    fn python_hosts_to_inventory_converts_host_dict() {
+        init_python();
+        Python::with_gil(|py| {
+            let hosts = PyDict::new(py);
+
+            let router1 = PyDict::new(py);
+            router1.set_item("hostname", "10.0.0.1").unwrap();
+            router1.set_item("platform", "ios").unwrap();
+
+            let router2 = PyDict::new(py);
+            router2.set_item("hostname", "10.0.0.2").unwrap();
+            router2.set_item("port", 2222).unwrap();
+            router2.set_item("platform", "nxos").unwrap();
+
+            hosts.set_item("router1", router1).unwrap();
+            hosts.set_item("router2", router2).unwrap();
+
+            let inventory =
+                python_hosts_to_inventory(hosts.into_any()).expect("hosts should convert");
+            let inventory_hosts = inventory.hosts();
+
+            assert_eq!(inventory_hosts.len(), 2);
+            assert_eq!(
+                inventory_hosts
+                    .get("router1")
+                    .expect("router1 should exist")
+                    .hostname(),
+                Some("10.0.0.1")
+            );
+            assert_eq!(
+                inventory_hosts
+                    .get("router2")
+                    .expect("router2 should exist")
+                    .port(),
+                Some(2222)
+            );
+        });
+    }
+
+    #[test]
+    fn python_hosts_to_inventory_rejects_non_dict_input() {
+        init_python();
+        Python::with_gil(|py| {
+            let not_a_dict = PyString::new(py, "not-a-dict");
+
+            let err = python_hosts_to_inventory(not_a_dict.into_any())
+                .err()
+                .expect("non-dict input should fail");
+            assert!(
+                err.to_string()
+                    .contains("hosts must be a dict mapping host id to host payload")
+            );
+        });
+    }
+
+    #[test]
+    fn py_genja_from_hosts_builds_runtime() {
+        init_python();
+        Python::with_gil(|py| {
+            let hosts = PyDict::new(py);
+            let router = PyDict::new(py);
+            router.set_item("hostname", "10.0.0.1").unwrap();
+            router.set_item("platform", "ios").unwrap();
+            hosts.set_item("router1", router).unwrap();
+
+            let runtime =
+                PyGenja::from_hosts(hosts.into_any(), None).expect("runtime should build");
+
+            assert!(runtime.inner.plugins_loaded());
+            assert!(runtime.inner.inventory_loaded());
+            assert!(runtime.__repr__().contains("Genja("));
+        });
+    }
+
+    #[test]
+    fn register_adds_genja_class_to_module() {
+        init_python();
+        Python::with_gil(|py| {
+            let module =
+                PyModule::new(py, "test_runtime_module").expect("test module should be created");
+
+            register(&module).expect("runtime class should register");
+
+            assert!(module.getattr("Genja").is_ok());
+        });
+    }
+}

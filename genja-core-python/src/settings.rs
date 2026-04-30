@@ -280,3 +280,66 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyLoggingConfig>()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn settings_fixture_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("python")
+            .join("tests")
+            .join("fixtures")
+            .join("settings.yaml")
+    }
+
+    #[test]
+    fn py_settings_new_wraps_default_settings() {
+        let settings = PySettings::new();
+
+        assert!(!settings.core().raise_on_error());
+        assert_eq!(settings.inventory().plugin(), "FileInventoryPlugin");
+        assert_eq!(settings.runner().plugin(), "threaded");
+        assert_eq!(settings.logging().level(), "info");
+        assert!(settings.logging().enabled());
+        assert!(settings.__repr__().contains("Settings("));
+    }
+
+    #[test]
+    fn py_settings_from_file_exposes_loaded_values() {
+        let settings = PySettings::from_file(settings_fixture_path().to_str().unwrap())
+            .expect("settings fixture should load");
+
+        assert!(!settings.core().raise_on_error());
+        assert_eq!(settings.inventory().plugin(), "FileInventoryPlugin");
+        assert_eq!(
+            settings.inventory().options().hosts_file(),
+            Some("./inventory/hosts.yaml".to_string())
+        );
+        assert_eq!(settings.ssh().config_file(), None);
+        assert_eq!(settings.runner().plugin(), "threaded");
+        assert_eq!(settings.runner().worker_count(), Some(10));
+        assert_eq!(settings.logging().level(), "info");
+        assert_eq!(settings.logging().max_file_count(), 10);
+    }
+
+    #[test]
+    fn register_adds_settings_classes_to_module() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let module = PyModule::new(py, "test_settings_module")
+                .expect("test module should be created");
+
+            register(&module).expect("settings classes should register");
+
+            assert!(module.getattr("Settings").is_ok());
+            assert!(module.getattr("CoreConfig").is_ok());
+            assert!(module.getattr("OptionsConfig").is_ok());
+            assert!(module.getattr("InventoryConfig").is_ok());
+            assert!(module.getattr("SSHConfig").is_ok());
+            assert!(module.getattr("RunnerConfig").is_ok());
+            assert!(module.getattr("LoggingConfig").is_ok());
+        });
+    }
+}

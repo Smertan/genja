@@ -690,3 +690,181 @@ fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
     let json_module = PyModule::import(py, "json")?;
     Ok(json_module.call_method1("loads", (dumped,))?.unbind())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyTuple;
+    use std::sync::Once;
+
+    fn init_python() {
+        static INIT: Once = Once::new();
+        INIT.call_once(pyo3::prepare_freethreaded_python);
+    }
+
+    fn make_task_class<'py>(
+        py: Python<'py>,
+        name: &str,
+        plugin_name: &str,
+        sub_task: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let builtins = PyModule::import(py, "builtins")?;
+        let type_fn = builtins.getattr("type")?;
+        let object = builtins.getattr("object")?;
+        let bases = PyTuple::new(py, [object])?;
+
+        let info = PyDict::new(py);
+        info.set_item("name", name)?;
+        info.set_item("plugin_name", plugin_name)?;
+        if let Some(sub_task) = sub_task {
+            info.set_item("sub_task", sub_task)?;
+        } else {
+            info.set_item("sub_task", py.None())?;
+        }
+
+        let attrs = PyDict::new(py);
+        attrs.set_item("__genja_task_info__", info)?;
+
+        type_fn.call1((name, bases, attrs))
+    }
+
+    #[test]
+    fn python_result_to_host_task_result_round_trips_success_dict() {
+        init_python();
+        Python::with_gil(|py| {
+            let result = PyDict::new(py);
+            result.set_item("status", "passed").unwrap();
+            result.set_item("changed", true).unwrap();
+            result.set_item("summary", "backup complete").unwrap();
+            result
+                .set_item("warnings", vec!["using fallback path"])
+                .unwrap();
+            result
+                .set_item(
+                    "messages",
+                    vec![json_value_to_py(
+                        py,
+                        &json!({
+                            "level": "info",
+                            "text": "backup complete",
+                            "code": "BACKUP_DONE",
+                            "timestamp": "2026-04-29T12:00:00Z",
+                        }),
+                    )
+                    .unwrap()],
+                )
+                .unwrap();
+            result
+                .set_item(
+                    "metadata",
+                    json_value_to_py(py, &json!({"backup_file": "/tmp/router1.cfg"})).unwrap(),
+                )
+                .unwrap();
+
+            let host_result = python_result_to_host_task_result(result.into_any())
+                .expect("success result should convert");
+            let data = host_task_result_to_json(&host_result);
+
+            assert!(matches!(host_result, HostTaskResult::Passed(_)));
+            assert_eq!(data["status"], "passed");
+            assert_eq!(data["changed"], true);
+            assert_eq!(data["summary"], "backup complete");
+            assert_eq!(data["warnings"], json!(["using fallback path"]));
+            assert_eq!(data["messages"][0]["code"], "BACKUP_DONE");
+            assert_eq!(data["metadata"]["backup_file"], "/tmp/router1.cfg");
+        });
+    }
+
+    #[test]
+    fn python_result_to_host_task_result_rejects_unknown_status() {
+        init_python();
+        Python::with_gil(|py| {
+            let result = PyDict::new(py);
+            result.set_item("status", "unknown").unwrap();
+
+            let err = python_result_to_host_task_result(result.into_any())
+                .expect_err("unknown status should fail");
+            assert!(
+                err.to_string()
+                    .contains("unsupported python task result status 'unknown'")
+            );
+        });
+    }
+
+    #[test]
+    fn python_host_to_rust_host_converts_dict_payload() {
+        init_python();
+        Python::with_gil(|py| {
+            let host = PyDict::new(py);
+            host.set_item("hostname", "10.0.0.1").unwrap();
+            host.set_item("port", 22).unwrap();
+            host.set_item("username", "admin").unwrap();
+            host.set_item("password", "secret").unwrap();
+            host.set_item("platform", "ios").unwrap();
+            host.set_item("data", json_value_to_py(py, &json!({"site": "lab"})).unwrap())
+                .unwrap();
+
+            let converted =
+                python_host_to_rust_host(host.into_any()).expect("host payload should convert");
+
+            assert_eq!(converted.hostname(), Some("10.0.0.1"));
+            assert_eq!(converted.port(), Some(22));
+            assert_eq!(converted.username(), Some("admin"));
+            assert_eq!(converted.password(), Some("secret"));
+            assert_eq!(converted.platform(), Some("ios"));
+            assert_eq!(
+                converted.data().map(|value| &**value),
+                Some(&json!({"site": "lab"}))
+            );
+        });
+    }
+
+    #[test]
+    fn extract_python_task_spec_extracts_nested_sub_task_metadata() {
+        init_python();
+        Python::with_gil(|py| {
+            let verify = make_task_class(py, "verify_backup", "ssh", None)
+                .expect("sub task class should be created");
+            let backup = make_task_class(py, "backup_config", "ssh", Some(&verify))
+                .expect("parent task class should be created");
+
+            let spec = extract_python_task_spec(backup).expect("task spec should extract");
+
+            assert_eq!(spec.name, "backup_config");
+            assert_eq!(spec.plugin_name, "ssh");
+            assert_eq!(spec.sub_tasks.len(), 1);
+            assert_eq!(spec.sub_tasks[0].name, "verify_backup");
+            assert_eq!(spec.sub_tasks[0].plugin_name, "ssh");
+        });
+    }
+
+    #[test]
+    fn extract_python_task_spec_rejects_empty_plugin_name() {
+        init_python();
+        Python::with_gil(|py| {
+            let task = make_task_class(py, "backup_config", "", None)
+                .expect("task class should be created");
+
+            let err = extract_python_task_spec(task).err().expect("empty plugin should fail");
+            assert!(
+                err.to_string()
+                    .contains("python task metadata field 'plugin_name' must not be empty")
+            );
+        });
+    }
+
+    #[test]
+    fn register_adds_task_classes_to_module() {
+        init_python();
+        Python::with_gil(|py| {
+            let module =
+                PyModule::new(py, "test_task_module").expect("test module should be created");
+
+            register(&module).expect("task classes should register");
+
+            assert!(module.getattr("HostTaskResult").is_ok());
+            assert!(module.getattr("TaskDefinition").is_ok());
+            assert!(module.getattr("TaskResults").is_ok());
+        });
+    }
+}
