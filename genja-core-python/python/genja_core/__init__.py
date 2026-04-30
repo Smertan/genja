@@ -8,6 +8,7 @@ for compatibility, but new code should prefer:
 
 from .genja_core import *
 from .task import (
+    GenjaTaskProtocol,
     Host,
     TaskFailureResult,
     TaskContext,
@@ -25,6 +26,7 @@ if hasattr(genja_core, "__all__"):
 
 __all__ = list(__all__) + [
     "task",
+    "GenjaTaskProtocol",
     "TaskInfo",
     "Host",
     "TaskContext",

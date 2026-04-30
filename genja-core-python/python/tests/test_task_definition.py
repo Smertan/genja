@@ -66,3 +66,22 @@ def test_task_definition_from_python_class_rejects_empty_plugin_name():
 
     with pytest.raises(ValueError, match="plugin_name.*must not be empty"):
         genja_core.TaskDefinition.from_python_class(InvalidTask)
+
+
+def test_task_decorator_requires_callable_run_method():
+    with pytest.raises(TypeError, match="must define a 'run' method"):
+        @task(name="backup_config", plugin_name="ssh")
+        class InvalidTask:
+            pass
+
+
+def test_task_decorator_rejects_undecorated_sub_task():
+    class PlainSubTask:
+        def run(self, task, host, context):
+            return TaskSuccessResult(summary="noop")
+
+    with pytest.raises(TypeError, match="must also be decorated with @task"):
+        @task(name="backup_config", plugin_name="ssh", sub_task=PlainSubTask)
+        class InvalidTask:
+            def run(self, task, host, context):
+                return TaskSuccessResult(summary="noop")

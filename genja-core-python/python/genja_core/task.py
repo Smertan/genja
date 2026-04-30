@@ -56,9 +56,11 @@ Task metadata comes from ``@task(...)``:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
+
+_TaskClassT = TypeVar("_TaskClassT", bound=type)
 
 
 class _GenjaModel(BaseModel):
@@ -95,10 +97,50 @@ class TaskContext(_GenjaModel):
     max_depth: int | None = None
 
 
-def task(name: str, plugin_name: str, sub_task: type | None = None):
+class GenjaTaskProtocol(Protocol):
+    """Structural typing contract for Python-authored Genja task classes."""
+
+    __genja_task_info__: dict[str, Any]
+
+    def run(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskContext,
+    ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult: ...
+
+
+def task(
+    name: str,
+    plugin_name: str,
+    sub_task: type[GenjaTaskProtocol] | None = None,
+):
     """Attach Genja task metadata to a Python task class."""
 
-    def wrap(cls):
+    def wrap(cls: _TaskClassT) -> _TaskClassT:
+        if not isinstance(cls, type):
+            raise TypeError("@task can only decorate classes")
+
+        run = getattr(cls, "run", None)
+        if run is None:
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' must define a 'run' method"
+            )
+        if not callable(run):
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' attribute 'run' must be callable"
+            )
+
+        if sub_task is not None:
+            if not isinstance(sub_task, type):
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' sub_task must be a task class or None"
+                )
+            if not hasattr(sub_task, "__genja_task_info__"):
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' sub_task '{sub_task.__name__}' must also be decorated with @task"
+                )
+
         cls.__genja_task_info__ = {
             "name": name,
             "plugin_name": plugin_name,
@@ -153,6 +195,7 @@ class TaskSkipResult(_GenjaModel):
 
 __all__ = [
     "task",
+    "GenjaTaskProtocol",
     "TaskInfo",
     "Host",
     "TaskContext",

@@ -8,6 +8,7 @@ name = "genja_core"
 crate-type = ["cdylib"]
 
 [dependencies]
+genja = { path = "../genja" }
 genja-core = { path = "../genja-core" }
 humantime = "2.2.0"
 pyo3 = "0.24.0"

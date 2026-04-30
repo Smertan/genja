@@ -1,11 +1,13 @@
+use ::genja::Genja as RuntimeGenja;
 use ::genja_core::settings::{
     CoreConfig, InventoryConfig, LoggingConfig, OptionsConfig, RunnerConfig, SSHConfig,
 };
-use ::genja_core::inventory::{ConnectionKey, Host};
+use ::genja_core::inventory::{ConnectionKey, Host, Hosts, Inventory};
 use ::genja_core::Settings;
 use ::genja_core::task::{
     HostTaskResult, MessageLevel, SubTasks, Task, TaskDefinition, TaskError, TaskFailure,
-    TaskFailureKind, TaskInfo, TaskMessage, TaskSkip, TaskSuccess,
+    TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskSkip,
+    TaskSuccess,
 };
 use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
@@ -450,6 +452,163 @@ impl PyTaskDefinition {
     }
 }
 
+#[pyclass(name = "TaskResults")]
+#[derive(Clone)]
+struct PyTaskResults {
+    inner: TaskResults,
+}
+
+#[pymethods]
+impl PyTaskResults {
+    #[getter]
+    fn task_name(&self) -> String {
+        self.inner.task_name().to_string()
+    }
+
+    #[getter]
+    fn passed_hosts(&self) -> Vec<String> {
+        self.inner
+            .passed_hosts()
+            .into_iter()
+            .map(|host| host.to_string())
+            .collect()
+    }
+
+    #[getter]
+    fn failed_hosts(&self) -> Vec<String> {
+        self.inner
+            .failed_hosts()
+            .into_iter()
+            .map(|host| host.to_string())
+            .collect()
+    }
+
+    #[getter]
+    fn skipped_hosts(&self) -> Vec<String> {
+        self.inner
+            .skipped_hosts()
+            .into_iter()
+            .map(|host| host.to_string())
+            .collect()
+    }
+
+    fn host_summary(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let summary = self.inner.host_summary();
+        let value = json!({
+            "passed": summary.passed(),
+            "failed": summary.failed(),
+            "skipped": summary.skipped(),
+            "total": summary.total(),
+        });
+        json_value_to_py(py, &value)
+    }
+
+    fn task_summary(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_value_to_py(py, &task_results_summary_to_json(&self.inner.task_summary()))
+    }
+
+    #[pyo3(signature = (*, raw=false))]
+    fn to_dict(&self, py: Python<'_>, raw: bool) -> PyResult<Py<PyAny>> {
+        let dumped = if raw {
+            self.inner.to_raw_json_string()
+        } else {
+            self.inner.to_json_string()
+        }
+        .map_err(|err| PyValueError::new_err(format!("failed to serialize task results: {err}")))?;
+
+        let value: Value = serde_json::from_str(&dumped)
+            .map_err(|err| PyValueError::new_err(format!("failed to parse task results json: {err}")))?;
+        json_value_to_py(py, &value)
+    }
+
+    #[pyo3(signature = (*, raw=false, pretty=false))]
+    fn to_json(&self, raw: bool, pretty: bool) -> PyResult<String> {
+        match (raw, pretty) {
+            (true, true) => self.inner.to_raw_pretty_json_string(),
+            (true, false) => self.inner.to_raw_json_string(),
+            (false, true) => self.inner.to_pretty_json_string(),
+            (false, false) => self.inner.to_json_string(),
+        }
+        .map_err(|err| PyValueError::new_err(format!("failed to serialize task results: {err}")))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TaskResults(task_name={:?}, passed={}, failed={}, skipped={})",
+            self.inner.task_name(),
+            self.inner.passed_hosts().len(),
+            self.inner.failed_hosts().len(),
+            self.inner.skipped_hosts().len()
+        )
+    }
+}
+
+#[pyclass(name = "Genja")]
+#[derive(Clone)]
+struct PyGenja {
+    inner: RuntimeGenja,
+}
+
+#[pymethods]
+impl PyGenja {
+    #[staticmethod]
+    #[pyo3(signature = (hosts, settings=None))]
+    fn from_hosts(hosts: Bound<'_, PyAny>, settings: Option<PyRef<'_, PySettings>>) -> PyResult<Self> {
+        let inventory = python_hosts_to_inventory(hosts)?;
+        let inner = if let Some(settings) = settings {
+            RuntimeGenja::builder(inventory)
+                .with_settings(settings.inner.clone())
+                .build()
+                .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?
+        } else {
+            RuntimeGenja::from_inventory(inventory)
+        };
+        Ok(Self { inner })
+    }
+
+    #[staticmethod]
+    fn from_settings_file(path: &str) -> PyResult<Self> {
+        let inner = RuntimeGenja::from_settings_file(path).map_err(|err| {
+            PyValueError::new_err(format!(
+                "failed to build Genja runtime from settings file {path}: {err}"
+            ))
+        })?;
+        Ok(Self { inner })
+    }
+
+    fn with_runner(&self, runner: &str) -> PyResult<Self> {
+        let inner = self
+            .inner
+            .with_runner(runner)
+            .map_err(|err| PyValueError::new_err(format!("failed to select runner {runner}: {err}")))?;
+        Ok(Self { inner })
+    }
+
+    #[pyo3(signature = (task_class, max_depth=None))]
+    fn run_task(
+        &self,
+        task_class: Bound<'_, PyAny>,
+        max_depth: Option<usize>,
+    ) -> PyResult<PyTaskResults> {
+        let spec = extract_python_task_spec(task_class)?;
+        let task = task_from_spec(&spec);
+        let max_depth =
+            max_depth.unwrap_or_else(|| self.inner.settings().runner().max_task_depth());
+        let inner = self.inner.run(task, max_depth).map_err(|err| {
+            PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
+        })?;
+        Ok(PyTaskResults { inner })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Genja(plugins_loaded={}, inventory_loaded={})",
+            self.inner.plugins_loaded(),
+            self.inner.inventory_loaded()
+        )
+    }
+}
+
 fn python_result_to_host_task_result(obj: Bound<'_, PyAny>) -> PyResult<HostTaskResult> {
     let normalized = if obj.hasattr("model_dump")? {
         obj.call_method("model_dump", (), Some(&PyDict::from_sequence(&[("mode", "json")].into_pyobject(obj.py())?)?))?
@@ -640,6 +799,29 @@ fn host_task_result_to_json(result: &HostTaskResult) -> Value {
     }
 }
 
+fn task_results_summary_to_json(summary: &TaskResultsSummary) -> Value {
+    let sub_tasks = summary
+        .sub_tasks()
+        .iter()
+        .map(|(task_name, sub_summary)| {
+            (task_name.to_string(), task_results_summary_to_json(sub_summary))
+        })
+        .collect::<serde_json::Map<String, Value>>();
+
+    json!({
+        "task_name": summary.task_name(),
+        "hosts": {
+            "passed": summary.hosts().passed(),
+            "failed": summary.hosts().failed(),
+            "skipped": summary.hosts().skipped(),
+            "total": summary.hosts().total(),
+        },
+        "duration_ms": summary.duration_ms(),
+        "duration": summary.duration_display(),
+        "sub_tasks": Value::Object(sub_tasks),
+    })
+}
+
 fn task_message_to_json(message: &TaskMessage) -> Value {
     json!({
         "level": message_level_to_str(message.level()),
@@ -798,6 +980,21 @@ fn python_host_to_rust_host(obj: Bound<'_, PyAny>) -> PyResult<Host> {
         .map_err(|err| PyValueError::new_err(format!("invalid host payload: {err}")))
 }
 
+fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
+    let dict = obj.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("hosts must be a dict mapping host id to host payload")
+    })?;
+
+    let mut hosts = Hosts::new();
+    for (host_id, host_obj) in dict.iter() {
+        let host_id: String = host_id.extract()?;
+        let host = python_host_to_rust_host(host_obj)?;
+        hosts.add_host(host_id, host);
+    }
+
+    Ok(Inventory::builder().hosts(hosts).build())
+}
+
 fn python_task_error(err: PyErr) -> TaskError {
     TaskError::new(std::io::Error::other(err.to_string()))
 }
@@ -820,5 +1017,7 @@ fn genja_core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyLoggingConfig>()?;
     module.add_class::<PyHostTaskResult>()?;
     module.add_class::<PyTaskDefinition>()?;
+    module.add_class::<PyTaskResults>()?;
+    module.add_class::<PyGenja>()?;
     Ok(())
 }
