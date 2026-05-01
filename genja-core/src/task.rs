@@ -536,7 +536,7 @@
 //!
 //! Tasks can define sub-tasks that execute after the parent task completes. This
 //!
-use crate::inventory::Host;
+use crate::inventory::{Connection, Host};
 use crate::types::{CustomTreeMap, NatString};
 use log::{debug, info, warn};
 use serde::Serialize;
@@ -545,7 +545,7 @@ use std::any::{type_name, Any};
 use std::error::Error;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 /// Represents an error that occurred during task execution.
@@ -2957,10 +2957,10 @@ pub trait Task: TaskInfo + SubTasks + Send + Sync {
     ///
     /// The default implementation preserves the original `start(...)` contract
     /// so existing task implementations do not need to change.
-    fn start_with_context(
+    fn start_with_runtime(
         &self,
         host: &Host,
-        context: &TaskExecutionContext,
+        context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         let _ = context;
         self.start(host)
@@ -2988,6 +2988,60 @@ impl TaskExecutionContext {
 
     pub fn max_depth(&self) -> usize {
         self.max_depth
+    }
+}
+
+/// Runtime context passed into task implementations.
+#[derive(Debug, Clone)]
+pub struct TaskRuntimeContext {
+    execution: TaskExecutionContext,
+    connection: Option<Arc<Mutex<dyn Connection>>>,
+}
+
+impl TaskRuntimeContext {
+    pub fn new(
+        execution: TaskExecutionContext,
+        connection: Option<Arc<Mutex<dyn Connection>>>,
+    ) -> Self {
+        Self {
+            execution,
+            connection,
+        }
+    }
+
+    pub fn execution(&self) -> &TaskExecutionContext {
+        &self.execution
+    }
+
+    pub fn current_depth(&self) -> usize {
+        self.execution.current_depth()
+    }
+
+    pub fn max_depth(&self) -> usize {
+        self.execution.max_depth()
+    }
+
+    pub fn connection(&self) -> Option<&Arc<Mutex<dyn Connection>>> {
+        self.connection.as_ref()
+    }
+
+    pub fn has_connection(&self) -> bool {
+        self.connection.is_some()
+    }
+
+    pub fn with_connection<R>(
+        &self,
+        f: impl FnOnce(&mut dyn Connection) -> Result<R, TaskError>,
+    ) -> Result<Option<R>, TaskError> {
+        let Some(connection) = &self.connection else {
+            return Ok(None);
+        };
+
+        let mut guard = connection
+            .lock()
+            .map_err(|_| TaskError::new(std::io::Error::other("connection lock poisoned")))?;
+
+        f(&mut *guard).map(Some)
     }
 }
 
@@ -3501,7 +3555,8 @@ impl TaskDefinition {
         }
 
         let execution_context = TaskExecutionContext::new(depth, max_depth);
-        let host_result = task.start_with_context(host, &execution_context);
+        let runtime_context = TaskRuntimeContext::new(execution_context, None);
+        let host_result = task.start_with_runtime(host, &runtime_context);
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
             .duration_since(started_at)
@@ -3747,7 +3802,7 @@ impl DerefMut for Tasks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::{BaseBuilderHost, Host};
+    use crate::inventory::{BaseBuilderHost, Connection, ConnectionKey, Host, ResolvedConnectionParams};
     use log::{LevelFilter, Log, Metadata, Record};
     use serde_json::json;
     use std::fmt;
@@ -3798,6 +3853,35 @@ mod tests {
     struct FailingTask;
 
     struct SkippingTask;
+
+    #[derive(Debug)]
+    struct TestConnection {
+        key: ConnectionKey,
+        alive: bool,
+    }
+
+    impl Connection for TestConnection {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+            Box::new(Self {
+                key: key.clone(),
+                alive: false,
+            })
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+
+        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            self.alive = true;
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.alive = false;
+            self.key.clone()
+        }
+    }
 
     impl TaskInfo for TestTask {
         fn name(&self) -> &str {
@@ -4591,6 +4675,40 @@ mod tests {
 
         assert_eq!(millis.duration_display(), Some("2.5ms".to_string()));
         assert_eq!(seconds.duration_display(), Some("1.5s".to_string()));
+    }
+
+    #[test]
+    fn task_runtime_context_helpers_expose_execution_and_connection() {
+        let execution = TaskExecutionContext::new(2, 5);
+        let key = ConnectionKey::new("router1", "ssh");
+        let connection = Arc::new(Mutex::new(TestConnection {
+            key: key.clone(),
+            alive: true,
+        }));
+        let context = TaskRuntimeContext::new(execution.clone(), Some(connection));
+
+        assert_eq!(context.execution(), &execution);
+        assert_eq!(context.current_depth(), 2);
+        assert_eq!(context.max_depth(), 5);
+        assert!(context.has_connection());
+        assert!(context.connection().is_some());
+
+        let is_alive = context
+            .with_connection(|connection| Ok(connection.is_alive()))
+            .expect("connection helper should not fail");
+        assert_eq!(is_alive, Some(true));
+    }
+
+    #[test]
+    fn task_runtime_context_with_connection_returns_none_without_connection() {
+        let context = TaskRuntimeContext::new(TaskExecutionContext::new(0, 1), None);
+
+        let result = context
+            .with_connection(|connection| Ok(connection.is_alive()))
+            .expect("missing connection should not fail");
+
+        assert_eq!(result, None);
+        assert!(!context.has_connection());
     }
 
     #[test]

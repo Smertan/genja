@@ -1,9 +1,9 @@
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host};
 use ::genja_core::task::{
-    HostTaskResult, MessageLevel, SubTasks, Task, TaskDefinition, TaskError, TaskExecutionContext,
-    TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskSkip,
-    TaskSuccess,
+    HostTaskResult, MessageLevel, SubTasks, Task, TaskDefinition, TaskError, TaskFailure,
+    TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskRuntimeContext,
+    TaskSkip, TaskSuccess,
 };
 use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
@@ -100,10 +100,10 @@ impl Task for PythonBackedTask {
         self.run_python(host, 0, None)
     }
 
-    fn start_with_context(
+    fn start_with_runtime(
         &self,
         host: &Host,
-        context: &TaskExecutionContext,
+        context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         self.run_python(host, context.current_depth(), Some(context.max_depth()))
     }
