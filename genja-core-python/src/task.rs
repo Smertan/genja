@@ -1,15 +1,15 @@
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host};
 use ::genja_core::task::{
-    HostTaskResult, MessageLevel, SubTasks, Task, TaskDefinition, TaskError, TaskFailure,
-    TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskSkip,
-    TaskSuccess, TaskExecutionContext,
+    HostTaskResult, MessageLevel, SubTasks, Task, TaskDefinition, TaskError, TaskExecutionContext,
+    TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskSkip,
+    TaskSuccess,
 };
 use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -51,6 +51,7 @@ impl PyHostTaskResult {
 struct PythonTaskSpec {
     name: String,
     plugin_name: String,
+    processor_names: Vec<String>,
     options: Option<Value>,
     py_task_class: Arc<Py<PyAny>>,
     sub_tasks: Vec<PythonTaskSpec>,
@@ -72,6 +73,14 @@ impl TaskInfo for PythonBackedTask {
 
     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
         ConnectionKey::new(hostname, self.plugin_name())
+    }
+
+    fn processor_names(&self) -> Vec<&str> {
+        self.spec
+            .processor_names
+            .iter()
+            .map(String::as_str)
+            .collect()
     }
 
     fn options(&self) -> Option<&Value> {
@@ -131,7 +140,9 @@ impl PythonBackedTask {
                         .set_item("max_depth", max_depth)
                         .map_err(python_task_error)?;
                 } else {
-                    context.set_item("max_depth", py.None()).map_err(python_task_error)?;
+                    context
+                        .set_item("max_depth", py.None())
+                        .map_err(python_task_error)?;
                 }
                 build_python_task_model(py, "TaskExecutionContext", context)
                     .map_err(python_task_error)?
@@ -193,11 +204,10 @@ impl PyTaskDefinition {
 
     fn run_on_host(&self, host: Bound<'_, PyAny>) -> PyResult<PyHostTaskResult> {
         let host = python_host_to_rust_host(host)?;
-        let result = self
-            .inner
-            .as_task()
-            .start(&host)
-            .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
+        let result =
+            self.inner.as_task().start(&host).map_err(|err| {
+                PyValueError::new_err(format!("python task execution failed: {err}"))
+            })?;
         Ok(PyHostTaskResult { inner: result })
     }
 
@@ -263,7 +273,10 @@ impl PyTaskResults {
     }
 
     fn task_summary(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_value_to_py(py, &task_results_summary_to_json(&self.inner.task_summary()))
+        json_value_to_py(
+            py,
+            &task_results_summary_to_json(&self.inner.task_summary()),
+        )
     }
 
     #[pyo3(signature = (*, raw=false))]
@@ -324,35 +337,42 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn python_result_to_host_task_result(obj: Bound<'_, PyAny>) -> PyResult<HostTaskResult> {
-    let normalized = if obj.hasattr("model_dump")? {
-        obj.call_method(
-            "model_dump",
-            (),
-            Some(&PyDict::from_sequence(
-                &[("mode", "json")].into_pyobject(obj.py())?,
-            )?),
-        )?
-    } else if obj.hasattr("to_dict")? {
-        obj.call_method0("to_dict")?
+pub(crate) fn python_result_to_host_task_result(obj: Bound<'_, PyAny>) -> PyResult<HostTaskResult> {
+    let value = normalize_python_json_payload(&obj, "invalid python task result")?;
+    host_task_result_from_payload(&value)
+}
+
+pub(crate) fn python_result_to_task_results(obj: Bound<'_, PyAny>) -> PyResult<TaskResults> {
+    let value = normalize_python_json_payload(&obj, "invalid python task results")?;
+    json_to_task_results(&value)
+}
+
+fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
+    let result_value = if let Some(passed) = value.get("Passed") {
+        let mut tagged = passed.clone();
+        tagged["status"] = Value::String("passed".to_string());
+        tagged
+    } else if let Some(failed) = value.get("Failed") {
+        let mut tagged = failed.clone();
+        tagged["status"] = Value::String("failed".to_string());
+        tagged
+    } else if let Some(skipped) = value.get("Skipped") {
+        let mut tagged = skipped.clone();
+        tagged["status"] = Value::String("skipped".to_string());
+        tagged
     } else {
-        obj
+        value.clone()
     };
 
-    let json_module = PyModule::import(normalized.py(), "json")?;
-    let dumped: String = json_module.call_method1("dumps", (normalized,))?.extract()?;
-    let value: Value = serde_json::from_str(&dumped)
-        .map_err(|err| PyValueError::new_err(format!("invalid python task result: {err}")))?;
-
-    let status = value
+    let status = result_value
         .get("status")
         .and_then(Value::as_str)
         .ok_or_else(|| PyValueError::new_err("python task result is missing 'status'"))?;
 
     match status {
-        "passed" => Ok(HostTaskResult::passed(json_to_task_success(&value)?)),
-        "failed" => Ok(HostTaskResult::failed(json_to_task_failure(&value)?)),
-        "skipped" => Ok(HostTaskResult::Skipped(json_to_task_skip(&value))),
+        "passed" => Ok(HostTaskResult::passed(json_to_task_success(&result_value)?)),
+        "failed" => Ok(HostTaskResult::failed(json_to_task_failure(&result_value)?)),
+        "skipped" => Ok(HostTaskResult::Skipped(json_to_task_skip(&result_value))),
         other => Err(PyValueError::new_err(format!(
             "unsupported python task result status '{other}'"
         ))),
@@ -455,7 +475,9 @@ fn json_to_task_message(value: &Value) -> PyResult<TaskMessage> {
     }
     if let Some(timestamp) = value.get("timestamp").and_then(Value::as_str) {
         let parsed = humantime::parse_rfc3339(timestamp).map_err(|err| {
-            PyValueError::new_err(format!("invalid task message timestamp '{timestamp}': {err}"))
+            PyValueError::new_err(format!(
+                "invalid task message timestamp '{timestamp}': {err}"
+            ))
         })?;
         message = message.with_timestamp(parsed);
     }
@@ -525,7 +547,10 @@ fn task_results_summary_to_json(summary: &TaskResultsSummary) -> Value {
         .sub_tasks()
         .iter()
         .map(|(task_name, sub_summary)| {
-            (task_name.to_string(), task_results_summary_to_json(sub_summary))
+            (
+                task_name.to_string(),
+                task_results_summary_to_json(sub_summary),
+            )
         })
         .collect::<serde_json::Map<String, Value>>();
 
@@ -543,7 +568,7 @@ fn task_results_summary_to_json(summary: &TaskResultsSummary) -> Value {
     })
 }
 
-fn task_message_to_json(message: &TaskMessage) -> Value {
+pub(crate) fn task_message_to_json(message: &TaskMessage) -> Value {
     json!({
         "level": message_level_to_str(message.level()),
         "text": message.text(),
@@ -605,6 +630,11 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
             "python task metadata field 'plugin_name' must not be empty",
         ));
     }
+    let processor_names = if let Some(processors) = info.get_item("processors")? {
+        processors.extract::<Vec<String>>()?
+    } else {
+        Vec::new()
+    };
 
     let options = if let Some(options) = info.get_item("options")? {
         if options.is_none() {
@@ -626,6 +656,7 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     Ok(PythonTaskSpec {
         name,
         plugin_name,
+        processor_names,
         options,
         py_task_class: Arc::new(py_task_class.unbind()),
         sub_tasks,
@@ -651,6 +682,7 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
     json!({
         "name": spec.name,
         "plugin_name": spec.plugin_name,
+        "processors": spec.processor_names,
         "options": spec.options,
         "sub_task": spec.sub_tasks.first().map(python_task_spec_to_json),
     })
@@ -663,6 +695,7 @@ fn python_task_spec_to_py_dict<'py>(
     let task = PyDict::new(py);
     task.set_item("name", &spec.name)?;
     task.set_item("plugin_name", &spec.plugin_name)?;
+    task.set_item("processors", &spec.processor_names)?;
     if let Some(options) = spec.options.as_ref() {
         task.set_item("options", json_value_to_py(py, options)?)?;
     } else {
@@ -719,7 +752,9 @@ pub(crate) fn python_host_to_rust_host(obj: Bound<'_, PyAny>) -> PyResult<Host> 
     };
 
     let json_module = PyModule::import(normalized.py(), "json")?;
-    let dumped: String = json_module.call_method1("dumps", (normalized,))?.extract()?;
+    let dumped: String = json_module
+        .call_method1("dumps", (normalized,))?
+        .extract()?;
     serde_json::from_str(&dumped)
         .map_err(|err| PyValueError::new_err(format!("invalid host payload: {err}")))
 }
@@ -729,10 +764,30 @@ fn python_task_error(err: PyErr) -> TaskError {
 }
 
 fn py_any_to_json_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    normalize_python_json_payload(obj, "invalid json payload")
+}
+
+fn normalize_python_json_payload(obj: &Bound<'_, PyAny>, error_prefix: &str) -> PyResult<Value> {
+    let normalized = if obj.hasattr("model_dump")? {
+        obj.call_method(
+            "model_dump",
+            (),
+            Some(&PyDict::from_sequence(
+                &[("mode", "json")].into_pyobject(obj.py())?,
+            )?),
+        )?
+    } else if obj.hasattr("to_dict")? {
+        obj.call_method0("to_dict")?
+    } else {
+        obj.clone()
+    };
+
     let json_module = PyModule::import(obj.py(), "json")?;
-    let dumped: String = json_module.call_method1("dumps", (obj,))?.extract()?;
+    let dumped: String = json_module
+        .call_method1("dumps", (normalized,))?
+        .extract()?;
     serde_json::from_str(&dumped)
-        .map_err(|err| PyValueError::new_err(format!("invalid json payload: {err}")))
+        .map_err(|err| PyValueError::new_err(format!("{error_prefix}: {err}")))
 }
 
 fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
@@ -740,6 +795,53 @@ fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
         .map_err(|err| PyValueError::new_err(format!("failed to serialize value: {err}")))?;
     let json_module = PyModule::import(py, "json")?;
     Ok(json_module.call_method1("loads", (dumped,))?.unbind())
+}
+
+fn json_to_task_results(value: &Value) -> PyResult<TaskResults> {
+    let task_name = value
+        .get("task_name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| PyValueError::new_err("task results payload is missing 'task_name'"))?;
+    let mut results = TaskResults::new(task_name);
+
+    if let Some(summary) = value.get("summary").and_then(Value::as_str) {
+        results = results.with_summary(summary);
+    }
+    if let Some(started_at) = value.get("started_at").and_then(Value::as_str) {
+        let parsed = humantime::parse_rfc3339(started_at).map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid task results started_at '{started_at}': {err}"
+            ))
+        })?;
+        results = results.with_started_at(parsed);
+    }
+    if let Some(finished_at) = value.get("finished_at").and_then(Value::as_str) {
+        let parsed = humantime::parse_rfc3339(finished_at).map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid task results finished_at '{finished_at}': {err}"
+            ))
+        })?;
+        results = results.with_finished_at(parsed);
+    }
+    if let Some(duration_ns) = value.get("duration_ns").and_then(Value::as_u64) {
+        results = results.with_duration_ns(duration_ns as u128);
+    } else if let Some(duration_ms) = value.get("duration_ms").and_then(Value::as_u64) {
+        results = results.with_duration_ms(duration_ms as u128);
+    }
+
+    if let Some(hosts) = value.get("hosts").and_then(Value::as_object) {
+        for (hostname, result) in hosts {
+            results.insert_host_result(hostname, host_task_result_from_payload(result)?);
+        }
+    }
+
+    if let Some(sub_tasks) = value.get("sub_tasks").and_then(Value::as_object) {
+        for (task_name, sub_results) in sub_tasks {
+            results.insert_sub_task(task_name, json_to_task_results(sub_results)?);
+        }
+    }
+
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -835,10 +937,9 @@ mod tests {
 
             let err = python_result_to_host_task_result(result.into_any())
                 .expect_err("unknown status should fail");
-            assert!(
-                err.to_string()
-                    .contains("unsupported python task result status 'unknown'")
-            );
+            assert!(err
+                .to_string()
+                .contains("unsupported python task result status 'unknown'"));
         });
     }
 
@@ -852,8 +953,11 @@ mod tests {
             host.set_item("username", "admin").unwrap();
             host.set_item("password", "secret").unwrap();
             host.set_item("platform", "ios").unwrap();
-            host.set_item("data", json_value_to_py(py, &json!({"site": "lab"})).unwrap())
-                .unwrap();
+            host.set_item(
+                "data",
+                json_value_to_py(py, &json!({"site": "lab"})).unwrap(),
+            )
+            .unwrap();
 
             let converted =
                 python_host_to_rust_host(host.into_any()).expect("host payload should convert");
@@ -926,11 +1030,12 @@ mod tests {
             let task = make_task_class(py, "backup_config", "", None)
                 .expect("task class should be created");
 
-            let err = extract_python_task_spec(task).err().expect("empty plugin should fail");
-            assert!(
-                err.to_string()
-                    .contains("python task metadata field 'plugin_name' must not be empty")
-            );
+            let err = extract_python_task_spec(task)
+                .err()
+                .expect("empty plugin should fail");
+            assert!(err
+                .to_string()
+                .contains("python task metadata field 'plugin_name' must not be empty"));
         });
     }
 

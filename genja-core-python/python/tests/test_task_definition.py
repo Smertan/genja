@@ -10,12 +10,18 @@ from genja_core.task import (
 )
 
 
-@task(name="verify_backup", plugin_name="ssh", options={"mode": "strict"})
+@task(
+    name="verify_backup",
+    plugin_name="ssh",
+    processors=["audit"],
+    options={"mode": "strict"},
+)
 class VerifyBackupTask:
     def run(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
         assert isinstance(context, TaskExecutionContext)
+        assert task.processors == ["audit"]
         assert task.options == {"mode": "strict"}
         return TaskSuccessResult(
             summary=f"verified {host.hostname}",
@@ -56,6 +62,7 @@ def test_task_definition_from_python_class_extracts_metadata():
         "backup_path": "/tmp/configs",
         "compress": True,
     }
+    assert task_definition.sub_tasks[0].to_dict()["processors"] == ["audit"]
     assert task_definition.sub_tasks[0].to_dict()["options"] == {"mode": "strict"}
 
 

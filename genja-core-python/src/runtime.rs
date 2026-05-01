@@ -31,9 +31,9 @@ impl PyGenja {
         if let Some(plugin_manager) = plugin_manager {
             builder = builder.with_plugin_manager(plugin_manager.take_inner()?);
         }
-        let inner = builder
-            .build()
-            .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?;
+        let inner = builder.build().map_err(|err| {
+            PyValueError::new_err(format!("failed to build Genja runtime: {err}"))
+        })?;
         Ok(Self { inner })
     }
 
@@ -48,10 +48,9 @@ impl PyGenja {
     }
 
     fn with_runner(&self, runner: &str) -> PyResult<Self> {
-        let inner = self
-            .inner
-            .with_runner(runner)
-            .map_err(|err| PyValueError::new_err(format!("failed to select runner {runner}: {err}")))?;
+        let inner = self.inner.with_runner(runner).map_err(|err| {
+            PyValueError::new_err(format!("failed to select runner {runner}: {err}"))
+        })?;
         Ok(Self { inner })
     }
 
@@ -154,10 +153,9 @@ mod tests {
             let err = python_hosts_to_inventory(not_a_dict.into_any())
                 .err()
                 .expect("non-dict input should fail");
-            assert!(
-                err.to_string()
-                    .contains("hosts must be a dict mapping host id to host payload")
-            );
+            assert!(err
+                .to_string()
+                .contains("hosts must be a dict mapping host id to host payload"));
         });
     }
 
@@ -190,8 +188,8 @@ mod tests {
             router.set_item("platform", "ios").unwrap();
             hosts.set_item("router1", router).unwrap();
 
-            let plugin_manager = Py::new(py, PyPluginManager::new())
-                .expect("plugin manager should be created");
+            let plugin_manager =
+                Py::new(py, PyPluginManager::new()).expect("plugin manager should be created");
             let plugin_manager_ref = plugin_manager.bind(py).borrow();
 
             let runtime = PyGenja::from_hosts(hosts.into_any(), None, Some(plugin_manager_ref))

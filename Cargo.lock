@@ -403,6 +403,7 @@ dependencies = [
  "humantime",
  "pyo3",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

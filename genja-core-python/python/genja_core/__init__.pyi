@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .plugin_manager import PluginManager
+from .processor import TaskProcessorContext, TaskProcessorProtocol
 from .settings import (
     CoreConfig,
     InventoryConfig,

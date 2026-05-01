@@ -5,6 +5,7 @@ directly. The top-level package re-exports these names for compatibility, but
 ``genja_core.task`` is the primary public surface for:
 
 - ``@task(...)`` task metadata decoration
+- task processor selection metadata
 - ``TaskMessage``
 - ``TaskSuccessResult``
 - ``TaskFailureResult``
@@ -27,6 +28,7 @@ The canonical authoring shape is:
     @task(
         name="backup_config",
         plugin_name="ssh",
+        processors=["audit"],
         options={"backup_path": "/tmp/configs", "compress": True},
     )
     class BackupConfigTask:
@@ -69,6 +71,7 @@ Task metadata comes from ``@task(...)``:
 - ``name``: required and must be non-empty
 - ``plugin_name``: required and must be non-empty
 - ``sub_task``: optional decorated task class
+- ``processors``: optional list of processor plugin names
 - ``options``: optional JSON-serializable task options payload
 """
 
@@ -95,6 +98,7 @@ class TaskInfo(_GenjaModel):
 
     name: str
     plugin_name: str
+    processors: list[str] = Field(default_factory=list)
     options: Any | None = None
     sub_task: TaskInfo | None = None
 
@@ -134,6 +138,7 @@ def task(
     name: str,
     plugin_name: str,
     sub_task: type[GenjaTaskProtocol] | None = None,
+    processors: list[str] | None = None,
     options: Any | None = None,
 ):
     """Attach Genja task metadata to a Python task class."""
@@ -161,10 +166,21 @@ def task(
                 raise TypeError(
                     f"@task-decorated class '{cls.__name__}' sub_task '{sub_task.__name__}' must also be decorated with @task"
                 )
+        if processors is not None:
+            if not isinstance(processors, list):
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' processors must be a list of processor names or None"
+                )
+            for processor_name in processors:
+                if not isinstance(processor_name, str) or not processor_name.strip():
+                    raise TypeError(
+                        f"@task-decorated class '{cls.__name__}' processors must contain non-empty strings"
+                    )
 
         cls.__genja_task_info__ = {
             "name": name,
             "plugin_name": plugin_name,
+            "processors": list(processors or []),
             "options": options,
             "sub_task": sub_task,
         }
