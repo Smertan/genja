@@ -14,7 +14,7 @@ from .settings import (
 from .task import (
     GenjaTaskProtocol,
     Host,
-    TaskContext,
+    TaskExecutionContext,
     TaskFailureResult,
     TaskInfo,
     TaskMessage,

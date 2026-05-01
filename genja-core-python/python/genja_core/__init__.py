@@ -19,8 +19,8 @@ from .settings import (
 from .task import (
     GenjaTaskProtocol,
     Host,
+    TaskExecutionContext,
     TaskFailureResult,
-    TaskContext,
     TaskInfo,
     TaskMessage,
     TaskSkipResult,
@@ -45,7 +45,7 @@ __all__ = list(__all__) + [
     "GenjaTaskProtocol",
     "TaskInfo",
     "Host",
-    "TaskContext",
+    "TaskExecutionContext",
     "TaskMessage",
     "TaskSuccessResult",
     "TaskFailureResult",

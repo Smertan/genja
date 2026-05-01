@@ -13,6 +13,30 @@ class RuntimeBackupTask:
         )
 
 
+@task(name="runtime_child", plugin_name="ssh")
+class RuntimeChildTask:
+    def run(self, task, host, context):
+        return TaskSuccessResult(
+            summary=f"child handled {host.hostname}",
+            metadata={
+                "current_depth": context.current_depth,
+                "max_depth": context.max_depth,
+            },
+        )
+
+
+@task(name="runtime_parent", plugin_name="ssh", sub_task=RuntimeChildTask)
+class RuntimeParentTask:
+    def run(self, task, host, context):
+        return TaskSuccessResult(
+            summary=f"parent handled {host.hostname}",
+            metadata={
+                "current_depth": context.current_depth,
+                "max_depth": context.max_depth,
+            },
+        )
+
+
 def test_genja_runtime_runs_python_task_definition():
     runtime = genja_core.Genja.from_hosts(
         {
@@ -32,3 +56,24 @@ def test_genja_runtime_runs_python_task_definition():
     assert data["task_name"] == "runtime_backup"
     assert data["hosts"]["router1"]["Passed"]["summary"] == "runtime handled 10.0.0.1"
     assert data["hosts"]["router2"]["Passed"]["metadata"]["platform"] == "ios"
+
+
+def test_genja_runtime_passes_real_task_context_depth():
+    runtime = genja_core.Genja.from_hosts(
+        {
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }
+    ).with_runner("serial")
+    results = runtime.run_task(RuntimeParentTask, max_depth=1)
+    data = results.to_dict(raw=True)
+
+    assert data["hosts"]["router1"]["Passed"]["metadata"] == {
+        "current_depth": 0,
+        "max_depth": 1,
+    }
+
+    child_results = data["sub_tasks"]["runtime_child"]
+    assert child_results["hosts"]["router1"]["Passed"]["metadata"] == {
+        "current_depth": 1,
+        "max_depth": 1,
+    }

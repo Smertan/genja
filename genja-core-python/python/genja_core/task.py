@@ -9,6 +9,7 @@ directly. The top-level package re-exports these names for compatibility, but
 - ``TaskSuccessResult``
 - ``TaskFailureResult``
 - ``TaskSkipResult``
+- task ``options`` metadata
 
 The canonical authoring shape is:
 
@@ -16,28 +17,45 @@ The canonical authoring shape is:
 
     from genja_core.task import (
         Host,
-        TaskContext,
+        TaskExecutionContext,
         TaskInfo,
         TaskMessage,
         TaskSuccessResult,
         task,
     )
 
-    @task(name="backup_config", plugin_name="ssh")
+    @task(
+        name="backup_config",
+        plugin_name="ssh",
+        options={"backup_path": "/tmp/configs", "compress": True},
+    )
     class BackupConfigTask:
         def run(
             self,
             task: TaskInfo,
             host: Host,
-            context: TaskContext,
+            context: TaskExecutionContext,
         ) -> TaskSuccessResult:
             return TaskSuccessResult(
                 changed=True,
-                summary=f"backed up {host.hostname}",
+                summary=(
+                    f"backed up {host.hostname} to "
+                    f"{task.options['backup_path']}"
+                ),
                 messages=[
-                    TaskMessage(level="info", text=f"task={task.name}")
+                    TaskMessage(
+                        level="info",
+                        text=(
+                            f"task={task.name} "
+                            f"depth={context.current_depth}/{context.max_depth}"
+                        ),
+                    )
                 ],
-                metadata={"platform": host.platform},
+                metadata={
+                    "platform": host.platform,
+                    "backup_path": task.options["backup_path"],
+                    "compress": task.options["compress"],
+                },
             )
 
 ``run(...)`` must return one of:
@@ -51,6 +69,7 @@ Task metadata comes from ``@task(...)``:
 - ``name``: required and must be non-empty
 - ``plugin_name``: required and must be non-empty
 - ``sub_task``: optional decorated task class
+- ``options``: optional JSON-serializable task options payload
 """
 
 from __future__ import annotations
@@ -76,6 +95,7 @@ class TaskInfo(_GenjaModel):
 
     name: str
     plugin_name: str
+    options: Any | None = None
     sub_task: TaskInfo | None = None
 
 
@@ -90,7 +110,7 @@ class Host(_GenjaModel):
     data: Any | None = None
 
 
-class TaskContext(_GenjaModel):
+class TaskExecutionContext(_GenjaModel):
     """Execution context passed into Python task ``run(...)`` methods."""
 
     current_depth: int = 0
@@ -106,7 +126,7 @@ class GenjaTaskProtocol(Protocol):
         self,
         task: TaskInfo,
         host: Host,
-        context: TaskContext,
+        context: TaskExecutionContext,
     ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult: ...
 
 
@@ -114,6 +134,7 @@ def task(
     name: str,
     plugin_name: str,
     sub_task: type[GenjaTaskProtocol] | None = None,
+    options: Any | None = None,
 ):
     """Attach Genja task metadata to a Python task class."""
 
@@ -144,6 +165,7 @@ def task(
         cls.__genja_task_info__ = {
             "name": name,
             "plugin_name": plugin_name,
+            "options": options,
             "sub_task": sub_task,
         }
         return cls
@@ -198,7 +220,7 @@ __all__ = [
     "GenjaTaskProtocol",
     "TaskInfo",
     "Host",
-    "TaskContext",
+    "TaskExecutionContext",
     "TaskMessage",
     "TaskSuccessResult",
     "TaskFailureResult",

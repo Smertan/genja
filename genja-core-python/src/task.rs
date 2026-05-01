@@ -3,7 +3,7 @@ use ::genja_core::inventory::{ConnectionKey, Host};
 use ::genja_core::task::{
     HostTaskResult, MessageLevel, SubTasks, Task, TaskDefinition, TaskError, TaskFailure,
     TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskSkip,
-    TaskSuccess,
+    TaskSuccess, TaskExecutionContext,
 };
 use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
@@ -51,6 +51,7 @@ impl PyHostTaskResult {
 struct PythonTaskSpec {
     name: String,
     plugin_name: String,
+    options: Option<Value>,
     py_task_class: Arc<Py<PyAny>>,
     sub_tasks: Vec<PythonTaskSpec>,
 }
@@ -74,7 +75,7 @@ impl TaskInfo for PythonBackedTask {
     }
 
     fn options(&self) -> Option<&Value> {
-        None
+        self.spec.options.as_ref()
     }
 }
 
@@ -86,6 +87,25 @@ impl SubTasks for PythonBackedTask {
 
 impl Task for PythonBackedTask {
     fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError> {
+        self.run_python(host, 0, None)
+    }
+
+    fn start_with_context(
+        &self,
+        host: &Host,
+        context: &TaskExecutionContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        self.run_python(host, context.current_depth(), Some(context.max_depth()))
+    }
+}
+
+impl PythonBackedTask {
+    fn run_python(
+        &self,
+        host: &Host,
+        current_depth: usize,
+        max_depth: Option<usize>,
+    ) -> Result<HostTaskResult, TaskError> {
         Python::with_gil(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
             let instance = class.call0().map_err(python_task_error)?;
@@ -104,10 +124,17 @@ impl Task for PythonBackedTask {
             let context_payload = {
                 let context = PyDict::new(py);
                 context
-                    .set_item("current_depth", 0)
+                    .set_item("current_depth", current_depth)
                     .map_err(python_task_error)?;
-                context.set_item("max_depth", py.None()).map_err(python_task_error)?;
-                build_python_task_model(py, "TaskContext", context).map_err(python_task_error)?
+                if let Some(max_depth) = max_depth {
+                    context
+                        .set_item("max_depth", max_depth)
+                        .map_err(python_task_error)?;
+                } else {
+                    context.set_item("max_depth", py.None()).map_err(python_task_error)?;
+                }
+                build_python_task_model(py, "TaskExecutionContext", context)
+                    .map_err(python_task_error)?
             };
 
             let result = instance
@@ -579,6 +606,16 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         ));
     }
 
+    let options = if let Some(options) = info.get_item("options")? {
+        if options.is_none() {
+            None
+        } else {
+            Some(py_any_to_json_value(&options)?)
+        }
+    } else {
+        None
+    };
+
     let mut sub_tasks = Vec::new();
     if let Some(sub_task) = info.get_item("sub_task")? {
         if !sub_task.is_none() {
@@ -589,6 +626,7 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     Ok(PythonTaskSpec {
         name,
         plugin_name,
+        options,
         py_task_class: Arc::new(py_task_class.unbind()),
         sub_tasks,
     })
@@ -613,6 +651,7 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
     json!({
         "name": spec.name,
         "plugin_name": spec.plugin_name,
+        "options": spec.options,
         "sub_task": spec.sub_tasks.first().map(python_task_spec_to_json),
     })
 }
@@ -624,6 +663,11 @@ fn python_task_spec_to_py_dict<'py>(
     let task = PyDict::new(py);
     task.set_item("name", &spec.name)?;
     task.set_item("plugin_name", &spec.plugin_name)?;
+    if let Some(options) = spec.options.as_ref() {
+        task.set_item("options", json_value_to_py(py, options)?)?;
+    } else {
+        task.set_item("options", py.None())?;
+    }
     if let Some(sub_task) = spec.sub_tasks.first() {
         task.set_item("sub_task", python_task_spec_to_py_dict(py, sub_task)?)?;
     } else {
@@ -682,6 +726,13 @@ pub(crate) fn python_host_to_rust_host(obj: Bound<'_, PyAny>) -> PyResult<Host> 
 
 fn python_task_error(err: PyErr) -> TaskError {
     TaskError::new(std::io::Error::other(err.to_string()))
+}
+
+fn py_any_to_json_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    let json_module = PyModule::import(obj.py(), "json")?;
+    let dumped: String = json_module.call_method1("dumps", (obj,))?.extract()?;
+    serde_json::from_str(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid json payload: {err}")))
 }
 
 fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
@@ -832,9 +883,39 @@ mod tests {
 
             assert_eq!(spec.name, "backup_config");
             assert_eq!(spec.plugin_name, "ssh");
+            assert_eq!(spec.options, None);
             assert_eq!(spec.sub_tasks.len(), 1);
             assert_eq!(spec.sub_tasks[0].name, "verify_backup");
             assert_eq!(spec.sub_tasks[0].plugin_name, "ssh");
+        });
+    }
+
+    #[test]
+    fn extract_python_task_spec_extracts_options_payload() {
+        init_python();
+        Python::with_gil(|py| {
+            let task = make_task_class(py, "backup_config", "ssh", None)
+                .expect("task class should be created");
+            task.getattr("__genja_task_info__")
+                .expect("task metadata should exist")
+                .downcast::<PyDict>()
+                .expect("task metadata should be a dict")
+                .set_item(
+                    "options",
+                    json_value_to_py(
+                        py,
+                        &json!({"backup_path": "/tmp/configs", "compress": true}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+
+            let spec = extract_python_task_spec(task).expect("task spec should extract");
+
+            assert_eq!(
+                spec.options,
+                Some(json!({"backup_path": "/tmp/configs", "compress": true}))
+            );
         });
     }
 

@@ -2945,6 +2945,43 @@ pub trait SubTasks {
 pub trait Task: TaskInfo + SubTasks + Send + Sync {
     /// Start executing the task.
     fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError>;
+
+    /// Start executing the task with runtime execution context.
+    ///
+    /// The default implementation preserves the original `start(...)` contract
+    /// so existing task implementations do not need to change.
+    fn start_with_context(
+        &self,
+        host: &Host,
+        context: &TaskExecutionContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let _ = context;
+        self.start(host)
+    }
+}
+
+/// Execution context passed into task implementations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskExecutionContext {
+    current_depth: usize,
+    max_depth: usize,
+}
+
+impl TaskExecutionContext {
+    pub fn new(current_depth: usize, max_depth: usize) -> Self {
+        Self {
+            current_depth,
+            max_depth,
+        }
+    }
+
+    pub fn current_depth(&self) -> usize {
+        self.current_depth
+    }
+
+    pub fn max_depth(&self) -> usize {
+        self.max_depth
+    }
 }
 
 /// Execution context passed to task processors.
@@ -3385,7 +3422,8 @@ impl TaskDefinition {
             processor.on_instance_start(&processor_context)?;
         }
 
-        let host_result = task.start(host);
+        let execution_context = TaskExecutionContext::new(depth, max_depth);
+        let host_result = task.start_with_context(host, &execution_context);
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
             .duration_since(started_at)

@@ -1,30 +1,47 @@
 import genja_core
 import pytest
-from genja_core.task import Host, TaskContext, TaskInfo, TaskMessage, TaskSuccessResult, task
+from genja_core.task import (
+    Host,
+    TaskExecutionContext,
+    TaskInfo,
+    TaskMessage,
+    TaskSuccessResult,
+    task,
+)
 
 
-@task(name="verify_backup", plugin_name="ssh")
+@task(name="verify_backup", plugin_name="ssh", options={"mode": "strict"})
 class VerifyBackupTask:
     def run(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
-        assert isinstance(context, TaskContext)
+        assert isinstance(context, TaskExecutionContext)
+        assert task.options == {"mode": "strict"}
         return TaskSuccessResult(
             summary=f"verified {host.hostname}",
             messages=[TaskMessage(level="info", text=task.name)],
         )
 
 
-@task(name="backup_config", plugin_name="ssh", sub_task=VerifyBackupTask)
+@task(
+    name="backup_config",
+    plugin_name="ssh",
+    sub_task=VerifyBackupTask,
+    options={"backup_path": "/tmp/configs", "compress": True},
+)
 class BackupConfigTask:
     def run(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
-        assert isinstance(context, TaskContext)
+        assert isinstance(context, TaskExecutionContext)
+        assert task.options == {"backup_path": "/tmp/configs", "compress": True}
         return TaskSuccessResult(
             changed=True,
             summary=f"backed up {host.hostname}",
-            metadata={"sub_task_name": task.sub_task.name},
+            metadata={
+                "sub_task_name": task.sub_task.name,
+                "backup_path": task.options["backup_path"],
+            },
         )
 
 
@@ -35,6 +52,11 @@ def test_task_definition_from_python_class_extracts_metadata():
     assert task_definition.plugin_name == "ssh"
     assert len(task_definition.sub_tasks) == 1
     assert task_definition.sub_tasks[0].name == "verify_backup"
+    assert task_definition.to_dict()["options"] == {
+        "backup_path": "/tmp/configs",
+        "compress": True,
+    }
+    assert task_definition.sub_tasks[0].to_dict()["options"] == {"mode": "strict"}
 
 
 def test_task_definition_run_on_host_executes_python_body():
@@ -47,6 +69,7 @@ def test_task_definition_run_on_host_executes_python_body():
     assert data["changed"] is True
     assert data["summary"] == "backed up router1"
     assert data["metadata"]["sub_task_name"] == "verify_backup"
+    assert data["metadata"]["backup_path"] == "/tmp/configs"
 
 
 def test_task_definition_from_python_class_requires_decorator_metadata():
