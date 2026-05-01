@@ -7,6 +7,12 @@ for compatibility, but new code should prefer:
 """
 
 from .genja_core import *
+from .connection import (
+    ConnectionKey,
+    ConnectionPluginProtocol,
+    ConnectionProtocol,
+    ResolvedConnectionParams,
+)
 from .plugin_manager import PluginManager
 from .processor import TaskProcessorContext, TaskProcessorProtocol
 from .settings import (
@@ -37,6 +43,10 @@ if hasattr(genja_core, "__all__"):
 
 __all__ = list(__all__) + [
     "task",
+    "ConnectionKey",
+    "ResolvedConnectionParams",
+    "ConnectionProtocol",
+    "ConnectionPluginProtocol",
     "PluginManager",
     "TaskProcessorContext",
     "TaskProcessorProtocol",

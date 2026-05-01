@@ -1,6 +1,7 @@
 use genja::plugins::built_in_plugin_manager;
+use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
 use genja_core::task::{HostTaskResult, TaskProcessor, TaskProcessorContext, TaskResults};
-use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
+use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, PluginProcessor, Plugins};
 use genja_plugin_manager::PluginManager;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -64,39 +65,41 @@ impl PyPluginManager {
             ))
         })?;
 
-        let Some(processors) = value
-            .get("tool")
-            .and_then(|tool| tool.get("genja"))
-            .and_then(|genja| genja.get("plugins"))
-            .and_then(|plugins| plugins.get("processor"))
-            .and_then(toml::Value::as_table)
-        else {
-            return Ok(());
-        };
+        for section_name in ["processor", "connection"] {
+            let Some(entries) = value
+                .get("tool")
+                .and_then(|tool| tool.get("genja"))
+                .and_then(|genja| genja.get("plugins"))
+                .and_then(|plugins| plugins.get(section_name))
+                .and_then(toml::Value::as_table)
+            else {
+                continue;
+            };
 
-        for (name, import_path) in processors {
-            let import_path = import_path.as_str().ok_or_else(|| {
-                PyValueError::new_err(format!(
-                    "processor plugin entry '{name}' in {} must be a string import path",
-                    manifest_path.display()
-                ))
-            })?;
-            let processor = Python::with_gil(|py| import_python_plugin(py, import_path))?;
-            let declared_name = Python::with_gil(|py| {
-                extract_plugin_identity_value(
-                    processor.bind(py),
-                    "name",
-                    "processor plugin name must not be empty",
-                    "plugin",
-                )
-            })?;
-            if declared_name != *name {
-                return Err(PyValueError::new_err(format!(
-                    "processor plugin name mismatch in {}: manifest key '{name}' does not match plugin.name() value '{declared_name}'",
-                    manifest_path.display()
-                )));
+            for (name, import_path) in entries {
+                let import_path = import_path.as_str().ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "{section_name} plugin entry '{name}' in {} must be a string import path",
+                        manifest_path.display()
+                    ))
+                })?;
+                let plugin = Python::with_gil(|py| import_python_plugin(py, import_path))?;
+                let declared_name = Python::with_gil(|py| {
+                    extract_plugin_identity_value(
+                        plugin.bind(py),
+                        "name",
+                        &format!("{section_name} plugin name must not be empty"),
+                        "plugin",
+                    )
+                })?;
+                if declared_name != *name {
+                    return Err(PyValueError::new_err(format!(
+                        "{section_name} plugin name mismatch in {}: manifest key '{name}' does not match plugin.name() value '{declared_name}'",
+                        manifest_path.display()
+                    )));
+                }
+                self.register_python_plugin(plugin)?;
             }
-            self.register_python_plugin(processor)?;
         }
 
         Ok(())
@@ -182,6 +185,13 @@ impl PyPluginManager {
             .as_mut()
             .ok_or_else(|| PyValueError::new_err("plugin manager has already been consumed"))?;
         match declared_group.as_str() {
+            "ConnectionPlugin" => {
+                manager.register_plugin(Plugins::Connection(Box::new(PyConnectionPlugin {
+                    name: declared_name,
+                    group: declared_group,
+                    plugin: Arc::new(plugin),
+                })));
+            }
             "ProcessorPlugin" => {
                 manager.register_plugin(Plugins::Processor(Box::new(PyProcessorPlugin {
                     name: declared_name,
@@ -191,11 +201,165 @@ impl PyPluginManager {
             }
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unsupported python plugin group '{other}'; only 'ProcessorPlugin' is currently supported"
+                    "unsupported python plugin group '{other}'; only 'ProcessorPlugin' and 'ConnectionPlugin' are currently supported"
                 )));
             }
         }
         Ok(())
+    }
+}
+
+struct PyConnectionPlugin {
+    name: String,
+    group: String,
+    plugin: Arc<Py<PyAny>>,
+}
+
+impl Plugin for PyConnectionPlugin {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn group(&self) -> String {
+        self.group.clone()
+    }
+}
+
+impl PluginConnection for PyConnectionPlugin {
+    fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+        Box::new(PyConnectionInstance::from_factory(
+            Arc::clone(&self.plugin),
+            self.name.clone(),
+            self.group.clone(),
+            key.clone(),
+        ))
+    }
+
+    fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+        Err("connection plugin factory instances cannot be opened directly".to_string())
+    }
+
+    fn close(&mut self) -> ConnectionKey {
+        ConnectionKey::new("", self.name.clone())
+    }
+
+    fn is_alive(&self) -> bool {
+        false
+    }
+}
+
+struct PyConnectionInstance {
+    name: String,
+    group: String,
+    factory_plugin: Arc<Py<PyAny>>,
+    key: ConnectionKey,
+    connection: Option<Py<PyAny>>,
+    create_error: Option<String>,
+}
+
+impl PyConnectionInstance {
+    fn from_factory(
+        factory_plugin: Arc<Py<PyAny>>,
+        name: String,
+        group: String,
+        key: ConnectionKey,
+    ) -> Self {
+        let created = Python::with_gil(|py| {
+            let plugin = factory_plugin.bind(py);
+            let key_payload = build_python_connection_key(py, &key)?;
+            Ok::<_, PyErr>(plugin.call_method1("create", (key_payload,))?.unbind())
+        });
+
+        match created {
+            Ok(connection) => Self {
+                name,
+                group,
+                factory_plugin,
+                key,
+                connection: Some(connection),
+                create_error: None,
+            },
+            Err(err) => Self {
+                name,
+                group,
+                factory_plugin,
+                key,
+                connection: None,
+                create_error: Some(err.to_string()),
+            },
+        }
+    }
+}
+
+impl Plugin for PyConnectionInstance {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn group(&self) -> String {
+        self.group.clone()
+    }
+}
+
+impl PluginConnection for PyConnectionInstance {
+    fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+        Box::new(Self::from_factory(
+            Arc::clone(&self.factory_plugin),
+            self.name.clone(),
+            self.group.clone(),
+            key.clone(),
+        ))
+    }
+
+    fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
+        if let Some(error) = self.create_error.as_ref() {
+            return Err(format!("failed to create python connection plugin instance: {error}"));
+        }
+        let Some(connection) = self.connection.as_ref() else {
+            return Err("python connection plugin instance is missing a connection".to_string());
+        };
+
+        Python::with_gil(|py| {
+            let connection = connection.bind(py);
+            let params_payload =
+                build_python_resolved_connection_params(py, params).map_err(|err| err.to_string())?;
+            connection
+                .call_method1("open", (params_payload,))
+                .map_err(|err| err.to_string())?;
+            Ok(())
+        })
+    }
+
+    fn close(&mut self) -> ConnectionKey {
+        let Some(connection) = self.connection.as_ref() else {
+            return self.key.clone();
+        };
+
+        Python::with_gil(|py| {
+            let connection = connection.bind(py);
+            match connection.call_method0("close") {
+                Ok(value) if value.is_none() => self.key.clone(),
+                Ok(value) => py_any_to_connection_key(&value).unwrap_or_else(|_| self.key.clone()),
+                Err(_) => self.key.clone(),
+            }
+        })
+    }
+
+    fn is_alive(&self) -> bool {
+        if self.create_error.is_some() {
+            return false;
+        }
+        let Some(connection) = self.connection.as_ref() else {
+            return false;
+        };
+
+        Python::with_gil(|py| {
+            let connection = connection.bind(py);
+            connection
+                .call_method0("is_alive")
+                .and_then(|value| value.extract::<bool>())
+                .unwrap_or(false)
+        })
     }
 }
 
@@ -400,6 +564,73 @@ fn build_python_processor_context<'py>(
     build_python_model(py, "genja_core.processor", "TaskProcessorContext", payload)
 }
 
+fn build_python_connection_key<'py>(
+    py: Python<'py>,
+    key: &ConnectionKey,
+) -> PyResult<Py<PyAny>> {
+    let payload = PyDict::new(py);
+    payload.set_item("hostname", &key.hostname)?;
+    payload.set_item("plugin_name", &key.plugin_name)?;
+    build_python_model(py, "genja_core.connection", "ConnectionKey", payload)
+}
+
+fn build_python_resolved_connection_params<'py>(
+    py: Python<'py>,
+    params: &ResolvedConnectionParams,
+) -> PyResult<Py<PyAny>> {
+    let payload = PyDict::new(py);
+    payload.set_item("hostname", &params.hostname)?;
+    payload.set_item("port", params.port)?;
+    payload.set_item("username", params.username.as_ref())?;
+    payload.set_item("password", params.password.as_ref())?;
+    payload.set_item("platform", params.platform.as_ref())?;
+    match params.extras.as_ref() {
+        Some(extras) => {
+            let json_module = PyModule::import(py, "json")?;
+            let dumped = serde_json::to_string(extras)
+                .map_err(|err| PyValueError::new_err(format!("failed to serialize extras: {err}")))?;
+            payload.set_item("extras", json_module.call_method1("loads", (dumped,))?)?;
+        }
+        None => payload.set_item("extras", py.None())?,
+    }
+    build_python_model(
+        py,
+        "genja_core.connection",
+        "ResolvedConnectionParams",
+        payload,
+    )
+}
+
+fn py_any_to_connection_key(obj: &Bound<'_, PyAny>) -> PyResult<ConnectionKey> {
+    let normalized = if obj.hasattr("model_dump")? {
+        obj.call_method(
+            "model_dump",
+            (),
+            Some(&PyDict::from_sequence(
+                &[("mode", "json")].into_pyobject(obj.py())?,
+            )?),
+        )?
+    } else if obj.hasattr("to_dict")? {
+        obj.call_method0("to_dict")?
+    } else {
+        obj.clone()
+    };
+    let json_module = PyModule::import(obj.py(), "json")?;
+    let dumped: String = json_module.call_method1("dumps", (normalized,))?.extract()?;
+    let value: serde_json::Value = serde_json::from_str(&dumped).map_err(|err| {
+        PyValueError::new_err(format!("invalid connection key payload: {err}"))
+    })?;
+    let hostname = value
+        .get("hostname")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| PyValueError::new_err("connection key payload is missing 'hostname'"))?;
+    let plugin_name = value
+        .get("plugin_name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| PyValueError::new_err("connection key payload is missing 'plugin_name'"))?;
+    Ok(ConnectionKey::new(hostname, plugin_name))
+}
+
 fn build_python_model<'py>(
     py: Python<'py>,
     module_name: &str,
@@ -423,8 +654,11 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use genja_core::inventory::ConnectionManager;
+    use genja_plugin_manager::connection_factory::build_connection_factory;
     use serde_json::Value;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::Once;
 
     fn init_python() {
@@ -463,6 +697,21 @@ mod tests {
                 modules
                     .set_item("genja_core.processor", &processor)
                     .expect("processor stub should register");
+                let connection = PyModule::from_code(
+                    py,
+                    pyo3::ffi::c_str!(
+                        "class ConnectionKey:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass ResolvedConnectionParams:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
+                    ),
+                    pyo3::ffi::c_str!("genja_core/connection.py"),
+                    pyo3::ffi::c_str!("genja_core.connection"),
+                )
+                .expect("connection stub should build");
+                genja_core
+                    .add("connection", &connection)
+                    .expect("connection module should attach to package");
+                modules
+                    .set_item("genja_core.connection", &connection)
+                    .expect("connection stub should register");
             });
         });
     }
@@ -519,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn register_processor_adds_processor_plugin() {
+    fn register_plugin_adds_processor_plugin() {
         init_python();
         Python::with_gil(|py| {
             let manager = PyPluginManager::new();
@@ -589,6 +838,53 @@ mod tests {
             assert!(err
                 .to_string()
                 .contains("unsupported python plugin group 'RunnerPlugin'"));
+        });
+    }
+
+    #[test]
+    fn register_connection_plugin_supports_factory_open_and_close() {
+        init_python();
+        Python::with_gil(|py| {
+            let manager = PyPluginManager::new();
+            let plugin_class =
+                import_fixture_attr(py, "tests.fixtures.connection_plugins", "ConnectionPlugin")
+                    .expect("fixture plugin class should import");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+
+            manager
+                .register_plugin(plugin)
+                .expect("connection plugin should register");
+
+            let inner = Arc::new(manager.take_inner().expect("plugin manager should be consumable"));
+            let factory = build_connection_factory(Arc::clone(&inner));
+            let connection_manager = ConnectionManager::with_connection_factory(factory);
+            let key = ConnectionKey::new("router1", "ssh");
+            let params = ResolvedConnectionParams {
+                hostname: "10.0.0.1".to_string(),
+                port: Some(22),
+                username: Some("admin".to_string()),
+                password: Some("secret".to_string()),
+                platform: Some("ios".to_string()),
+                extras: None,
+            };
+
+            let connection = connection_manager
+                .open_connection(&key, &params)
+                .expect("open should succeed")
+                .expect("connection should be created");
+
+            {
+                let guard = connection.lock().expect("connection lock should succeed");
+                assert!(guard.is_alive());
+            }
+
+            connection_manager.close_connection(&key);
+            let counters = connection_manager
+                .connection_counters_for("ssh")
+                .expect("counters should exist");
+            assert_eq!(counters.create_calls, 1);
+            assert_eq!(counters.open_calls, 1);
+            assert_eq!(counters.close_calls, 1);
         });
     }
 
