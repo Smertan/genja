@@ -399,6 +399,7 @@ version = "0.1.0"
 dependencies = [
  "genja",
  "genja-core",
+ "genja-plugin-manager",
  "humantime",
  "pyo3",
  "serde_json",

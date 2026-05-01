@@ -1,12 +1,14 @@
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
+mod plugin_manager;
 mod runtime;
 mod settings;
 mod task;
 
 #[pymodule]
 fn genja_core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    plugin_manager::register(module)?;
     runtime::register(module)?;
     settings::register(module)?;
     task::register(module)?;
@@ -33,6 +35,7 @@ mod tests {
             genja_core(py, &module).expect("module initialization should succeed");
 
             assert!(module.getattr("Genja").is_ok());
+            assert!(module.getattr("PluginManager").is_ok());
             assert!(module.getattr("Settings").is_ok());
             assert!(module.getattr("CoreConfig").is_ok());
             assert!(module.getattr("TaskDefinition").is_ok());

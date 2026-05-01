@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .plugin_manager import PluginManager
 from .settings import (
     CoreConfig,
     InventoryConfig,
@@ -67,7 +68,11 @@ class TaskResults:
 
 class Genja:
     @staticmethod
-    def from_hosts(hosts: dict[str, Any], settings: Settings | None = None) -> Genja: ...
+    def from_hosts(
+        hosts: dict[str, Any],
+        settings: Settings | None = None,
+        plugin_manager: PluginManager | None = None,
+    ) -> Genja: ...
     @staticmethod
     def from_settings_file(path: str) -> Genja: ...
 

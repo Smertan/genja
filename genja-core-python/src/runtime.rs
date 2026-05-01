@@ -4,6 +4,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 
+use crate::plugin_manager::PyPluginManager;
 use crate::settings::PySettings;
 use crate::task::{self, PyTaskResults};
 
@@ -16,17 +17,23 @@ pub struct PyGenja {
 #[pymethods]
 impl PyGenja {
     #[staticmethod]
-    #[pyo3(signature = (hosts, settings=None))]
-    fn from_hosts(hosts: Bound<'_, PyAny>, settings: Option<PyRef<'_, PySettings>>) -> PyResult<Self> {
+    #[pyo3(signature = (hosts, settings=None, plugin_manager=None))]
+    fn from_hosts(
+        hosts: Bound<'_, PyAny>,
+        settings: Option<PyRef<'_, PySettings>>,
+        plugin_manager: Option<PyRef<'_, PyPluginManager>>,
+    ) -> PyResult<Self> {
         let inventory = python_hosts_to_inventory(hosts)?;
-        let inner = if let Some(settings) = settings {
-            RuntimeGenja::builder(inventory)
-                .with_settings(settings.inner.clone())
-                .build()
-                .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?
-        } else {
-            RuntimeGenja::from_inventory(inventory)
-        };
+        let mut builder = RuntimeGenja::builder(inventory);
+        if let Some(settings) = settings {
+            builder = builder.with_settings(settings.inner.clone());
+        }
+        if let Some(plugin_manager) = plugin_manager {
+            builder = builder.with_plugin_manager(plugin_manager.take_inner()?);
+        }
+        let inner = builder
+            .build()
+            .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?;
         Ok(Self { inner })
     }
 
@@ -89,6 +96,7 @@ fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin_manager::PyPluginManager;
     use pyo3::types::PyString;
     use std::sync::Once;
 
@@ -164,11 +172,34 @@ mod tests {
             hosts.set_item("router1", router).unwrap();
 
             let runtime =
-                PyGenja::from_hosts(hosts.into_any(), None).expect("runtime should build");
+                PyGenja::from_hosts(hosts.into_any(), None, None).expect("runtime should build");
 
             assert!(runtime.inner.plugins_loaded());
             assert!(runtime.inner.inventory_loaded());
             assert!(runtime.__repr__().contains("Genja("));
+        });
+    }
+
+    #[test]
+    fn py_genja_from_hosts_accepts_plugin_manager() {
+        init_python();
+        Python::with_gil(|py| {
+            let hosts = PyDict::new(py);
+            let router = PyDict::new(py);
+            router.set_item("hostname", "10.0.0.1").unwrap();
+            router.set_item("platform", "ios").unwrap();
+            hosts.set_item("router1", router).unwrap();
+
+            let plugin_manager = Py::new(py, PyPluginManager::new())
+                .expect("plugin manager should be created");
+            let plugin_manager_ref = plugin_manager.bind(py).borrow();
+
+            let runtime = PyGenja::from_hosts(hosts.into_any(), None, Some(plugin_manager_ref))
+                .expect("runtime should build with explicit plugin manager");
+
+            assert!(runtime.inner.plugins_loaded());
+            assert!(runtime.inner.inventory_loaded());
+            assert!(runtime.inner.get_runner_plugin("serial").is_ok());
         });
     }
 

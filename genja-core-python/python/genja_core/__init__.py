@@ -7,6 +7,7 @@ for compatibility, but new code should prefer:
 """
 
 from .genja_core import *
+from .plugin_manager import PluginManager
 from .settings import (
     CoreConfig,
     InventoryConfig,
@@ -35,6 +36,7 @@ if hasattr(genja_core, "__all__"):
 
 __all__ = list(__all__) + [
     "task",
+    "PluginManager",
     "Settings",
     "CoreConfig",
     "InventoryConfig",
