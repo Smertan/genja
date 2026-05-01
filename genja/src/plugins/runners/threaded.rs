@@ -280,7 +280,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
-        _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
+        connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
@@ -305,6 +305,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
             let jobs = Arc::clone(&jobs);
             let tx = tx.clone();
             let task = task.clone();
+            let connection_resolver = connection_resolver.clone();
 
             handles.push(thread::spawn(move || -> Result<(), GenjaError> {
                 loop {
@@ -323,7 +324,13 @@ impl PluginRunner for ThreadedRunnerPlugin {
                         break;
                     };
 
-                    let host_results = TaskExecutor::run_host(&task, &host_id, &host, max_depth)?;
+                    let host_results = TaskExecutor::run_host(
+                        &task,
+                        &host_id,
+                        &host,
+                        connection_resolver.clone(),
+                        max_depth,
+                    )?;
 
                     tx.send(host_results).map_err(|err| {
                         error!(

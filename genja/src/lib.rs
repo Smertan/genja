@@ -59,7 +59,8 @@ pub use genja_core::GenjaError;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
-    Task, TaskDefinition, TaskInfo, TaskProcessorResolver, TaskResults, TaskResultsSummary,
+    Task, TaskConnectionResolver, TaskDefinition, TaskInfo, TaskProcessorResolver, TaskResults,
+    TaskResultsSummary,
 };
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
@@ -109,6 +110,45 @@ pub struct Genja {
 }
 
 pub mod plugins;
+
+#[derive(Debug, Clone)]
+struct RuntimeTaskConnectionResolver {
+    inventory: Arc<Inventory>,
+}
+
+impl RuntimeTaskConnectionResolver {
+    fn new(inventory: Arc<Inventory>) -> Self {
+        Self { inventory }
+    }
+}
+
+impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
+    fn resolve_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<std::sync::Mutex<dyn genja_core::inventory::Connection>>>, GenjaError>
+    {
+        let Some(key) = task.get_connection_key(hostname) else {
+            return Ok(None);
+        };
+
+        let params = self
+            .inventory
+            .resolve_connection_params(hostname, &key.plugin_name)
+            .ok_or_else(|| {
+                GenjaError::Message(format!(
+                    "failed to resolve connection params for host '{}' using plugin '{}'",
+                    hostname, key.plugin_name
+                ))
+            })?;
+
+        self.inventory
+            .connections()
+            .open_connection(&key, &params)
+            .map_err(GenjaError::Message)
+    }
+}
 
 impl Genja {
     /// Returns a builder that requires an inventory up front.
@@ -740,7 +780,7 @@ impl Genja {
     ///
     /// ```
     /// use genja::Genja;
-    /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost, ConnectionKey};
+    /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
     /// use genja_core::task::{Task, TaskInfo, TaskError, HostTaskResult, TaskSuccess, SubTasks};
     /// use serde_json::Value;
     /// use std::sync::Arc;
@@ -749,11 +789,6 @@ impl Genja {
     ///
     /// impl TaskInfo for MyTask {
     ///     fn name(&self) -> &str { "my-task" }
-    ///     fn connection_plugin_name(&self) -> Option<&str> { Some("test") }
-    ///     fn get_connection_key(&self, hostname: &str) -> Option<ConnectionKey> {
-    ///         self.connection_plugin_name()
-    ///             .map(|plugin_name| ConnectionKey::new(hostname, plugin_name))
-    ///     }
     ///     fn options(&self) -> Option<&Value> { None }
     /// }
     ///
@@ -783,7 +818,13 @@ impl Genja {
     ) -> Result<TaskResults, GenjaError> {
         let hosts = self.selected_hosts()?;
         let host_count = hosts.len();
+        let inventory = self
+            .inventory
+            .as_ref()
+            .ok_or(GenjaError::InventoryNotLoaded)?;
         let processor_resolver: Arc<dyn TaskProcessorResolver> = self.plugins.clone();
+        let connection_resolver: Arc<dyn TaskConnectionResolver> =
+            Arc::new(RuntimeTaskConnectionResolver::new(Arc::clone(inventory)));
         let task_definition = TaskDefinition::new(task).with_processor_resolver(processor_resolver);
         let runner_name = self.settings.runner().plugin();
         info!(
@@ -802,7 +843,7 @@ impl Genja {
         let results = runner.run(
             &task_definition,
             &hosts,
-            None,
+            Some(connection_resolver),
             self.settings.runner(),
             max_depth,
         )?;
@@ -879,10 +920,17 @@ impl Default for Genja {
 mod tests {
     use super::{Genja, GenjaError};
     use genja_core::Settings;
-    use genja_core::inventory::{BaseBuilderHost, Data, Host, Hosts, Inventory};
+    use genja_core::inventory::{
+        BaseBuilderHost, Connection, ConnectionKey, Data, Host, Hosts, Inventory,
+        ResolvedConnectionParams,
+    };
     use genja_core::settings::RunnerConfig;
-    use genja_core::task::{HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskSuccess};
+    use genja_core::task::{
+        HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    };
+    use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, Plugins};
     use serde_json::{Value, json};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
     struct TestTask {
@@ -895,7 +943,7 @@ mod tests {
         }
 
         fn connection_plugin_name(&self) -> Option<&str> {
-            Some("test")
+            None
         }
 
         fn options(&self) -> Option<&Value> {
@@ -923,7 +971,7 @@ mod tests {
         }
 
         fn connection_plugin_name(&self) -> Option<&str> {
-            Some("test")
+            None
         }
 
         fn options(&self) -> Option<&Value> {
@@ -953,7 +1001,7 @@ mod tests {
         }
 
         fn connection_plugin_name(&self) -> Option<&str> {
-            Some("test")
+            None
         }
 
         fn options(&self) -> Option<&Value> {
@@ -981,7 +1029,7 @@ mod tests {
         }
 
         fn connection_plugin_name(&self) -> Option<&str> {
-            Some("test")
+            None
         }
 
         fn options(&self) -> Option<&Value> {
@@ -1003,6 +1051,19 @@ mod tests {
 
     struct ParentTask;
 
+    #[derive(Debug)]
+    struct TestConnectionPlugin;
+
+    #[derive(Debug)]
+    struct TestRuntimeConnection {
+        key: ConnectionKey,
+        alive: bool,
+    }
+
+    struct ConnectionAwareTask {
+        saw_connection: Arc<AtomicBool>,
+    }
+
     #[derive(genja_core_derive::Task)]
     struct DerivedProcessorTask {
         name: &'static str,
@@ -1021,7 +1082,7 @@ mod tests {
         }
 
         fn connection_plugin_name(&self) -> Option<&str> {
-            Some("test")
+            None
         }
 
         fn options(&self) -> Option<&Value> {
@@ -1038,6 +1099,119 @@ mod tests {
     impl Task for ParentTask {
         fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    impl Plugin for TestConnectionPlugin {
+        fn name(&self) -> String {
+            "test".to_string()
+        }
+    }
+
+    impl PluginConnection for TestConnectionPlugin {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+            Box::new(TestRuntimeConnection {
+                key: key.clone(),
+                alive: false,
+            })
+        }
+
+        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            Err("factory should not be opened directly".to_string())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            ConnectionKey::new("", "test")
+        }
+
+        fn is_alive(&self) -> bool {
+            false
+        }
+    }
+
+    impl Plugin for TestRuntimeConnection {
+        fn name(&self) -> String {
+            "test".to_string()
+        }
+    }
+
+    impl PluginConnection for TestRuntimeConnection {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+            Box::new(Self {
+                key: key.clone(),
+                alive: false,
+            })
+        }
+
+        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            self.alive = true;
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.alive = false;
+            self.key.clone()
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+    }
+
+    impl Connection for TestRuntimeConnection {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+            Box::new(Self {
+                key: key.clone(),
+                alive: false,
+            })
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+
+        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            self.alive = true;
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.alive = false;
+            self.key.clone()
+        }
+    }
+
+    impl TaskInfo for ConnectionAwareTask {
+        fn name(&self) -> &str {
+            "connection-aware"
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("test")
+        }
+    }
+
+    impl SubTasks for ConnectionAwareTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    impl Task for ConnectionAwareTask {
+        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn start_with_runtime(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let alive = context
+                .with_connection(|connection| Ok(connection.is_alive()))?
+                .unwrap_or(false);
+            self.saw_connection.store(alive, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(TaskSuccess::new().with_changed(alive)))
         }
     }
 
@@ -1408,6 +1582,36 @@ mod tests {
                 .host_result("router1")
                 .expect("router1 result should exist")
                 .is_skipped()
+        );
+    }
+
+    #[test]
+    fn run_passes_open_connection_into_task_runtime_context() {
+        let saw_connection = Arc::new(AtomicBool::new(false));
+        let mut plugin_manager = crate::plugins::built_in_plugin_manager();
+        plugin_manager.register_plugin(Plugins::Connection(Box::new(TestConnectionPlugin)));
+
+        let genja = Genja::builder(test_inventory())
+            .with_plugin_manager(plugin_manager)
+            .build()
+            .expect("genja should build with connection plugin");
+
+        let results = genja
+            .run(
+                ConnectionAwareTask {
+                    saw_connection: Arc::clone(&saw_connection),
+                },
+                0,
+            )
+            .expect("run should succeed");
+
+        assert!(saw_connection.load(Ordering::SeqCst));
+        assert_eq!(results.passed_hosts().len(), 2);
+        assert!(
+            results
+                .host_result("router1")
+                .expect("router1 result should exist")
+                .is_passed()
         );
     }
 

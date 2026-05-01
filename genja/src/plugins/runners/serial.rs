@@ -112,11 +112,11 @@ impl PluginRunner for SerialRunnerPlugin {
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
-        _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
+        connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         _runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
-        TaskExecutor::new(hosts, max_depth).run_definition(task)
+        TaskExecutor::new(hosts, connection_resolver, max_depth).run_definition(task)
     }
 
     fn run_tasks(

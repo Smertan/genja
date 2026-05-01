@@ -1,18 +1,28 @@
 use genja_core::inventory::{Host, Hosts};
-use genja_core::task::{TaskDefinition, TaskInfo, TaskResults};
+use genja_core::task::{TaskConnectionResolver, TaskDefinition, TaskInfo, TaskResults};
 use genja_core::{GenjaError, NatString};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// Shared execution helper for built-in runner plugins.
 #[derive(Debug)]
 pub(crate) struct TaskExecutor<'a> {
     hosts: &'a Hosts,
+    connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
     max_depth: usize,
 }
 
 impl<'a> TaskExecutor<'a> {
-    pub(crate) fn new(hosts: &'a Hosts, max_depth: usize) -> Self {
-        Self { hosts, max_depth }
+    pub(crate) fn new(
+        hosts: &'a Hosts,
+        connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+        max_depth: usize,
+    ) -> Self {
+        Self {
+            hosts,
+            connection_resolver,
+            max_depth,
+        }
     }
 
     pub(crate) fn run_definition(
@@ -28,6 +38,7 @@ impl<'a> TaskExecutor<'a> {
                 task_definition,
                 host_id,
                 host,
+                self.connection_resolver.clone(),
                 self.max_depth,
             )?);
         }
@@ -49,10 +60,17 @@ impl<'a> TaskExecutor<'a> {
         task_definition: &TaskDefinition,
         host_id: &NatString,
         host: &Host,
+        connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
         let mut results = TaskResults::new(task_definition.name());
-        task_definition.start(host_id.as_str(), host, &mut results, max_depth)?;
+        task_definition.start_with_connection_resolver(
+            host_id.as_str(),
+            host,
+            &mut results,
+            connection_resolver.as_deref(),
+            max_depth,
+        )?;
         Ok(results)
     }
 }

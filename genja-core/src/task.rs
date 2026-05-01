@@ -3154,17 +3154,23 @@ pub trait TaskProcessorResolver: Send + Sync {
 /// a task is available before the task body runs. Core task execution remains
 /// generic by depending only on this trait rather than on a concrete runtime type.
 pub trait TaskConnectionResolver: Send + Sync {
-    /// Ensure the connection required by `task` for `hostname` is open and ready.
-    fn ensure_connection_open(
+    /// Open or retrieve the connection required by `task` for `hostname`.
+    fn resolve_task_connection(
         &self,
         task: &dyn Task,
         hostname: &str,
-    ) -> Result<(), crate::GenjaError>;
+    ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError>;
 }
 
 impl fmt::Debug for dyn TaskProcessorResolver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TaskProcessorResolver")
+    }
+}
+
+impl fmt::Debug for dyn TaskConnectionResolver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TaskConnectionResolver")
     }
 }
 
@@ -3523,8 +3529,10 @@ impl TaskDefinition {
             processor.on_instance_start(&processor_context)?;
         }
 
-        if let Some(connection_resolver) = connection_resolver {
-            if let Err(error) = connection_resolver.ensure_connection_open(task, hostname) {
+        let connection = if let Some(connection_resolver) = connection_resolver {
+            match connection_resolver.resolve_task_connection(task, hostname) {
+                Ok(connection) => connection,
+                Err(error) => {
                 let finished_at = SystemTime::now();
                 let duration_ns = finished_at
                     .duration_since(started_at)
@@ -3552,10 +3560,13 @@ impl TaskDefinition {
                 results.insert_host_result(hostname, host_result);
                 return Ok(());
             }
-        }
+            }
+        } else {
+            None
+        };
 
         let execution_context = TaskExecutionContext::new(depth, max_depth);
-        let runtime_context = TaskRuntimeContext::new(execution_context, None);
+        let runtime_context = TaskRuntimeContext::new(execution_context, connection);
         let host_result = task.start_with_runtime(host, &runtime_context);
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
