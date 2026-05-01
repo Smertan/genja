@@ -2,7 +2,7 @@ import genja_core
 from genja_core.task import Host, TaskMessage, TaskSuccessResult, task
 
 
-@task(name="runtime_backup", plugin_name="ssh")
+@task(name="runtime_backup", connection_plugin_name="ssh")
 class RuntimeBackupTask:
     def run(self, task, host, context):
         return TaskSuccessResult(
@@ -13,7 +13,7 @@ class RuntimeBackupTask:
         )
 
 
-@task(name="runtime_child", plugin_name="ssh")
+@task(name="runtime_child", connection_plugin_name="ssh")
 class RuntimeChildTask:
     def run(self, task, host, context):
         return TaskSuccessResult(
@@ -25,7 +25,11 @@ class RuntimeChildTask:
         )
 
 
-@task(name="runtime_parent", plugin_name="ssh", sub_task=RuntimeChildTask)
+@task(
+    name="runtime_parent",
+    connection_plugin_name="ssh",
+    sub_task=RuntimeChildTask,
+)
 class RuntimeParentTask:
     def run(self, task, host, context):
         return TaskSuccessResult(

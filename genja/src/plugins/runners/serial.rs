@@ -36,7 +36,7 @@
 //! #[derive(TaskDerive)]
 //! struct ExampleTask {
 //!     name: String,
-//!     plugin_name: Option<String>,
+//!     connection_plugin_name: Option<String>,
 //!     options: Option<serde_json::Value>,
 //! }
 //!
@@ -49,7 +49,7 @@
 //! let runner = SerialRunnerPlugin;
 //! let task = TaskDefinition::new(ExampleTask {
 //!     name: "example".to_string(),
-//!     plugin_name: Some("ssh".to_string()),
+//!     connection_plugin_name: Some("ssh".to_string()),
 //!     options: None,
 //! });
 //! let hosts = Hosts::default();

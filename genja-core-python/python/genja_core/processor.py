@@ -31,7 +31,7 @@ metadata:
             }
             return data
 
-    @task(name="backup_config", plugin_name="ssh", processors=["audit"])
+    @task(name="backup_config", connection_plugin_name="ssh", processors=["audit"])
     class BackupConfigTask:
         def run(self, task, host, context):
             return TaskSuccessResult(summary=f"backed up {host.hostname}")

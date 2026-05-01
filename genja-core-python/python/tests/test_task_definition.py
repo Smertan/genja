@@ -12,7 +12,7 @@ from genja_core.task import (
 
 @task(
     name="verify_backup",
-    plugin_name="ssh",
+    connection_plugin_name="ssh",
     processors=["audit"],
     options={"mode": "strict"},
 )
@@ -31,7 +31,7 @@ class VerifyBackupTask:
 
 @task(
     name="backup_config",
-    plugin_name="ssh",
+    connection_plugin_name="ssh",
     sub_task=VerifyBackupTask,
     options={"backup_path": "/tmp/configs", "compress": True},
 )
@@ -55,7 +55,7 @@ def test_task_definition_from_python_class_extracts_metadata():
     task_definition = genja_core.TaskDefinition.from_python_class(BackupConfigTask)
 
     assert task_definition.name == "backup_config"
-    assert task_definition.plugin_name == "ssh"
+    assert task_definition.connection_plugin_name == "ssh"
     assert len(task_definition.sub_tasks) == 1
     assert task_definition.sub_tasks[0].name == "verify_backup"
     assert task_definition.to_dict()["options"] == {
@@ -88,19 +88,19 @@ def test_task_definition_from_python_class_requires_decorator_metadata():
         genja_core.TaskDefinition.from_python_class(MissingMetadataTask)
 
 
-def test_task_definition_from_python_class_rejects_empty_plugin_name():
-    @task(name="backup_config", plugin_name="")
+def test_task_definition_from_python_class_rejects_empty_connection_plugin_name():
+    @task(name="backup_config", connection_plugin_name="")
     class InvalidTask:
         def run(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
-    with pytest.raises(ValueError, match="plugin_name.*must not be empty"):
+    with pytest.raises(ValueError, match="connection_plugin_name.*must not be empty"):
         genja_core.TaskDefinition.from_python_class(InvalidTask)
 
 
 def test_task_decorator_requires_callable_run_method():
     with pytest.raises(TypeError, match="must define a 'run' method"):
-        @task(name="backup_config", plugin_name="ssh")
+        @task(name="backup_config", connection_plugin_name="ssh")
         class InvalidTask:
             pass
 
@@ -111,7 +111,11 @@ def test_task_decorator_rejects_undecorated_sub_task():
             return TaskSuccessResult(summary="noop")
 
     with pytest.raises(TypeError, match="must also be decorated with @task"):
-        @task(name="backup_config", plugin_name="ssh", sub_task=PlainSubTask)
+        @task(
+            name="backup_config",
+            connection_plugin_name="ssh",
+            sub_task=PlainSubTask,
+        )
         class InvalidTask:
             def run(self, task, host, context):
                 return TaskSuccessResult(summary="noop")

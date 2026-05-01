@@ -112,7 +112,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///
 /// The macro expects the struct to have:
 /// - A `name` field of type `String` or `&'static str` (required)
-/// - An optional `plugin_name` field of type `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`
+/// - An optional `connection_plugin_name` field of type `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`
 /// - An optional `options` field of type `Option<serde_json::Value>`
 /// - An optional `processor_names` field of type `Vec<String>`
 /// - Or a struct-level `#[task(processors = ["processor_name"])]` attribute
@@ -120,12 +120,12 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///
 /// After deriving, the generated behavior is:
 /// - `name()` reads from the struct's `name` field
-/// - `plugin_name()` reads from `plugin_name` if present, otherwise returns `""`
+/// - `connection_plugin_name()` reads from `connection_plugin_name` if present, otherwise returns `""`
 /// - `options()` returns the `options` field if present, otherwise `None`
 /// - `processor_names()` returns the configured processor names if present, otherwise an empty vector
 /// - `with_processor()` and `with_processors()` are generated when `processor_names` is present
 /// - `sub_tasks()` returns all fields marked with `#[task(subtask)]` in declaration order
-/// - `get_connection_key(hostname)` builds a `ConnectionKey` from `hostname` and `plugin_name()`
+/// - `get_connection_key(hostname)` builds a `ConnectionKey` from `hostname` and `connection_plugin_name()`
 ///
 /// # Parameters
 ///
@@ -151,7 +151,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// #[derive(Task)]
 /// struct MyTask {
 ///     name: String,
-///     plugin_name: Option<String>,
+///     connection_plugin_name: Option<String>,
 ///     options: Option<serde_json::Value>,
 ///     #[task(subtask)]
 ///     child_task: Arc<dyn Task>,
@@ -191,7 +191,7 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     };
 
     let mut name_field = None;
-    let mut plugin_name_field = None;
+    let mut connection_plugin_name_field = None;
     let mut options_field = None;
     let mut processor_names_field: Option<(syn::Ident, Type)> = None;
     let mut subtask_fields: Vec<(syn::Ident, SubtaskKind)> = Vec::new();
@@ -218,7 +218,7 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
 
         match ident.to_string().as_str() {
             "name" => name_field = Some(field.ty.clone()),
-            "plugin_name" => plugin_name_field = Some(field.ty.clone()),
+            "connection_plugin_name" => connection_plugin_name_field = Some(field.ty.clone()),
             "options" => options_field = Some(field.ty.clone()),
             "processor_names" => {
                 processor_names_field = Some((ident.clone(), field.ty.clone()));
@@ -253,12 +253,12 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
             .into();
     }
 
-    let plugin_name_ty = plugin_name_field.clone();
-    if let Some(ty) = &plugin_name_ty {
+    let connection_plugin_name_ty = connection_plugin_name_field.clone();
+    if let Some(ty) = &connection_plugin_name_ty {
         if !is_string_or_static_str(ty) && !is_option_of(ty, is_string_or_static_str) {
             return syn::Error::new_spanned(
                 ty,
-                "`plugin_name` must be `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`",
+                "`connection_plugin_name` must be `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`",
             )
             .to_compile_error()
             .into();
@@ -302,10 +302,10 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
         quote! { self.name }
     };
 
-    let plugin_name_getter = match plugin_name_ty {
-        Some(ty) if is_string_type(&ty) => quote! { self.plugin_name.as_str() },
-        Some(ty) if is_static_str_type(&ty) => quote! { self.plugin_name },
-        Some(_) => quote! { self.plugin_name.as_deref().unwrap_or("") },
+    let connection_plugin_name_getter = match connection_plugin_name_ty {
+        Some(ty) if is_string_type(&ty) => quote! { self.connection_plugin_name.as_str() },
+        Some(ty) if is_static_str_type(&ty) => quote! { self.connection_plugin_name },
+        Some(_) => quote! { self.connection_plugin_name.as_deref().unwrap_or("") },
         None => quote! { "" },
     };
 
@@ -373,15 +373,15 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
                 #name_getter
             }
 
-            fn plugin_name(&self) -> &str {
-                #plugin_name_getter
+            fn connection_plugin_name(&self) -> &str {
+                #connection_plugin_name_getter
             }
 
             fn get_connection_key(
                 &self,
                 hostname: &str,
             ) -> genja_core::inventory::ConnectionKey {
-                genja_core::inventory::ConnectionKey::new(hostname, #plugin_name_getter)
+                genja_core::inventory::ConnectionKey::new(hostname, #connection_plugin_name_getter)
             }
 
             fn options(&self) -> Option<&serde_json::Value> {

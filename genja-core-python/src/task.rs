@@ -50,7 +50,7 @@ impl PyHostTaskResult {
 #[derive(Clone)]
 struct PythonTaskSpec {
     name: String,
-    plugin_name: String,
+    connection_plugin_name: String,
     processor_names: Vec<String>,
     options: Option<Value>,
     py_task_class: Arc<Py<PyAny>>,
@@ -67,12 +67,12 @@ impl TaskInfo for PythonBackedTask {
         &self.spec.name
     }
 
-    fn plugin_name(&self) -> &str {
-        &self.spec.plugin_name
+    fn connection_plugin_name(&self) -> &str {
+        &self.spec.connection_plugin_name
     }
 
     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-        ConnectionKey::new(hostname, self.plugin_name())
+        ConnectionKey::new(hostname, self.connection_plugin_name())
     }
 
     fn processor_names(&self) -> Vec<&str> {
@@ -181,8 +181,8 @@ impl PyTaskDefinition {
     }
 
     #[getter]
-    fn plugin_name(&self) -> String {
-        self.spec.plugin_name.clone()
+    fn connection_plugin_name(&self) -> String {
+        self.spec.connection_plugin_name.clone()
     }
 
     #[getter]
@@ -213,9 +213,9 @@ impl PyTaskDefinition {
 
     fn __repr__(&self) -> String {
         format!(
-            "TaskDefinition(name={:?}, plugin_name={:?}, sub_tasks={})",
+            "TaskDefinition(name={:?}, connection_plugin_name={:?}, sub_tasks={})",
             self.spec.name,
-            self.spec.plugin_name,
+            self.spec.connection_plugin_name,
             self.spec.sub_tasks.len()
         )
     }
@@ -621,13 +621,17 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
             "python task metadata field 'name' must not be empty",
         ));
     }
-    let plugin_name: String = info
-        .get_item("plugin_name")?
-        .ok_or_else(|| PyValueError::new_err("python task metadata is missing 'plugin_name'"))?
+    let connection_plugin_name: String = info
+        .get_item("connection_plugin_name")?
+        .ok_or_else(|| {
+            PyValueError::new_err(
+                "python task metadata is missing 'connection_plugin_name'",
+            )
+        })?
         .extract()?;
-    if plugin_name.trim().is_empty() {
+    if connection_plugin_name.trim().is_empty() {
         return Err(PyValueError::new_err(
-            "python task metadata field 'plugin_name' must not be empty",
+            "python task metadata field 'connection_plugin_name' must not be empty",
         ));
     }
     let processor_names = if let Some(processors) = info.get_item("processors")? {
@@ -655,7 +659,7 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
 
     Ok(PythonTaskSpec {
         name,
-        plugin_name,
+        connection_plugin_name,
         processor_names,
         options,
         py_task_class: Arc::new(py_task_class.unbind()),
@@ -681,7 +685,7 @@ fn task_from_spec(spec: &PythonTaskSpec) -> PythonBackedTask {
 fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
     json!({
         "name": spec.name,
-        "plugin_name": spec.plugin_name,
+        "connection_plugin_name": spec.connection_plugin_name,
         "processors": spec.processor_names,
         "options": spec.options,
         "sub_task": spec.sub_tasks.first().map(python_task_spec_to_json),
@@ -694,7 +698,10 @@ fn python_task_spec_to_py_dict<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let task = PyDict::new(py);
     task.set_item("name", &spec.name)?;
-    task.set_item("plugin_name", &spec.plugin_name)?;
+    task.set_item(
+        "connection_plugin_name",
+        &spec.connection_plugin_name,
+    )?;
     task.set_item("processors", &spec.processor_names)?;
     if let Some(options) = spec.options.as_ref() {
         task.set_item("options", json_value_to_py(py, options)?)?;
@@ -858,7 +865,7 @@ mod tests {
     fn make_task_class<'py>(
         py: Python<'py>,
         name: &str,
-        plugin_name: &str,
+        connection_plugin_name: &str,
         sub_task: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let builtins = PyModule::import(py, "builtins")?;
@@ -868,7 +875,7 @@ mod tests {
 
         let info = PyDict::new(py);
         info.set_item("name", name)?;
-        info.set_item("plugin_name", plugin_name)?;
+        info.set_item("connection_plugin_name", connection_plugin_name)?;
         if let Some(sub_task) = sub_task {
             info.set_item("sub_task", sub_task)?;
         } else {
@@ -986,11 +993,11 @@ mod tests {
             let spec = extract_python_task_spec(backup).expect("task spec should extract");
 
             assert_eq!(spec.name, "backup_config");
-            assert_eq!(spec.plugin_name, "ssh");
+            assert_eq!(spec.connection_plugin_name, "ssh");
             assert_eq!(spec.options, None);
             assert_eq!(spec.sub_tasks.len(), 1);
             assert_eq!(spec.sub_tasks[0].name, "verify_backup");
-            assert_eq!(spec.sub_tasks[0].plugin_name, "ssh");
+            assert_eq!(spec.sub_tasks[0].connection_plugin_name, "ssh");
         });
     }
 
@@ -1024,7 +1031,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_python_task_spec_rejects_empty_plugin_name() {
+    fn extract_python_task_spec_rejects_empty_connection_plugin_name() {
         init_python();
         Python::with_gil(|py| {
             let task = make_task_class(py, "backup_config", "", None)
@@ -1035,7 +1042,7 @@ mod tests {
                 .expect("empty plugin should fail");
             assert!(err
                 .to_string()
-                .contains("python task metadata field 'plugin_name' must not be empty"));
+                .contains("python task metadata field 'connection_plugin_name' must not be empty"));
         });
     }
 

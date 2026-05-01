@@ -27,7 +27,7 @@ The canonical authoring shape is:
 
     @task(
         name="backup_config",
-        plugin_name="ssh",
+        connection_plugin_name="ssh",
         processors=["audit"],
         options={"backup_path": "/tmp/configs", "compress": True},
     )
@@ -69,7 +69,7 @@ The canonical authoring shape is:
 Task metadata comes from ``@task(...)``:
 
 - ``name``: required and must be non-empty
-- ``plugin_name``: required and must be non-empty
+- ``connection_plugin_name``: required and must be non-empty
 - ``sub_task``: optional decorated task class
 - ``processors``: optional list of processor plugin names
 - ``options``: optional JSON-serializable task options payload
@@ -97,7 +97,7 @@ class TaskInfo(_GenjaModel):
     """Task metadata passed into Python task ``run(...)`` methods."""
 
     name: str
-    plugin_name: str
+    connection_plugin_name: str
     processors: list[str] = Field(default_factory=list)
     options: Any | None = None
     sub_task: TaskInfo | None = None
@@ -136,7 +136,7 @@ class GenjaTaskProtocol(Protocol):
 
 def task(
     name: str,
-    plugin_name: str,
+    connection_plugin_name: str,
     sub_task: type[GenjaTaskProtocol] | None = None,
     processors: list[str] | None = None,
     options: Any | None = None,
@@ -179,7 +179,7 @@ def task(
 
         cls.__genja_task_info__ = {
             "name": name,
-            "plugin_name": plugin_name,
+            "connection_plugin_name": connection_plugin_name,
             "processors": list(processors or []),
             "options": options,
             "sub_task": sub_task,

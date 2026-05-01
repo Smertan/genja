@@ -188,7 +188,7 @@
 //! In the common derive-based workflow, the derive macro from `genja-core-derive`
 //! generates [`TaskInfo`] and [`SubTasks`], while you still implement [`Task`]
 //! manually to provide `start()`. If you call generated metadata methods such as
-//! `name()` or `plugin_name()` directly, import [`TaskInfo`] so those trait methods
+//! `name()` or `connection_plugin_name()` directly, import [`TaskInfo`] so those trait methods
 //! are in scope.
 //!
 //! ```rust
@@ -199,7 +199,7 @@
 //! #[derive(TaskDerive)]
 //! struct DeployTask {
 //!     name: String,
-//!     plugin_name: Option<String>,
+//!     connection_plugin_name: Option<String>,
 //!     options: Option<serde_json::Value>,
 //!     config_file: String,
 //! }
@@ -216,13 +216,13 @@
 //!
 //! let task = DeployTask {
 //!     name: "deploy".to_string(),
-//!     plugin_name: Some("ssh".to_string()),
+//!     connection_plugin_name: Some("ssh".to_string()),
 //!     options: None,
 //!     config_file: "router.conf".to_string(),
 //! };
 //!
 //! assert_eq!(task.name(), "deploy");
-//! assert_eq!(task.plugin_name(), "ssh");
+//! assert_eq!(task.connection_plugin_name(), "ssh");
 //! ```
 //!
 //! ## [`TaskInfo`]
@@ -230,7 +230,7 @@
 //! Provides metadata about a task including its name, associated plugin, connection
 //! requirements, and optional configuration. This trait is typically auto-implemented
 //! when using the derive macro from `genja-core-derive`.
-//! That derive reads the task struct's `name`, optional `plugin_name`, and optional
+//! That derive reads the task struct's `name`, optional `connection_plugin_name`, and optional
 //! `options` fields to generate the corresponding trait methods. Tasks can select
 //! processor plugins by returning names from [`TaskInfo::processor_names`]. The
 //! derive macro supports either a `processor_names: Vec<String>` field or
@@ -490,7 +490,7 @@
 //! #[derive(TaskDerive)]
 //! struct DeployTask {
 //!     name: String,
-//!     plugin_name: Option<String>,
+//!     connection_plugin_name: Option<String>,
 //!     options: Option<serde_json::Value>,
 //! }
 //!
@@ -504,7 +504,7 @@
 //!
 //! let task = TaskDefinition::new(DeployTask {
 //!     name: "deploy".to_string(),
-//!     plugin_name: Some("ssh".to_string()),
+//!     connection_plugin_name: Some("ssh".to_string()),
 //!     options: None,
 //! });
 //! let host = Host::builder().hostname("router1").build();
@@ -2897,8 +2897,8 @@ pub trait TaskInfo {
     /// Return the task's name.
     fn name(&self) -> &str;
 
-    /// Return the task's plugin name.
-    fn plugin_name(&self) -> &str;
+    /// Return the task's connection plugin name.
+    fn connection_plugin_name(&self) -> &str;
 
     /// Build the task's connection key for a host.
     fn get_connection_key(&self, hostname: &str) -> crate::inventory::ConnectionKey;
@@ -2928,7 +2928,7 @@ pub trait SubTasks {
 /// #[derive(TaskDerive)]
 /// struct MyTask {
 ///     name: String,
-///     plugin_name: Option<String>,
+///     connection_plugin_name: Option<String>,
 /// }
 ///
 /// impl Task for MyTask {
@@ -3127,7 +3127,7 @@ impl fmt::Debug for dyn TaskProcessorResolver {
 ///         &self.name
 ///     }
 ///
-///     fn plugin_name(&self) -> &str {
+///     fn connection_plugin_name(&self) -> &str {
 ///         "ssh"
 ///     }
 ///
@@ -3587,14 +3587,14 @@ impl TaskInfo for TaskDefinition {
 
     /// Returns the name of the plugin associated with this task.
     ///
-    /// This method delegates to the inner task's `plugin_name()` implementation,
+    /// This method delegates to the inner task's `connection_plugin_name()` implementation,
     /// providing access to the plugin identifier that will handle the task's execution.
     ///
     /// # Returns
     ///
-    /// A string slice containing the plugin's name (e.g., "ssh", "netconf", "restconf").
-    fn plugin_name(&self) -> &str {
-        self.inner.plugin_name()
+    /// A string slice containing the connection plugin's name (e.g., "ssh", "netconf", "restconf").
+    fn connection_plugin_name(&self) -> &str {
+        self.inner.connection_plugin_name()
     }
 
     /// Builds a connection key for the specified host.
@@ -3725,7 +3725,7 @@ mod tests {
             self.name
         }
 
-        fn plugin_name(&self) -> &str {
+        fn connection_plugin_name(&self) -> &str {
             "ssh"
         }
 
@@ -3756,7 +3756,7 @@ mod tests {
             self.name
         }
 
-        fn plugin_name(&self) -> &str {
+        fn connection_plugin_name(&self) -> &str {
             "ssh"
         }
 
@@ -3833,7 +3833,7 @@ mod tests {
             "failing"
         }
 
-        fn plugin_name(&self) -> &str {
+        fn connection_plugin_name(&self) -> &str {
             "ssh"
         }
 
@@ -3865,7 +3865,7 @@ mod tests {
             "skipping"
         }
 
-        fn plugin_name(&self) -> &str {
+        fn connection_plugin_name(&self) -> &str {
             "ssh"
         }
 
@@ -4232,7 +4232,7 @@ mod tests {
             "erroring"
         }
 
-        fn plugin_name(&self) -> &str {
+        fn connection_plugin_name(&self) -> &str {
             "ssh"
         }
 

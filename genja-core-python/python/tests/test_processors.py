@@ -6,7 +6,7 @@ from tests.fixtures.processor_plugins import AuditProcessor
 from genja_core.task import Host, TaskSuccessResult, task
 
 
-@task(name="processor_backup", plugin_name="ssh", processors=["audit"])
+@task(name="processor_backup", connection_plugin_name="ssh", processors=["audit"])
 class ProcessorBackupTask:
     def run(self, task, host, context):
         return TaskSuccessResult(

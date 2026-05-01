@@ -96,7 +96,7 @@ It generates `TaskInfo` and `SubTasks`, then you provide the execution logic by 
 The derive macro maps fields like this:
 
 - `name` is required and becomes `TaskInfo::name()`.
-- `plugin_name` is optional and becomes `TaskInfo::plugin_name()`.
+- `connection_plugin_name` is optional and becomes `TaskInfo::connection_plugin_name()`.
 - `options` is optional and becomes `TaskInfo::options()`.
 - `processor_names` is optional and becomes `TaskInfo::processor_names()`.
 - `#[task(processors = ["audit"])]` can be used when processor names are fixed at compile time.
@@ -105,7 +105,7 @@ The derive macro maps fields like this:
 That means the usual pattern is:
 
 1. Add `#[derive(TaskDerive)]` to the task struct.
-2. Declare `name`, and optionally `plugin_name`, `options`, `processor_names`, and `#[task(subtask)]` fields.
+2. Declare `name`, and optionally `connection_plugin_name`, `options`, `processor_names`, and `#[task(subtask)]` fields.
 3. Implement `Task::start(&self, host)` manually.
 
 ```rust
@@ -117,7 +117,7 @@ use genja_core_derive::Task as TaskDerive;
 #[derive(TaskDerive)]
 struct CheckConfigTask {
     name: String,
-    plugin_name: Option<String>,
+    connection_plugin_name: Option<String>,
 }
 
 impl Task for CheckConfigTask {
@@ -139,7 +139,7 @@ let genja = Genja::builder(inventory).build()?;
 let results = genja.run(
     CheckConfigTask {
         name: "check_config".to_string(),
-        plugin_name: Some("ssh".to_string()),
+        connection_plugin_name: Some("ssh".to_string()),
     },
     10,
 )?;
@@ -152,7 +152,7 @@ Notes:
 
 - `max_depth` limits recursive sub-task execution. A task with no sub-tasks can use a small value like `1`.
 - `#[derive(TaskDerive)]` requires a `name` field and generates `TaskInfo` plus `SubTasks`, not `Task::start()`.
-- `plugin_name` is optional, but usually needed for real task execution.
+- `connection_plugin_name` is optional, but usually needed for real task execution.
 - Rich task output lives in `TaskSuccess`, `TaskFailure`, `TaskSkip`, and `TaskResults`.
 - The lower-level task API is documented in `genja-core/src/task.rs`.
 
@@ -171,7 +171,7 @@ use genja_core_derive::Task as TaskDerive;
 #[task(processors = ["audit"])]
 struct DeployTask {
     name: &'static str,
-    plugin_name: Option<String>,
+    connection_plugin_name: Option<String>,
 }
 
 impl Task for DeployTask {
@@ -249,7 +249,7 @@ use genja_core_derive::Task as TaskDerive;
 #[derive(TaskDerive)]
 struct ValidateTask {
     name: String,
-    plugin_name: Option<String>,
+    connection_plugin_name: Option<String>,
 }
 
 impl Task for ValidateTask {
@@ -261,7 +261,7 @@ impl Task for ValidateTask {
 #[derive(TaskDerive)]
 struct DeployTask {
     name: String,
-    plugin_name: Option<String>,
+    connection_plugin_name: Option<String>,
     #[task(subtask)]
     validate: Arc<dyn Task>,
 }
@@ -279,10 +279,10 @@ let genja = Genja::builder(inventory).build()?;
 
 let task = DeployTask {
     name: "deploy".to_string(),
-    plugin_name: Some("ssh".to_string()),
+    connection_plugin_name: Some("ssh".to_string()),
     validate: Arc::new(ValidateTask {
         name: "validate".to_string(),
-        plugin_name: Some("ssh".to_string()),
+        connection_plugin_name: Some("ssh".to_string()),
     }),
 };
 

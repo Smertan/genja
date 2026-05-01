@@ -749,9 +749,9 @@ impl Genja {
     ///
     /// impl TaskInfo for MyTask {
     ///     fn name(&self) -> &str { "my-task" }
-    ///     fn plugin_name(&self) -> &str { "test" }
+    ///     fn connection_plugin_name(&self) -> &str { "test" }
     ///     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-    ///         ConnectionKey::new(hostname, self.plugin_name())
+    ///         ConnectionKey::new(hostname, self.connection_plugin_name())
     ///     }
     ///     fn options(&self) -> Option<&Value> { None }
     /// }
@@ -887,12 +887,12 @@ mod tests {
             &self.name
         }
 
-        fn plugin_name(&self) -> &str {
+        fn connection_plugin_name(&self) -> &str {
             "test"
         }
 
         fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.plugin_name())
+            ConnectionKey::new(hostname, self.connection_plugin_name())
         }
 
         fn options(&self) -> Option<&Value> {
@@ -919,12 +919,12 @@ mod tests {
             "failed-task"
         }
 
-        fn plugin_name(&self) -> &str {
+        fn connection_plugin_name(&self) -> &str {
             "test"
         }
 
         fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.plugin_name())
+            ConnectionKey::new(hostname, self.connection_plugin_name())
         }
 
         fn options(&self) -> Option<&Value> {
@@ -953,12 +953,12 @@ mod tests {
             "skipped-task"
         }
 
-        fn plugin_name(&self) -> &str {
+        fn connection_plugin_name(&self) -> &str {
             "test"
         }
 
         fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.plugin_name())
+            ConnectionKey::new(hostname, self.connection_plugin_name())
         }
 
         fn options(&self) -> Option<&Value> {
@@ -985,12 +985,12 @@ mod tests {
             "child-task"
         }
 
-        fn plugin_name(&self) -> &str {
+        fn connection_plugin_name(&self) -> &str {
             "test"
         }
 
         fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.plugin_name())
+            ConnectionKey::new(hostname, self.connection_plugin_name())
         }
 
         fn options(&self) -> Option<&Value> {
@@ -1029,12 +1029,12 @@ mod tests {
             "parent-task"
         }
 
-        fn plugin_name(&self) -> &str {
+        fn connection_plugin_name(&self) -> &str {
             "test"
         }
 
         fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.plugin_name())
+            ConnectionKey::new(hostname, self.connection_plugin_name())
         }
 
         fn options(&self) -> Option<&Value> {
