@@ -749,9 +749,10 @@ impl Genja {
     ///
     /// impl TaskInfo for MyTask {
     ///     fn name(&self) -> &str { "my-task" }
-    ///     fn connection_plugin_name(&self) -> &str { "test" }
-    ///     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-    ///         ConnectionKey::new(hostname, self.connection_plugin_name())
+    ///     fn connection_plugin_name(&self) -> Option<&str> { Some("test") }
+    ///     fn get_connection_key(&self, hostname: &str) -> Option<ConnectionKey> {
+    ///         self.connection_plugin_name()
+    ///             .map(|plugin_name| ConnectionKey::new(hostname, plugin_name))
     ///     }
     ///     fn options(&self) -> Option<&Value> { None }
     /// }
@@ -798,7 +799,13 @@ impl Genja {
             host_count
         );
         let runner = self.get_runner_plugin(runner_name)?;
-        let results = runner.run(&task_definition, &hosts, self.settings.runner(), max_depth)?;
+        let results = runner.run(
+            &task_definition,
+            &hosts,
+            None,
+            self.settings.runner(),
+            max_depth,
+        )?;
         let summary = results.task_summary();
         log_task_summary(&summary, host_count, 0);
         Ok(results)
@@ -872,7 +879,7 @@ impl Default for Genja {
 mod tests {
     use super::{Genja, GenjaError};
     use genja_core::Settings;
-    use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Data, Host, Hosts, Inventory};
+    use genja_core::inventory::{BaseBuilderHost, Data, Host, Hosts, Inventory};
     use genja_core::settings::RunnerConfig;
     use genja_core::task::{HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskSuccess};
     use serde_json::{Value, json};
@@ -887,12 +894,8 @@ mod tests {
             &self.name
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "test"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.connection_plugin_name())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("test")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -919,12 +922,8 @@ mod tests {
             "failed-task"
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "test"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.connection_plugin_name())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("test")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -953,12 +952,8 @@ mod tests {
             "skipped-task"
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "test"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.connection_plugin_name())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("test")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -985,12 +980,8 @@ mod tests {
             "child-task"
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "test"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.connection_plugin_name())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("test")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -1029,12 +1020,8 @@ mod tests {
             "parent-task"
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "test"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.connection_plugin_name())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("test")
         }
 
         fn options(&self) -> Option<&Value> {

@@ -222,7 +222,7 @@
 //! };
 //!
 //! assert_eq!(task.name(), "deploy");
-//! assert_eq!(task.connection_plugin_name(), "ssh");
+//! assert_eq!(task.connection_plugin_name(), Some("ssh"));
 //! ```
 //!
 //! ## [`TaskInfo`]
@@ -2897,14 +2897,21 @@ pub trait TaskInfo {
     /// Return the task's name.
     fn name(&self) -> &str;
 
-    /// Return the task's connection plugin name.
-    fn connection_plugin_name(&self) -> &str;
+    /// Return the task's connection plugin name, if the task needs a connection.
+    fn connection_plugin_name(&self) -> Option<&str> {
+        None
+    }
 
-    /// Build the task's connection key for a host.
-    fn get_connection_key(&self, hostname: &str) -> crate::inventory::ConnectionKey;
+    /// Build the task's connection key for a host, if the task needs a connection.
+    fn get_connection_key(&self, hostname: &str) -> Option<crate::inventory::ConnectionKey> {
+        self.connection_plugin_name()
+            .map(|plugin_name| crate::inventory::ConnectionKey::new(hostname, plugin_name))
+    }
 
     /// Return the task's options payload, if set.
-    fn options(&self) -> Option<&Value>;
+    fn options(&self) -> Option<&Value> {
+        None
+    }
 
     /// Return processor plugin names selected for this task.
     fn processor_names(&self) -> Vec<&str> {
@@ -3087,6 +3094,20 @@ pub trait TaskProcessorResolver: Send + Sync {
     fn resolve_task_processor(&self, name: &str) -> Option<Arc<dyn TaskProcessor>>;
 }
 
+/// Opens or verifies task-scoped connections before execution.
+///
+/// The full runtime can implement this trait to ensure the connection selected by
+/// a task is available before the task body runs. Core task execution remains
+/// generic by depending only on this trait rather than on a concrete runtime type.
+pub trait TaskConnectionResolver: Send + Sync {
+    /// Ensure the connection required by `task` for `hostname` is open and ready.
+    fn ensure_connection_open(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<(), crate::GenjaError>;
+}
+
 impl fmt::Debug for dyn TaskProcessorResolver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TaskProcessorResolver")
@@ -3127,12 +3148,13 @@ impl fmt::Debug for dyn TaskProcessorResolver {
 ///         &self.name
 ///     }
 ///
-///     fn connection_plugin_name(&self) -> &str {
-///         "ssh"
+///     fn connection_plugin_name(&self) -> Option<&str> {
+///         Some("ssh")
 ///     }
 ///
-///     fn get_connection_key(&self, hostname: &str) -> genja_core::inventory::ConnectionKey {
-///         genja_core::inventory::ConnectionKey::new(hostname, "ssh")
+///     fn get_connection_key(&self, hostname: &str) -> Option<genja_core::inventory::ConnectionKey> {
+///         self.connection_plugin_name()
+///             .map(|plugin_name| genja_core::inventory::ConnectionKey::new(hostname, plugin_name))
 ///     }
 ///
 ///     fn options(&self) -> Option<&Value> {
@@ -3297,6 +3319,30 @@ impl TaskDefinition {
             hostname,
             host,
             results,
+            None,
+            self.processor_resolver.as_deref(),
+            self.processor_names(),
+            None,
+            0,
+            max_depth,
+        )
+    }
+
+    /// Executes this task definition while ensuring task-scoped connections are opened.
+    pub fn start_with_connection_resolver(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        max_depth: usize,
+    ) -> Result<(), crate::GenjaError> {
+        Self::start_with_depth(
+            self.inner.as_ref(),
+            hostname,
+            host,
+            results,
+            connection_resolver,
             self.processor_resolver.as_deref(),
             self.processor_names(),
             None,
@@ -3375,6 +3421,7 @@ impl TaskDefinition {
         hostname: &str,
         host: &Host,
         results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
         processor_resolver: Option<&dyn TaskProcessorResolver>,
         processor_names: Vec<&str>,
         parent_task_name: Option<&str>,
@@ -3420,6 +3467,37 @@ impl TaskDefinition {
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
         for processor in &processors {
             processor.on_instance_start(&processor_context)?;
+        }
+
+        if let Some(connection_resolver) = connection_resolver {
+            if let Err(error) = connection_resolver.ensure_connection_open(task, hostname) {
+                let finished_at = SystemTime::now();
+                let duration_ns = finished_at
+                    .duration_since(started_at)
+                    .map(|duration| duration.as_nanos())
+                    .unwrap_or(0);
+                results.record_execution_timing(started_at, finished_at);
+
+                warn!(
+                    "task '{}' failed to open connection for host '{}': {}",
+                    task.name(),
+                    hostname,
+                    error
+                );
+
+                let mut host_result = HostTaskResult::failed(
+                    TaskFailure::new(error)
+                        .with_kind(TaskFailureKind::Connection)
+                        .with_started_at(started_at)
+                        .with_finished_at(finished_at)
+                        .with_duration_ns(duration_ns),
+                );
+                for processor in &processors {
+                    processor.on_instance_finish(&processor_context, &mut host_result)?;
+                }
+                results.insert_host_result(hostname, host_result);
+                return Ok(());
+            }
         }
 
         let execution_context = TaskExecutionContext::new(depth, max_depth);
@@ -3549,6 +3627,7 @@ impl TaskDefinition {
                 hostname,
                 host,
                 sub_results,
+                connection_resolver,
                 processor_resolver,
                 sub_processor_names,
                 Some(task.name()),
@@ -3593,7 +3672,7 @@ impl TaskInfo for TaskDefinition {
     /// # Returns
     ///
     /// A string slice containing the connection plugin's name (e.g., "ssh", "netconf", "restconf").
-    fn connection_plugin_name(&self) -> &str {
+    fn connection_plugin_name(&self) -> Option<&str> {
         self.inner.connection_plugin_name()
     }
 
@@ -3609,9 +3688,9 @@ impl TaskInfo for TaskDefinition {
     ///
     /// # Returns
     ///
-    /// A `ConnectionKey` that uniquely identifies the connection to the specified host
-    /// using this task's plugin.
-    fn get_connection_key(&self, hostname: &str) -> crate::inventory::ConnectionKey {
+    /// An optional `ConnectionKey` that uniquely identifies the connection to the
+    /// specified host when this task declares a connection plugin.
+    fn get_connection_key(&self, hostname: &str) -> Option<crate::inventory::ConnectionKey> {
         self.inner.get_connection_key(hostname)
     }
 
@@ -3668,7 +3747,7 @@ impl DerefMut for Tasks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::{BaseBuilderHost, ConnectionKey, Host};
+    use crate::inventory::{BaseBuilderHost, Host};
     use log::{LevelFilter, Log, Metadata, Record};
     use serde_json::json;
     use std::fmt;
@@ -3725,12 +3804,8 @@ mod tests {
             self.name
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "ssh"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, "ssh")
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -3756,12 +3831,8 @@ mod tests {
             self.name
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "ssh"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, "ssh")
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -3833,12 +3904,8 @@ mod tests {
             "failing"
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "ssh"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, "ssh")
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -3865,12 +3932,8 @@ mod tests {
             "skipping"
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "ssh"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, "ssh")
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -4232,12 +4295,8 @@ mod tests {
             "erroring"
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "ssh"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, "ssh")
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
         }
 
         fn options(&self) -> Option<&Value> {

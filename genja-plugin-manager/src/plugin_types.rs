@@ -239,11 +239,12 @@
 //!         &self,
 //!         task: &TaskDefinition,
 //!         hosts: &Hosts,
+//!         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
 //!         runner_config: &RunnerConfig,
 //!         max_depth: usize,
 //!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Execute task sequentially on each host
-//!         let _ = (task, hosts, runner_config, max_depth);
+//!         let _ = (task, hosts, connection_resolver, runner_config, max_depth);
 //!         Ok(TaskResults::new("sequential"))
 //!     }
 //!
@@ -251,11 +252,12 @@
 //!         &self,
 //!         tasks: &Tasks,
 //!         hosts: &Hosts,
+//!         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
 //!         runner_config: &RunnerConfig,
 //!         max_depth: usize,
 //!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
 //!         // Execute all tasks sequentially
-//!         let _ = (tasks, hosts, runner_config, max_depth);
+//!         let _ = (tasks, hosts, connection_resolver, runner_config, max_depth);
 //!         Ok(Vec::new())
 //!     }
 //! }
@@ -392,7 +394,9 @@ use genja_core::inventory::{
     ConnectionKey, Hosts, Inventory, ResolvedConnectionParams, TransformFunction,
 };
 use genja_core::settings::RunnerConfig;
-use genja_core::task::{TaskDefinition, TaskProcessor, TaskResults, Tasks};
+use genja_core::task::{
+    TaskConnectionResolver, TaskDefinition, TaskProcessor, TaskResults, Tasks,
+};
 use genja_core::{InventoryLoadError, Settings};
 use std::sync::Arc;
 /// Filesystem path to a plugin or plugin metadata entry.
@@ -497,6 +501,7 @@ pub trait PluginRunner: Plugin {
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
+        connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, genja_core::GenjaError>;
@@ -506,6 +511,7 @@ pub trait PluginRunner: Plugin {
         &self,
         tasks: &Tasks,
         hosts: &Hosts,
+        connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, genja_core::GenjaError>;
@@ -713,6 +719,7 @@ mod tests {
             &self,
             _task: &TaskDefinition,
             _hosts: &Hosts,
+            _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
             _runner_config: &RunnerConfig,
             _max_depth: usize,
         ) -> Result<TaskResults, genja_core::GenjaError> {
@@ -723,6 +730,7 @@ mod tests {
             &self,
             _tasks: &Tasks,
             _hosts: &Hosts,
+            _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
             _runner_config: &RunnerConfig,
             _max_depth: usize,
         ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {

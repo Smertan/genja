@@ -120,12 +120,12 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///
 /// After deriving, the generated behavior is:
 /// - `name()` reads from the struct's `name` field
-/// - `connection_plugin_name()` reads from `connection_plugin_name` if present, otherwise returns `""`
+/// - `connection_plugin_name()` reads from `connection_plugin_name` if present, otherwise returns `None`
 /// - `options()` returns the `options` field if present, otherwise `None`
 /// - `processor_names()` returns the configured processor names if present, otherwise an empty vector
 /// - `with_processor()` and `with_processors()` are generated when `processor_names` is present
 /// - `sub_tasks()` returns all fields marked with `#[task(subtask)]` in declaration order
-/// - `get_connection_key(hostname)` builds a `ConnectionKey` from `hostname` and `connection_plugin_name()`
+/// - `get_connection_key(hostname)` builds a `ConnectionKey` from `hostname` and `connection_plugin_name()` when a connection plugin is set
 ///
 /// # Parameters
 ///
@@ -303,10 +303,26 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     };
 
     let connection_plugin_name_getter = match connection_plugin_name_ty {
-        Some(ty) if is_string_type(&ty) => quote! { self.connection_plugin_name.as_str() },
-        Some(ty) if is_static_str_type(&ty) => quote! { self.connection_plugin_name },
-        Some(_) => quote! { self.connection_plugin_name.as_deref().unwrap_or("") },
-        None => quote! { "" },
+        Some(ty) if is_string_type(&ty) => quote! {
+            if self.connection_plugin_name.trim().is_empty() {
+                None
+            } else {
+                Some(self.connection_plugin_name.as_str())
+            }
+        },
+        Some(ty) if is_static_str_type(&ty) => quote! {
+            if self.connection_plugin_name.trim().is_empty() {
+                None
+            } else {
+                Some(self.connection_plugin_name)
+            }
+        },
+        Some(_) => quote! {
+            self.connection_plugin_name
+                .as_deref()
+                .filter(|plugin_name| !plugin_name.trim().is_empty())
+        },
+        None => quote! { None },
     };
 
     let options_getter = if options_field.is_some() {
@@ -373,15 +389,17 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
                 #name_getter
             }
 
-            fn connection_plugin_name(&self) -> &str {
+            fn connection_plugin_name(&self) -> Option<&str> {
                 #connection_plugin_name_getter
             }
 
             fn get_connection_key(
                 &self,
                 hostname: &str,
-            ) -> genja_core::inventory::ConnectionKey {
-                genja_core::inventory::ConnectionKey::new(hostname, #connection_plugin_name_getter)
+            ) -> Option<genja_core::inventory::ConnectionKey> {
+                self.connection_plugin_name().map(|plugin_name| {
+                    genja_core::inventory::ConnectionKey::new(hostname, plugin_name)
+                })
             }
 
             fn options(&self) -> Option<&serde_json::Value> {

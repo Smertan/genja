@@ -88,11 +88,33 @@ def test_task_definition_from_python_class_requires_decorator_metadata():
         genja_core.TaskDefinition.from_python_class(MissingMetadataTask)
 
 
-def test_task_definition_from_python_class_rejects_empty_connection_plugin_name():
-    @task(name="backup_config", connection_plugin_name="")
+def test_task_definition_from_python_class_allows_missing_connection_plugin_name():
+    @task(name="backup_config")
+    class NoConnectionTask:
+        def run(self, task, host, context):
+            return TaskSuccessResult(summary="noop")
+
+    task_definition = genja_core.TaskDefinition.from_python_class(NoConnectionTask)
+
+    assert task_definition.connection_plugin_name is None
+    assert task_definition.to_dict()["connection_plugin_name"] is None
+
+
+def test_task_decorator_rejects_empty_connection_plugin_name():
+    with pytest.raises(TypeError, match="connection_plugin_name must be a non-empty string or None"):
+        @task(name="backup_config", connection_plugin_name="")
+        class InvalidTask:
+            def run(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
+def test_task_definition_from_python_class_rejects_empty_connection_plugin_name_in_metadata():
+    @task(name="backup_config", connection_plugin_name="ssh")
     class InvalidTask:
         def run(self, task, host, context):
             return TaskSuccessResult(summary="noop")
+
+    InvalidTask.__genja_task_info__["connection_plugin_name"] = ""
 
     with pytest.raises(ValueError, match="connection_plugin_name.*must not be empty"):
         genja_core.TaskDefinition.from_python_class(InvalidTask)

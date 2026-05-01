@@ -55,7 +55,7 @@
 //! let hosts = Hosts::default();
 //! let config = RunnerConfig::default();
 //!
-//! let results = runner.run(&task, &hosts, &config, 10)?;
+//! let results = runner.run(&task, &hosts, None, &config, 10)?;
 //! # Ok::<(), genja_core::GenjaError>(())
 //! ```
 //!
@@ -112,6 +112,7 @@ impl PluginRunner for SerialRunnerPlugin {
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
+        _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         _runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
@@ -122,12 +123,13 @@ impl PluginRunner for SerialRunnerPlugin {
         &self,
         tasks: &Tasks,
         hosts: &Hosts,
+        connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         tasks
             .iter()
-            .map(|task| self.run(task, hosts, runner_config, max_depth))
+            .map(|task| self.run(task, hosts, connection_resolver.clone(), runner_config, max_depth))
             .collect()
     }
 }

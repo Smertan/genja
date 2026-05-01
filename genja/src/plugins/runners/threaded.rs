@@ -166,7 +166,7 @@
 //! # let config = RunnerConfig::default();
 //!
 //! // Execute all tasks sequentially, each with parallel host execution
-//! let all_results = runner.run_tasks(&tasks, &hosts, &config, 10)?;
+//! let all_results = runner.run_tasks(&tasks, &hosts, None, &config, 10)?;
 //! # Ok(())
 //! # }
 //! ```
@@ -280,6 +280,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
+        _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
@@ -386,12 +387,13 @@ impl PluginRunner for ThreadedRunnerPlugin {
         &self,
         tasks: &Tasks,
         hosts: &Hosts,
+        connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         tasks
             .iter()
-            .map(|task| self.run(task, hosts, runner_config, max_depth))
+            .map(|task| self.run(task, hosts, connection_resolver.clone(), runner_config, max_depth))
             .collect()
     }
 }

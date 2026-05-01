@@ -64,6 +64,7 @@
 //!         &self,
 //!         _task: &TaskDefinition,
 //!         _hosts: &Hosts,
+//!         _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
 //!         _runner_config: &RunnerConfig,
 //!         _max_depth: usize,
 //!     ) -> Result<TaskResults, genja_core::GenjaError> {
@@ -75,6 +76,7 @@
 //!         &self,
 //!         _tasks: &Tasks,
 //!         _hosts: &Hosts,
+//!         _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
 //!         _runner_config: &RunnerConfig,
 //!         _max_depth: usize,
 //!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
@@ -277,11 +279,12 @@
 //!         &self,
 //!         task: &TaskDefinition,
 //!         hosts: &Hosts,
+//!         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
 //!         runner_config: &RunnerConfig,
 //!         max_depth: usize,
 //!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Execute task on each host sequentially
-//!         let _ = (task, hosts, runner_config, max_depth);
+//!         let _ = (task, hosts, connection_resolver, runner_config, max_depth);
 //!         Ok(TaskResults::new("sequential"))
 //!     }
 //!
@@ -289,11 +292,12 @@
 //!         &self,
 //!         tasks: &Tasks,
 //!         hosts: &Hosts,
+//!         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
 //!         runner_config: &RunnerConfig,
 //!         max_depth: usize,
 //!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
 //!         // Execute all tasks sequentially
-//!         let _ = (tasks, hosts, runner_config, max_depth);
+//!         let _ = (tasks, hosts, connection_resolver, runner_config, max_depth);
 //!         Ok(Vec::new())
 //!     }
 //! }
@@ -1437,6 +1441,7 @@ inventory_a = "../this/path/does/not/exist.so"
             &self,
             _task: &genja_core::task::TaskDefinition,
             _hosts: &genja_core::inventory::Hosts,
+            _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
             _runner_config: &genja_core::settings::RunnerConfig,
             _max_depth: usize,
         ) -> Result<genja_core::task::TaskResults, genja_core::GenjaError> {
@@ -1447,6 +1452,7 @@ inventory_a = "../this/path/does/not/exist.so"
             &self,
             _tasks: &Tasks,
             _hosts: &genja_core::inventory::Hosts,
+            _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
             _runner_config: &genja_core::settings::RunnerConfig,
             _max_depth: usize,
         ) -> Result<Vec<genja_core::task::TaskResults>, genja_core::GenjaError> {

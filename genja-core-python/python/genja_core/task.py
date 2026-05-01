@@ -69,7 +69,7 @@ The canonical authoring shape is:
 Task metadata comes from ``@task(...)``:
 
 - ``name``: required and must be non-empty
-- ``connection_plugin_name``: required and must be non-empty
+- ``connection_plugin_name``: optional; when provided it must be non-empty
 - ``sub_task``: optional decorated task class
 - ``processors``: optional list of processor plugin names
 - ``options``: optional JSON-serializable task options payload
@@ -97,7 +97,7 @@ class TaskInfo(_GenjaModel):
     """Task metadata passed into Python task ``run(...)`` methods."""
 
     name: str
-    connection_plugin_name: str
+    connection_plugin_name: str | None = None
     processors: list[str] = Field(default_factory=list)
     options: Any | None = None
     sub_task: TaskInfo | None = None
@@ -136,7 +136,7 @@ class GenjaTaskProtocol(Protocol):
 
 def task(
     name: str,
-    connection_plugin_name: str,
+    connection_plugin_name: str | None = None,
     sub_task: type[GenjaTaskProtocol] | None = None,
     processors: list[str] | None = None,
     options: Any | None = None,
@@ -165,6 +165,14 @@ def task(
             if not hasattr(sub_task, "__genja_task_info__"):
                 raise TypeError(
                     f"@task-decorated class '{cls.__name__}' sub_task '{sub_task.__name__}' must also be decorated with @task"
+                )
+        if connection_plugin_name is not None:
+            if (
+                not isinstance(connection_plugin_name, str)
+                or not connection_plugin_name.strip()
+            ):
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' connection_plugin_name must be a non-empty string or None"
                 )
         if processors is not None:
             if not isinstance(processors, list):
