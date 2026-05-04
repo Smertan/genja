@@ -120,10 +120,11 @@ impl PyGenja {
     #[pyo3(signature = (task_class, max_depth=None))]
     fn run_task(
         &self,
+        py: Python<'_>,
         task_class: Bound<'_, PyAny>,
         max_depth: Option<usize>,
     ) -> PyResult<PyTaskResults> {
-        task::run_task(&self.inner, task_class, max_depth)
+        task::run_task(py, &self.inner, task_class, max_depth)
     }
 
     fn __repr__(&self) -> String {
