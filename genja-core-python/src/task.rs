@@ -13,6 +13,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use crate::plugin_manager::python_connection_from_runtime_connection;
+
 #[pyclass(name = "HostTaskResult")]
 #[derive(Clone)]
 pub struct PyHostTaskResult {
@@ -97,7 +99,7 @@ impl SubTasks for PythonBackedTask {
 
 impl Task for PythonBackedTask {
     fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError> {
-        self.run_python(host, 0, None)
+        self.run_python(host, 0, None, None)
     }
 
     fn start_with_runtime(
@@ -105,7 +107,16 @@ impl Task for PythonBackedTask {
         host: &Host,
         context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
-        self.run_python(host, context.current_depth(), Some(context.max_depth()))
+        let python_connection = context
+            .connection()
+            .and_then(|connection| connection.lock().ok())
+            .and_then(|guard| python_connection_from_runtime_connection(&*guard));
+        self.run_python(
+            host,
+            context.current_depth(),
+            Some(context.max_depth()),
+            python_connection,
+        )
     }
 }
 
@@ -115,6 +126,7 @@ impl PythonBackedTask {
         host: &Host,
         current_depth: usize,
         max_depth: Option<usize>,
+        connection: Option<Py<PyAny>>,
     ) -> Result<HostTaskResult, TaskError> {
         Python::with_gil(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
@@ -145,7 +157,15 @@ impl PythonBackedTask {
                         .set_item("max_depth", py.None())
                         .map_err(python_task_error)?;
                 }
-                build_python_task_model(py, "TaskExecutionContext", context)
+                match connection {
+                    Some(connection) => context
+                        .set_item("connection", connection.bind(py))
+                        .map_err(python_task_error)?,
+                    None => context
+                        .set_item("connection", py.None())
+                        .map_err(python_task_error)?,
+                }
+                build_python_task_model(py, "TaskRuntimeContext", context)
                     .map_err(python_task_error)?
             };
 

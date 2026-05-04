@@ -18,7 +18,7 @@ The canonical authoring shape is:
 
     from genja_core.task import (
         Host,
-        TaskExecutionContext,
+        TaskRuntimeContext,
         TaskInfo,
         TaskMessage,
         TaskSuccessResult,
@@ -36,7 +36,7 @@ The canonical authoring shape is:
             self,
             task: TaskInfo,
             host: Host,
-            context: TaskExecutionContext,
+            context: TaskRuntimeContext,
         ) -> TaskSuccessResult:
             return TaskSuccessResult(
                 changed=True,
@@ -114,11 +114,12 @@ class Host(_GenjaModel):
     data: Any | None = None
 
 
-class TaskExecutionContext(_GenjaModel):
-    """Execution context passed into Python task ``run(...)`` methods."""
+class TaskRuntimeContext(_GenjaModel):
+    """Runtime context passed into Python task ``run(...)`` methods."""
 
     current_depth: int = 0
     max_depth: int | None = None
+    connection: Any | None = None
 
 
 class GenjaTaskProtocol(Protocol):
@@ -130,7 +131,7 @@ class GenjaTaskProtocol(Protocol):
         self,
         task: TaskInfo,
         host: Host,
-        context: TaskExecutionContext,
+        context: TaskRuntimeContext,
     ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult: ...
 
 
@@ -244,7 +245,7 @@ __all__ = [
     "GenjaTaskProtocol",
     "TaskInfo",
     "Host",
-    "TaskExecutionContext",
+    "TaskRuntimeContext",
     "TaskMessage",
     "TaskSuccessResult",
     "TaskFailureResult",

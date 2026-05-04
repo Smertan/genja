@@ -1,6 +1,7 @@
 use genja::plugins::built_in_plugin_manager;
-use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
+use genja_core::inventory::{Connection, ConnectionKey, ResolvedConnectionParams};
 use genja_core::task::{HostTaskResult, TaskProcessor, TaskProcessorContext, TaskResults};
+use genja_plugin_manager::connection_factory::PluginConnectionAdapter;
 use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, PluginProcessor, Plugins};
 use genja_plugin_manager::PluginManager;
 use pyo3::exceptions::PyValueError;
@@ -289,6 +290,20 @@ impl PyConnectionInstance {
             },
         }
     }
+}
+
+pub(crate) fn python_connection_from_runtime_connection(
+    connection: &dyn Connection,
+) -> Option<Py<PyAny>> {
+    let adapter = (connection as &dyn std::any::Any).downcast_ref::<PluginConnectionAdapter>()?;
+    let py_connection = (adapter.inner_plugin_connection() as &dyn std::any::Any)
+        .downcast_ref::<PyConnectionInstance>()?;
+    Python::with_gil(|py| {
+        py_connection
+            .connection
+            .as_ref()
+            .map(|connection| connection.clone_ref(py))
+    })
 }
 
 impl Plugin for PyConnectionInstance {

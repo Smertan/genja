@@ -2,7 +2,7 @@ import genja_core
 import pytest
 from genja_core.task import (
     Host,
-    TaskExecutionContext,
+    TaskRuntimeContext,
     TaskInfo,
     TaskMessage,
     TaskSuccessResult,
@@ -20,7 +20,7 @@ class VerifyBackupTask:
     def run(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
-        assert isinstance(context, TaskExecutionContext)
+        assert isinstance(context, TaskRuntimeContext)
         assert task.processors == ["audit"]
         assert task.options == {"mode": "strict"}
         return TaskSuccessResult(
@@ -39,7 +39,7 @@ class BackupConfigTask:
     def run(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
-        assert isinstance(context, TaskExecutionContext)
+        assert isinstance(context, TaskRuntimeContext)
         assert task.options == {"backup_path": "/tmp/configs", "compress": True}
         return TaskSuccessResult(
             changed=True,

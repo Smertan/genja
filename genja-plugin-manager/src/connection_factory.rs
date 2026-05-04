@@ -343,6 +343,11 @@ impl PluginConnectionAdapter {
             alive: false,
         }
     }
+
+    #[doc(hidden)]
+    pub fn inner_plugin_connection(&self) -> &dyn PluginConnection {
+        self.inner.as_ref()
+    }
 }
 
 impl Connection for PluginConnectionAdapter {

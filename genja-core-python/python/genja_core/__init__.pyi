@@ -22,7 +22,7 @@ from .settings import (
 from .task import (
     GenjaTaskProtocol,
     Host,
-    TaskExecutionContext,
+    TaskRuntimeContext,
     TaskFailureResult,
     TaskInfo,
     TaskMessage,

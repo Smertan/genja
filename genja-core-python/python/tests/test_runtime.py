@@ -1,8 +1,9 @@
 import genja_core
 from genja_core.task import Host, TaskMessage, TaskSuccessResult, task
+from tests.fixtures.connection_plugins import ConnectionPlugin, TestConnection
 
 
-@task(name="runtime_backup", connection_plugin_name="ssh")
+@task(name="runtime_backup")
 class RuntimeBackupTask:
     def run(self, task, host, context):
         return TaskSuccessResult(
@@ -13,7 +14,7 @@ class RuntimeBackupTask:
         )
 
 
-@task(name="runtime_child", connection_plugin_name="ssh")
+@task(name="runtime_child")
 class RuntimeChildTask:
     def run(self, task, host, context):
         return TaskSuccessResult(
@@ -27,7 +28,6 @@ class RuntimeChildTask:
 
 @task(
     name="runtime_parent",
-    connection_plugin_name="ssh",
     sub_task=RuntimeChildTask,
 )
 class RuntimeParentTask:
@@ -37,6 +37,20 @@ class RuntimeParentTask:
             metadata={
                 "current_depth": context.current_depth,
                 "max_depth": context.max_depth,
+            },
+        )
+
+
+@task(name="runtime_connection", connection_plugin_name="ssh")
+class RuntimeConnectionTask:
+    def run(self, task, host, context):
+        assert isinstance(context.connection, TestConnection)
+        return TaskSuccessResult(
+            summary=f"connected to {host.hostname}",
+            metadata={
+                "connection_alive": context.connection.is_alive(),
+                "connection_hostname": context.connection.key.hostname,
+                "opened_with": context.connection.opened_with,
             },
         )
 
@@ -80,4 +94,37 @@ def test_genja_runtime_passes_real_task_context_depth():
     assert child_results["hosts"]["router1"]["Passed"]["metadata"] == {
         "current_depth": 1,
         "max_depth": 1,
+    }
+
+
+def test_genja_runtime_passes_python_connection_into_runtime_context():
+    plugins = genja_core.PluginManager()
+    plugins.register_plugin(ConnectionPlugin())
+
+    runtime = genja_core.Genja.from_hosts(
+        {
+            "router1": Host(
+                hostname="10.0.0.1",
+                port=22,
+                username="admin",
+                password="secret",
+                platform="ios",
+            ),
+        },
+        plugin_manager=plugins,
+    ).with_runner("serial")
+    results = runtime.run_task(RuntimeConnectionTask)
+    data = results.to_dict()
+
+    assert data["hosts"]["router1"]["Passed"]["metadata"] == {
+        "connection_alive": True,
+        "connection_hostname": "router1",
+        "opened_with": {
+            "hostname": "10.0.0.1",
+            "port": 22,
+            "username": "admin",
+            "password": "secret",
+            "platform": "ios",
+            "extras": None,
+        },
     }

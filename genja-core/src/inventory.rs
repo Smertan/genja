@@ -47,6 +47,7 @@ use genja_core_derive::{DerefMacro, DerefMutMacro};
 use schemars::{schema_for, JsonSchema};
 use serde::de::{Error, SeqAccess, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
@@ -2459,7 +2460,7 @@ impl TransformFunctionOptions {
 
 pub trait Connection
 where
-    Self: Send + Sync + fmt::Debug,
+    Self: Any + Send + Sync + fmt::Debug,
 {
     fn create(&self, key: &ConnectionKey) -> Box<dyn Connection>;
 
