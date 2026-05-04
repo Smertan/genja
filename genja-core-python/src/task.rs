@@ -752,7 +752,7 @@ fn build_python_task_model<'py>(
     Ok(class.call((), Some(&kwargs))?.unbind())
 }
 
-fn host_to_py_dict<'py>(py: Python<'py>, host: &Host) -> PyResult<Bound<'py, PyDict>> {
+pub(crate) fn host_to_py_dict<'py>(py: Python<'py>, host: &Host) -> PyResult<Bound<'py, PyDict>> {
     let payload = PyDict::new(py);
     payload.set_item("hostname", host.hostname())?;
     payload.set_item("port", host.port())?;

@@ -76,6 +76,50 @@ def test_genja_runtime_runs_python_task_definition():
     assert data["hosts"]["router2"]["Passed"]["metadata"]["platform"] == "ios"
 
 
+def test_genja_inventory_accessors_expose_host_payloads():
+    runtime = genja_core.Genja.from_hosts(
+        {
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+            "router2": Host(hostname="10.0.0.2", port=2222, platform="nxos"),
+        }
+    )
+
+    inventory = runtime.inventory()
+    raw_hosts = runtime.hosts_raw()
+    inventory_hosts = runtime.iter_inventory_hosts()
+
+    assert inventory["router1"]["hostname"] == "10.0.0.1"
+    assert raw_hosts["router2"]["platform"] == "nxos"
+    assert inventory_hosts == [
+        ("router1", inventory["router1"]),
+        ("router2", inventory["router2"]),
+    ]
+
+
+def test_genja_filter_accessors_and_execution_respect_selected_hosts():
+    runtime = genja_core.Genja.from_hosts(
+        {
+            "router1": Host(
+                hostname="10.0.0.1",
+                platform="ios",
+                data={"site": {"role": "core"}},
+            ),
+            "router2": Host(
+                hostname="10.0.0.2",
+                platform="nxos",
+                data={"site": {"role": "edge"}},
+            ),
+        }
+    ).with_runner("serial")
+
+    filtered = runtime.filter_by_key_value("data.site.role", "^core$")
+    results = filtered.run_task(RuntimeBackupTask)
+
+    assert results.passed_hosts == ["router1"]
+    assert filtered.inventory()["router2"]["hostname"] == "10.0.0.2"
+    assert filtered.hosts_raw()["router1"]["platform"] == "ios"
+
+
 def test_genja_runtime_passes_real_task_context_depth():
     runtime = genja_core.Genja.from_hosts(
         {
