@@ -164,50 +164,58 @@ impl PyPluginManager {
     }
 
     fn register_python_plugin(&self, plugin: Py<PyAny>) -> PyResult<()> {
-        let (declared_name, declared_group) = Python::with_gil(|py| {
-            let plugin_ref = plugin.bind(py);
-            let declared_name = extract_plugin_identity_value(
-                plugin_ref,
-                "name",
-                "plugin name must not be empty",
-                "plugin",
-            )?;
-            let declared_group = extract_plugin_identity_value(
-                plugin_ref,
-                "group",
-                "plugin group must not be empty",
-                "plugin",
-            )?;
-            Ok::<_, PyErr>((declared_name, declared_group))
-        })?;
-
         let mut guard = self.lock_inner()?;
         let manager = guard
             .as_mut()
             .ok_or_else(|| PyValueError::new_err("plugin manager has already been consumed"))?;
-        match declared_group.as_str() {
-            "ConnectionPlugin" => {
-                manager.register_plugin(Plugins::Connection(Box::new(PyConnectionPlugin {
-                    name: declared_name,
-                    group: declared_group,
-                    plugin: Arc::new(plugin),
-                })));
-            }
-            "ProcessorPlugin" => {
-                manager.register_plugin(Plugins::Processor(Box::new(PyProcessorPlugin {
-                    name: declared_name,
-                    group: declared_group,
-                    processor: Arc::new(plugin),
-                })));
-            }
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unsupported python plugin group '{other}'; only 'ProcessorPlugin' and 'ConnectionPlugin' are currently supported"
-                )));
-            }
-        }
-        Ok(())
+        register_python_plugin_on_manager(manager, plugin)
     }
+}
+
+pub(crate) fn register_python_plugin_on_manager(
+    manager: &mut PluginManager,
+    plugin: Py<PyAny>,
+) -> PyResult<()> {
+    let (declared_name, declared_group) = Python::with_gil(|py| {
+        let plugin_ref = plugin.bind(py);
+        let declared_name = extract_plugin_identity_value(
+            plugin_ref,
+            "name",
+            "plugin name must not be empty",
+            "plugin",
+        )?;
+        let declared_group = extract_plugin_identity_value(
+            plugin_ref,
+            "group",
+            "plugin group must not be empty",
+            "plugin",
+        )?;
+        Ok::<_, PyErr>((declared_name, declared_group))
+    })?;
+
+    match declared_group.as_str() {
+        "ConnectionPlugin" => {
+            manager.register_plugin(Plugins::Connection(Box::new(PyConnectionPlugin {
+                name: declared_name,
+                group: declared_group,
+                plugin: Arc::new(plugin),
+            })));
+        }
+        "ProcessorPlugin" => {
+            manager.register_plugin(Plugins::Processor(Box::new(PyProcessorPlugin {
+                name: declared_name,
+                group: declared_group,
+                processor: Arc::new(plugin),
+            })));
+        }
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unsupported python plugin group '{other}'; only 'ProcessorPlugin' and 'ConnectionPlugin' are currently supported"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 struct PyConnectionPlugin {

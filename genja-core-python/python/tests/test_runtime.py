@@ -172,3 +172,25 @@ def test_genja_runtime_passes_python_connection_into_runtime_context():
             "extras": None,
         },
     }
+
+
+def test_genja_builder_registers_plugin_and_builds_runtime():
+    runtime = (
+        genja_core.Genja.builder(
+            {
+                "router1": Host(
+                    hostname="10.0.0.1",
+                    port=22,
+                    username="admin",
+                    password="secret",
+                    platform="ios",
+                ),
+            }
+        )
+        .with_plugin(ConnectionPlugin())
+        .with_runner("serial")
+        .build()
+    )
+
+    results = runtime.run_task(RuntimeConnectionTask)
+    assert results.passed_hosts == ["router1"]

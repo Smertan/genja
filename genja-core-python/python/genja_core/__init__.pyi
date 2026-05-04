@@ -75,6 +75,12 @@ class TaskResults:
 
 class Genja:
     @staticmethod
+    def builder(
+        hosts: dict[str, Any],
+        settings: Settings | None = None,
+        plugin_manager: PluginManager | None = None,
+    ) -> GenjaBuilder: ...
+    @staticmethod
     def from_hosts(
         hosts: dict[str, Any],
         settings: Settings | None = None,
@@ -94,6 +100,13 @@ class Genja:
         task_class: type[GenjaTaskProtocol],
         max_depth: int | None = None,
     ) -> TaskResults: ...
+
+
+class GenjaBuilder:
+    def with_plugin(self, plugin: Any) -> GenjaBuilder: ...
+    def with_plugin_manager(self, plugin_manager: PluginManager) -> GenjaBuilder: ...
+    def with_runner(self, runner: str) -> GenjaBuilder: ...
+    def build(self) -> Genja: ...
 
 
 __all__: list[str]

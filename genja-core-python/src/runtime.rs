@@ -3,8 +3,9 @@ use ::genja_core::inventory::{Hosts, Inventory};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
+use std::sync::Mutex;
 
-use crate::plugin_manager::PyPluginManager;
+use crate::plugin_manager::{register_python_plugin_on_manager, PyPluginManager};
 use crate::settings::PySettings;
 use crate::task::{self, PyTaskResults};
 
@@ -18,23 +19,38 @@ pub struct PyGenja {
 impl PyGenja {
     #[staticmethod]
     #[pyo3(signature = (hosts, settings=None, plugin_manager=None))]
+    fn builder(
+        hosts: Bound<'_, PyAny>,
+        settings: Option<PyRef<'_, PySettings>>,
+        plugin_manager: Option<PyRef<'_, PyPluginManager>>,
+    ) -> PyResult<PyGenjaBuilder> {
+        let inventory = python_hosts_to_inventory(hosts)?;
+        let settings = settings.map(|settings| settings.inner.clone());
+        let plugin_manager = if let Some(plugin_manager) = plugin_manager {
+            plugin_manager.take_inner()?
+        } else {
+            PyPluginManager::new().take_inner()?
+        };
+
+        Ok(PyGenjaBuilder {
+            inner: Mutex::new(Some(PyGenjaBuilderState {
+                inventory,
+                settings,
+                plugin_manager,
+                runner: None,
+            })),
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (hosts, settings=None, plugin_manager=None))]
     fn from_hosts(
         hosts: Bound<'_, PyAny>,
         settings: Option<PyRef<'_, PySettings>>,
         plugin_manager: Option<PyRef<'_, PyPluginManager>>,
     ) -> PyResult<Self> {
-        let inventory = python_hosts_to_inventory(hosts)?;
-        let mut builder = RuntimeGenja::builder(inventory);
-        if let Some(settings) = settings {
-            builder = builder.with_settings(settings.inner.clone());
-        }
-        if let Some(plugin_manager) = plugin_manager {
-            builder = builder.with_plugin_manager(plugin_manager.take_inner()?);
-        }
-        let inner = builder.build().map_err(|err| {
-            PyValueError::new_err(format!("failed to build Genja runtime: {err}"))
-        })?;
-        Ok(Self { inner })
+        let builder = Self::builder(hosts, settings, plugin_manager)?;
+        builder.build()
     }
 
     #[staticmethod]
@@ -119,8 +135,87 @@ impl PyGenja {
     }
 }
 
+struct PyGenjaBuilderState {
+    inventory: Inventory,
+    settings: Option<genja_core::Settings>,
+    plugin_manager: genja_plugin_manager::PluginManager,
+    runner: Option<String>,
+}
+
+#[pyclass(name = "GenjaBuilder")]
+pub struct PyGenjaBuilder {
+    inner: Mutex<Option<PyGenjaBuilderState>>,
+}
+
+#[pymethods]
+impl PyGenjaBuilder {
+    fn with_plugin(&self, plugin: Bound<'_, PyAny>) -> PyResult<Self> {
+        let mut state = self.take_state()?;
+        register_python_plugin_on_manager(&mut state.plugin_manager, plugin.unbind())?;
+        Ok(Self {
+            inner: Mutex::new(Some(state)),
+        })
+    }
+
+    fn with_plugin_manager(&self, plugin_manager: PyRef<'_, PyPluginManager>) -> PyResult<Self> {
+        let mut state = self.take_state()?;
+        state.plugin_manager = plugin_manager.take_inner()?;
+        Ok(Self {
+            inner: Mutex::new(Some(state)),
+        })
+    }
+
+    fn with_runner(&self, runner: &str) -> PyResult<Self> {
+        let mut state = self.take_state()?;
+        state.runner = Some(runner.to_string());
+        Ok(Self {
+            inner: Mutex::new(Some(state)),
+        })
+    }
+
+    fn build(&self) -> PyResult<PyGenja> {
+        let state = self.take_state()?;
+        build_runtime(
+            state.inventory,
+            state.settings,
+            state.plugin_manager,
+            state.runner.as_deref(),
+        )
+    }
+
+    fn __repr__(&self) -> String {
+        match self.lock_inner() {
+            Ok(guard) => {
+                let consumed = guard.is_none();
+                let runner = guard
+                    .as_ref()
+                    .and_then(|state| state.runner.as_deref())
+                    .unwrap_or("None");
+                format!("GenjaBuilder(consumed={consumed}, runner={runner})")
+            }
+            Err(_) => "GenjaBuilder(<unavailable>)".to_string(),
+        }
+    }
+}
+
+impl PyGenjaBuilder {
+    fn lock_inner(&self) -> PyResult<std::sync::MutexGuard<'_, Option<PyGenjaBuilderState>>> {
+        self.inner
+            .lock()
+            .map_err(|_| PyValueError::new_err("genja builder lock is poisoned"))
+    }
+
+    fn take_state(&self) -> PyResult<PyGenjaBuilderState> {
+        let mut guard = self.lock_inner()?;
+        guard
+            .take()
+            .ok_or_else(|| PyValueError::new_err("genja builder has already been consumed"))
+    }
+}
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyGenja>()?;
+    module.add_class::<PyGenjaBuilder>()?;
     Ok(())
 }
 
@@ -145,6 +240,27 @@ fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
     }
 
     Ok(Inventory::builder().hosts(hosts).build())
+}
+
+fn build_runtime(
+    inventory: Inventory,
+    settings: Option<genja_core::Settings>,
+    plugin_manager: genja_plugin_manager::PluginManager,
+    runner: Option<&str>,
+) -> PyResult<PyGenja> {
+    let mut builder = RuntimeGenja::builder(inventory).with_plugin_manager(plugin_manager);
+    if let Some(settings) = settings {
+        builder = builder.with_settings(settings);
+    }
+    let mut inner = builder
+        .build()
+        .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?;
+    if let Some(runner) = runner {
+        inner = inner.with_runner(runner).map_err(|err| {
+            PyValueError::new_err(format!("failed to select runner {runner}: {err}"))
+        })?;
+    }
+    Ok(PyGenja { inner })
 }
 
 #[cfg(test)]
@@ -234,6 +350,28 @@ mod tests {
     }
 
     #[test]
+    fn py_genja_builder_builds_runtime_with_runner() {
+        init_python();
+        Python::with_gil(|py| {
+            let hosts = PyDict::new(py);
+            let router = PyDict::new(py);
+            router.set_item("hostname", "10.0.0.1").unwrap();
+            router.set_item("platform", "ios").unwrap();
+            hosts.set_item("router1", router).unwrap();
+
+            let builder =
+                PyGenja::builder(hosts.into_any(), None, None).expect("builder should be created");
+            let builder = builder
+                .with_runner("serial")
+                .expect("runner should be set on builder");
+            let runtime = builder.build().expect("builder should produce runtime");
+
+            assert!(runtime.inner.inventory_loaded());
+            assert!(runtime.inner.get_runner_plugin("serial").is_ok());
+        });
+    }
+
+    #[test]
     fn py_genja_from_hosts_accepts_plugin_manager() {
         init_python();
         Python::with_gil(|py| {
@@ -253,6 +391,31 @@ mod tests {
             assert!(runtime.inner.plugins_loaded());
             assert!(runtime.inner.inventory_loaded());
             assert!(runtime.inner.get_runner_plugin("serial").is_ok());
+        });
+    }
+
+    #[test]
+    fn py_genja_builder_consumes_previous_builder_instance() {
+        init_python();
+        Python::with_gil(|py| {
+            let hosts = PyDict::new(py);
+            let router = PyDict::new(py);
+            router.set_item("hostname", "10.0.0.1").unwrap();
+            hosts.set_item("router1", router).unwrap();
+
+            let builder =
+                PyGenja::builder(hosts.into_any(), None, None).expect("builder should be created");
+            let next_builder = builder
+                .with_runner("serial")
+                .expect("runner should be set on builder");
+            let err = builder
+                .build()
+                .err()
+                .expect("consumed builder should not build twice");
+            assert!(err
+                .to_string()
+                .contains("genja builder has already been consumed"));
+            assert!(next_builder.build().is_ok());
         });
     }
 
@@ -368,6 +531,7 @@ mod tests {
             register(&module).expect("runtime class should register");
 
             assert!(module.getattr("Genja").is_ok());
+            assert!(module.getattr("GenjaBuilder").is_ok());
         });
     }
 }
