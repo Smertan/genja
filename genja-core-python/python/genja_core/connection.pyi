@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Awaitable, Protocol
 
 
 class ConnectionKey:
@@ -22,15 +22,26 @@ class ResolvedConnectionParams:
 
 
 class ConnectionProtocol(Protocol):
-    def open(self, params: ResolvedConnectionParams) -> None: ...
-    def close(self) -> ConnectionKey | dict[str, Any] | None: ...
-    def is_alive(self) -> bool: ...
+    def open(
+        self,
+        params: ResolvedConnectionParams,
+    ) -> None | Awaitable[None]: ...
+    def execute_command(self, command: str) -> str | Awaitable[str]: ...
+    def close(
+        self,
+    ) -> ConnectionKey | dict[str, Any] | None | Awaitable[
+        ConnectionKey | dict[str, Any] | None
+    ]: ...
+    def is_alive(self) -> bool | Awaitable[bool]: ...
 
 
 class ConnectionPluginProtocol(Protocol):
     def name(self) -> str: ...
     def group(self) -> str: ...
-    def create(self, key: ConnectionKey) -> ConnectionProtocol: ...
+    def create(
+        self,
+        key: ConnectionKey,
+    ) -> ConnectionProtocol | Awaitable[ConnectionProtocol]: ...
 
 
 __all__: list[str]

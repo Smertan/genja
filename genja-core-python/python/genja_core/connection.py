@@ -12,6 +12,9 @@ directly. The top-level package re-exports these names for compatibility, but
 Connection plugins are registered on ``PluginManager`` and selected by task
 metadata:
 
+Connection factories and connection methods may be implemented as either
+``def`` or ``async def``; Genja will resolve either form.
+
 .. code-block:: python
 
     import genja_core
@@ -48,7 +51,7 @@ metadata:
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Awaitable, Protocol
 
 from pydantic import BaseModel
 
@@ -76,11 +79,20 @@ class ResolvedConnectionParams(_GenjaModel):
 
 
 class ConnectionProtocol(Protocol):
-    def open(self, params: ResolvedConnectionParams) -> None: ...
+    def open(
+        self,
+        params: ResolvedConnectionParams,
+    ) -> None | Awaitable[None]: ...
 
-    def close(self) -> ConnectionKey | dict[str, Any] | None: ...
+    def execute_command(self, command: str) -> str | Awaitable[str]: ...
 
-    def is_alive(self) -> bool: ...
+    def close(
+        self,
+    ) -> ConnectionKey | dict[str, Any] | None | Awaitable[
+        ConnectionKey | dict[str, Any] | None
+    ]: ...
+
+    def is_alive(self) -> bool | Awaitable[bool]: ...
 
 
 class ConnectionPluginProtocol(Protocol):
@@ -88,7 +100,10 @@ class ConnectionPluginProtocol(Protocol):
 
     def group(self) -> str: ...
 
-    def create(self, key: ConnectionKey) -> ConnectionProtocol: ...
+    def create(
+        self,
+        key: ConnectionKey,
+    ) -> ConnectionProtocol | Awaitable[ConnectionProtocol]: ...
 
 
 __all__ = [

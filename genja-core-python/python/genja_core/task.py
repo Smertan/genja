@@ -60,7 +60,8 @@ The canonical authoring shape is:
                 },
             )
 
-``run(...)`` must return one of:
+``run(...)`` may be implemented as ``def`` or ``async def`` and must resolve to
+one of:
 
 - ``TaskSuccessResult``
 - ``TaskFailureResult``
@@ -78,7 +79,7 @@ Task metadata comes from ``@task(...)``:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Protocol, TypeVar
+from typing import Any, Awaitable, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -132,7 +133,9 @@ class GenjaTaskProtocol(Protocol):
         task: TaskInfo,
         host: Host,
         context: TaskRuntimeContext,
-    ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult: ...
+    ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult | Awaitable[
+        TaskSuccessResult | TaskFailureResult | TaskSkipResult
+    ]: ...
 
 
 def task(
