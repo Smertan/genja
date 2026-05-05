@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
 use genja_plugin_manager::plugin_types::{Plugin, PluginConnection};
 
@@ -22,12 +23,13 @@ impl Plugin for TaskA {
     }
 }
 
+#[async_trait]
 impl PluginConnection for TaskA {
     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
         Box::new(TaskA::with_key(key.clone()))
     }
 
-    fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+    async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
         println!("Opening connection in Task A");
         self.alive = true;
         Ok(())

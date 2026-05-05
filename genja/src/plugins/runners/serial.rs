@@ -30,6 +30,7 @@
 //! use genja_core::inventory::{Host, Hosts};
 //! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskSuccess, TaskInfo};
 //! use genja_plugin_manager::plugin_types::PluginRunner;
+//! use tokio::runtime::Builder;
 //! # use genja::plugins::SerialRunnerPlugin;
 //! # use genja_core_derive::Task as TaskDerive;
 //!
@@ -55,7 +56,8 @@
 //! let hosts = Hosts::default();
 //! let config = RunnerConfig::default();
 //!
-//! let results = runner.run(&task, &hosts, None, &config, 10)?;
+//! let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+//! let results = runtime.block_on(runner.run(&task, &hosts, None, &config, 10))?;
 //! # Ok::<(), genja_core::GenjaError>(())
 //! ```
 //!
@@ -72,6 +74,7 @@
 //! `threaded` runner plugin instead.
 
 use super::executor::TaskExecutor;
+use async_trait::async_trait;
 use genja_core::GenjaError;
 use genja_core::inventory::Hosts;
 use genja_core::settings::RunnerConfig;
@@ -91,6 +94,7 @@ impl Plugin for SerialRunnerPlugin {
     }
 }
 
+#[async_trait]
 impl PluginRunner for SerialRunnerPlugin {
     /// Executes a single task definition serially across all hosts.
     ///
@@ -108,7 +112,7 @@ impl PluginRunner for SerialRunnerPlugin {
     ///
     /// Returns `Ok(TaskResults)` containing the results of the task execution across all hosts,
     /// or `Err(GenjaError)` if the task execution fails.
-    fn run(
+    async fn run(
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
@@ -116,10 +120,12 @@ impl PluginRunner for SerialRunnerPlugin {
         _runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
-        TaskExecutor::new(hosts, connection_resolver, max_depth).run_definition(task)
+        TaskExecutor::new(hosts, connection_resolver, max_depth)
+            .run_definition(task)
+            .await
     }
 
-    fn run_tasks(
+    async fn run_tasks(
         &self,
         tasks: &Tasks,
         hosts: &Hosts,
@@ -127,9 +133,19 @@ impl PluginRunner for SerialRunnerPlugin {
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
-        tasks
-            .iter()
-            .map(|task| self.run(task, hosts, connection_resolver.clone(), runner_config, max_depth))
-            .collect()
+        let mut results = Vec::with_capacity(tasks.len());
+        for task in tasks.iter() {
+            results.push(
+                self.run(
+                    task,
+                    hosts,
+                    connection_resolver.clone(),
+                    runner_config,
+                    max_depth,
+                )
+                .await?,
+            );
+        }
+        Ok(results)
     }
 }

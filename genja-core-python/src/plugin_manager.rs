@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use genja::plugins::built_in_plugin_manager;
 use genja_core::inventory::{Connection, ConnectionKey, ResolvedConnectionParams};
 use genja_core::task::{HostTaskResult, TaskProcessor, TaskProcessorContext, TaskResults};
@@ -234,6 +235,7 @@ impl Plugin for PyConnectionPlugin {
     }
 }
 
+#[async_trait]
 impl PluginConnection for PyConnectionPlugin {
     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
         Box::new(PyConnectionInstance::from_factory(
@@ -244,7 +246,7 @@ impl PluginConnection for PyConnectionPlugin {
         ))
     }
 
-    fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+    async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
         Err("connection plugin factory instances cannot be opened directly".to_string())
     }
 
@@ -324,6 +326,7 @@ impl Plugin for PyConnectionInstance {
     }
 }
 
+#[async_trait]
 impl PluginConnection for PyConnectionInstance {
     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
         Box::new(Self::from_factory(
@@ -334,7 +337,7 @@ impl PluginConnection for PyConnectionInstance {
         ))
     }
 
-    fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
+    async fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
         if let Some(error) = self.create_error.as_ref() {
             return Err(format!("failed to create python connection plugin instance: {error}"));
         }
@@ -683,6 +686,15 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Once;
+    use tokio::runtime::Builder;
+
+    fn run_async<F: std::future::Future>(future: F) -> F::Output {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(future)
+    }
 
     fn init_python() {
         static INIT: Once = Once::new();
@@ -891,13 +903,12 @@ mod tests {
                 extras: None,
             };
 
-            let connection = connection_manager
-                .open_connection(&key, &params)
+            let connection = run_async(connection_manager.open_connection(&key, &params))
                 .expect("open should succeed")
                 .expect("connection should be created");
 
             {
-                let guard = connection.lock().expect("connection lock should succeed");
+                let guard = connection.blocking_lock();
                 assert!(guard.is_alive());
             }
 

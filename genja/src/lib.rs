@@ -56,6 +56,7 @@
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
 pub use genja_core::GenjaError;
+use async_trait::async_trait;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
@@ -69,6 +70,7 @@ use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
 use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::runtime::Builder;
 
 // GenjaError is re-exported from genja-core.
 
@@ -122,12 +124,13 @@ impl RuntimeTaskConnectionResolver {
     }
 }
 
+#[async_trait]
 impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
-    fn resolve_task_connection(
+    async fn resolve_task_connection(
         &self,
         task: &dyn Task,
         hostname: &str,
-    ) -> Result<Option<Arc<std::sync::Mutex<dyn genja_core::inventory::Connection>>>, GenjaError>
+    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn genja_core::inventory::Connection>>>, GenjaError>
     {
         let Some(key) = task.get_connection_key(hostname) else {
             return Ok(None);
@@ -146,6 +149,7 @@ impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
         self.inventory
             .connections()
             .open_connection(&key, &params)
+            .await
             .map_err(GenjaError::Message)
     }
 }
@@ -840,13 +844,21 @@ impl Genja {
             host_count
         );
         let runner = self.get_runner_plugin(runner_name)?;
-        let results = runner.run(
-            &task_definition,
-            &hosts,
-            Some(connection_resolver),
-            self.settings.runner(),
-            max_depth,
-        )?;
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
+        let results = runtime.block_on(async {
+            runner
+                .run(
+                    &task_definition,
+                    &hosts,
+                    Some(connection_resolver),
+                    self.settings.runner(),
+                    max_depth,
+                )
+                .await
+        })?;
         let summary = results.task_summary();
         log_task_summary(&summary, host_count, 0);
         Ok(results)
@@ -919,6 +931,7 @@ impl Default for Genja {
 #[cfg(test)]
 mod tests {
     use super::{Genja, GenjaError};
+    use async_trait::async_trait;
     use genja_core::Settings;
     use genja_core::inventory::{
         BaseBuilderHost, Connection, ConnectionKey, Data, Host, Hosts, Inventory,
@@ -1108,6 +1121,7 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl PluginConnection for TestConnectionPlugin {
         fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
             Box::new(TestRuntimeConnection {
@@ -1116,7 +1130,7 @@ mod tests {
             })
         }
 
-        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
             Err("factory should not be opened directly".to_string())
         }
 
@@ -1135,6 +1149,7 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl PluginConnection for TestRuntimeConnection {
         fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
             Box::new(Self {
@@ -1143,7 +1158,7 @@ mod tests {
             })
         }
 
-        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
             self.alive = true;
             Ok(())
         }
@@ -1158,6 +1173,7 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Connection for TestRuntimeConnection {
         fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
             Box::new(Self {
@@ -1170,7 +1186,7 @@ mod tests {
             self.alive
         }
 
-        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
             self.alive = true;
             Ok(())
         }
@@ -1197,19 +1213,23 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for ConnectionAwareTask {
         fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
 
-        fn start_with_runtime(
+        async fn start_with_runtime(
             &self,
             _host: &Host,
             context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
-            let alive = context
-                .with_connection(|connection| Ok(connection.is_alive()))?
-                .unwrap_or(false);
+            let alive = if let Some(connection) = context.connection() {
+                let guard = connection.lock().await;
+                guard.is_alive()
+            } else {
+                false
+            };
             self.saw_connection.store(alive, Ordering::SeqCst);
             Ok(HostTaskResult::passed(TaskSuccess::new().with_changed(alive)))
         }

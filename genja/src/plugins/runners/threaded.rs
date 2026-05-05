@@ -154,6 +154,7 @@
 //! ```rust
 //! use genja_core::task::Tasks;
 //! use genja_plugin_manager::plugin_types::PluginRunner;
+//! use tokio::runtime::Builder;
 //! # use genja::plugins::ThreadedRunnerPlugin;
 //! # use genja_core::inventory::Hosts;
 //! # use genja_core::settings::RunnerConfig;
@@ -166,7 +167,8 @@
 //! # let config = RunnerConfig::default();
 //!
 //! // Execute all tasks sequentially, each with parallel host execution
-//! let all_results = runner.run_tasks(&tasks, &hosts, None, &config, 10)?;
+//! let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+//! let all_results = runtime.block_on(runner.run_tasks(&tasks, &hosts, None, &config, 10))?;
 //! # Ok(())
 //! # }
 //! ```
@@ -210,6 +212,7 @@
 //! - [`RunnerConfig`](../../../genja_core/settings/struct.RunnerConfig.html) - Configuration options
 
 use super::executor::TaskExecutor;
+use async_trait::async_trait;
 use genja_core::GenjaError;
 use genja_core::NatString;
 use genja_core::inventory::{Host, Hosts};
@@ -217,10 +220,8 @@ use genja_core::settings::RunnerConfig;
 use genja_core::task::{TaskDefinition, TaskInfo, TaskResults, Tasks};
 use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 use log::error;
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
 use std::time::SystemTime;
+use tokio::task::JoinSet;
 
 /// A multi-threaded task runner plugin that executes tasks concurrently across multiple hosts.
 ///
@@ -246,6 +247,7 @@ impl Plugin for ThreadedRunnerPlugin {
     }
 }
 
+#[async_trait]
 impl PluginRunner for ThreadedRunnerPlugin {
     /// Executes a task across multiple hosts using a thread pool.
     ///
@@ -276,7 +278,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
     /// - A worker thread encounters an error while executing tasks
     /// - The shared job queue lock becomes poisoned
     /// - Communication between worker threads and the main thread fails
-    fn run(
+    async fn run(
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
@@ -297,69 +299,33 @@ impl PluginRunner for ThreadedRunnerPlugin {
 
         let started_at = SystemTime::now();
         let worker_count = worker_count_for(hosts.len(), runner_config.worker_count());
-        let jobs = Arc::new(Mutex::new(collect_jobs(hosts)));
-        let (tx, rx) = mpsc::channel();
-        let mut handles = Vec::with_capacity(worker_count);
-
-        for _ in 0..worker_count {
-            let jobs = Arc::clone(&jobs);
-            let tx = tx.clone();
-            let task = task.clone();
-            let connection_resolver = connection_resolver.clone();
-
-            handles.push(thread::spawn(move || -> Result<(), GenjaError> {
-                loop {
-                    let next_job = {
-                        let mut guard = jobs.lock().map_err(|_| {
-                            error!(
-                                "threaded runner queue lock poisoned for task '{}'",
-                                task.name()
-                            );
-                            GenjaError::Message("threaded runner queue lock poisoned".to_string())
-                        })?;
-                        guard.pop_front()
-                    };
-
-                    let Some((host_id, host)) = next_job else {
-                        break;
-                    };
-
-                    let host_results = TaskExecutor::run_host(
-                        &task,
-                        &host_id,
-                        &host,
-                        connection_resolver.clone(),
-                        max_depth,
-                    )?;
-
-                    tx.send(host_results).map_err(|err| {
-                        error!(
-                            "threaded runner failed to send host result for task '{}': {}",
-                            task.name(),
-                            err
-                        );
-                        GenjaError::Message(format!(
-                            "threaded runner failed to send host result: {}",
-                            err
-                        ))
-                    })?;
-                }
-
-                Ok(())
-            }));
-        }
-
-        drop(tx);
-
+        let jobs = collect_jobs(hosts);
+        let mut join_set = JoinSet::new();
+        let mut jobs_iter = jobs.into_iter();
         let mut results = TaskResults::new(task.name()).with_started_at(started_at);
         task.process_task_start(&mut results)?;
-        for host_results in rx {
-            results.merge(host_results);
+
+        while join_set.len() < worker_count {
+            let Some((host_id, host)) = jobs_iter.next() else {
+                break;
+            };
+            let task = task.clone();
+            let connection_resolver = connection_resolver.clone();
+            join_set.spawn(async move {
+                TaskExecutor::run_host(
+                    &task,
+                    &host_id,
+                    &host,
+                    connection_resolver,
+                    max_depth,
+                )
+                .await
+            });
         }
 
-        for handle in handles {
-            match handle.join() {
-                Ok(Ok(())) => {}
+        while let Some(joined) = join_set.join_next().await {
+            match joined {
+                Ok(Ok(host_results)) => results.merge(host_results),
                 Ok(Err(err)) => {
                     error!(
                         "threaded runner worker failed for task '{}': {}",
@@ -368,12 +334,32 @@ impl PluginRunner for ThreadedRunnerPlugin {
                     );
                     return Err(err);
                 }
-                Err(_) => {
-                    error!("threaded runner worker panicked for task '{}'", task.name());
-                    return Err(GenjaError::Message(
-                        "threaded runner worker panicked".to_string(),
-                    ));
+                Err(err) => {
+                    error!(
+                        "threaded runner worker task failed for task '{}': {}",
+                        task.name(),
+                        err
+                    );
+                    return Err(GenjaError::Message(format!(
+                        "threaded runner worker task failed: {}",
+                        err
+                    )));
                 }
+            }
+
+            if let Some((host_id, host)) = jobs_iter.next() {
+                let task = task.clone();
+                let connection_resolver = connection_resolver.clone();
+                join_set.spawn(async move {
+                    TaskExecutor::run_host(
+                        &task,
+                        &host_id,
+                        &host,
+                        connection_resolver,
+                        max_depth,
+                    )
+                    .await
+                });
             }
         }
 
@@ -390,7 +376,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         Ok(results)
     }
 
-    fn run_tasks(
+    async fn run_tasks(
         &self,
         tasks: &Tasks,
         hosts: &Hosts,
@@ -398,10 +384,20 @@ impl PluginRunner for ThreadedRunnerPlugin {
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
-        tasks
-            .iter()
-            .map(|task| self.run(task, hosts, connection_resolver.clone(), runner_config, max_depth))
-            .collect()
+        let mut results = Vec::with_capacity(tasks.len());
+        for task in tasks.iter() {
+            results.push(
+                self.run(
+                    task,
+                    hosts,
+                    connection_resolver.clone(),
+                    runner_config,
+                    max_depth,
+                )
+                .await?,
+            );
+        }
+        Ok(results)
     }
 }
 
@@ -431,7 +427,7 @@ fn worker_count_for(host_count: usize, configured_worker_count: Option<usize>) -
         return worker_count.max(1).min(host_count.max(1));
     }
 
-    let available = thread::available_parallelism()
+    let available = std::thread::available_parallelism()
         .map(|parallelism| parallelism.get())
         .unwrap_or(1);
     available.max(1).min(host_count.max(1))
@@ -458,7 +454,7 @@ fn worker_count_for(host_count: usize, configured_worker_count: Option<usize>) -
 /// Returns a `VecDeque` containing tuples of `(NatString, Host)`, where each tuple represents
 /// a single job consisting of a host identifier and its corresponding host object. The queue
 /// maintains the iteration order of the input hosts collection.
-fn collect_jobs(hosts: &Hosts) -> VecDeque<(NatString, Host)> {
+fn collect_jobs(hosts: &Hosts) -> Vec<(NatString, Host)> {
     hosts
         .iter()
         .map(|(host_id, host)| (host_id.clone(), host.clone()))

@@ -486,6 +486,7 @@
 //! use genja_core::inventory::{BaseBuilderHost, Host};
 //! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskResults, TaskSuccess};
 //! use genja_core_derive::Task as TaskDerive;
+//! use tokio::runtime::Builder;
 //!
 //! #[derive(TaskDerive)]
 //! struct DeployTask {
@@ -510,7 +511,9 @@
 //! let host = Host::builder().hostname("router1").build();
 //! let mut results = TaskResults::new("deploy");
 //!
-//! task.start("router1", &host, &mut results, 1)
+//! let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+//! runtime
+//!     .block_on(task.start("router1", &host, &mut results, 1))
 //!     .expect("task execution should succeed");
 //!
 //! assert!(results.host_result("router1").unwrap().is_passed());
@@ -538,6 +541,8 @@
 //!
 use crate::inventory::{Connection, Host};
 use crate::types::{CustomTreeMap, NatString};
+use async_recursion::async_recursion;
+use async_trait::async_trait;
 use log::{debug, info, warn};
 use serde::Serialize;
 use serde_json::Value;
@@ -545,8 +550,9 @@ use std::any::{type_name, Any};
 use std::error::Error;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::sync::Mutex;
 
 /// Represents an error that occurred during task execution.
 ///
@@ -2949,6 +2955,7 @@ pub trait SubTasks {
 ///     }
 /// }
 /// ```
+#[async_trait]
 pub trait Task: TaskInfo + SubTasks + Send + Sync {
     /// Start executing the task.
     fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError>;
@@ -2957,7 +2964,7 @@ pub trait Task: TaskInfo + SubTasks + Send + Sync {
     ///
     /// The default implementation preserves the original `start(...)` contract
     /// so existing task implementations do not need to change.
-    fn start_with_runtime(
+    async fn start_with_runtime(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
@@ -3037,11 +3044,22 @@ impl TaskRuntimeContext {
             return Ok(None);
         };
 
-        let mut guard = connection
-            .lock()
-            .map_err(|_| TaskError::new(std::io::Error::other("connection lock poisoned")))?;
+        let mut guard = connection.blocking_lock();
 
         f(&mut *guard).map(Some)
+    }
+
+    pub async fn execute_command(&self, command: &str) -> Result<Option<String>, TaskError> {
+        let Some(connection) = &self.connection else {
+            return Ok(None);
+        };
+
+        let mut guard = connection.lock().await;
+        guard
+            .execute_command(command)
+            .await
+            .map(Some)
+            .map_err(|err| TaskError::new(std::io::Error::other(err)))
     }
 }
 
@@ -3153,9 +3171,10 @@ pub trait TaskProcessorResolver: Send + Sync {
 /// The full runtime can implement this trait to ensure the connection selected by
 /// a task is available before the task body runs. Core task execution remains
 /// generic by depending only on this trait rather than on a concrete runtime type.
+#[async_trait]
 pub trait TaskConnectionResolver: Send + Sync {
     /// Open or retrieve the connection required by `task` for `hostname`.
-    fn resolve_task_connection(
+    async fn resolve_task_connection(
         &self,
         task: &dyn Task,
         hostname: &str,
@@ -3367,7 +3386,7 @@ impl TaskDefinition {
     /// This method currently does not return an error for depth overflow. When task
     /// nesting exceeds `max_depth`, it records an internal failed host result for that
     /// task node and returns `Ok(())`.
-    pub fn start(
+    pub async fn start(
         &self,
         hostname: &str,
         host: &Host,
@@ -3386,10 +3405,11 @@ impl TaskDefinition {
             0,
             max_depth,
         )
+        .await
     }
 
     /// Executes this task definition while ensuring task-scoped connections are opened.
-    pub fn start_with_connection_resolver(
+    pub async fn start_with_connection_resolver(
         &self,
         hostname: &str,
         host: &Host,
@@ -3409,6 +3429,7 @@ impl TaskDefinition {
             0,
             max_depth,
         )
+        .await
     }
 
     /// Run aggregate task-start processors for this definition.
@@ -3476,7 +3497,8 @@ impl TaskDefinition {
     /// Depth overflow is handled by inserting a failed host result with
     /// [`TaskFailureKind::Internal`]. This helper only returns an error if a future
     /// implementation path introduces one explicitly.
-    fn start_with_depth(
+    #[async_recursion]
+    async fn start_with_depth(
         task: &dyn Task,
         hostname: &str,
         host: &Host,
@@ -3530,7 +3552,10 @@ impl TaskDefinition {
         }
 
         let connection = if let Some(connection_resolver) = connection_resolver {
-            match connection_resolver.resolve_task_connection(task, hostname) {
+            match connection_resolver
+                .resolve_task_connection(task, hostname)
+                .await
+            {
                 Ok(connection) => connection,
                 Err(error) => {
                 let finished_at = SystemTime::now();
@@ -3567,7 +3592,7 @@ impl TaskDefinition {
 
         let execution_context = TaskExecutionContext::new(depth, max_depth);
         let runtime_context = TaskRuntimeContext::new(execution_context, connection);
-        let host_result = task.start_with_runtime(host, &runtime_context);
+        let host_result = task.start_with_runtime(host, &runtime_context).await;
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
             .duration_since(started_at)
@@ -3699,7 +3724,8 @@ impl TaskDefinition {
                 Some(task.name()),
                 depth + 1,
                 max_depth,
-            )?;
+            )
+            .await?;
             if sub_task_started {
                 let sub_context = TaskProcessorContext::new(
                     sub_task_name.as_str(),
@@ -3816,9 +3842,19 @@ mod tests {
     use crate::inventory::{BaseBuilderHost, Connection, ConnectionKey, Host, ResolvedConnectionParams};
     use log::{LevelFilter, Log, Metadata, Record};
     use serde_json::json;
+    use std::future::Future;
     use std::fmt;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
+    use tokio::runtime::Builder;
+
+    fn run_async<F: Future>(future: F) -> F::Output {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(future)
+    }
 
     #[derive(Debug)]
     struct TestTaskFailureError;
@@ -3871,6 +3907,7 @@ mod tests {
         alive: bool,
     }
 
+    #[async_trait]
     impl Connection for TestConnection {
         fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
             Box::new(Self {
@@ -3883,7 +3920,7 @@ mod tests {
             self.alive
         }
 
-        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
             self.alive = true;
             Ok(())
         }
@@ -4132,7 +4169,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
 
         let mut results = TaskResults::new("root");
-        task.start("router1", &host, &mut results, 4)
+        run_async(task.start("router1", &host, &mut results, 4))
             .expect("start should succeed");
         assert_eq!(counter.load(Ordering::SeqCst), 4);
         assert!(results.host_result("router1").is_some());
@@ -4160,7 +4197,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
 
         let mut results = TaskResults::new("root");
-        task.start("router1", &host, &mut results, 4)
+        run_async(task.start("router1", &host, &mut results, 4))
             .expect("start should capture depth overflow as a host failure");
 
         assert_eq!(counter.load(Ordering::SeqCst), 5);
@@ -4203,7 +4240,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should succeed");
 
         let success = results
@@ -4222,7 +4259,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("failing");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should record a failed result");
 
         let failure = results
@@ -4241,7 +4278,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("skipping");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should record a skipped result");
 
         let skip = results
@@ -4267,7 +4304,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should succeed");
 
         let entries = logger.entries();
@@ -4293,7 +4330,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("failing");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should record a failed result");
 
         let entries = logger.entries();
@@ -4317,7 +4354,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("skipping");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should record a skipped result");
 
         let entries = logger.entries();
@@ -4417,7 +4454,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("erroring");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should capture task error as host failure");
 
         let failure = results
@@ -4579,7 +4616,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        task.start("router1", &host, &mut results, 3)
+        run_async(task.start("router1", &host, &mut results, 3))
             .expect("start should succeed");
 
         let json = results
@@ -4613,7 +4650,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        task.start("router1", &host, &mut results, 3)
+        run_async(task.start("router1", &host, &mut results, 3))
             .expect("task execution should succeed");
 
         assert_eq!(processor_calls.load(Ordering::SeqCst), 4);
@@ -4692,7 +4729,7 @@ mod tests {
     fn task_runtime_context_helpers_expose_execution_and_connection() {
         let execution = TaskExecutionContext::new(2, 5);
         let key = ConnectionKey::new("router1", "ssh");
-        let connection = Arc::new(Mutex::new(TestConnection {
+        let connection = Arc::new(tokio::sync::Mutex::new(TestConnection {
             key: key.clone(),
             alive: true,
         }));

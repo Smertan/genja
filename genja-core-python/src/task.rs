@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host};
 use ::genja_core::task::{
@@ -97,19 +98,20 @@ impl SubTasks for PythonBackedTask {
     }
 }
 
+#[async_trait]
 impl Task for PythonBackedTask {
     fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError> {
         self.run_python(host, 0, None, None)
     }
 
-    fn start_with_runtime(
+    async fn start_with_runtime(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         let python_connection = context
             .connection()
-            .and_then(|connection| connection.lock().ok())
+            .map(|connection| connection.blocking_lock())
             .and_then(|guard| python_connection_from_runtime_connection(&*guard));
         self.run_python(
             host,

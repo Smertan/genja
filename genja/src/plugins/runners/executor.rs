@@ -25,7 +25,7 @@ impl<'a> TaskExecutor<'a> {
         }
     }
 
-    pub(crate) fn run_definition(
+    pub(crate) async fn run_definition(
         &self,
         task_definition: &TaskDefinition,
     ) -> Result<TaskResults, GenjaError> {
@@ -40,7 +40,8 @@ impl<'a> TaskExecutor<'a> {
                 host,
                 self.connection_resolver.clone(),
                 self.max_depth,
-            )?);
+            )
+            .await?);
         }
 
         let finished_at = SystemTime::now();
@@ -56,7 +57,7 @@ impl<'a> TaskExecutor<'a> {
         Ok(results)
     }
 
-    pub(crate) fn run_host(
+    pub(crate) async fn run_host(
         task_definition: &TaskDefinition,
         host_id: &NatString,
         host: &Host,
@@ -70,7 +71,8 @@ impl<'a> TaskExecutor<'a> {
             &mut results,
             connection_resolver.as_deref(),
             max_depth,
-        )?;
+        )
+        .await?;
         Ok(results)
     }
 }
