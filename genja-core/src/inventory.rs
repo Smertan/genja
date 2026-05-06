@@ -115,7 +115,7 @@ pub trait DerefTarget {
 ///
 /// This struct defines optional connection parameters that can be specified per connection plugin name
 /// (e.g., "ssh", "netconf", "http") to override the base connection settings defined at the host,
-/// group, or defaults level. Connection options are stored in a map keyed by connection plugin name name
+/// group, or defaults level. Connection options are stored in a map keyed by connection plugin name
 /// and are applied during connection parameter resolution.
 ///
 /// All fields are optional, allowing partial overrides. When resolving connection parameters,

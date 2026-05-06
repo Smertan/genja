@@ -80,8 +80,10 @@
 //!    │    │      on_instance_start                       │         │
 //!    │    │      - Receives task, parent, depth, host    │         │
 //!    │    │                                              │         │
-//!    │    │    Execute task.start(host)                  │         │
+//!    │    │    Execute task.start_with_runtime(...)      │         │
 //!    │    │      - Record start timestamp                │         │
+//!    │    │      - Optionally open task-scoped           │         │
+//!    │    │        connection via TaskConnectionResolver │         │
 //!    │    │      - Call task implementation              │         │
 //!    │    │      - Record finish timestamp               │         │
 //!    │    │                                              │         │
@@ -161,8 +163,8 @@
 //!
 //! 3. **Execution**: A runner plugin (e.g., `ThreadedRunner`, `SerialRunner`) orchestrates
 //!    task execution across selected hosts:
-//!    - Obtains or creates connections via `PluginConnection`
-//!    - Calls `task.start(host)` for each host
+//!    - Optionally resolves a task-scoped connection via [`TaskConnectionResolver`]
+//!    - Calls [`Task::start_with_runtime`] for each host
 //!    - Records timing information (start, finish, duration)
 //!    - Captures results (success, failure, or skip)
 //!    - Recursively processes sub-tasks up to `max_depth`
@@ -292,8 +294,8 @@
 //! ## [`SubTasks`]
 //!
 //! Enables hierarchical task structures by allowing tasks to define sub-tasks that
-//! execute after the parent task completes. Sub-tasks inherit the execution context
-//! and can be conditionally skipped based on parent task results.
+//! execute after the parent task completes. Sub-tasks receive their own runtime
+//! context and execution depth when they run.
 //! With the derive macro, any field marked with `#[task(subtask)]` is included in
 //! [`SubTasks::sub_tasks()`] in declaration order.
 //!
