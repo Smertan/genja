@@ -4,7 +4,6 @@ use genja_core::{GenjaError, NatString};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-
 /// Shared execution helper for built-in runner plugins.
 ///
 /// `TaskExecutor` provides a reusable mechanism for executing task definitions
@@ -88,14 +87,16 @@ impl<'a> TaskExecutor<'a> {
         task_definition.process_task_start(&mut results)?;
 
         for (host_id, host) in self.hosts.iter() {
-            results.merge(Self::run_host(
-                task_definition,
-                host_id,
-                host,
-                self.connection_resolver.clone(),
-                self.max_depth,
-            )
-            .await?);
+            results.merge(
+                Self::run_host(
+                    task_definition,
+                    host_id,
+                    host,
+                    self.connection_resolver.clone(),
+                    self.max_depth,
+                )
+                .await?,
+            );
         }
 
         let finished_at = SystemTime::now();
@@ -148,14 +149,15 @@ impl<'a> TaskExecutor<'a> {
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
         let mut results = TaskResults::new(task_definition.name());
-        task_definition.start_with_connection_resolver(
-            host_id.as_str(),
-            host,
-            &mut results,
-            connection_resolver.as_deref(),
-            max_depth,
-        )
-        .await?;
+        task_definition
+            .start_with_connection_resolver(
+                host_id.as_str(),
+                host,
+                &mut results,
+                connection_resolver.as_deref(),
+                max_depth,
+            )
+            .await?;
         Ok(results)
     }
 }

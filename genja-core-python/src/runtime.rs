@@ -100,7 +100,8 @@ impl PyGenja {
         let hosts = self.inner.iter_inventory_hosts().map_err(|err| {
             PyValueError::new_err(format!("failed to iterate inventory hosts: {err}"))
         })?;
-        hosts.into_iter()
+        hosts
+            .into_iter()
             .map(|(host_id, host)| {
                 Ok((
                     host_id.to_string(),
@@ -433,7 +434,9 @@ mod tests {
             let runtime =
                 PyGenja::from_hosts(hosts.into_any(), None, None).expect("runtime should build");
 
-            let inventory = runtime.inventory(py).expect("inventory accessor should work");
+            let inventory = runtime
+                .inventory(py)
+                .expect("inventory accessor should work");
             let inventory: Bound<'_, PyDict> = inventory.bind(py).clone().downcast_into().unwrap();
             assert_eq!(
                 inventory
@@ -447,7 +450,9 @@ mod tests {
                 "10.0.0.1"
             );
 
-            let raw_hosts = runtime.hosts_raw(py).expect("hosts_raw accessor should work");
+            let raw_hosts = runtime
+                .hosts_raw(py)
+                .expect("hosts_raw accessor should work");
             let raw_hosts: Bound<'_, PyDict> = raw_hosts.bind(py).clone().downcast_into().unwrap();
             assert_eq!(
                 raw_hosts

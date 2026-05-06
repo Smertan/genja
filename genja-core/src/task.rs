@@ -80,7 +80,7 @@
 //!    │    │      on_instance_start                       │         │
 //!    │    │      - Receives task, parent, depth, host    │         │
 //!    │    │                                              │         │
-//!    │    │    Execute task.start_with_runtime(...)      │         │
+//!    │    │    Execute task.start(...)                   │         │
 //!    │    │      - Record start timestamp                │         │
 //!    │    │      - Optionally open task-scoped           │         │
 //!    │    │        connection via TaskConnectionResolver │         │
@@ -164,7 +164,7 @@
 //! 3. **Execution**: A runner plugin (e.g., `ThreadedRunner`, `SerialRunner`) orchestrates
 //!    task execution across selected hosts:
 //!    - Optionally resolves a task-scoped connection via [`TaskConnectionResolver`]
-//!    - Calls [`Task::start_with_runtime`] for each host
+//!    - Calls [`Task::start`] for each host with a [`TaskRuntimeContext`]
 //!    - Records timing information (start, finish, duration)
 //!    - Captures results (success, failure, or skip)
 //!    - Recursively processes sub-tasks up to `max_depth`
@@ -184,8 +184,8 @@
 //! ## [`Task`]
 //!
 //! The primary trait that all tasks must implement. It combines [`TaskInfo`] for
-//! metadata, [`SubTasks`] for hierarchical task structures, and a `start()` method
-//! for execution logic.
+//! metadata, [`SubTasks`] for hierarchical task structures, and an async `start()`
+//! method for execution logic.
 //!
 //! In the common derive-based workflow, the derive macro from `genja-core-derive`
 //! generates [`TaskInfo`] and [`SubTasks`], while you still implement [`Task`]
@@ -194,8 +194,11 @@
 //! are in scope.
 //!
 //! ```rust
+//! use async_trait::async_trait;
 //! use genja_core::inventory::Host;
-//! use genja_core::task::{HostTaskResult, Task, TaskSuccess, TaskInfo};
+//! use genja_core::task::{
+//!     HostTaskResult, Task, TaskInfo, TaskRuntimeContext, TaskSuccess,
+//! };
 //! use genja_core_derive::Task as TaskDerive;
 //!
 //! #[derive(TaskDerive)]
@@ -206,8 +209,13 @@
 //!     config_file: String,
 //! }
 //!
+//! #[async_trait]
 //! impl Task for DeployTask {
-//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!     async fn start(
+//!         &self,
+//!         _host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(
 //!             TaskSuccess::new()
 //!                 .with_changed(true)
@@ -241,7 +249,7 @@
 //! ## Task Processors
 //!
 //! [`TaskProcessor`] provides lifecycle hooks for processing task results without
-//! changing the task's `start()` implementation. A task selects processors by name,
+//! changing the task's async `start()` implementation. A task selects processors by name,
 //! and the runtime resolves those names through a [`TaskProcessorResolver`]. In the
 //! full Genja runtime, the plugin manager implements the resolver, so invalid
 //! processor names fail with `GenjaError::PluginNotFound`.
@@ -249,8 +257,11 @@
 //! Processors can be selected in three ways:
 //!
 //! ```rust
+//! use async_trait::async_trait;
 //! use genja_core::inventory::Host;
-//! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskSuccess};
+//! use genja_core::task::{
+//!     HostTaskResult, Task, TaskDefinition, TaskRuntimeContext, TaskSuccess,
+//! };
 //! use genja_core_derive::Task as TaskDerive;
 //!
 //! #[derive(TaskDerive)]
@@ -265,14 +276,24 @@
 //!     processor_names: Vec<String>,
 //! }
 //!
+//! #[async_trait]
 //! impl Task for AttributeTask {
-//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!     async fn start(
+//!         &self,
+//!         _host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(TaskSuccess::new()))
 //!     }
 //! }
 //!
+//! #[async_trait]
 //! impl Task for FieldTask {
-//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!     async fn start(
+//!         &self,
+//!         _host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(TaskSuccess::new()))
 //!     }
 //! }
@@ -485,8 +506,11 @@
 //! with depth limiting to prevent infinite recursion.
 //!
 //! ```rust
+//! use async_trait::async_trait;
 //! use genja_core::inventory::{BaseBuilderHost, Host};
-//! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskResults, TaskSuccess};
+//! use genja_core::task::{
+//!     HostTaskResult, Task, TaskDefinition, TaskResults, TaskRuntimeContext, TaskSuccess,
+//! };
 //! use genja_core_derive::Task as TaskDerive;
 //! use tokio::runtime::Builder;
 //!
@@ -497,8 +521,13 @@
 //!     options: Option<serde_json::Value>,
 //! }
 //!
+//! #[async_trait]
 //! impl Task for DeployTask {
-//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!     async fn start(
+//!         &self,
+//!         _host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(
 //!             TaskSuccess::new().with_summary("deploy complete"),
 //!         ))
@@ -2937,7 +2966,8 @@ pub trait SubTasks {
 ///
 /// # Example
 /// ```rust
-/// use genja_core::task::Task;
+/// use async_trait::async_trait;
+/// use genja_core::task::{Task, TaskRuntimeContext};
 /// use genja_core_derive::Task as TaskDerive;
 ///
 /// #[derive(TaskDerive)]
@@ -2946,10 +2976,12 @@ pub trait SubTasks {
 ///     connection_plugin_name: Option<String>,
 /// }
 ///
+/// #[async_trait]
 /// impl Task for MyTask {
-///     fn start(
+///     async fn start(
 ///         &self,
 ///         _host: &genja_core::inventory::Host,
+///         _context: &TaskRuntimeContext,
 ///     ) -> Result<genja_core::task::HostTaskResult, genja_core::task::TaskError> {
 ///         Ok(genja_core::task::HostTaskResult::passed(
 ///             genja_core::task::TaskSuccess::new(),
@@ -2959,21 +2991,12 @@ pub trait SubTasks {
 /// ```
 #[async_trait]
 pub trait Task: TaskInfo + SubTasks + Send + Sync {
-    /// Start executing the task.
-    fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError>;
-
     /// Start executing the task with runtime execution context.
-    ///
-    /// The default implementation preserves the original `start(...)` contract
-    /// so existing task implementations do not need to change.
-    async fn start_with_runtime(
+    async fn start(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
-    ) -> Result<HostTaskResult, TaskError> {
-        let _ = context;
-        self.start(host)
-    }
+    ) -> Result<HostTaskResult, TaskError>;
 }
 
 /// Execution context passed into task implementations.
@@ -3215,7 +3238,10 @@ impl fmt::Debug for dyn TaskConnectionResolver {
 /// # Example
 ///
 /// ```rust
-/// use genja_core::task::{Task, TaskDefinition, TaskInfo, SubTasks, HostTaskResult, TaskSuccess};
+/// use async_trait::async_trait;
+/// use genja_core::task::{
+///     HostTaskResult, Task, TaskDefinition, TaskInfo, TaskRuntimeContext, TaskSuccess, SubTasks,
+/// };
 /// use genja_core::inventory::Host;
 /// use std::sync::Arc;
 /// use serde_json::Value;
@@ -3249,8 +3275,13 @@ impl fmt::Debug for dyn TaskConnectionResolver {
 ///     }
 /// }
 ///
+/// #[async_trait]
 /// impl Task for MyTask {
-///     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///     async fn start(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 ///         Ok(HostTaskResult::passed(TaskSuccess::new()))
 ///     }
 /// }
@@ -3456,8 +3487,8 @@ impl TaskDefinition {
     ///
     /// This internal helper method performs the actual recursive task execution,
     /// tracking the current depth to enforce the maximum depth limit. It executes
-    /// the task by calling its `start()` method, stores the result, then recursively
-    /// processes all sub-tasks returned by `sub_tasks()`.
+    /// the task by calling its runtime-aware `start()` method, stores the result,
+    /// then recursively processes all sub-tasks returned by `sub_tasks()`.
     ///
     /// Sub-tasks are executed in iteration order. Results are grouped by task name, so
     /// a sub-task named `"validate"` produces a single `TaskResults` node containing
@@ -3560,33 +3591,33 @@ impl TaskDefinition {
             {
                 Ok(connection) => connection,
                 Err(error) => {
-                let finished_at = SystemTime::now();
-                let duration_ns = finished_at
-                    .duration_since(started_at)
-                    .map(|duration| duration.as_nanos())
-                    .unwrap_or(0);
-                results.record_execution_timing(started_at, finished_at);
+                    let finished_at = SystemTime::now();
+                    let duration_ns = finished_at
+                        .duration_since(started_at)
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or(0);
+                    results.record_execution_timing(started_at, finished_at);
 
-                warn!(
-                    "task '{}' failed to open connection for host '{}': {}",
-                    task.name(),
-                    hostname,
-                    error
-                );
+                    warn!(
+                        "task '{}' failed to open connection for host '{}': {}",
+                        task.name(),
+                        hostname,
+                        error
+                    );
 
-                let mut host_result = HostTaskResult::failed(
-                    TaskFailure::new(error)
-                        .with_kind(TaskFailureKind::Connection)
-                        .with_started_at(started_at)
-                        .with_finished_at(finished_at)
-                        .with_duration_ns(duration_ns),
-                );
-                for processor in &processors {
-                    processor.on_instance_finish(&processor_context, &mut host_result)?;
+                    let mut host_result = HostTaskResult::failed(
+                        TaskFailure::new(error)
+                            .with_kind(TaskFailureKind::Connection)
+                            .with_started_at(started_at)
+                            .with_finished_at(finished_at)
+                            .with_duration_ns(duration_ns),
+                    );
+                    for processor in &processors {
+                        processor.on_instance_finish(&processor_context, &mut host_result)?;
+                    }
+                    results.insert_host_result(hostname, host_result);
+                    return Ok(());
                 }
-                results.insert_host_result(hostname, host_result);
-                return Ok(());
-            }
             }
         } else {
             None
@@ -3594,7 +3625,7 @@ impl TaskDefinition {
 
         let execution_context = TaskExecutionContext::new(depth, max_depth);
         let runtime_context = TaskRuntimeContext::new(execution_context, connection);
-        let host_result = task.start_with_runtime(host, &runtime_context).await;
+        let host_result = task.start(host, &runtime_context).await;
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
             .duration_since(started_at)
@@ -3841,11 +3872,14 @@ impl DerefMut for Tasks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::{BaseBuilderHost, Connection, ConnectionKey, Host, ResolvedConnectionParams};
+    use crate::inventory::{
+        BaseBuilderHost, Connection, ConnectionKey, Host, ResolvedConnectionParams,
+    };
+    use async_trait::async_trait;
     use log::{LevelFilter, Log, Metadata, Record};
     use serde_json::json;
-    use std::future::Future;
     use std::fmt;
+    use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
     use tokio::runtime::Builder;
@@ -3953,8 +3987,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for TestTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             self.counter.fetch_add(1, Ordering::SeqCst);
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
@@ -3984,8 +4023,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for ProcessorTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
@@ -4053,8 +4097,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for FailingTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::failed(TaskFailure::new(
                 TestTaskFailureError,
             )))
@@ -4081,8 +4130,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for SkippingTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::Skipped(
                 TaskSkip::new().with_reason("filtered"),
             ))
@@ -4171,8 +4225,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
 
         let mut results = TaskResults::new("root");
-        run_async(task.start("router1", &host, &mut results, 4))
-            .expect("start should succeed");
+        run_async(task.start("router1", &host, &mut results, 4)).expect("start should succeed");
         assert_eq!(counter.load(Ordering::SeqCst), 4);
         assert!(results.host_result("router1").is_some());
         assert!(results.sub_task("node").is_some());
@@ -4242,8 +4295,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        run_async(task.start("router1", &host, &mut results, 0))
-            .expect("start should succeed");
+        run_async(task.start("router1", &host, &mut results, 0)).expect("start should succeed");
 
         let success = results
             .host_result("router1")
@@ -4306,8 +4358,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        run_async(task.start("router1", &host, &mut results, 0))
-            .expect("start should succeed");
+        run_async(task.start("router1", &host, &mut results, 0)).expect("start should succeed");
 
         let entries = logger.entries();
         assert!(entries.iter().any(|entry| {
@@ -4444,8 +4495,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for ErroringTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Err(TaskError::new(ExternalTaskError))
         }
     }
@@ -4618,8 +4674,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        run_async(task.start("router1", &host, &mut results, 3))
-            .expect("start should succeed");
+        run_async(task.start("router1", &host, &mut results, 3)).expect("start should succeed");
 
         let json = results
             .to_json_string()

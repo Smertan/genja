@@ -26,9 +26,12 @@
 //! # Example
 //!
 //! ```rust,no_run
+//! use async_trait::async_trait;
 //! use genja_core::settings::RunnerConfig;
 //! use genja_core::inventory::{Host, Hosts};
-//! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskSuccess, TaskInfo};
+//! use genja_core::task::{
+//!     HostTaskResult, Task, TaskDefinition, TaskInfo, TaskRuntimeContext, TaskSuccess,
+//! };
 //! use genja_plugin_manager::plugin_types::PluginRunner;
 //! use tokio::runtime::Builder;
 //! # use genja::plugins::SerialRunnerPlugin;
@@ -41,8 +44,13 @@
 //!     options: Option<serde_json::Value>,
 //! }
 //!
+//! #[async_trait]
 //! impl Task for ExampleTask {
-//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!     async fn start(
+//!         &self,
+//!         _host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(TaskSuccess::new()))
 //!     }
 //! }

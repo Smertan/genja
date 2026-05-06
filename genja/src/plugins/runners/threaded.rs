@@ -311,14 +311,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
             let task = task.clone();
             let connection_resolver = connection_resolver.clone();
             join_set.spawn(async move {
-                TaskExecutor::run_host(
-                    &task,
-                    &host_id,
-                    &host,
-                    connection_resolver,
-                    max_depth,
-                )
-                .await
+                TaskExecutor::run_host(&task, &host_id, &host, connection_resolver, max_depth).await
             });
         }
 
@@ -350,14 +343,8 @@ impl PluginRunner for ThreadedRunnerPlugin {
                 let task = task.clone();
                 let connection_resolver = connection_resolver.clone();
                 join_set.spawn(async move {
-                    TaskExecutor::run_host(
-                        &task,
-                        &host_id,
-                        &host,
-                        connection_resolver,
-                        max_depth,
-                    )
-                    .await
+                    TaskExecutor::run_host(&task, &host_id, &host, connection_resolver, max_depth)
+                        .await
                 });
             }
         }

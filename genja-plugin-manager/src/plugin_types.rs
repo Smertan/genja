@@ -387,8 +387,8 @@
 //! }
 //!
 
-use libloading::Library;
 use async_trait::async_trait;
+use libloading::Library;
 use serde::Deserialize;
 use std::any::Any;
 use std::collections::HashMap;
@@ -400,9 +400,7 @@ use genja_core::inventory::{
     ConnectionKey, Hosts, Inventory, ResolvedConnectionParams, TransformFunction,
 };
 use genja_core::settings::RunnerConfig;
-use genja_core::task::{
-    TaskConnectionResolver, TaskDefinition, TaskProcessor, TaskResults, Tasks,
-};
+use genja_core::task::{TaskConnectionResolver, TaskDefinition, TaskProcessor, TaskResults, Tasks};
 use genja_core::{InventoryLoadError, Settings};
 use std::sync::Arc;
 /// Filesystem path to a plugin or plugin metadata entry.

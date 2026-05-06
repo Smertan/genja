@@ -213,14 +213,13 @@ use std::path::{Path, PathBuf};
 /// }
 /// ```
 pub fn copy_plugins_from_manifest() -> io::Result<()> {
-    let manifest_dir =
-        PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(io::Error::other)?);
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(io::Error::other)?);
     let manifest_path = manifest_dir.join("Cargo.toml");
     println!("cargo:rerun-if-changed={}", manifest_path.display());
 
     let manifest = fs::read_to_string(&manifest_path)?;
-    let value: toml::Value = toml::from_str(&manifest)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    let value: toml::Value =
+        toml::from_str(&manifest).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
 
     let Some(plugins) = value
         .get("package")

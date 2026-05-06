@@ -110,8 +110,9 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// fields and generates appropriate getter methods and subtask collection logic.
 ///
 /// This macro does **not** generate the core `genja_core::task::Task` implementation.
-/// Users must still implement `Task` manually and provide the `start()` method that
-/// returns `Result<HostTaskResult, TaskError>`.
+/// Users must still implement `Task` manually and provide the async `start()`
+/// method that accepts `TaskRuntimeContext` and returns
+/// `Result<HostTaskResult, TaskError>`.
 ///
 /// The macro expects the struct to have:
 /// - A `name` field of type `String` or `&'static str` (required)
@@ -147,9 +148,10 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// # Examples
 ///
 /// ```ignore
+/// use async_trait::async_trait;
 /// use std::sync::Arc;
 /// use genja_core::inventory::Host;
-/// use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
+/// use genja_core::task::{HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess};
 ///
 /// #[derive(Task)]
 /// struct MyTask {
@@ -160,8 +162,13 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///     child_task: Arc<dyn Task>,
 /// }
 ///
+/// #[async_trait]
 /// impl Task for MyTask {
-///     fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+///     async fn start(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, TaskError> {
 ///         Ok(HostTaskResult::passed(TaskSuccess::new()))
 ///     }
 /// }

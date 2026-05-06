@@ -354,7 +354,9 @@ impl PluginConnection for PyConnectionInstance {
 
     async fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
         if let Some(error) = self.create_error.as_ref() {
-            return Err(format!("failed to create python connection plugin instance: {error}"));
+            return Err(format!(
+                "failed to create python connection plugin instance: {error}"
+            ));
         }
         let Some(connection) = self.connection.as_ref() else {
             return Err("python connection plugin instance is missing a connection".to_string());
@@ -362,8 +364,8 @@ impl PluginConnection for PyConnectionInstance {
 
         Python::with_gil(|py| {
             let connection = connection.bind(py);
-            let params_payload =
-                build_python_resolved_connection_params(py, params).map_err(|err| err.to_string())?;
+            let params_payload = build_python_resolved_connection_params(py, params)
+                .map_err(|err| err.to_string())?;
             let result = connection
                 .call_method1("open", (params_payload,))
                 .map_err(|err| err.to_string())?;
@@ -374,7 +376,9 @@ impl PluginConnection for PyConnectionInstance {
 
     async fn execute_command(&mut self, command: &str) -> Result<String, String> {
         if let Some(error) = self.create_error.as_ref() {
-            return Err(format!("failed to create python connection plugin instance: {error}"));
+            return Err(format!(
+                "failed to create python connection plugin instance: {error}"
+            ));
         }
         let Some(connection) = self.connection.as_ref() else {
             return Err("python connection plugin instance is missing a connection".to_string());
@@ -642,10 +646,7 @@ fn build_python_processor_context<'py>(
     build_python_model(py, "genja_core.processor", "TaskProcessorContext", payload)
 }
 
-fn build_python_connection_key<'py>(
-    py: Python<'py>,
-    key: &ConnectionKey,
-) -> PyResult<Py<PyAny>> {
+fn build_python_connection_key<'py>(py: Python<'py>, key: &ConnectionKey) -> PyResult<Py<PyAny>> {
     let payload = PyDict::new(py);
     payload.set_item("hostname", &key.hostname)?;
     payload.set_item("plugin_name", &key.plugin_name)?;
@@ -665,8 +666,9 @@ fn build_python_resolved_connection_params<'py>(
     match params.extras.as_ref() {
         Some(extras) => {
             let json_module = PyModule::import(py, "json")?;
-            let dumped = serde_json::to_string(extras)
-                .map_err(|err| PyValueError::new_err(format!("failed to serialize extras: {err}")))?;
+            let dumped = serde_json::to_string(extras).map_err(|err| {
+                PyValueError::new_err(format!("failed to serialize extras: {err}"))
+            })?;
             payload.set_item("extras", json_module.call_method1("loads", (dumped,))?)?;
         }
         None => payload.set_item("extras", py.None())?,
@@ -694,10 +696,11 @@ fn py_any_to_connection_key(obj: &Bound<'_, PyAny>) -> PyResult<ConnectionKey> {
         obj.clone()
     };
     let json_module = PyModule::import(obj.py(), "json")?;
-    let dumped: String = json_module.call_method1("dumps", (normalized,))?.extract()?;
-    let value: serde_json::Value = serde_json::from_str(&dumped).map_err(|err| {
-        PyValueError::new_err(format!("invalid connection key payload: {err}"))
-    })?;
+    let dumped: String = json_module
+        .call_method1("dumps", (normalized,))?
+        .extract()?;
+    let value: serde_json::Value = serde_json::from_str(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid connection key payload: {err}")))?;
     let hostname = value
         .get("hostname")
         .and_then(serde_json::Value::as_str)
@@ -942,7 +945,11 @@ mod tests {
                 .register_plugin(plugin)
                 .expect("connection plugin should register");
 
-            let inner = Arc::new(manager.take_inner().expect("plugin manager should be consumable"));
+            let inner = Arc::new(
+                manager
+                    .take_inner()
+                    .expect("plugin manager should be consumable"),
+            );
             let factory = build_connection_factory(Arc::clone(&inner));
             let connection_manager = ConnectionManager::with_connection_factory(factory);
             let key = ConnectionKey::new("router1", "ssh");
@@ -991,7 +998,11 @@ mod tests {
                 .register_plugin(plugin)
                 .expect("connection plugin should register");
 
-            let inner = Arc::new(manager.take_inner().expect("plugin manager should be consumable"));
+            let inner = Arc::new(
+                manager
+                    .take_inner()
+                    .expect("plugin manager should be consumable"),
+            );
             let factory = build_connection_factory(Arc::clone(&inner));
             let connection_manager = ConnectionManager::with_connection_factory(factory);
             let key = ConnectionKey::new("router1", "async_ssh");

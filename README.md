@@ -120,8 +120,13 @@ struct CheckConfigTask {
     connection_plugin_name: Option<String>,
 }
 
+#[async_trait::async_trait]
 impl Task for CheckConfigTask {
-    fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
         Ok(HostTaskResult::passed(
             TaskSuccess::new()
                 .with_summary("configuration is present")
@@ -174,8 +179,13 @@ struct DeployTask {
     connection_plugin_name: Option<String>,
 }
 
+#[async_trait::async_trait]
 impl Task for DeployTask {
-    fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
         Ok(HostTaskResult::passed(TaskSuccess::new()))
     }
 }
@@ -252,8 +262,13 @@ struct ValidateTask {
     connection_plugin_name: Option<String>,
 }
 
+#[async_trait::async_trait]
 impl Task for ValidateTask {
-    fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
         Ok(HostTaskResult::passed(
             TaskSuccess::new().with_summary("validation passed"),
         ))
@@ -268,8 +283,13 @@ struct DeployTask {
     validate: Arc<dyn Task>,
 }
 
+#[async_trait::async_trait]
 impl Task for DeployTask {
-    fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
         Ok(HostTaskResult::passed(
             TaskSuccess::new().with_summary("deployment complete"),
         ))

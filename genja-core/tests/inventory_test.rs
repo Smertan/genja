@@ -276,7 +276,8 @@ fn connection_manager_creates_connections_lazily() {
     let created_for_factory = Arc::clone(&created);
     let manager = ConnectionManager::with_connection_factory(Arc::new(move |_key| {
         created_for_factory.fetch_add(1, Ordering::SeqCst);
-        Some(Arc::new(Mutex::new(TestConnection)) as Arc<Mutex<dyn genja_core::inventory::Connection>>)
+        Some(Arc::new(Mutex::new(TestConnection))
+            as Arc<Mutex<dyn genja_core::inventory::Connection>>)
     }));
     let key = ConnectionKey::new("router1.lab", "ssh2");
 

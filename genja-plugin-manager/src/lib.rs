@@ -485,9 +485,9 @@ pub mod plugin_types;
 // pub use plugin_types;
 pub mod connection_factory;
 
-use genja_core::task::{TaskProcessor, TaskProcessorResolver};
 #[cfg(test)]
 use async_trait::async_trait;
+use genja_core::task::{TaskProcessor, TaskProcessorResolver};
 use libloading::{Library, Symbol};
 use plugin_types::{
     GroupOrName, PluginConnection, PluginCreatePlugins, PluginEntry, PluginInventory, PluginName,
@@ -1452,7 +1452,9 @@ inventory_a = "../this/path/does/not/exist.so"
             &self,
             _task: &genja_core::task::TaskDefinition,
             _hosts: &genja_core::inventory::Hosts,
-            _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
+            _connection_resolver: Option<
+                std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>,
+            >,
             _runner_config: &genja_core::settings::RunnerConfig,
             _max_depth: usize,
         ) -> Result<genja_core::task::TaskResults, genja_core::GenjaError> {
@@ -1463,7 +1465,9 @@ inventory_a = "../this/path/does/not/exist.so"
             &self,
             _tasks: &Tasks,
             _hosts: &genja_core::inventory::Hosts,
-            _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
+            _connection_resolver: Option<
+                std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>,
+            >,
             _runner_config: &genja_core::settings::RunnerConfig,
             _max_depth: usize,
         ) -> Result<Vec<genja_core::task::TaskResults>, genja_core::GenjaError> {

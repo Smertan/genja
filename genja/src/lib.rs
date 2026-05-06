@@ -55,8 +55,8 @@
 //!
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
-pub use genja_core::GenjaError;
 use async_trait::async_trait;
+pub use genja_core::GenjaError;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
@@ -313,8 +313,8 @@ impl Genja {
     /// libraries found in a sibling `plugins` directory next to the current
     /// executable are loaded and registered.
     fn load_plugins(&mut self) -> Result<(), GenjaError> {
-        let plugin_dir = current_plugin_directory()
-            .map_err(|err| GenjaError::PluginLoad(err.to_string()))?;
+        let plugin_dir =
+            current_plugin_directory().map_err(|err| GenjaError::PluginLoad(err.to_string()))?;
         let manager = crate::plugins::built_in_plugin_manager()
             .load_plugins_from_directory(&plugin_dir)
             .map_err(|err| GenjaError::PluginLoad(err.to_string()))?;
@@ -794,9 +794,12 @@ impl Genja {
     /// # Examples
     ///
     /// ```
+    /// use async_trait::async_trait;
     /// use genja::Genja;
     /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
-    /// use genja_core::task::{Task, TaskInfo, TaskError, HostTaskResult, TaskSuccess, SubTasks};
+    /// use genja_core::task::{
+    ///     HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    /// };
     /// use serde_json::Value;
     /// use std::sync::Arc;
     ///
@@ -811,8 +814,13 @@ impl Genja {
     ///     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> { Vec::new() }
     /// }
     ///
+    /// #[async_trait]
     /// impl Task for MyTask {
-    ///     fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+    ///     async fn start(
+    ///         &self,
+    ///         _host: &Host,
+    ///         _context: &TaskRuntimeContext,
+    ///     ) -> Result<HostTaskResult, TaskError> {
     ///         Ok(HostTaskResult::passed(TaskSuccess::new()))
     ///     }
     /// }
@@ -954,8 +962,8 @@ mod tests {
     };
     use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, Plugins};
     use serde_json::{Value, json};
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     struct TestTask {
         name: String,
@@ -981,8 +989,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for TestTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
@@ -1009,8 +1022,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for FailedTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::failed(genja_core::task::TaskFailure::new(
                 std::io::Error::other("boom"),
             )))
@@ -1039,8 +1057,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for SkippedTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::skipped_with_reason("filtered"))
         }
     }
@@ -1067,8 +1090,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for ChildTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
@@ -1120,8 +1148,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for ParentTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
@@ -1226,11 +1259,7 @@ mod tests {
 
     #[async_trait]
     impl Task for ConnectionAwareTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
-            Ok(HostTaskResult::passed(TaskSuccess::new()))
-        }
-
-        async fn start_with_runtime(
+        async fn start(
             &self,
             _host: &Host,
             context: &TaskRuntimeContext,
@@ -1242,18 +1271,30 @@ mod tests {
                 false
             };
             self.saw_connection.store(alive, Ordering::SeqCst);
-            Ok(HostTaskResult::passed(TaskSuccess::new().with_changed(alive)))
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_changed(alive),
+            ))
         }
     }
 
+    #[async_trait]
     impl Task for DerivedProcessorTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
 
+    #[async_trait]
     impl Task for DerivedAttributeProcessorTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }

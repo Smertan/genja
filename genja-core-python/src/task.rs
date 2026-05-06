@@ -1,11 +1,11 @@
-use async_trait::async_trait;
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host};
 use ::genja_core::task::{
-    HostTaskResult, MessageLevel, SubTasks, Task, TaskDefinition, TaskError, TaskFailure,
-    TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskRuntimeContext,
-    TaskSkip, TaskSuccess,
+    HostTaskResult, MessageLevel, SubTasks, Task, TaskError, TaskFailure, TaskFailureKind,
+    TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskRuntimeContext, TaskSkip,
+    TaskSuccess,
 };
+use async_trait::async_trait;
 use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -14,7 +14,9 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use crate::plugin_manager::{python_connection_from_runtime_connection, resolve_python_maybe_awaitable};
+use crate::plugin_manager::{
+    python_connection_from_runtime_connection, resolve_python_maybe_awaitable,
+};
 
 #[pyclass(name = "HostTaskResult")]
 #[derive(Clone)]
@@ -100,11 +102,7 @@ impl SubTasks for PythonBackedTask {
 
 #[async_trait]
 impl Task for PythonBackedTask {
-    fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError> {
-        self.run_python(host, 0, None, None)
-    }
-
-    async fn start_with_runtime(
+    async fn start(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
@@ -186,7 +184,6 @@ impl PythonBackedTask {
 #[pyclass(name = "TaskDefinition")]
 #[derive(Clone)]
 pub struct PyTaskDefinition {
-    inner: TaskDefinition,
     spec: PythonTaskSpec,
 }
 
@@ -195,10 +192,7 @@ impl PyTaskDefinition {
     #[staticmethod]
     fn from_python_class(py_task_class: Bound<'_, PyAny>) -> PyResult<Self> {
         let spec = extract_python_task_spec(py_task_class)?;
-        Ok(Self {
-            inner: task_definition_from_spec(&spec),
-            spec,
-        })
+        Ok(Self { spec })
     }
 
     #[getter]
@@ -217,10 +211,7 @@ impl PyTaskDefinition {
             .sub_tasks
             .iter()
             .cloned()
-            .map(|spec| Self {
-                inner: task_definition_from_spec(&spec),
-                spec,
-            })
+            .map(|spec| Self { spec })
             .collect()
     }
 
@@ -230,10 +221,9 @@ impl PyTaskDefinition {
 
     fn run_on_host(&self, host: Bound<'_, PyAny>) -> PyResult<PyHostTaskResult> {
         let host = python_host_to_rust_host(host)?;
-        let result =
-            self.inner.as_task().start(&host).map_err(|err| {
-                PyValueError::new_err(format!("python task execution failed: {err}"))
-            })?;
+        let result = task_from_spec(&self.spec)
+            .run_python(&host, 0, None, None)
+            .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
         Ok(PyHostTaskResult { inner: result })
     }
 
@@ -351,9 +341,11 @@ pub fn run_task(
     let spec = extract_python_task_spec(task_class)?;
     let task = task_from_spec(&spec);
     let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
-    let inner = py.allow_threads(|| runtime.run(task, max_depth)).map_err(|err| {
-        PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
-    })?;
+    let inner = py
+        .allow_threads(|| runtime.run(task, max_depth))
+        .map_err(|err| {
+            PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
+        })?;
     Ok(PyTaskResults { inner })
 }
 
@@ -696,10 +688,6 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     })
 }
 
-fn task_definition_from_spec(spec: &PythonTaskSpec) -> TaskDefinition {
-    TaskDefinition::new(task_from_spec(spec))
-}
-
 fn task_from_spec(spec: &PythonTaskSpec) -> PythonBackedTask {
     PythonBackedTask {
         spec: spec.clone(),
@@ -728,10 +716,9 @@ fn python_task_spec_to_py_dict<'py>(
     let task = PyDict::new(py);
     task.set_item("name", &spec.name)?;
     match &spec.connection_plugin_name {
-        Some(connection_plugin_name) => task.set_item(
-            "connection_plugin_name",
-            connection_plugin_name,
-        )?,
+        Some(connection_plugin_name) => {
+            task.set_item("connection_plugin_name", connection_plugin_name)?
+        }
         None => task.set_item("connection_plugin_name", py.None())?,
     }
     task.set_item("processors", &spec.processor_names)?;
@@ -1071,7 +1058,10 @@ mod tests {
             assert_eq!(spec.options, None);
             assert_eq!(spec.sub_tasks.len(), 1);
             assert_eq!(spec.sub_tasks[0].name, "verify_backup");
-            assert_eq!(spec.sub_tasks[0].connection_plugin_name.as_deref(), Some("ssh"));
+            assert_eq!(
+                spec.sub_tasks[0].connection_plugin_name.as_deref(),
+                Some("ssh")
+            );
         });
     }
 
