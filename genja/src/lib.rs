@@ -188,7 +188,7 @@ impl Genja {
 
     /// Creates a `Genja` instance from an existing `Inventory`.
     ///
-    /// Initializes default settings and an empty plugin manager, and derives
+    /// Initializes default settings and the built-in plugin manager, and derives
     /// the host ID cache from the provided inventory.
     ///
     /// # Examples
@@ -227,9 +227,14 @@ impl Genja {
     /// # Errors
     ///
     /// Returns `Err(GenjaError::ConfigLoad)` if the settings file cannot be read
-    /// or parsed. Returns `Err(GenjaError::PluginsNotLoaded)` if plugin loading
-    /// fails. Returns `Err(GenjaError::InventoryNotLoaded)` if inventory loading
-    /// fails.
+    /// or parsed.
+    ///
+    /// Returns `Err(GenjaError::PluginLoad)` if plugin discovery or dynamic plugin
+    /// loading fails.
+    ///
+    /// Returns inventory-related errors from loading the configured inventory plugin,
+    /// including `GenjaError::InventoryLoad`, `GenjaError::PluginNotFound`, and
+    /// `GenjaError::NotInventoryPlugin`.
     ///
     /// # Examples
     ///
@@ -320,7 +325,8 @@ impl Genja {
 
     /// Loads an `Inventory` into the runtime and caches host identifiers.
     ///
-    /// This replaces any previously loaded inventory and updates the internal
+    /// This replaces any previously loaded inventory, wires the inventory's
+    /// connection factory from the current plugin manager, and updates the internal
     /// host ID cache used by runtime operations.
     ///
     /// # Examples
@@ -378,7 +384,9 @@ impl Genja {
     /// Returns a new `Genja` with the selected runner plugin activated.
     ///
     /// The named plugin must already be loaded in the current plugin manager and
-    /// must be registered as a runner plugin.
+    /// must be registered as a runner plugin. The returned instance preserves the
+    /// current runner options and limits, while changing only the selected runner
+    /// plugin name.
     ///
     /// # Errors
     ///
@@ -752,9 +760,11 @@ impl Genja {
     /// The execution flow:
     /// 1. Retrieves the currently selected hosts
     /// 2. Wraps the task in a `TaskDefinition`
-    /// 3. Obtains the configured runner plugin
-    /// 4. Executes the task across all selected hosts
-    /// 5. Logs a summary of the results
+    /// 3. Attaches the plugin manager as a processor resolver
+    /// 4. Builds a runtime connection resolver from the loaded inventory
+    /// 5. Obtains the configured runner plugin
+    /// 6. Builds a Tokio runtime and executes the task across all selected hosts
+    /// 7. Logs a summary of the results
     ///
     /// # Parameters
     ///
@@ -778,6 +788,7 @@ impl Genja {
     /// * `GenjaError::PluginsNotLoaded` - Plugins have not been loaded
     /// * `GenjaError::PluginNotFound` - The configured runner plugin does not exist
     /// * `GenjaError::NotRunnerPlugin` - The configured plugin is not a runner plugin
+    /// * `GenjaError::Message` - The internal async runtime could not be created
     /// * Other errors from the runner plugin's execution
     ///
     /// # Examples
@@ -1799,7 +1810,8 @@ impl GenjaBuilder {
     ///
     /// # Errors
     ///
-    /// Returns `Err(GenjaError::PluginsNotLoaded)` if plugin loading fails.
+    /// Returns `Err(GenjaError::PluginLoad)` if plugin discovery or dynamic plugin
+    /// loading fails.
     ///
     /// # Examples
     ///

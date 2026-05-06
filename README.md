@@ -111,7 +111,7 @@ That means the usual pattern is:
 ```rust
 use genja::Genja;
 use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
-use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
 use genja_core_derive::Task as TaskDerive;
 
 #[derive(TaskDerive)]
@@ -121,12 +121,12 @@ struct CheckConfigTask {
 }
 
 impl Task for CheckConfigTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(
+    fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(
             TaskSuccess::new()
                 .with_summary("configuration is present")
                 .with_changed(false),
-        )
+        ))
     }
 }
 
@@ -164,7 +164,7 @@ Tasks opt into processors by name:
 
 ```rust
 use genja_core::inventory::Host;
-use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
 use genja_core_derive::Task as TaskDerive;
 
 #[derive(TaskDerive)]
@@ -175,8 +175,8 @@ struct DeployTask {
 }
 
 impl Task for DeployTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(TaskSuccess::new())
+    fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
     }
 }
 ```
@@ -243,7 +243,7 @@ use std::sync::Arc;
 
 use genja::Genja;
 use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
-use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
 use genja_core_derive::Task as TaskDerive;
 
 #[derive(TaskDerive)]
@@ -253,8 +253,10 @@ struct ValidateTask {
 }
 
 impl Task for ValidateTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(TaskSuccess::new().with_summary("validation passed"))
+    fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(
+            TaskSuccess::new().with_summary("validation passed"),
+        ))
     }
 }
 
@@ -267,8 +269,10 @@ struct DeployTask {
 }
 
 impl Task for DeployTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(TaskSuccess::new().with_summary("deployment complete"))
+    fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(
+            TaskSuccess::new().with_summary("deployment complete"),
+        ))
     }
 }
 

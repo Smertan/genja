@@ -105,6 +105,7 @@ impl PluginRunner for SerialRunnerPlugin {
     ///
     /// * `task` - The task definition to execute, containing the task configuration and actions.
     /// * `hosts` - The inventory of hosts on which to execute the task.
+    /// * `connection_resolver` - Optional shared resolver used for per-host connection selection.
     /// * `_runner_config` - The runner configuration (currently unused in serial execution).
     /// * `max_depth` - The maximum depth for nested task execution, used to prevent infinite recursion.
     ///
@@ -125,6 +126,23 @@ impl PluginRunner for SerialRunnerPlugin {
             .await
     }
 
+    /// Executes all task definitions sequentially.
+    ///
+    /// This method runs each task in `tasks` one after another. For each task, host
+    /// execution is also serial because it delegates to [`Self::run`].
+    ///
+    /// # Parameters
+    ///
+    /// * `tasks` - The ordered list of task definitions to execute.
+    /// * `hosts` - The inventory of hosts on which to execute each task.
+    /// * `connection_resolver` - Optional shared resolver used for per-host connection selection.
+    /// * `runner_config` - The runner configuration forwarded to [`Self::run`].
+    /// * `max_depth` - The maximum depth for nested task execution.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Vec<TaskResults>)` containing one aggregated result set per task,
+    /// or `Err(GenjaError)` if any task execution fails.
     async fn run_tasks(
         &self,
         tasks: &Tasks,
