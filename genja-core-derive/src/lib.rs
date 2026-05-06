@@ -1,6 +1,9 @@
-//! This crate provides two procedural macros: `DerefMacro` and `DerefMutMacro`.
-//! These macros allow you to implement the `Deref` and `DerefMut` traits
-//! for your custom types.
+//! This crate provides three procedural macros: `DerefMacro`, `DerefMutMacro`,
+//! and `Task`.
+//!
+//! `DerefMacro` and `DerefMutMacro` generate `Deref` and `DerefMut`
+//! implementations for tuple-wrapper types. `Task` generates `TaskInfo` and
+//! `SubTasks` implementations for task structs used by `genja-core`.
 //!
 //! # Example
 //! ```
@@ -108,7 +111,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///
 /// This macro does **not** generate the core `genja_core::task::Task` implementation.
 /// Users must still implement `Task` manually and provide the `start()` method that
-/// returns a `HostTaskResult`.
+/// returns `Result<HostTaskResult, TaskError>`.
 ///
 /// The macro expects the struct to have:
 /// - A `name` field of type `String` or `&'static str` (required)
@@ -130,7 +133,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// # Parameters
 ///
 /// * `input` - A `TokenStream` representing the input tokens of the derive macro, containing
-///             the struct definition to which the `Task` trait should be applied.
+///             the struct definition for which `TaskInfo` and `SubTasks` should be generated.
 ///
 /// # Returns
 ///

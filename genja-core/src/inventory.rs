@@ -42,6 +42,7 @@
 //! let _ = inventory.hosts();
 //! ```
 use crate::{CustomTreeMap, NatString, State};
+use async_trait::async_trait;
 use dashmap::DashMap;
 use genja_core_derive::{DerefMacro, DerefMutMacro};
 use schemars::{schema_for, JsonSchema};
@@ -50,7 +51,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
+use tokio::sync::Mutex;
 
 pub trait BaseMethods {
     fn schema() -> String
@@ -113,7 +115,7 @@ pub trait DerefTarget {
 ///
 /// This struct defines optional connection parameters that can be specified per connection plugin name
 /// (e.g., "ssh", "netconf", "http") to override the base connection settings defined at the host,
-/// group, or defaults level. Connection options are stored in a map keyed by connection plugin name name
+/// group, or defaults level. Connection options are stored in a map keyed by connection plugin name
 /// and are applied during connection parameter resolution.
 ///
 /// All fields are optional, allowing partial overrides. When resolving connection parameters,
@@ -2458,6 +2460,7 @@ impl TransformFunctionOptions {
     }
 }
 
+#[async_trait]
 pub trait Connection
 where
     Self: Any + Send + Sync + fmt::Debug,
@@ -2466,7 +2469,11 @@ where
 
     fn is_alive(&self) -> bool;
 
-    fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String>;
+    async fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String>;
+
+    async fn execute_command(&mut self, _command: &str) -> Result<String, String> {
+        Err("connection does not implement execute_command".to_string())
+    }
 
     fn close(&mut self) -> ConnectionKey;
 }
@@ -2694,16 +2701,20 @@ pub type ConnectionFactory =
 /// ## Monitoring Connection Usage
 ///
 /// ```
-/// # use std::sync::{Arc, Mutex};
+/// # use async_trait::async_trait;
+/// # use std::sync::Arc;
+/// # use tokio::runtime::Builder;
+/// # use tokio::sync::Mutex;
 /// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
 /// # #[derive(Debug)]
 /// # struct SshConnection { alive: bool }
+/// # #[async_trait]
 /// # impl Connection for SshConnection {
 /// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
 /// #         Box::new(SshConnection { alive: false })
 /// #     }
 /// #     fn is_alive(&self) -> bool { self.alive }
-/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #     async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
 /// #         self.alive = true; Ok(())
 /// #     }
 /// #     fn close(&mut self) -> ConnectionKey {
@@ -2726,8 +2737,12 @@ pub type ConnectionFactory =
 /// };
 ///
 /// // Perform operations
-/// manager.open_connection(&key, &params)?;
-/// manager.open_connection(&key, &params)?; // Reuses existing connection
+/// let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+/// runtime.block_on(async {
+///     manager.open_connection(&key, &params).await?;
+///     manager.open_connection(&key, &params).await?; // Reuses existing connection
+///     Ok::<(), String>(())
+/// })?;
 /// manager.close_connection(&key);
 ///
 /// // Check counters
@@ -2741,16 +2756,20 @@ pub type ConnectionFactory =
 /// ## Detecting Connection Leaks in Tests
 ///
 /// ```
-/// # use std::sync::{Arc, Mutex};
+/// # use async_trait::async_trait;
+/// # use std::sync::Arc;
+/// # use tokio::runtime::Builder;
+/// # use tokio::sync::Mutex;
 /// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
 /// # #[derive(Debug)]
 /// # struct SshConnection { alive: bool }
+/// # #[async_trait]
 /// # impl Connection for SshConnection {
 /// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
 /// #         Box::new(SshConnection { alive: false })
 /// #     }
 /// #     fn is_alive(&self) -> bool { self.alive }
-/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #     async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
 /// #         self.alive = true; Ok(())
 /// #     }
 /// #     fn close(&mut self) -> ConnectionKey {
@@ -2772,9 +2791,10 @@ pub type ConnectionFactory =
 /// };
 ///
 /// // Open multiple connections
+/// let runtime = Builder::new_current_thread().enable_all().build().unwrap();
 /// for i in 1..=5 {
 ///     let key = ConnectionKey::new(format!("router{}", i), "ssh");
-///     manager.open_connection(&key, &params)?;
+///     runtime.block_on(async { manager.open_connection(&key, &params).await })?;
 /// }
 ///
 /// // Verify all connections were created
@@ -2792,16 +2812,20 @@ pub type ConnectionFactory =
 /// ## Comparing Multiple Connection Types
 ///
 /// ```
-/// # use std::sync::{Arc, Mutex};
+/// # use async_trait::async_trait;
+/// # use std::sync::Arc;
+/// # use tokio::runtime::Builder;
+/// # use tokio::sync::Mutex;
 /// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
 /// # #[derive(Debug)]
 /// # struct TestConnection { conn_type: String, alive: bool }
+/// # #[async_trait]
 /// # impl Connection for TestConnection {
 /// #     fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
 /// #         Box::new(TestConnection { conn_type: key.plugin_name.clone(), alive: false })
 /// #     }
 /// #     fn is_alive(&self) -> bool { self.alive }
-/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #     async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
 /// #         self.alive = true; Ok(())
 /// #     }
 /// #     fn close(&mut self) -> ConnectionKey {
@@ -2826,8 +2850,12 @@ pub type ConnectionFactory =
 /// };
 ///
 /// // Open different connection plugin names
-/// manager.open_connection(&ConnectionKey::new("router1", "ssh"), &params)?;
-/// manager.open_connection(&ConnectionKey::new("router1", "netconf"), &params)?;
+/// let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+/// runtime.block_on(async {
+///     manager.open_connection(&ConnectionKey::new("router1", "ssh"), &params).await?;
+///     manager.open_connection(&ConnectionKey::new("router1", "netconf"), &params).await?;
+///     Ok::<(), String>(())
+/// })?;
 ///
 /// // Get snapshot of all counters
 /// let snapshot = manager.connection_counters_snapshot();
@@ -2939,7 +2967,9 @@ pub struct ConnectionCounters {
 /// ## Basic Setup with Factory
 ///
 /// ```
-/// use std::sync::{Arc, Mutex};
+/// use async_trait::async_trait;
+/// use std::sync::Arc;
+/// use tokio::sync::Mutex;
 /// use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
 ///
 /// #[derive(Debug)]
@@ -2947,6 +2977,7 @@ pub struct ConnectionCounters {
 ///     alive: bool,
 /// }
 ///
+/// #[async_trait]
 /// impl Connection for SshConnection {
 ///     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
 ///         Box::new(SshConnection { alive: false })
@@ -2956,7 +2987,7 @@ pub struct ConnectionCounters {
 ///         self.alive
 ///     }
 ///
-///     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+///     async fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
 ///         -> Result<(), String> {
 ///         self.alive = true;
 ///         Ok(())
@@ -2983,16 +3014,19 @@ pub struct ConnectionCounters {
 /// ## Connection Reuse
 ///
 /// ```
-/// # use std::sync::{Arc, Mutex};
+/// # use async_trait::async_trait;
+/// # use std::sync::Arc;
+/// # use tokio::sync::Mutex;
 /// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
 /// # #[derive(Debug)]
 /// # struct SshConnection { alive: bool }
+/// # #[async_trait]
 /// # impl Connection for SshConnection {
 /// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
 /// #         Box::new(SshConnection { alive: false })
 /// #     }
 /// #     fn is_alive(&self) -> bool { self.alive }
-/// #     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+/// #     async fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
 /// #         -> Result<(), String> { self.alive = true; Ok(()) }
 /// #     fn close(&mut self) -> ConnectionKey {
 /// #         self.alive = false;
@@ -3018,16 +3052,20 @@ pub struct ConnectionCounters {
 /// ## Monitoring Connection Usage
 ///
 /// ```
-/// # use std::sync::{Arc, Mutex};
+/// # use async_trait::async_trait;
+/// # use std::sync::Arc;
+/// # use tokio::runtime::Builder;
+/// # use tokio::sync::Mutex;
 /// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams};
 /// # #[derive(Debug)]
 /// # struct SshConnection { alive: bool }
+/// # #[async_trait]
 /// # impl Connection for SshConnection {
 /// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
 /// #         Box::new(SshConnection { alive: false })
 /// #     }
 /// #     fn is_alive(&self) -> bool { self.alive }
-/// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+/// #     async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
 /// #         self.alive = true; Ok(())
 /// #     }
 /// #     fn close(&mut self) -> ConnectionKey {
@@ -3049,7 +3087,8 @@ pub struct ConnectionCounters {
 ///     extras: None,
 /// };
 ///
-/// manager.open_connection(&key, &params)?;
+/// let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+/// runtime.block_on(async { manager.open_connection(&key, &params).await })?;
 ///
 /// // Check counters
 /// let counters = manager.connection_counters_for("ssh").unwrap();
@@ -3061,16 +3100,19 @@ pub struct ConnectionCounters {
 /// ## Cleanup
 ///
 /// ```
-/// # use std::sync::{Arc, Mutex};
+/// # use async_trait::async_trait;
+/// # use std::sync::Arc;
+/// # use tokio::sync::Mutex;
 /// # use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
 /// # #[derive(Debug)]
 /// # struct SshConnection { alive: bool }
+/// # #[async_trait]
 /// # impl Connection for SshConnection {
 /// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
 /// #         Box::new(SshConnection { alive: false })
 /// #     }
 /// #     fn is_alive(&self) -> bool { self.alive }
-/// #     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+/// #     async fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
 /// #         -> Result<(), String> { self.alive = true; Ok(()) }
 /// #     fn close(&mut self) -> ConnectionKey {
 /// #         self.alive = false;
@@ -3206,18 +3248,21 @@ impl ConnectionManager {
     /// # Examples
     ///
     /// ```
-    /// use std::sync::{Arc, Mutex};
+    /// use async_trait::async_trait;
+    /// use std::sync::Arc;
+    /// use tokio::sync::Mutex;
     /// use genja_core::inventory::{Connection, ConnectionKey, ConnectionManager};
     ///
     /// #[derive(Debug)]
     /// struct DummyConnection;
     ///
+    /// #[async_trait]
     /// impl Connection for DummyConnection {
     ///     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
     ///         Box::new(DummyConnection)
     ///     }
     ///     fn is_alive(&self) -> bool { true }
-    ///     fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
+    ///     async fn open(&mut self, _params: &genja_core::inventory::ResolvedConnectionParams)
     ///         -> Result<(), String> { Ok(()) }
     ///     fn close(&mut self) -> ConnectionKey {
     ///         ConnectionKey::new("router1", "ssh")
@@ -3273,20 +3318,18 @@ impl ConnectionManager {
     /// it from `connections_map`.
     pub fn close_connection(&self, key: &ConnectionKey) {
         if let Some((_, connection)) = self.connections_map.remove(key) {
-            if let Ok(mut connection) = connection.lock() {
-                connection.close();
-                self.increment_close(&key.plugin_name);
-            }
+            let mut connection = connection.blocking_lock();
+            connection.close();
+            self.increment_close(&key.plugin_name);
         }
     }
 
     /// Close all connections in `connections_map` and then clear the map.
     pub fn close_all_connections(&self) {
         self.connections_map.iter().for_each(|entry| {
-            if let Ok(mut connection) = entry.value().lock() {
-                connection.close();
-                self.increment_close(&entry.key().plugin_name);
-            }
+            let mut connection = entry.value().blocking_lock();
+            connection.close();
+            self.increment_close(&entry.key().plugin_name);
         });
         self.connections_map.clear();
     }
@@ -3367,7 +3410,10 @@ impl ConnectionManager {
     /// ## Basic Usage
     ///
     /// ```
-    /// use std::sync::{Arc, Mutex};
+    /// use async_trait::async_trait;
+    /// use std::sync::Arc;
+    /// use tokio::runtime::Builder;
+    /// use tokio::sync::Mutex;
     /// use genja_core::inventory::{
     ///     Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams
     /// };
@@ -3377,6 +3423,7 @@ impl ConnectionManager {
     ///     alive: bool,
     /// }
     ///
+    /// #[async_trait]
     /// impl Connection for SshConnection {
     ///     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
     ///         Box::new(SshConnection { alive: false })
@@ -3386,7 +3433,7 @@ impl ConnectionManager {
     ///         self.alive
     ///     }
     ///
-    ///     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+    ///     async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
     ///         self.alive = true;
     ///         Ok(())
     ///     }
@@ -3413,11 +3460,12 @@ impl ConnectionManager {
     /// };
     ///
     /// // First call creates and opens the connection
-    /// let connection = manager.open_connection(&key, &params)?;
+    /// let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+    /// let connection = runtime.block_on(async { manager.open_connection(&key, &params).await })?;
     /// assert!(connection.is_some());
     ///
     /// // Second call reuses the existing connection without reopening
-    /// let same_connection = manager.open_connection(&key, &params)?;
+    /// let same_connection = runtime.block_on(async { manager.open_connection(&key, &params).await })?;
     /// assert!(Arc::ptr_eq(&connection.unwrap(), &same_connection.unwrap()));
     /// # Ok::<(), String>(())
     /// ```
@@ -3426,6 +3474,7 @@ impl ConnectionManager {
     ///
     /// ```
     /// use std::sync::Arc;
+    /// use tokio::runtime::Builder;
     /// use genja_core::inventory::{ConnectionKey, ConnectionManager, ResolvedConnectionParams};
     ///
     /// // Factory returns None for unknown connection plugin names
@@ -3449,7 +3498,8 @@ impl ConnectionManager {
     ///     extras: None,
     /// };
     ///
-    /// let result = manager.open_connection(&key, &params)?;
+    /// let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+    /// let result = runtime.block_on(async { manager.open_connection(&key, &params).await })?;
     /// assert!(result.is_none()); // No plugin available
     /// # Ok::<(), String>(())
     /// ```
@@ -3457,20 +3507,24 @@ impl ConnectionManager {
     /// ## Thread-Safe Concurrent Access
     ///
     /// ```
-    /// use std::sync::{Arc, Mutex};
+    /// use async_trait::async_trait;
+    /// use std::sync::Arc;
     /// use std::thread;
+    /// use tokio::runtime::Builder;
+    /// use tokio::sync::Mutex;
     /// use genja_core::inventory::{
     ///     Connection, ConnectionKey, ConnectionManager, ResolvedConnectionParams
     /// };
     ///
     /// # #[derive(Debug)]
     /// # struct SshConnection { alive: bool }
+    /// # #[async_trait]
     /// # impl Connection for SshConnection {
     /// #     fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
     /// #         Box::new(SshConnection { alive: false })
     /// #     }
     /// #     fn is_alive(&self) -> bool { self.alive }
-    /// #     fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+    /// #     async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
     /// #         self.alive = true;
     /// #         Ok(())
     /// #     }
@@ -3483,6 +3537,7 @@ impl ConnectionManager {
     ///     Some(Arc::new(Mutex::new(SshConnection { alive: false })) as Arc<Mutex<dyn Connection>>)
     /// });
     /// let manager = Arc::new(ConnectionManager::with_connection_factory(factory));
+    /// let runtime = Arc::new(Builder::new_current_thread().enable_all().build().unwrap());
     ///
     /// let key = ConnectionKey::new("router1", "ssh");
     /// let params = Arc::new(ResolvedConnectionParams {
@@ -3498,10 +3553,11 @@ impl ConnectionManager {
     /// let handles: Vec<_> = (0..3)
     ///     .map(|_| {
     ///         let manager = Arc::clone(&manager);
+    ///         let runtime = Arc::clone(&runtime);
     ///         let key = key.clone();
     ///         let params = Arc::clone(&params);
     ///         thread::spawn(move || {
-    ///             manager.open_connection(&key, &params)
+    ///             runtime.block_on(async { manager.open_connection(&key, &params).await })
     ///         })
     ///     })
     ///     .collect();
@@ -3511,7 +3567,7 @@ impl ConnectionManager {
     ///     assert!(result.is_ok());
     /// }
     /// ```
-    pub fn open_connection(
+    pub async fn open_connection(
         &self,
         key: &ConnectionKey,
         params: &ResolvedConnectionParams,
@@ -3521,11 +3577,9 @@ impl ConnectionManager {
         };
 
         {
-            let mut guard = connection
-                .lock()
-                .map_err(|_| "connection lock poisoned".to_string())?;
+            let mut guard = connection.lock().await;
             if !guard.is_alive() {
-                guard.open(params)?;
+                guard.open(params).await?;
                 self.increment_open(&key.plugin_name);
             }
         }
@@ -4603,7 +4657,17 @@ impl Default for InventoryBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::runtime::Builder;
+
+    fn run_async<F: Future>(future: F) -> F::Output {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(future)
+    }
 
     fn create_dummy_hosts() -> Result<Hosts, std::io::Error> {
         let mut hosts = Hosts(CustomTreeMap::new());
@@ -5216,6 +5280,7 @@ mod tests {
             key: ConnectionKey,
         }
 
+        #[async_trait]
         impl Connection for TestConnection {
             fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
                 Box::new(TestConnection {
@@ -5228,7 +5293,7 @@ mod tests {
                 true
             }
 
-            fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
                 Ok(())
             }
 
@@ -5435,6 +5500,7 @@ mod tests {
         #[derive(Debug)]
         struct FailingConnection;
 
+        #[async_trait]
         impl Connection for FailingConnection {
             fn create(&self, _key: &ConnectionKey) -> Box<dyn Connection> {
                 Box::new(FailingConnection)
@@ -5444,7 +5510,7 @@ mod tests {
                 false
             }
 
-            fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
                 Err("boom".to_string())
             }
 
@@ -5467,7 +5533,7 @@ mod tests {
             extras: None,
         };
 
-        let err = manager.open_connection(&key, &params).unwrap_err();
+        let err = run_async(manager.open_connection(&key, &params)).unwrap_err();
         assert_eq!(err, "boom");
         let counters = manager.connection_counters_for("ssh").unwrap();
         assert_eq!(counters.create_calls, 1);
@@ -5488,7 +5554,7 @@ mod tests {
             extras: None,
         };
 
-        let result = manager.open_connection(&key, &params).unwrap();
+        let result = run_async(manager.open_connection(&key, &params)).unwrap();
         assert!(result.is_none());
         assert!(manager.connection_counters_for("ssh").is_none());
     }

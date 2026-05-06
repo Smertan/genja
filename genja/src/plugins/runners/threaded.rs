@@ -1,14 +1,15 @@
 //! Multi-threaded task execution plugin for concurrent host processing.
 //!
 //! This module provides a threaded runner plugin that executes tasks across multiple hosts
-//! concurrently using a configurable thread pool. It's designed for I/O-bound operations
+//! concurrently using a bounded set of async tasks. It's designed for I/O-bound operations
 //! where parallel execution can significantly improve overall task completion time.
 //!
 //! # Overview
 //!
-//! The threaded runner distributes work across a pool of worker threads, with each thread
-//! pulling hosts from a shared job queue and executing tasks against them. Results are
-//! collected via message passing and merged into a single result set.
+//! The threaded runner keeps up to `worker_count` host executions in flight at a time.
+//! It clones the host list into a job vector, spawns async tasks with Tokio's `JoinSet`,
+//! and merges each completed host result into a single result set before spawning the next
+//! pending host.
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────┐
@@ -17,23 +18,23 @@
 //!                              │
 //!                              ▼
 //!                    ┌──────────────────┐
-//!                    │   Job Queue      │
-//!                    │  (Arc<Mutex<>>)  │
+//!                    │   Jobs Vec       │
+//!                    │  into_iter()     │
 //!                    └────────┬─────────┘
 //!                             │
 //!          ┌──────────────────┼──────────────────┐
 //!          │                  │                  │
 //!          ▼                  ▼                  ▼
 //!     ┌─────────┐        ┌─────────┐       ┌─────────┐
-//!     │Worker 1 │        │Worker 2 │  ...  │Worker N │
+//!     │Task 1   │        │Task 2   │  ...  │Task N   │
 //!     └────┬────┘        └────┬────┘       └────┬────┘
 //!          │                  │                  │
 //!          └──────────────────┼──────────────────┘
 //!                             │
 //!                             ▼
 //!                    ┌──────────────────┐
-//!                    │  Result Channel  │
-//!                    │     (mpsc)       │
+//!                    │   JoinSet        │
+//!                    │ join_next()      │
 //!                    └────────┬─────────┘
 //!                             │
 //!                             ▼
@@ -44,13 +45,13 @@
 //!
 //! # Worker Count Determination
 //!
-//! The number of worker threads is determined by the following priority:
+//! The concurrency limit is determined by the following priority:
 //!
 //! 1. **Explicit Configuration**: If `runner_config.worker_count` is set, use that value
 //!    (clamped between 1 and the number of hosts)
 //! 2. **System Parallelism**: Otherwise, use the system's available parallelism
 //!    (typically the number of CPU cores)
-//! 3. **Host Count Cap**: Never create more workers than hosts to process
+//! 3. **Host Count Cap**: Never allow more in-flight host executions than hosts to process
 //!
 //! # Configuration
 //!
@@ -74,11 +75,11 @@
 //!
 //! # Thread Safety
 //!
-//! The runner uses several thread-safe primitives:
+//! The runner uses several concurrency-safe primitives:
 //!
-//! - **`Arc<Mutex<VecDeque>>`**: Shared job queue protected by a mutex
-//! - **`mpsc::channel`**: Message passing for result collection
-//! - **Thread spawning**: Each worker runs in its own OS thread
+//! - **`tokio::task::JoinSet`**: Bounded in-flight host execution
+//! - **Cloned host jobs**: Each spawned task owns its host input
+//! - **Optional `Arc<TaskConnectionResolver>`**: Shared connection resolution across tasks
 //!
 //! # Performance Characteristics
 //!
@@ -90,11 +91,11 @@
 //!
 //! ## Considerations
 //!
-//! - **Memory overhead**: Each worker thread has its own stack (typically 2MB on Linux)
-//! - **Context switching**: Too many threads can cause performance degradation
-//! - **Lock contention**: High worker counts may contend on the job queue mutex
+//! - **Task overhead**: More in-flight tasks still increase scheduling and memory overhead
+//! - **Context switching**: Excessive concurrency can still degrade throughput
+//! - **Host cloning cost**: Hosts are cloned into a job vector before execution begins
 //!
-//! ## Recommended Worker Counts
+//! ## Recommended Concurrency Levels
 //!
 //! | Scenario | Recommended Workers | Rationale |
 //! |----------|-------------------|-----------|
@@ -107,9 +108,7 @@
 //!
 //! The runner handles several error conditions:
 //!
-//! - **Worker panics**: Detected via `thread::join()` and converted to `GenjaError`
-//! - **Lock poisoning**: Mutex poisoning is caught and reported
-//! - **Channel errors**: Send/receive failures are converted to errors
+//! - **Join failures**: Tokio task failures are logged and converted to `GenjaError`
 //! - **Task failures**: Individual host failures are collected in results
 //!
 //! # Examples
@@ -132,7 +131,8 @@
 //! // let task = TaskDefinition::new(my_task);
 //! let config = RunnerConfig::default();
 //!
-//! // let results = runner.run(&task, &hosts, &config, 10)?;
+//! // let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+//! // let results = runtime.block_on(runner.run(&task, &hosts, None, &config, 10))?;
 //! # Ok(())
 //! # }
 //! ```
@@ -154,6 +154,7 @@
 //! ```rust
 //! use genja_core::task::Tasks;
 //! use genja_plugin_manager::plugin_types::PluginRunner;
+//! use tokio::runtime::Builder;
 //! # use genja::plugins::ThreadedRunnerPlugin;
 //! # use genja_core::inventory::Hosts;
 //! # use genja_core::settings::RunnerConfig;
@@ -166,40 +167,41 @@
 //! # let config = RunnerConfig::default();
 //!
 //! // Execute all tasks sequentially, each with parallel host execution
-//! let all_results = runner.run_tasks(&tasks, &hosts, None, &config, 10)?;
+//! let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+//! let all_results = runtime.block_on(runner.run_tasks(&tasks, &hosts, None, &config, 10))?;
 //! # Ok(())
 //! # }
 //! ```
 //!
 //! # Implementation Details
 //!
-//! ## Job Queue
+//! ## Job Collection
 //!
-//! The job queue is a `VecDeque` wrapped in `Arc<Mutex<>>` for thread-safe access.
-//! Workers pop jobs from the front of the queue in a FIFO manner:
+//! The host list is cloned into a `Vec<(NatString, Host)>`, then consumed with an iterator.
+//! The runner first fills the `JoinSet` up to the worker limit, then starts one new host
+//! execution each time an in-flight task completes:
 //!
 //! ```text
-//! Queue: [host1, host2, host3, host4, host5]
-//!         ▲                              ▲
-//!         │                              │
-//!      pop_front()                    push_back()
+//! Initial fill: host1, host2, host3
+//! Completed:    host2
+//! Refilled:     host4
 //! ```
 //!
 //! ## Result Collection
 //!
-//! Results are sent via an `mpsc::channel` from workers to the main thread:
+//! Results are merged on the main async task as `join_next()` yields completed host executions:
 //!
 //! ```text
-//! Worker 1 ──┐
-//! Worker 2 ──┼──> Channel ──> Main Thread ──> Merged Results
-//! Worker 3 ──┘
+//! Task 1 ──┐
+//! Task 2 ──┼──> JoinSet::join_next() ──> Main Task ──> Merged Results
+//! Task 3 ──┘
 //! ```
 //!
 //! ## Timing
 //!
 //! The runner tracks timing at multiple levels:
 //!
-//! - **Overall execution**: Start to finish of all workers
+//! - **Overall execution**: Start to finish of the full runner invocation
 //! - **Per-host timing**: Captured by `TaskExecutor`
 //! - **Sub-task timing**: Nested task execution times
 //!
@@ -210,6 +212,7 @@
 //! - [`RunnerConfig`](../../../genja_core/settings/struct.RunnerConfig.html) - Configuration options
 
 use super::executor::TaskExecutor;
+use async_trait::async_trait;
 use genja_core::GenjaError;
 use genja_core::NatString;
 use genja_core::inventory::{Host, Hosts};
@@ -217,27 +220,25 @@ use genja_core::settings::RunnerConfig;
 use genja_core::task::{TaskDefinition, TaskInfo, TaskResults, Tasks};
 use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 use log::error;
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
 use std::time::SystemTime;
+use tokio::task::JoinSet;
 
 /// A multi-threaded task runner plugin that executes tasks concurrently across multiple hosts.
 ///
-/// This runner distributes host execution across a configurable number of worker threads,
-/// allowing parallel task execution. The number of workers is determined by either the
-/// configured worker count or the system's available parallelism, capped by the number of hosts.
+/// This runner distributes host execution across a configurable number of concurrent async
+/// tasks. The number of in-flight host executions is determined by either the configured
+/// worker count or the system's available parallelism, capped by the number of hosts.
 ///
 /// # Thread Safety
 ///
-/// This runner uses thread-safe primitives (Arc, Mutex, mpsc channels) to coordinate work
-/// distribution and result collection across worker threads.
+/// This runner shares only cloned host inputs and an optional `Arc`-wrapped connection
+/// resolver across spawned tasks.
 ///
 /// # Performance
 ///
 /// The threaded runner is suitable for I/O-bound tasks where parallelism can improve
-/// overall execution time. Worker threads pull jobs from a shared queue until all hosts
-/// have been processed.
+/// overall execution time. Spawned tasks are kept in flight until all hosts have been
+/// processed.
 pub struct ThreadedRunnerPlugin;
 
 impl Plugin for ThreadedRunnerPlugin {
@@ -246,13 +247,14 @@ impl Plugin for ThreadedRunnerPlugin {
     }
 }
 
+#[async_trait]
 impl PluginRunner for ThreadedRunnerPlugin {
-    /// Executes a task across multiple hosts using a thread pool.
+    /// Executes a task across multiple hosts using bounded async concurrency.
     ///
     /// This method distributes task execution across the provided hosts using a configurable
-    /// number of worker threads. Each worker thread pulls hosts from a shared queue and executes
-    /// the task against them. Results from all hosts are collected and merged into a single
-    /// `TaskResults` object.
+    /// number of concurrent host executions. The runner fills a `JoinSet` up to the worker
+    /// limit, merges each completed host result, and then schedules the next pending host
+    /// until all hosts have been processed into a single `TaskResults` object.
     ///
     /// If the host list is empty, the method returns immediately with an empty result set.
     ///
@@ -260,23 +262,22 @@ impl PluginRunner for ThreadedRunnerPlugin {
     ///
     /// * `task` - The task definition to execute on each host.
     /// * `hosts` - A collection of hosts on which to execute the task.
-    /// * `runner_config` - Configuration for the runner, including the desired worker thread count.
+    /// * `connection_resolver` - Optional shared resolver used for per-host connection selection.
+    /// * `runner_config` - Configuration for the runner, including the desired concurrency limit.
     /// * `max_depth` - The maximum recursion depth for nested task execution.
     ///
     /// # Returns
     ///
     /// Returns `Ok(TaskResults)` containing the aggregated results from all hosts, including
-    /// timing information and execution status. Returns `Err(GenjaError)` if any worker thread
-    /// fails, panics, or if internal synchronization primitives become poisoned.
+    /// timing information and execution status. Returns `Err(GenjaError)` if any spawned task
+    /// fails or returns an execution error.
     ///
     /// # Errors
     ///
     /// This method will return an error if:
-    /// - A worker thread panics during execution
-    /// - A worker thread encounters an error while executing tasks
-    /// - The shared job queue lock becomes poisoned
-    /// - Communication between worker threads and the main thread fails
-    fn run(
+    /// - A spawned Tokio task fails during execution
+    /// - A host execution returns an error
+    async fn run(
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
@@ -297,69 +298,33 @@ impl PluginRunner for ThreadedRunnerPlugin {
 
         let started_at = SystemTime::now();
         let worker_count = worker_count_for(hosts.len(), runner_config.worker_count());
-        let jobs = Arc::new(Mutex::new(collect_jobs(hosts)));
-        let (tx, rx) = mpsc::channel();
-        let mut handles = Vec::with_capacity(worker_count);
-
-        for _ in 0..worker_count {
-            let jobs = Arc::clone(&jobs);
-            let tx = tx.clone();
-            let task = task.clone();
-            let connection_resolver = connection_resolver.clone();
-
-            handles.push(thread::spawn(move || -> Result<(), GenjaError> {
-                loop {
-                    let next_job = {
-                        let mut guard = jobs.lock().map_err(|_| {
-                            error!(
-                                "threaded runner queue lock poisoned for task '{}'",
-                                task.name()
-                            );
-                            GenjaError::Message("threaded runner queue lock poisoned".to_string())
-                        })?;
-                        guard.pop_front()
-                    };
-
-                    let Some((host_id, host)) = next_job else {
-                        break;
-                    };
-
-                    let host_results = TaskExecutor::run_host(
-                        &task,
-                        &host_id,
-                        &host,
-                        connection_resolver.clone(),
-                        max_depth,
-                    )?;
-
-                    tx.send(host_results).map_err(|err| {
-                        error!(
-                            "threaded runner failed to send host result for task '{}': {}",
-                            task.name(),
-                            err
-                        );
-                        GenjaError::Message(format!(
-                            "threaded runner failed to send host result: {}",
-                            err
-                        ))
-                    })?;
-                }
-
-                Ok(())
-            }));
-        }
-
-        drop(tx);
-
+        let jobs = collect_jobs(hosts);
+        let mut join_set = JoinSet::new();
+        let mut jobs_iter = jobs.into_iter();
         let mut results = TaskResults::new(task.name()).with_started_at(started_at);
         task.process_task_start(&mut results)?;
-        for host_results in rx {
-            results.merge(host_results);
+
+        while join_set.len() < worker_count {
+            let Some((host_id, host)) = jobs_iter.next() else {
+                break;
+            };
+            let task = task.clone();
+            let connection_resolver = connection_resolver.clone();
+            join_set.spawn(async move {
+                TaskExecutor::run_host(
+                    &task,
+                    &host_id,
+                    &host,
+                    connection_resolver,
+                    max_depth,
+                )
+                .await
+            });
         }
 
-        for handle in handles {
-            match handle.join() {
-                Ok(Ok(())) => {}
+        while let Some(joined) = join_set.join_next().await {
+            match joined {
+                Ok(Ok(host_results)) => results.merge(host_results),
                 Ok(Err(err)) => {
                     error!(
                         "threaded runner worker failed for task '{}': {}",
@@ -368,12 +333,32 @@ impl PluginRunner for ThreadedRunnerPlugin {
                     );
                     return Err(err);
                 }
-                Err(_) => {
-                    error!("threaded runner worker panicked for task '{}'", task.name());
-                    return Err(GenjaError::Message(
-                        "threaded runner worker panicked".to_string(),
-                    ));
+                Err(err) => {
+                    error!(
+                        "threaded runner worker task failed for task '{}': {}",
+                        task.name(),
+                        err
+                    );
+                    return Err(GenjaError::Message(format!(
+                        "threaded runner worker task failed: {}",
+                        err
+                    )));
                 }
+            }
+
+            if let Some((host_id, host)) = jobs_iter.next() {
+                let task = task.clone();
+                let connection_resolver = connection_resolver.clone();
+                join_set.spawn(async move {
+                    TaskExecutor::run_host(
+                        &task,
+                        &host_id,
+                        &host,
+                        connection_resolver,
+                        max_depth,
+                    )
+                    .await
+                });
             }
         }
 
@@ -390,7 +375,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         Ok(results)
     }
 
-    fn run_tasks(
+    async fn run_tasks(
         &self,
         tasks: &Tasks,
         hosts: &Hosts,
@@ -398,67 +383,77 @@ impl PluginRunner for ThreadedRunnerPlugin {
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
-        tasks
-            .iter()
-            .map(|task| self.run(task, hosts, connection_resolver.clone(), runner_config, max_depth))
-            .collect()
+        let mut results = Vec::with_capacity(tasks.len());
+        for task in tasks.iter() {
+            results.push(
+                self.run(
+                    task,
+                    hosts,
+                    connection_resolver.clone(),
+                    runner_config,
+                    max_depth,
+                )
+                .await?,
+            );
+        }
+        Ok(results)
     }
 }
 
-/// Determines the optimal number of worker threads for task execution.
+/// Determines the optimal concurrency limit for task execution.
 ///
-/// This function calculates the number of worker threads to use based on the configured
-/// worker count and the number of hosts. If a worker count is explicitly configured, it
-/// will be used (clamped between 1 and the host count). Otherwise, the function uses the
-/// system's available parallelism as the basis, also clamped to ensure at least one worker
-/// and no more workers than hosts.
+/// This function calculates the number of concurrent host executions to use based on the
+/// configured worker count and the number of hosts. If a worker count is explicitly
+/// configured, it will be used (clamped between 1 and the host count). Otherwise, the
+/// function uses the system's available parallelism as the basis, also clamped to ensure
+/// at least one in-flight execution and no more concurrent executions than hosts.
 ///
 /// # Parameters
 ///
 /// * `host_count` - The total number of hosts that need to be processed. This serves as
-///   an upper bound for the worker count, as having more workers than hosts would be wasteful.
+///   an upper bound for the concurrency limit, as having more in-flight executions than
+///   hosts would be wasteful.
 /// * `configured_worker_count` - An optional explicit worker count from the runner configuration.
 ///   If `Some`, this value takes precedence over system parallelism detection. If `None`, the
 ///   function falls back to detecting available system parallelism.
 ///
 /// # Returns
 ///
-/// Returns the number of worker threads to spawn, guaranteed to be at least 1 and at most
-/// equal to the host count. The returned value represents the optimal thread pool size for
-/// distributing work across the available hosts.
+/// Returns the number of concurrent host executions to allow, guaranteed to be at least 1
+/// and at most equal to the host count. The returned value represents the effective
+/// in-flight work limit for distributing execution across the available hosts.
 fn worker_count_for(host_count: usize, configured_worker_count: Option<usize>) -> usize {
     if let Some(worker_count) = configured_worker_count {
         return worker_count.max(1).min(host_count.max(1));
     }
 
-    let available = thread::available_parallelism()
+    let available = std::thread::available_parallelism()
         .map(|parallelism| parallelism.get())
         .unwrap_or(1);
     available.max(1).min(host_count.max(1))
 }
 
-/// Converts a collection of hosts into a queue of jobs for worker thread processing.
+/// Converts a collection of hosts into an owned job list for concurrent task processing.
 ///
-/// This function transforms the provided `Hosts` collection into a `VecDeque` containing
-/// tuples of host identifiers and their corresponding host objects. The resulting queue
-/// is used by worker threads to pull jobs in a thread-safe manner during parallel task
+/// This function transforms the provided `Hosts` collection into a `Vec` containing
+/// tuples of host identifiers and their corresponding host objects. The resulting list
+/// is consumed by the runner as it schedules host executions during parallel task
 /// execution.
 ///
-/// Each job in the queue represents a single host that needs to have tasks executed against it.
-/// The use of `VecDeque` allows efficient FIFO (first-in-first-out) job distribution, where
-/// worker threads can quickly pop jobs from the front of the queue.
+/// Each job in the list represents a single host that needs to have tasks executed against it.
+/// Each tuple is cloned up front so spawned tasks can own their inputs independently.
 ///
 /// # Parameters
 ///
 /// * `hosts` - A reference to the `Hosts` collection containing all hosts that need to be
-///   processed. Each host in this collection will be cloned and added to the job queue.
+///   processed. Each host in this collection will be cloned and added to the job list.
 ///
 /// # Returns
 ///
-/// Returns a `VecDeque` containing tuples of `(NatString, Host)`, where each tuple represents
-/// a single job consisting of a host identifier and its corresponding host object. The queue
+/// Returns a `Vec` containing tuples of `(NatString, Host)`, where each tuple represents
+/// a single job consisting of a host identifier and its corresponding host object. The list
 /// maintains the iteration order of the input hosts collection.
-fn collect_jobs(hosts: &Hosts) -> VecDeque<(NatString, Host)> {
+fn collect_jobs(hosts: &Hosts) -> Vec<(NatString, Host)> {
     hosts
         .iter()
         .map(|(host_id, host)| (host_id.clone(), host.clone()))

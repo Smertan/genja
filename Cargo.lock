@@ -33,6 +33,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 
 [[package]]
+name = "async-recursion"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b43422f69d8ff38f95f1b2bb76517c91589a924d1559a0e935d7c8ce0274c11"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -355,18 +366,22 @@ dependencies = [
 name = "genja"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "genja-core",
  "genja-core-derive",
  "genja-plugin-manager",
  "log",
  "regex",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
 name = "genja-core"
 version = "0.1.0"
 dependencies = [
+ "async-recursion",
+ "async-trait",
  "config",
  "dashmap",
  "genja-core-derive",
@@ -380,6 +395,7 @@ dependencies = [
  "serde_yaml",
  "ssh2-config",
  "tempfile",
+ "tokio",
  "tracing",
  "tracing-rolling-file",
  "tracing-subscriber",
@@ -397,12 +413,14 @@ dependencies = [
 name = "genja-core-python"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "genja",
  "genja-core",
  "genja-plugin-manager",
  "humantime",
  "pyo3",
  "serde_json",
+ "tokio",
  "toml",
 ]
 
@@ -410,11 +428,13 @@ dependencies = [
 name = "genja-plugin-manager"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "genja-core",
  "libloading",
  "log",
  "serde",
  "serde_json",
+ "tokio",
  "toml",
 ]
 
@@ -951,6 +971,7 @@ checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 name = "plugin-mods"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "genja-core",
  "genja-plugin-manager",
 ]
@@ -967,6 +988,7 @@ dependencies = [
 name = "plugin_tasks"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "genja-core",
  "genja-plugin-manager",
 ]
@@ -1488,6 +1510,27 @@ checksum = "42d3e9c45c09de15d06dd8acf5f4e0e399e85927b7f00711024eb7ae10fa4869"
 dependencies = [
  "displaydoc",
  "zerovec",
+]
+
+[[package]]
+name = "tokio"
+version = "1.52.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "110a78583f19d5cdb2c5ccf321d1290344e71313c6c37d43520d386027d18386"
+dependencies = [
+ "pin-project-lite",
+ "tokio-macros",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host};
 use ::genja_core::task::{
@@ -13,7 +14,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use crate::plugin_manager::python_connection_from_runtime_connection;
+use crate::plugin_manager::{python_connection_from_runtime_connection, resolve_python_maybe_awaitable};
 
 #[pyclass(name = "HostTaskResult")]
 #[derive(Clone)]
@@ -97,20 +98,23 @@ impl SubTasks for PythonBackedTask {
     }
 }
 
+#[async_trait]
 impl Task for PythonBackedTask {
     fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError> {
         self.run_python(host, 0, None, None)
     }
 
-    fn start_with_runtime(
+    async fn start_with_runtime(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
-        let python_connection = context
-            .connection()
-            .and_then(|connection| connection.lock().ok())
-            .and_then(|guard| python_connection_from_runtime_connection(&*guard));
+        let python_connection = if let Some(connection) = context.connection() {
+            let guard = connection.lock().await;
+            python_connection_from_runtime_connection(&*guard)
+        } else {
+            None
+        };
         self.run_python(
             host,
             context.current_depth(),
@@ -172,8 +176,9 @@ impl PythonBackedTask {
             let result = instance
                 .call_method1("run", (task_payload, host_payload, context_payload))
                 .map_err(python_task_error)?;
+            let result = resolve_python_maybe_awaitable(py, result).map_err(python_task_error)?;
 
-            python_result_to_host_task_result(result).map_err(python_task_error)
+            python_result_to_host_task_result(result.bind(py).clone()).map_err(python_task_error)
         })
     }
 }
@@ -881,12 +886,49 @@ fn json_to_task_results(value: &Value) -> PyResult<TaskResults> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pyo3::types::PyModule;
     use pyo3::types::PyTuple;
+    use std::path::PathBuf;
     use std::sync::Once;
 
     fn init_python() {
         static INIT: Once = Once::new();
-        INIT.call_once(pyo3::prepare_freethreaded_python);
+        INIT.call_once(|| {
+            pyo3::prepare_freethreaded_python();
+            Python::with_gil(|py| {
+                let sys = PyModule::import(py, "sys").expect("sys module should import");
+                let path = sys.getattr("path").expect("sys.path should exist");
+                let python_source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
+                path.call_method1("insert", (0, python_source.display().to_string()))
+                    .expect("python source path should be inserted");
+                let modules = sys.getattr("modules").expect("sys.modules should exist");
+                let genja_core = PyModule::from_code(
+                    py,
+                    pyo3::ffi::c_str!("__path__ = []\n"),
+                    pyo3::ffi::c_str!("genja_core/__init__.py"),
+                    pyo3::ffi::c_str!("genja_core"),
+                )
+                .expect("genja_core stub should build");
+                let task = PyModule::from_code(
+                    py,
+                    pyo3::ffi::c_str!(
+                        "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    pass\n"
+                    ),
+                    pyo3::ffi::c_str!("genja_core/task.py"),
+                    pyo3::ffi::c_str!("genja_core.task"),
+                )
+                .expect("task stub should build");
+                genja_core
+                    .add("task", &task)
+                    .expect("task module should attach to package");
+                modules
+                    .set_item("genja_core", &genja_core)
+                    .expect("genja_core stub should register");
+                modules
+                    .set_item("genja_core.task", &task)
+                    .expect("task stub should register");
+            });
+        });
     }
 
     fn make_task_class<'py>(
@@ -1103,6 +1145,38 @@ mod tests {
             assert!(module.getattr("HostTaskResult").is_ok());
             assert!(module.getattr("TaskDefinition").is_ok());
             assert!(module.getattr("TaskResults").is_ok());
+        });
+    }
+
+    #[test]
+    fn task_definition_run_on_host_executes_async_python_body() {
+        init_python();
+        Python::with_gil(|py| {
+            let task_class = PyModule::import(py, "tests.fixtures.task_definitions")
+                .and_then(|module| module.getattr("AsyncRuntimeTask"))
+                .expect("fixture task class should import");
+
+            let task_definition = PyTaskDefinition::from_python_class(task_class)
+                .expect("task definition should build");
+            let host = {
+                let payload = PyDict::new(py);
+                payload.set_item("hostname", "router1").unwrap();
+                payload.set_item("platform", "ios").unwrap();
+                payload
+            };
+
+            let result = task_definition
+                .run_on_host(host.into_any())
+                .expect("async task should execute");
+            let data = result.to_dict(py).expect("result should convert");
+            let value = normalize_python_json_payload(&data.bind(py).clone(), "invalid result")
+                .expect("result payload should normalize");
+
+            assert_eq!(result.status(), "passed");
+            assert_eq!(value["changed"], json!(true));
+            assert_eq!(value["summary"], json!("async handled router1"));
+            assert_eq!(value["metadata"]["current_depth"], json!(0));
+            assert_eq!(value["metadata"]["max_depth"], Value::Null);
         });
     }
 }

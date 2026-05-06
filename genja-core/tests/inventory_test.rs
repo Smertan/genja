@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use genja_core::inventory::{
     BaseBuilderHost, ConnectionKey, ConnectionManager, ConnectionOptions, Data, Defaults, Extras,
     Group, Groups, Host, Hosts, Inventory, ParentGroups, TransformFunctionOptions,
@@ -5,7 +6,8 @@ use genja_core::inventory::{
 // use genja_core::CustomTreeMap;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 mod common;
 
 fn build_connection_options(
@@ -248,6 +250,7 @@ fn connection_manager_creates_connections_lazily() {
     #[derive(Debug)]
     struct TestConnection;
 
+    #[async_trait]
     impl genja_core::inventory::Connection for TestConnection {
         fn create(&self, _key: &ConnectionKey) -> Box<dyn genja_core::inventory::Connection> {
             Box::new(TestConnection)
@@ -257,7 +260,7 @@ fn connection_manager_creates_connections_lazily() {
             true
         }
 
-        fn open(
+        async fn open(
             &mut self,
             _params: &genja_core::inventory::ResolvedConnectionParams,
         ) -> Result<(), String> {
@@ -273,7 +276,7 @@ fn connection_manager_creates_connections_lazily() {
     let created_for_factory = Arc::clone(&created);
     let manager = ConnectionManager::with_connection_factory(Arc::new(move |_key| {
         created_for_factory.fetch_add(1, Ordering::SeqCst);
-        Some(Arc::new(Mutex::new(TestConnection)))
+        Some(Arc::new(Mutex::new(TestConnection)) as Arc<Mutex<dyn genja_core::inventory::Connection>>)
     }));
     let key = ConnectionKey::new("router1.lab", "ssh2");
 

@@ -56,6 +56,7 @@
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
 pub use genja_core::GenjaError;
+use async_trait::async_trait;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
@@ -69,6 +70,7 @@ use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
 use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::runtime::Builder;
 
 // GenjaError is re-exported from genja-core.
 
@@ -122,12 +124,13 @@ impl RuntimeTaskConnectionResolver {
     }
 }
 
+#[async_trait]
 impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
-    fn resolve_task_connection(
+    async fn resolve_task_connection(
         &self,
         task: &dyn Task,
         hostname: &str,
-    ) -> Result<Option<Arc<std::sync::Mutex<dyn genja_core::inventory::Connection>>>, GenjaError>
+    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn genja_core::inventory::Connection>>>, GenjaError>
     {
         let Some(key) = task.get_connection_key(hostname) else {
             return Ok(None);
@@ -146,6 +149,7 @@ impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
         self.inventory
             .connections()
             .open_connection(&key, &params)
+            .await
             .map_err(GenjaError::Message)
     }
 }
@@ -184,7 +188,7 @@ impl Genja {
 
     /// Creates a `Genja` instance from an existing `Inventory`.
     ///
-    /// Initializes default settings and an empty plugin manager, and derives
+    /// Initializes default settings and the built-in plugin manager, and derives
     /// the host ID cache from the provided inventory.
     ///
     /// # Examples
@@ -223,9 +227,14 @@ impl Genja {
     /// # Errors
     ///
     /// Returns `Err(GenjaError::ConfigLoad)` if the settings file cannot be read
-    /// or parsed. Returns `Err(GenjaError::PluginsNotLoaded)` if plugin loading
-    /// fails. Returns `Err(GenjaError::InventoryNotLoaded)` if inventory loading
-    /// fails.
+    /// or parsed.
+    ///
+    /// Returns `Err(GenjaError::PluginLoad)` if plugin discovery or dynamic plugin
+    /// loading fails.
+    ///
+    /// Returns inventory-related errors from loading the configured inventory plugin,
+    /// including `GenjaError::InventoryLoad`, `GenjaError::PluginNotFound`, and
+    /// `GenjaError::NotInventoryPlugin`.
     ///
     /// # Examples
     ///
@@ -316,7 +325,8 @@ impl Genja {
 
     /// Loads an `Inventory` into the runtime and caches host identifiers.
     ///
-    /// This replaces any previously loaded inventory and updates the internal
+    /// This replaces any previously loaded inventory, wires the inventory's
+    /// connection factory from the current plugin manager, and updates the internal
     /// host ID cache used by runtime operations.
     ///
     /// # Examples
@@ -374,7 +384,9 @@ impl Genja {
     /// Returns a new `Genja` with the selected runner plugin activated.
     ///
     /// The named plugin must already be loaded in the current plugin manager and
-    /// must be registered as a runner plugin.
+    /// must be registered as a runner plugin. The returned instance preserves the
+    /// current runner options and limits, while changing only the selected runner
+    /// plugin name.
     ///
     /// # Errors
     ///
@@ -748,9 +760,11 @@ impl Genja {
     /// The execution flow:
     /// 1. Retrieves the currently selected hosts
     /// 2. Wraps the task in a `TaskDefinition`
-    /// 3. Obtains the configured runner plugin
-    /// 4. Executes the task across all selected hosts
-    /// 5. Logs a summary of the results
+    /// 3. Attaches the plugin manager as a processor resolver
+    /// 4. Builds a runtime connection resolver from the loaded inventory
+    /// 5. Obtains the configured runner plugin
+    /// 6. Builds a Tokio runtime and executes the task across all selected hosts
+    /// 7. Logs a summary of the results
     ///
     /// # Parameters
     ///
@@ -774,6 +788,7 @@ impl Genja {
     /// * `GenjaError::PluginsNotLoaded` - Plugins have not been loaded
     /// * `GenjaError::PluginNotFound` - The configured runner plugin does not exist
     /// * `GenjaError::NotRunnerPlugin` - The configured plugin is not a runner plugin
+    /// * `GenjaError::Message` - The internal async runtime could not be created
     /// * Other errors from the runner plugin's execution
     ///
     /// # Examples
@@ -840,13 +855,21 @@ impl Genja {
             host_count
         );
         let runner = self.get_runner_plugin(runner_name)?;
-        let results = runner.run(
-            &task_definition,
-            &hosts,
-            Some(connection_resolver),
-            self.settings.runner(),
-            max_depth,
-        )?;
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
+        let results = runtime.block_on(async {
+            runner
+                .run(
+                    &task_definition,
+                    &hosts,
+                    Some(connection_resolver),
+                    self.settings.runner(),
+                    max_depth,
+                )
+                .await
+        })?;
         let summary = results.task_summary();
         log_task_summary(&summary, host_count, 0);
         Ok(results)
@@ -919,6 +942,7 @@ impl Default for Genja {
 #[cfg(test)]
 mod tests {
     use super::{Genja, GenjaError};
+    use async_trait::async_trait;
     use genja_core::Settings;
     use genja_core::inventory::{
         BaseBuilderHost, Connection, ConnectionKey, Data, Host, Hosts, Inventory,
@@ -1108,6 +1132,7 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl PluginConnection for TestConnectionPlugin {
         fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
             Box::new(TestRuntimeConnection {
@@ -1116,7 +1141,7 @@ mod tests {
             })
         }
 
-        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
             Err("factory should not be opened directly".to_string())
         }
 
@@ -1135,6 +1160,7 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl PluginConnection for TestRuntimeConnection {
         fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
             Box::new(Self {
@@ -1143,7 +1169,7 @@ mod tests {
             })
         }
 
-        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
             self.alive = true;
             Ok(())
         }
@@ -1158,6 +1184,7 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Connection for TestRuntimeConnection {
         fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
             Box::new(Self {
@@ -1170,7 +1197,7 @@ mod tests {
             self.alive
         }
 
-        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
             self.alive = true;
             Ok(())
         }
@@ -1197,19 +1224,23 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for ConnectionAwareTask {
         fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
 
-        fn start_with_runtime(
+        async fn start_with_runtime(
             &self,
             _host: &Host,
             context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
-            let alive = context
-                .with_connection(|connection| Ok(connection.is_alive()))?
-                .unwrap_or(false);
+            let alive = if let Some(connection) = context.connection() {
+                let guard = connection.lock().await;
+                guard.is_alive()
+            } else {
+                false
+            };
             self.saw_connection.store(alive, Ordering::SeqCst);
             Ok(HostTaskResult::passed(TaskSuccess::new().with_changed(alive)))
         }
@@ -1779,7 +1810,8 @@ impl GenjaBuilder {
     ///
     /// # Errors
     ///
-    /// Returns `Err(GenjaError::PluginsNotLoaded)` if plugin loading fails.
+    /// Returns `Err(GenjaError::PluginLoad)` if plugin discovery or dynamic plugin
+    /// loading fails.
     ///
     /// # Examples
     ///
