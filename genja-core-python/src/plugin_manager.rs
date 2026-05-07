@@ -17,6 +17,18 @@ use crate::task::{
     PyTaskResults,
 };
 
+/// A Python-exposed wrapper around the Rust `PluginManager`.
+///
+/// This struct provides a thread-safe interface to the plugin management system,
+/// allowing Python code to register, load, and manage both Rust and Python plugins.
+/// The inner `PluginManager` is wrapped in a `Mutex` and `Option` to support
+/// safe concurrent access and one-time consumption semantics.
+///
+/// # Fields
+///
+/// * `inner` - A mutex-protected optional `PluginManager`. The `Option` allows
+///   the manager to be consumed (taken) exactly once, after which subsequent
+///   operations will fail with an error indicating the manager has been consumed.
 #[pyclass(name = "PluginManager")]
 pub struct PyPluginManager {
     inner: Mutex<Option<PluginManager>>,
@@ -24,6 +36,17 @@ pub struct PyPluginManager {
 
 #[pymethods]
 impl PyPluginManager {
+    /// Creates a new `PyPluginManager` instance with built-in plugins pre-registered.
+    ///
+    /// This constructor initializes the plugin manager with a default set of built-in
+    /// plugins provided by the `genja` crate. The manager is wrapped in a `Mutex` to
+    /// ensure thread-safe access from Python code.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `PyPluginManager` instance containing a mutex-protected plugin
+    /// manager initialized with built-in plugins. The manager can be used immediately
+    /// to register additional plugins or query existing ones.
     #[new]
     pub(crate) fn new() -> Self {
         Self {
@@ -31,6 +54,31 @@ impl PyPluginManager {
         }
     }
 
+    /// Loads Rust plugins from a specified directory.
+    ///
+    /// This method scans the given directory for dynamic library files containing
+    /// Rust plugins and registers them with the plugin manager. The plugin manager
+    /// is temporarily consumed during the loading process and then restored.
+    ///
+    /// # Parameters
+    ///
+    /// * `path` - A string slice representing the filesystem path to the directory
+    ///   containing the plugin dynamic libraries to load.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if all plugins in the directory were successfully loaded,
+    /// or a `PyErr` if:
+    /// - The plugin manager has already been consumed
+    /// - The plugin manager lock is poisoned
+    /// - Loading plugins from the directory fails (e.g., directory doesn't exist,
+    ///   invalid plugin format, or plugin initialization errors)
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the plugin manager has been consumed
+    /// or if any error occurs during the plugin loading process from the specified
+    /// directory.
     fn load_rust_plugins_from_directory(&self, path: &str) -> PyResult<()> {
         let mut guard = self.lock_inner()?;
         let manager = guard
@@ -45,10 +93,78 @@ impl PyPluginManager {
         Ok(())
     }
 
+    /// Registers a Python plugin with the plugin manager.
+    ///
+    /// This method serves as a public interface for registering Python plugins,
+    /// accepting a bound Python object and delegating to the internal registration
+    /// logic. The plugin must implement the required plugin interface methods
+    /// (`name()` and `group()`) and belong to a supported plugin group
+    /// (currently "ProcessorPlugin" or "ConnectionPlugin").
+    ///
+    /// # Parameters
+    ///
+    /// * `plugin` - A bound reference to a Python object implementing the plugin
+    ///   interface. The object will be unbound and stored internally for later use.
+    ///   The plugin must define callable `name()` and `group()` methods that return
+    ///   non-empty strings identifying the plugin.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the plugin was successfully registered, or a `PyErr` if:
+    /// - The plugin manager has already been consumed
+    /// - The plugin manager lock is poisoned
+    /// - The plugin is missing required `name()` or `group()` methods
+    /// - The plugin's `name()` or `group()` methods are not callable
+    /// - The plugin's `name()` or `group()` returns an empty string
+    /// - The plugin's group is not a supported type ("ProcessorPlugin" or "ConnectionPlugin")
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the plugin does not conform to the
+    /// expected plugin interface or if the plugin manager is in an invalid state.
     fn register_plugin(&self, plugin: Bound<'_, PyAny>) -> PyResult<()> {
         self.register_python_plugin(plugin.unbind())
     }
 
+    /// Loads Python plugins from a `pyproject.toml` file.
+    ///
+    /// This method reads plugin definitions from the `[tool.genja.plugins]` section
+    /// of a `pyproject.toml` file and registers them with the plugin manager. It
+    /// supports both "processor" and "connection" plugin types. Each plugin entry
+    /// must specify an import path in the format `module:attribute`, and the plugin's
+    /// declared name (from its `name()` method) must match the key used in the manifest.
+    ///
+    /// The expected structure in `pyproject.toml` is:
+    /// ```toml
+    /// [tool.genja.plugins.processor]
+    /// my_processor = "my_module:MyProcessorClass"
+    ///
+    /// [tool.genja.plugins.connection]
+    /// my_connection = "my_module:MyConnectionClass"
+    /// ```
+    ///
+    /// # Parameters
+    ///
+    /// * `path` - An optional string slice representing the filesystem path to the
+    ///   `pyproject.toml` file. If `None`, defaults to `"pyproject.toml"` in the
+    ///   current directory. The path can be absolute or relative.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if all plugins were successfully loaded and registered, or
+    /// a `PyErr` if:
+    /// - The plugin manager has already been consumed
+    /// - The plugin manager lock is poisoned
+    /// - The `pyproject.toml` file cannot be read or parsed
+    /// - Any plugin import path is invalid or the plugin cannot be imported
+    /// - A plugin's declared `name()` does not match its manifest key
+    /// - Any plugin registration fails (e.g., missing required methods, unsupported group)
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the manifest file is invalid, if any
+    /// plugin import fails, if there is a name mismatch between the manifest key
+    /// and the plugin's declared name, or if plugin registration fails for any reason.
     #[pyo3(signature = (path=None))]
     fn load_python_plugins_from_pyproject(&self, path: Option<&str>) -> PyResult<()> {
         let manifest_path = path
@@ -107,6 +223,32 @@ impl PyPluginManager {
         Ok(())
     }
 
+    /// Removes a plugin from the plugin manager by name.
+    ///
+    /// This method deregisters a previously registered plugin, removing it from the
+    /// plugin manager's internal registry. After deregistration, the plugin will no
+    /// longer be available for use. The method returns the group name of the
+    /// deregistered plugin if it was found, or `None` if no plugin with the given
+    /// name was registered.
+    ///
+    /// # Parameters
+    ///
+    /// * `name` - A string slice representing the unique name of the plugin to
+    ///   deregister. This should match the name returned by the plugin's `name()`
+    ///   method when it was registered.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Some(String))` containing the group name of the deregistered
+    /// plugin if a plugin with the given name was found and removed, or `Ok(None)`
+    /// if no plugin with that name was registered. Returns a `PyErr` if:
+    /// - The plugin manager has already been consumed
+    /// - The plugin manager lock is poisoned
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the plugin manager has been consumed
+    /// or if the internal lock is poisoned.
     fn deregister_plugin(&self, name: &str) -> PyResult<Option<String>> {
         let mut guard = self.lock_inner()?;
         let manager = guard
@@ -115,6 +257,25 @@ impl PyPluginManager {
         Ok(manager.deregister_plugin(name))
     }
 
+    /// Retrieves the names of all registered plugins.
+    ///
+    /// This method returns a list of the unique names of all plugins currently
+    /// registered with the plugin manager, including both built-in plugins and
+    /// any plugins that have been registered via `register_plugin`,
+    /// `load_rust_plugins_from_directory`, or `load_python_plugins_from_pyproject`.
+    /// The names correspond to the values returned by each plugin's `name()` method.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Vec<String>)` containing the names of all registered plugins,
+    /// or a `PyErr` if:
+    /// - The plugin manager has already been consumed
+    /// - The plugin manager lock is poisoned
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the plugin manager has been consumed
+    /// or if the internal lock is poisoned.
     fn plugin_names(&self) -> PyResult<Vec<String>> {
         let guard = self.lock_inner()?;
         let manager = guard
@@ -127,6 +288,26 @@ impl PyPluginManager {
             .collect())
     }
 
+    /// Retrieves the names and groups of all registered plugins.
+    ///
+    /// This method returns a list of tuples containing the unique name and group
+    /// identifier for each plugin currently registered with the plugin manager.
+    /// The information includes both built-in plugins and any plugins that have
+    /// been registered via `register_plugin`, `load_rust_plugins_from_directory`,
+    /// or `load_python_plugins_from_pyproject`. Each tuple contains the plugin's
+    /// name (from its `name()` method) and its group (from its `group()` method).
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Vec<(String, String)>)` containing tuples of (name, group) for
+    /// all registered plugins, or a `PyErr` if:
+    /// - The plugin manager has already been consumed
+    /// - The plugin manager lock is poisoned
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the plugin manager has been consumed
+    /// or if the internal lock is poisoned.
     fn plugin_names_and_groups(&self) -> PyResult<Vec<(String, String)>> {
         let guard = self.lock_inner()?;
         let manager = guard
@@ -135,6 +316,18 @@ impl PyPluginManager {
         Ok(manager.get_all_plugin_names_and_groups())
     }
 
+    /// Returns a string representation of the plugin manager for Python's `repr()`.
+    ///
+    /// This method provides a human-readable representation of the plugin manager's
+    /// state, including the number of registered plugins and whether the manager
+    /// has been consumed. The format is `PluginManager(plugin_count=N, consumed=bool)`.
+    /// If the internal lock cannot be acquired, returns `PluginManager(<unavailable>)`.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `String` containing:
+    /// - The number of registered plugins and consumption status if the lock is available
+    /// - `"PluginManager(<unavailable>)"` if the lock cannot be acquired
     fn __repr__(&self) -> String {
         match self.lock_inner() {
             Ok(guard) => {
@@ -151,6 +344,24 @@ impl PyPluginManager {
 }
 
 impl PyPluginManager {
+    /// Consumes and returns the inner `PluginManager`, leaving `None` in its place.
+    ///
+    /// This method provides one-time consumption semantics for the plugin manager,
+    /// allowing it to be moved out of the `PyPluginManager` wrapper. After this
+    /// method is called, the plugin manager is no longer available and subsequent
+    /// operations will fail with an error indicating the manager has been consumed.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(PluginManager)` containing the inner plugin manager if it has
+    /// not been previously consumed, or a `PyErr` if:
+    /// - The plugin manager has already been consumed (taken)
+    /// - The plugin manager lock is poisoned
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the plugin manager has already been
+    /// consumed or if the internal mutex lock is poisoned.
     pub(crate) fn take_inner(&self) -> PyResult<PluginManager> {
         let mut guard = self.lock_inner()?;
         guard
@@ -158,12 +369,57 @@ impl PyPluginManager {
             .ok_or_else(|| PyValueError::new_err("plugin manager has already been consumed"))
     }
 
+    /// Acquires a mutex guard for the inner `Option<PluginManager>`.
+    ///
+    /// This method provides thread-safe access to the inner plugin manager by
+    /// acquiring the mutex lock. The returned guard allows safe concurrent access
+    /// to the plugin manager from multiple threads.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(MutexGuard<'_, Option<PluginManager>>)` containing a guard that
+    /// provides access to the inner plugin manager, or a `PyErr` if the mutex lock
+    /// is poisoned (indicating that a thread panicked while holding the lock).
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the internal mutex lock is poisoned,
+    /// which occurs when a thread panics while holding the lock.
     fn lock_inner(&self) -> PyResult<std::sync::MutexGuard<'_, Option<PluginManager>>> {
         self.inner
             .lock()
             .map_err(|_| PyValueError::new_err("plugin manager lock is poisoned"))
     }
 
+    /// Registers a Python plugin with the plugin manager.
+    ///
+    /// This internal method handles the registration of Python plugins by acquiring
+    /// the plugin manager lock, verifying the manager has not been consumed, and
+    /// delegating to the registration logic. The plugin must implement the required
+    /// plugin interface methods (`name()` and `group()`) and belong to a supported
+    /// plugin group.
+    ///
+    /// # Parameters
+    ///
+    /// * `plugin` - A Python object implementing the plugin interface. The object
+    ///   must define callable `name()` and `group()` methods that return non-empty
+    ///   strings identifying the plugin. The plugin's group must be either
+    ///   "ProcessorPlugin" or "ConnectionPlugin".
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the plugin was successfully registered, or a `PyErr` if:
+    /// - The plugin manager has already been consumed
+    /// - The plugin manager lock is poisoned
+    /// - The plugin is missing required `name()` or `group()` methods
+    /// - The plugin's `name()` or `group()` methods are not callable
+    /// - The plugin's `name()` or `group()` returns an empty string
+    /// - The plugin's group is not a supported type
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the plugin manager is in an invalid
+    /// state or if the plugin does not conform to the expected plugin interface.
     fn register_python_plugin(&self, plugin: Py<PyAny>) -> PyResult<()> {
         let mut guard = self.lock_inner()?;
         let manager = guard
@@ -173,6 +429,39 @@ impl PyPluginManager {
     }
 }
 
+/// Registers a Python plugin directly with a mutable `PluginManager` reference.
+///
+/// This function extracts the plugin's identity (name and group) by calling its
+/// `name()` and `group()` methods, then wraps the plugin in the appropriate Rust
+/// adapter type based on its group. The wrapped plugin is then registered with
+/// the provided plugin manager. This function is used internally by the
+/// `PyPluginManager` wrapper and can also be used directly when a mutable
+/// reference to a `PluginManager` is available.
+///
+/// # Parameters
+///
+/// * `manager` - A mutable reference to the `PluginManager` where the plugin
+///   will be registered. The manager maintains the registry of all plugins and
+///   handles plugin lifecycle operations.
+/// * `plugin` - A Python object implementing the plugin interface. The object
+///   must define callable `name()` and `group()` methods that return non-empty
+///   strings. The plugin's group must be either "ProcessorPlugin" or
+///   "ConnectionPlugin". The plugin is wrapped in an `Arc` for shared ownership
+///   across the plugin system.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if the plugin was successfully registered, or a `PyErr` if:
+/// - The plugin is missing required `name()` or `group()` methods
+/// - The plugin's `name()` or `group()` methods are not callable
+/// - The plugin's `name()` or `group()` returns an empty string
+/// - The plugin's group is not "ProcessorPlugin" or "ConnectionPlugin"
+/// - Any Python error occurs during identity extraction
+///
+/// # Errors
+///
+/// This function will return an error if the plugin does not conform to the
+/// expected plugin interface or if its group type is not supported.
 pub(crate) fn register_python_plugin_on_manager(
     manager: &mut PluginManager,
     plugin: Py<PyAny>,
@@ -219,6 +508,25 @@ pub(crate) fn register_python_plugin_on_manager(
     Ok(())
 }
 
+/// A Rust adapter for Python connection plugins that serves as a factory.
+///
+/// This struct wraps a Python connection plugin object and implements the `Plugin`
+/// and `PluginConnection` traits to integrate Python-based connection plugins into
+/// the Rust plugin system. It acts as a factory that creates actual connection
+/// instances via the `create` method. The factory itself cannot be opened or used
+/// as a connection directly; it only produces `PyConnectionInstance` objects that
+/// handle the actual connection lifecycle.
+///
+/// # Fields
+///
+/// * `name` - The unique identifier for this connection plugin, matching the value
+///   returned by the Python plugin's `name()` method.
+/// * `group` - The group identifier for this plugin, matching the value returned by
+///   the Python plugin's `group()` method. For connection plugins, this is typically
+///   "ConnectionPlugin".
+/// * `plugin` - An `Arc`-wrapped Python object implementing the connection plugin
+///   interface. The `Arc` allows the plugin to be shared across multiple connection
+///   instances created by this factory.
 struct PyConnectionPlugin {
     name: String,
     group: String,
@@ -237,6 +545,25 @@ impl Plugin for PyConnectionPlugin {
 
 #[async_trait]
 impl PluginConnection for PyConnectionPlugin {
+    /// Creates a new connection instance from this factory.
+    ///
+    /// This method instantiates a new `PyConnectionInstance` by calling the Python
+    /// plugin's `create()` method with the provided connection key. The resulting
+    /// instance is the actual connection object that can be opened, used, and closed.
+    /// This factory pattern allows multiple independent connections to be created
+    /// from the same plugin definition.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - A reference to the `ConnectionKey` identifying the target connection.
+    ///   This key contains the hostname and plugin name and is passed to the Python
+    ///   plugin's `create()` method to initialize the connection instance.
+    ///
+    /// # Returns
+    ///
+    /// Returns a boxed `PyConnectionInstance` that wraps the Python connection object
+    /// created by the plugin's `create()` method. The instance is ready to be opened
+    /// and used for executing commands.
     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
         Box::new(PyConnectionInstance::from_factory(
             Arc::clone(&self.plugin),
@@ -246,14 +573,50 @@ impl PluginConnection for PyConnectionPlugin {
         ))
     }
 
+    /// Attempts to open the factory instance, which always fails.
+    ///
+    /// This method is not supported for factory instances and always returns an error.
+    /// Connection plugin factories cannot be opened directly; only the instances
+    /// created by the `create()` method can be opened. This design enforces the
+    /// factory pattern and prevents misuse of the factory as a connection.
+    ///
+    /// # Parameters
+    ///
+    /// * `_params` - Connection parameters (unused, as this operation is not supported).
+    ///
+    /// # Returns
+    ///
+    /// Always returns `Err` with a message indicating that factory instances cannot
+    /// be opened directly.
     async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
         Err("connection plugin factory instances cannot be opened directly".to_string())
     }
 
+    /// Closes the factory instance and returns a minimal connection key.
+    ///
+    /// This method is called when the factory is being shut down. Since the factory
+    /// itself is not an active connection, this operation simply returns a connection
+    /// key with an empty hostname and the plugin's name. This satisfies the trait
+    /// requirement while indicating that no actual connection was closed.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `ConnectionKey` with an empty hostname and the plugin's name,
+    /// indicating that this is a factory instance rather than an active connection.
     fn close(&mut self) -> ConnectionKey {
         ConnectionKey::new("", self.name.clone())
     }
 
+    /// Checks if the factory instance is alive.
+    ///
+    /// This method always returns `false` because the factory itself is not an active
+    /// connection. Only the instances created by the `create()` method can be alive.
+    /// This design ensures that liveness checks are only meaningful for actual
+    /// connection instances, not for the factory that creates them.
+    ///
+    /// # Returns
+    ///
+    /// Always returns `false`, indicating that the factory is not an active connection.
     fn is_alive(&self) -> bool {
         false
     }
