@@ -106,12 +106,12 @@ That means the usual pattern is:
 
 1. Add `#[derive(TaskDerive)]` to the task struct.
 2. Declare `name`, and optionally `connection_plugin_name`, `options`, `processor_names`, and `#[task(subtask)]` fields.
-3. Implement `Task::start(&self, host)` manually.
+3. Implement the async `Task::start(&self, host, context)` method manually.
 
 ```rust
 use genja::Genja;
 use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
-use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
 use genja_core_derive::Task as TaskDerive;
 
 #[derive(TaskDerive)]
@@ -120,13 +120,18 @@ struct CheckConfigTask {
     connection_plugin_name: Option<String>,
 }
 
+#[async_trait::async_trait]
 impl Task for CheckConfigTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(
             TaskSuccess::new()
                 .with_summary("configuration is present")
                 .with_changed(false),
-        )
+        ))
     }
 }
 
@@ -151,7 +156,7 @@ assert!(results.host_result("router1").unwrap().is_passed());
 Notes:
 
 - `max_depth` limits recursive sub-task execution. A task with no sub-tasks can use a small value like `1`.
-- `#[derive(TaskDerive)]` requires a `name` field and generates `TaskInfo` plus `SubTasks`, not `Task::start()`.
+- `#[derive(TaskDerive)]` requires a `name` field and generates `TaskInfo` plus `SubTasks`, not the async `Task::start(...)` implementation.
 - `connection_plugin_name` is optional, but usually needed for real task execution.
 - Rich task output lives in `TaskSuccess`, `TaskFailure`, `TaskSkip`, and `TaskResults`.
 - The lower-level task API is documented in `genja-core/src/task.rs`.
@@ -164,7 +169,7 @@ Tasks opt into processors by name:
 
 ```rust
 use genja_core::inventory::Host;
-use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
 use genja_core_derive::Task as TaskDerive;
 
 #[derive(TaskDerive)]
@@ -174,9 +179,14 @@ struct DeployTask {
     connection_plugin_name: Option<String>,
 }
 
+#[async_trait::async_trait]
 impl Task for DeployTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(TaskSuccess::new())
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
     }
 }
 ```
@@ -243,7 +253,7 @@ use std::sync::Arc;
 
 use genja::Genja;
 use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
-use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
 use genja_core_derive::Task as TaskDerive;
 
 #[derive(TaskDerive)]
@@ -252,9 +262,16 @@ struct ValidateTask {
     connection_plugin_name: Option<String>,
 }
 
+#[async_trait::async_trait]
 impl Task for ValidateTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(TaskSuccess::new().with_summary("validation passed"))
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(
+            TaskSuccess::new().with_summary("validation passed"),
+        ))
     }
 }
 
@@ -266,9 +283,16 @@ struct DeployTask {
     validate: Arc<dyn Task>,
 }
 
+#[async_trait::async_trait]
 impl Task for DeployTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(TaskSuccess::new().with_summary("deployment complete"))
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(
+            TaskSuccess::new().with_summary("deployment complete"),
+        ))
     }
 }
 

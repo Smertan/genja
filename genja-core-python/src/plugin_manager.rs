@@ -1,6 +1,8 @@
+use async_trait::async_trait;
 use genja::plugins::built_in_plugin_manager;
-use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
+use genja_core::inventory::{Connection, ConnectionKey, ResolvedConnectionParams};
 use genja_core::task::{HostTaskResult, TaskProcessor, TaskProcessorContext, TaskResults};
+use genja_plugin_manager::connection_factory::PluginConnectionAdapter;
 use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, PluginProcessor, Plugins};
 use genja_plugin_manager::PluginManager;
 use pyo3::exceptions::PyValueError;
@@ -163,50 +165,58 @@ impl PyPluginManager {
     }
 
     fn register_python_plugin(&self, plugin: Py<PyAny>) -> PyResult<()> {
-        let (declared_name, declared_group) = Python::with_gil(|py| {
-            let plugin_ref = plugin.bind(py);
-            let declared_name = extract_plugin_identity_value(
-                plugin_ref,
-                "name",
-                "plugin name must not be empty",
-                "plugin",
-            )?;
-            let declared_group = extract_plugin_identity_value(
-                plugin_ref,
-                "group",
-                "plugin group must not be empty",
-                "plugin",
-            )?;
-            Ok::<_, PyErr>((declared_name, declared_group))
-        })?;
-
         let mut guard = self.lock_inner()?;
         let manager = guard
             .as_mut()
             .ok_or_else(|| PyValueError::new_err("plugin manager has already been consumed"))?;
-        match declared_group.as_str() {
-            "ConnectionPlugin" => {
-                manager.register_plugin(Plugins::Connection(Box::new(PyConnectionPlugin {
-                    name: declared_name,
-                    group: declared_group,
-                    plugin: Arc::new(plugin),
-                })));
-            }
-            "ProcessorPlugin" => {
-                manager.register_plugin(Plugins::Processor(Box::new(PyProcessorPlugin {
-                    name: declared_name,
-                    group: declared_group,
-                    processor: Arc::new(plugin),
-                })));
-            }
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unsupported python plugin group '{other}'; only 'ProcessorPlugin' and 'ConnectionPlugin' are currently supported"
-                )));
-            }
-        }
-        Ok(())
+        register_python_plugin_on_manager(manager, plugin)
     }
+}
+
+pub(crate) fn register_python_plugin_on_manager(
+    manager: &mut PluginManager,
+    plugin: Py<PyAny>,
+) -> PyResult<()> {
+    let (declared_name, declared_group) = Python::with_gil(|py| {
+        let plugin_ref = plugin.bind(py);
+        let declared_name = extract_plugin_identity_value(
+            plugin_ref,
+            "name",
+            "plugin name must not be empty",
+            "plugin",
+        )?;
+        let declared_group = extract_plugin_identity_value(
+            plugin_ref,
+            "group",
+            "plugin group must not be empty",
+            "plugin",
+        )?;
+        Ok::<_, PyErr>((declared_name, declared_group))
+    })?;
+
+    match declared_group.as_str() {
+        "ConnectionPlugin" => {
+            manager.register_plugin(Plugins::Connection(Box::new(PyConnectionPlugin {
+                name: declared_name,
+                group: declared_group,
+                plugin: Arc::new(plugin),
+            })));
+        }
+        "ProcessorPlugin" => {
+            manager.register_plugin(Plugins::Processor(Box::new(PyProcessorPlugin {
+                name: declared_name,
+                group: declared_group,
+                processor: Arc::new(plugin),
+            })));
+        }
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unsupported python plugin group '{other}'; only 'ProcessorPlugin' and 'ConnectionPlugin' are currently supported"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 struct PyConnectionPlugin {
@@ -225,6 +235,7 @@ impl Plugin for PyConnectionPlugin {
     }
 }
 
+#[async_trait]
 impl PluginConnection for PyConnectionPlugin {
     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
         Box::new(PyConnectionInstance::from_factory(
@@ -235,7 +246,7 @@ impl PluginConnection for PyConnectionPlugin {
         ))
     }
 
-    fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+    async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
         Err("connection plugin factory instances cannot be opened directly".to_string())
     }
 
@@ -267,7 +278,8 @@ impl PyConnectionInstance {
         let created = Python::with_gil(|py| {
             let plugin = factory_plugin.bind(py);
             let key_payload = build_python_connection_key(py, &key)?;
-            Ok::<_, PyErr>(plugin.call_method1("create", (key_payload,))?.unbind())
+            let created = plugin.call_method1("create", (key_payload,))?;
+            resolve_python_maybe_awaitable(py, created)
         });
 
         match created {
@@ -291,6 +303,34 @@ impl PyConnectionInstance {
     }
 }
 
+pub(crate) fn python_connection_from_runtime_connection(
+    connection: &dyn Connection,
+) -> Option<Py<PyAny>> {
+    let adapter = (connection as &dyn std::any::Any).downcast_ref::<PluginConnectionAdapter>()?;
+    let py_connection = (adapter.inner_plugin_connection() as &dyn std::any::Any)
+        .downcast_ref::<PyConnectionInstance>()?;
+    Python::with_gil(|py| {
+        py_connection
+            .connection
+            .as_ref()
+            .map(|connection| connection.clone_ref(py))
+    })
+}
+
+pub(crate) fn resolve_python_maybe_awaitable<'py>(
+    py: Python<'py>,
+    value: Bound<'py, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let inspect = PyModule::import(py, "inspect")?;
+    let is_awaitable: bool = inspect.call_method1("isawaitable", (&value,))?.extract()?;
+    if is_awaitable {
+        let asyncio = PyModule::import(py, "asyncio")?;
+        Ok(asyncio.call_method1("run", (value,))?.unbind())
+    } else {
+        Ok(value.unbind())
+    }
+}
+
 impl Plugin for PyConnectionInstance {
     fn name(&self) -> String {
         self.name.clone()
@@ -301,6 +341,7 @@ impl Plugin for PyConnectionInstance {
     }
 }
 
+#[async_trait]
 impl PluginConnection for PyConnectionInstance {
     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
         Box::new(Self::from_factory(
@@ -311,9 +352,11 @@ impl PluginConnection for PyConnectionInstance {
         ))
     }
 
-    fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
+    async fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
         if let Some(error) = self.create_error.as_ref() {
-            return Err(format!("failed to create python connection plugin instance: {error}"));
+            return Err(format!(
+                "failed to create python connection plugin instance: {error}"
+            ));
         }
         let Some(connection) = self.connection.as_ref() else {
             return Err("python connection plugin instance is missing a connection".to_string());
@@ -321,12 +364,37 @@ impl PluginConnection for PyConnectionInstance {
 
         Python::with_gil(|py| {
             let connection = connection.bind(py);
-            let params_payload =
-                build_python_resolved_connection_params(py, params).map_err(|err| err.to_string())?;
-            connection
+            let params_payload = build_python_resolved_connection_params(py, params)
+                .map_err(|err| err.to_string())?;
+            let result = connection
                 .call_method1("open", (params_payload,))
                 .map_err(|err| err.to_string())?;
+            resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
             Ok(())
+        })
+    }
+
+    async fn execute_command(&mut self, command: &str) -> Result<String, String> {
+        if let Some(error) = self.create_error.as_ref() {
+            return Err(format!(
+                "failed to create python connection plugin instance: {error}"
+            ));
+        }
+        let Some(connection) = self.connection.as_ref() else {
+            return Err("python connection plugin instance is missing a connection".to_string());
+        };
+
+        Python::with_gil(|py| {
+            let connection = connection.bind(py);
+            let result = connection
+                .call_method1("execute_command", (command,))
+                .map_err(|err| err.to_string())?;
+            let resolved =
+                resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
+            resolved
+                .bind(py)
+                .extract::<String>()
+                .map_err(|err| err.to_string())
         })
     }
 
@@ -338,8 +406,17 @@ impl PluginConnection for PyConnectionInstance {
         Python::with_gil(|py| {
             let connection = connection.bind(py);
             match connection.call_method0("close") {
-                Ok(value) if value.is_none() => self.key.clone(),
-                Ok(value) => py_any_to_connection_key(&value).unwrap_or_else(|_| self.key.clone()),
+                Ok(value) => match resolve_python_maybe_awaitable(py, value) {
+                    Ok(value) => {
+                        let value = value.bind(py);
+                        if value.is_none() {
+                            self.key.clone()
+                        } else {
+                            py_any_to_connection_key(value).unwrap_or_else(|_| self.key.clone())
+                        }
+                    }
+                    Err(_) => self.key.clone(),
+                },
                 Err(_) => self.key.clone(),
             }
         })
@@ -355,10 +432,15 @@ impl PluginConnection for PyConnectionInstance {
 
         Python::with_gil(|py| {
             let connection = connection.bind(py);
-            connection
-                .call_method0("is_alive")
-                .and_then(|value| value.extract::<bool>())
-                .unwrap_or(false)
+            let value = match connection.call_method0("is_alive") {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            let value = match resolve_python_maybe_awaitable(py, value) {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            value.bind(py).extract::<bool>().unwrap_or(false)
         })
     }
 }
@@ -564,10 +646,7 @@ fn build_python_processor_context<'py>(
     build_python_model(py, "genja_core.processor", "TaskProcessorContext", payload)
 }
 
-fn build_python_connection_key<'py>(
-    py: Python<'py>,
-    key: &ConnectionKey,
-) -> PyResult<Py<PyAny>> {
+fn build_python_connection_key<'py>(py: Python<'py>, key: &ConnectionKey) -> PyResult<Py<PyAny>> {
     let payload = PyDict::new(py);
     payload.set_item("hostname", &key.hostname)?;
     payload.set_item("plugin_name", &key.plugin_name)?;
@@ -587,8 +666,9 @@ fn build_python_resolved_connection_params<'py>(
     match params.extras.as_ref() {
         Some(extras) => {
             let json_module = PyModule::import(py, "json")?;
-            let dumped = serde_json::to_string(extras)
-                .map_err(|err| PyValueError::new_err(format!("failed to serialize extras: {err}")))?;
+            let dumped = serde_json::to_string(extras).map_err(|err| {
+                PyValueError::new_err(format!("failed to serialize extras: {err}"))
+            })?;
             payload.set_item("extras", json_module.call_method1("loads", (dumped,))?)?;
         }
         None => payload.set_item("extras", py.None())?,
@@ -616,10 +696,11 @@ fn py_any_to_connection_key(obj: &Bound<'_, PyAny>) -> PyResult<ConnectionKey> {
         obj.clone()
     };
     let json_module = PyModule::import(obj.py(), "json")?;
-    let dumped: String = json_module.call_method1("dumps", (normalized,))?.extract()?;
-    let value: serde_json::Value = serde_json::from_str(&dumped).map_err(|err| {
-        PyValueError::new_err(format!("invalid connection key payload: {err}"))
-    })?;
+    let dumped: String = json_module
+        .call_method1("dumps", (normalized,))?
+        .extract()?;
+    let value: serde_json::Value = serde_json::from_str(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid connection key payload: {err}")))?;
     let hostname = value
         .get("hostname")
         .and_then(serde_json::Value::as_str)
@@ -660,6 +741,15 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Once;
+    use tokio::runtime::Builder;
+
+    fn run_async<F: std::future::Future>(future: F) -> F::Output {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(future)
+    }
 
     fn init_python() {
         static INIT: Once = Once::new();
@@ -855,7 +945,11 @@ mod tests {
                 .register_plugin(plugin)
                 .expect("connection plugin should register");
 
-            let inner = Arc::new(manager.take_inner().expect("plugin manager should be consumable"));
+            let inner = Arc::new(
+                manager
+                    .take_inner()
+                    .expect("plugin manager should be consumable"),
+            );
             let factory = build_connection_factory(Arc::clone(&inner));
             let connection_manager = ConnectionManager::with_connection_factory(factory);
             let key = ConnectionKey::new("router1", "ssh");
@@ -868,19 +962,78 @@ mod tests {
                 extras: None,
             };
 
-            let connection = connection_manager
-                .open_connection(&key, &params)
+            let connection = run_async(connection_manager.open_connection(&key, &params))
                 .expect("open should succeed")
                 .expect("connection should be created");
 
             {
-                let guard = connection.lock().expect("connection lock should succeed");
+                let guard = connection.blocking_lock();
                 assert!(guard.is_alive());
             }
 
             connection_manager.close_connection(&key);
             let counters = connection_manager
                 .connection_counters_for("ssh")
+                .expect("counters should exist");
+            assert_eq!(counters.create_calls, 1);
+            assert_eq!(counters.open_calls, 1);
+            assert_eq!(counters.close_calls, 1);
+        });
+    }
+
+    #[test]
+    fn register_connection_plugin_supports_async_factory_and_methods() {
+        init_python();
+        Python::with_gil(|py| {
+            let manager = PyPluginManager::new();
+            let plugin_class = import_fixture_attr(
+                py,
+                "tests.fixtures.connection_plugins",
+                "AsyncConnectionPlugin",
+            )
+            .expect("fixture plugin class should import");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+
+            manager
+                .register_plugin(plugin)
+                .expect("connection plugin should register");
+
+            let inner = Arc::new(
+                manager
+                    .take_inner()
+                    .expect("plugin manager should be consumable"),
+            );
+            let factory = build_connection_factory(Arc::clone(&inner));
+            let connection_manager = ConnectionManager::with_connection_factory(factory);
+            let key = ConnectionKey::new("router1", "async_ssh");
+            let params = ResolvedConnectionParams {
+                hostname: "10.0.0.1".to_string(),
+                port: Some(22),
+                username: Some("admin".to_string()),
+                password: Some("secret".to_string()),
+                platform: Some("ios".to_string()),
+                extras: None,
+            };
+
+            let connection = run_async(connection_manager.open_connection(&key, &params))
+                .expect("open should succeed")
+                .expect("connection should be created");
+
+            let output = run_async(async {
+                let mut guard = connection.lock().await;
+                guard.execute_command("show version").await
+            })
+            .expect("execute_command should succeed");
+            assert_eq!(output, "10.0.0.1:show version");
+
+            {
+                let guard = connection.blocking_lock();
+                assert!(guard.is_alive());
+            }
+
+            connection_manager.close_connection(&key);
+            let counters = connection_manager
+                .connection_counters_for("async_ssh")
                 .expect("counters should exist");
             assert_eq!(counters.create_calls, 1);
             assert_eq!(counters.open_calls, 1);

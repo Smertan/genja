@@ -145,6 +145,7 @@
 //! ## Implementing a Connection Plugin
 //!
 //! ```rust
+//! use async_trait::async_trait;
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginConnection};
 //! use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
 //!
@@ -160,6 +161,7 @@
 //!     }
 //! }
 //!
+//! #[async_trait]
 //! impl PluginConnection for SshPlugin {
 //!     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
 //!         Box::new(SshPlugin {
@@ -168,8 +170,9 @@
 //!         })
 //!     }
 //!
-//!     fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
+//!     async fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
 //!         // Establish SSH connection
+//!         let _ = params;
 //!         self.connected = true;
 //!         Ok(())
 //!     }
@@ -220,6 +223,7 @@
 //! ## Implementing a Runner Plugin
 //!
 //! ```rust
+//! use async_trait::async_trait;
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 //! use genja_core::inventory::Hosts;
 //! use genja_core::settings::RunnerConfig;
@@ -234,28 +238,31 @@
 //!     }
 //! }
 //!
+//! #[async_trait]
 //! impl PluginRunner for SequentialRunner {
-//!     fn run(
+//!     async fn run(
 //!         &self,
 //!         task: &TaskDefinition,
 //!         hosts: &Hosts,
+//!         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
 //!         runner_config: &RunnerConfig,
 //!         max_depth: usize,
 //!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Execute task sequentially on each host
-//!         let _ = (task, hosts, runner_config, max_depth);
+//!         let _ = (task, hosts, connection_resolver, runner_config, max_depth);
 //!         Ok(TaskResults::new("sequential"))
 //!     }
 //!
-//!     fn run_tasks(
+//!     async fn run_tasks(
 //!         &self,
 //!         tasks: &Tasks,
 //!         hosts: &Hosts,
+//!         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
 //!         runner_config: &RunnerConfig,
 //!         max_depth: usize,
 //!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
 //!         // Execute all tasks sequentially
-//!         let _ = (tasks, hosts, runner_config, max_depth);
+//!         let _ = (tasks, hosts, connection_resolver, runner_config, max_depth);
 //!         Ok(Vec::new())
 //!     }
 //! }
@@ -380,6 +387,7 @@
 //! }
 //!
 
+use async_trait::async_trait;
 use libloading::Library;
 use serde::Deserialize;
 use std::any::Any;
@@ -392,7 +400,7 @@ use genja_core::inventory::{
     ConnectionKey, Hosts, Inventory, ResolvedConnectionParams, TransformFunction,
 };
 use genja_core::settings::RunnerConfig;
-use genja_core::task::{TaskDefinition, TaskProcessor, TaskResults, Tasks};
+use genja_core::task::{TaskConnectionResolver, TaskDefinition, TaskProcessor, TaskResults, Tasks};
 use genja_core::{InventoryLoadError, Settings};
 use std::sync::Arc;
 /// Filesystem path to a plugin or plugin metadata entry.
@@ -491,21 +499,24 @@ impl Debug for dyn PluginConnection {
 /// Runner plugins provide task execution for a given inventory and task list.
 /// Implementers should be safe to call from multiple threads and should avoid
 /// mutating shared state without synchronization.
+#[async_trait]
 pub trait PluginRunner: Plugin {
     /// Run a single task against the provided hosts.
-    fn run(
+    async fn run(
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
+        connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, genja_core::GenjaError>;
 
     /// Run all tasks in the provided task list against the provided hosts.
-    fn run_tasks(
+    async fn run_tasks(
         &self,
         tasks: &Tasks,
         hosts: &Hosts,
+        connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, genja_core::GenjaError>;
@@ -582,12 +593,17 @@ impl Debug for dyn PluginProcessor {
 ///
 /// Connection plugins provide lifecycle hooks for establishing and tearing down
 /// connections and expose a connection operation for downstream use.
+#[async_trait]
 pub trait PluginConnection: Plugin {
     /// Create a new per-host connection instance.
     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection>;
 
     /// Open a connection to a device.
-    fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String>;
+    async fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String>;
+
+    async fn execute_command(&mut self, _command: &str) -> Result<String, String> {
+        Err("connection plugin does not implement execute_command".to_string())
+    }
 
     /// Close a connection to a device.
     fn close(&mut self) -> ConnectionKey;
@@ -708,21 +724,24 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl PluginRunner for DummyRunner {
-        fn run(
+        async fn run(
             &self,
             _task: &TaskDefinition,
             _hosts: &Hosts,
+            _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
             _runner_config: &RunnerConfig,
             _max_depth: usize,
         ) -> Result<TaskResults, genja_core::GenjaError> {
             Ok(TaskResults::new(self.name))
         }
 
-        fn run_tasks(
+        async fn run_tasks(
             &self,
             _tasks: &Tasks,
             _hosts: &Hosts,
+            _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
             _runner_config: &RunnerConfig,
             _max_depth: usize,
         ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
@@ -776,6 +795,7 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl PluginConnection for DummyConnection {
         fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
             Box::new(Self {
@@ -785,7 +805,7 @@ mod tests {
             })
         }
 
-        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
             self.alive = true;
             Ok(())
         }

@@ -18,7 +18,7 @@ The canonical authoring shape is:
 
     from genja_core.task import (
         Host,
-        TaskExecutionContext,
+        TaskRuntimeContext,
         TaskInfo,
         TaskMessage,
         TaskSuccessResult,
@@ -36,7 +36,7 @@ The canonical authoring shape is:
             self,
             task: TaskInfo,
             host: Host,
-            context: TaskExecutionContext,
+            context: TaskRuntimeContext,
         ) -> TaskSuccessResult:
             return TaskSuccessResult(
                 changed=True,
@@ -60,7 +60,8 @@ The canonical authoring shape is:
                 },
             )
 
-``run(...)`` must return one of:
+``run(...)`` may be implemented as ``def`` or ``async def`` and must resolve to
+one of:
 
 - ``TaskSuccessResult``
 - ``TaskFailureResult``
@@ -69,7 +70,7 @@ The canonical authoring shape is:
 Task metadata comes from ``@task(...)``:
 
 - ``name``: required and must be non-empty
-- ``connection_plugin_name``: required and must be non-empty
+- ``connection_plugin_name``: optional; when provided it must be non-empty
 - ``sub_task``: optional decorated task class
 - ``processors``: optional list of processor plugin names
 - ``options``: optional JSON-serializable task options payload
@@ -78,7 +79,7 @@ Task metadata comes from ``@task(...)``:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Protocol, TypeVar
+from typing import Any, Awaitable, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -97,7 +98,7 @@ class TaskInfo(_GenjaModel):
     """Task metadata passed into Python task ``run(...)`` methods."""
 
     name: str
-    connection_plugin_name: str
+    connection_plugin_name: str | None = None
     processors: list[str] = Field(default_factory=list)
     options: Any | None = None
     sub_task: TaskInfo | None = None
@@ -114,11 +115,12 @@ class Host(_GenjaModel):
     data: Any | None = None
 
 
-class TaskExecutionContext(_GenjaModel):
-    """Execution context passed into Python task ``run(...)`` methods."""
+class TaskRuntimeContext(_GenjaModel):
+    """Runtime context passed into Python task ``run(...)`` methods."""
 
     current_depth: int = 0
     max_depth: int | None = None
+    connection: Any | None = None
 
 
 class GenjaTaskProtocol(Protocol):
@@ -130,13 +132,15 @@ class GenjaTaskProtocol(Protocol):
         self,
         task: TaskInfo,
         host: Host,
-        context: TaskExecutionContext,
-    ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult: ...
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult | Awaitable[
+        TaskSuccessResult | TaskFailureResult | TaskSkipResult
+    ]: ...
 
 
 def task(
     name: str,
-    connection_plugin_name: str,
+    connection_plugin_name: str | None = None,
     sub_task: type[GenjaTaskProtocol] | None = None,
     processors: list[str] | None = None,
     options: Any | None = None,
@@ -165,6 +169,14 @@ def task(
             if not hasattr(sub_task, "__genja_task_info__"):
                 raise TypeError(
                     f"@task-decorated class '{cls.__name__}' sub_task '{sub_task.__name__}' must also be decorated with @task"
+                )
+        if connection_plugin_name is not None:
+            if (
+                not isinstance(connection_plugin_name, str)
+                or not connection_plugin_name.strip()
+            ):
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' connection_plugin_name must be a non-empty string or None"
                 )
         if processors is not None:
             if not isinstance(processors, list):
@@ -236,7 +248,7 @@ __all__ = [
     "GenjaTaskProtocol",
     "TaskInfo",
     "Host",
-    "TaskExecutionContext",
+    "TaskRuntimeContext",
     "TaskMessage",
     "TaskSuccessResult",
     "TaskFailureResult",

@@ -80,8 +80,10 @@
 //!    │    │      on_instance_start                       │         │
 //!    │    │      - Receives task, parent, depth, host    │         │
 //!    │    │                                              │         │
-//!    │    │    Execute task.start(host)                  │         │
+//!    │    │    Execute task.start(...)                   │         │
 //!    │    │      - Record start timestamp                │         │
+//!    │    │      - Optionally open task-scoped           │         │
+//!    │    │        connection via TaskConnectionResolver │         │
 //!    │    │      - Call task implementation              │         │
 //!    │    │      - Record finish timestamp               │         │
 //!    │    │                                              │         │
@@ -161,8 +163,8 @@
 //!
 //! 3. **Execution**: A runner plugin (e.g., `ThreadedRunner`, `SerialRunner`) orchestrates
 //!    task execution across selected hosts:
-//!    - Obtains or creates connections via `PluginConnection`
-//!    - Calls `task.start(host)` for each host
+//!    - Optionally resolves a task-scoped connection via [`TaskConnectionResolver`]
+//!    - Calls [`Task::start`] for each host with a [`TaskRuntimeContext`]
 //!    - Records timing information (start, finish, duration)
 //!    - Captures results (success, failure, or skip)
 //!    - Recursively processes sub-tasks up to `max_depth`
@@ -182,8 +184,8 @@
 //! ## [`Task`]
 //!
 //! The primary trait that all tasks must implement. It combines [`TaskInfo`] for
-//! metadata, [`SubTasks`] for hierarchical task structures, and a `start()` method
-//! for execution logic.
+//! metadata, [`SubTasks`] for hierarchical task structures, and an async `start()`
+//! method for execution logic.
 //!
 //! In the common derive-based workflow, the derive macro from `genja-core-derive`
 //! generates [`TaskInfo`] and [`SubTasks`], while you still implement [`Task`]
@@ -192,8 +194,11 @@
 //! are in scope.
 //!
 //! ```rust
+//! use async_trait::async_trait;
 //! use genja_core::inventory::Host;
-//! use genja_core::task::{HostTaskResult, Task, TaskSuccess, TaskInfo};
+//! use genja_core::task::{
+//!     HostTaskResult, Task, TaskInfo, TaskRuntimeContext, TaskSuccess,
+//! };
 //! use genja_core_derive::Task as TaskDerive;
 //!
 //! #[derive(TaskDerive)]
@@ -204,8 +209,13 @@
 //!     config_file: String,
 //! }
 //!
+//! #[async_trait]
 //! impl Task for DeployTask {
-//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!     async fn start(
+//!         &self,
+//!         _host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(
 //!             TaskSuccess::new()
 //!                 .with_changed(true)
@@ -222,7 +232,7 @@
 //! };
 //!
 //! assert_eq!(task.name(), "deploy");
-//! assert_eq!(task.connection_plugin_name(), "ssh");
+//! assert_eq!(task.connection_plugin_name(), Some("ssh"));
 //! ```
 //!
 //! ## [`TaskInfo`]
@@ -239,7 +249,7 @@
 //! ## Task Processors
 //!
 //! [`TaskProcessor`] provides lifecycle hooks for processing task results without
-//! changing the task's `start()` implementation. A task selects processors by name,
+//! changing the task's async `start()` implementation. A task selects processors by name,
 //! and the runtime resolves those names through a [`TaskProcessorResolver`]. In the
 //! full Genja runtime, the plugin manager implements the resolver, so invalid
 //! processor names fail with `GenjaError::PluginNotFound`.
@@ -247,8 +257,11 @@
 //! Processors can be selected in three ways:
 //!
 //! ```rust
+//! use async_trait::async_trait;
 //! use genja_core::inventory::Host;
-//! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskSuccess};
+//! use genja_core::task::{
+//!     HostTaskResult, Task, TaskDefinition, TaskRuntimeContext, TaskSuccess,
+//! };
 //! use genja_core_derive::Task as TaskDerive;
 //!
 //! #[derive(TaskDerive)]
@@ -263,14 +276,24 @@
 //!     processor_names: Vec<String>,
 //! }
 //!
+//! #[async_trait]
 //! impl Task for AttributeTask {
-//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!     async fn start(
+//!         &self,
+//!         _host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(TaskSuccess::new()))
 //!     }
 //! }
 //!
+//! #[async_trait]
 //! impl Task for FieldTask {
-//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!     async fn start(
+//!         &self,
+//!         _host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(TaskSuccess::new()))
 //!     }
 //! }
@@ -292,8 +315,8 @@
 //! ## [`SubTasks`]
 //!
 //! Enables hierarchical task structures by allowing tasks to define sub-tasks that
-//! execute after the parent task completes. Sub-tasks inherit the execution context
-//! and can be conditionally skipped based on parent task results.
+//! execute after the parent task completes. Sub-tasks receive their own runtime
+//! context and execution depth when they run.
 //! With the derive macro, any field marked with `#[task(subtask)]` is included in
 //! [`SubTasks::sub_tasks()`] in declaration order.
 //!
@@ -483,9 +506,13 @@
 //! with depth limiting to prevent infinite recursion.
 //!
 //! ```rust
+//! use async_trait::async_trait;
 //! use genja_core::inventory::{BaseBuilderHost, Host};
-//! use genja_core::task::{HostTaskResult, Task, TaskDefinition, TaskResults, TaskSuccess};
+//! use genja_core::task::{
+//!     HostTaskResult, Task, TaskDefinition, TaskResults, TaskRuntimeContext, TaskSuccess,
+//! };
 //! use genja_core_derive::Task as TaskDerive;
+//! use tokio::runtime::Builder;
 //!
 //! #[derive(TaskDerive)]
 //! struct DeployTask {
@@ -494,8 +521,13 @@
 //!     options: Option<serde_json::Value>,
 //! }
 //!
+//! #[async_trait]
 //! impl Task for DeployTask {
-//!     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!     async fn start(
+//!         &self,
+//!         _host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(
 //!             TaskSuccess::new().with_summary("deploy complete"),
 //!         ))
@@ -510,7 +542,9 @@
 //! let host = Host::builder().hostname("router1").build();
 //! let mut results = TaskResults::new("deploy");
 //!
-//! task.start("router1", &host, &mut results, 1)
+//! let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+//! runtime
+//!     .block_on(task.start("router1", &host, &mut results, 1))
 //!     .expect("task execution should succeed");
 //!
 //! assert!(results.host_result("router1").unwrap().is_passed());
@@ -536,8 +570,10 @@
 //!
 //! Tasks can define sub-tasks that execute after the parent task completes. This
 //!
-use crate::inventory::Host;
+use crate::inventory::{Connection, Host};
 use crate::types::{CustomTreeMap, NatString};
+use async_recursion::async_recursion;
+use async_trait::async_trait;
 use log::{debug, info, warn};
 use serde::Serialize;
 use serde_json::Value;
@@ -547,6 +583,7 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::sync::Mutex;
 
 /// Represents an error that occurred during task execution.
 ///
@@ -2897,14 +2934,21 @@ pub trait TaskInfo {
     /// Return the task's name.
     fn name(&self) -> &str;
 
-    /// Return the task's connection plugin name.
-    fn connection_plugin_name(&self) -> &str;
+    /// Return the task's connection plugin name, if the task needs a connection.
+    fn connection_plugin_name(&self) -> Option<&str> {
+        None
+    }
 
-    /// Build the task's connection key for a host.
-    fn get_connection_key(&self, hostname: &str) -> crate::inventory::ConnectionKey;
+    /// Build the task's connection key for a host, if the task needs a connection.
+    fn get_connection_key(&self, hostname: &str) -> Option<crate::inventory::ConnectionKey> {
+        self.connection_plugin_name()
+            .map(|plugin_name| crate::inventory::ConnectionKey::new(hostname, plugin_name))
+    }
 
     /// Return the task's options payload, if set.
-    fn options(&self) -> Option<&Value>;
+    fn options(&self) -> Option<&Value> {
+        None
+    }
 
     /// Return processor plugin names selected for this task.
     fn processor_names(&self) -> Vec<&str> {
@@ -2922,7 +2966,8 @@ pub trait SubTasks {
 ///
 /// # Example
 /// ```rust
-/// use genja_core::task::Task;
+/// use async_trait::async_trait;
+/// use genja_core::task::{Task, TaskRuntimeContext};
 /// use genja_core_derive::Task as TaskDerive;
 ///
 /// #[derive(TaskDerive)]
@@ -2931,10 +2976,12 @@ pub trait SubTasks {
 ///     connection_plugin_name: Option<String>,
 /// }
 ///
+/// #[async_trait]
 /// impl Task for MyTask {
-///     fn start(
+///     async fn start(
 ///         &self,
 ///         _host: &genja_core::inventory::Host,
+///         _context: &TaskRuntimeContext,
 ///     ) -> Result<genja_core::task::HostTaskResult, genja_core::task::TaskError> {
 ///         Ok(genja_core::task::HostTaskResult::passed(
 ///             genja_core::task::TaskSuccess::new(),
@@ -2942,22 +2989,14 @@ pub trait SubTasks {
 ///     }
 /// }
 /// ```
+#[async_trait]
 pub trait Task: TaskInfo + SubTasks + Send + Sync {
-    /// Start executing the task.
-    fn start(&self, host: &Host) -> Result<HostTaskResult, TaskError>;
-
     /// Start executing the task with runtime execution context.
-    ///
-    /// The default implementation preserves the original `start(...)` contract
-    /// so existing task implementations do not need to change.
-    fn start_with_context(
+    async fn start(
         &self,
         host: &Host,
-        context: &TaskExecutionContext,
-    ) -> Result<HostTaskResult, TaskError> {
-        let _ = context;
-        self.start(host)
-    }
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError>;
 }
 
 /// Execution context passed into task implementations.
@@ -2981,6 +3020,71 @@ impl TaskExecutionContext {
 
     pub fn max_depth(&self) -> usize {
         self.max_depth
+    }
+}
+
+/// Runtime context passed into task implementations.
+#[derive(Debug, Clone)]
+pub struct TaskRuntimeContext {
+    execution: TaskExecutionContext,
+    connection: Option<Arc<Mutex<dyn Connection>>>,
+}
+
+impl TaskRuntimeContext {
+    pub fn new(
+        execution: TaskExecutionContext,
+        connection: Option<Arc<Mutex<dyn Connection>>>,
+    ) -> Self {
+        Self {
+            execution,
+            connection,
+        }
+    }
+
+    pub fn execution(&self) -> &TaskExecutionContext {
+        &self.execution
+    }
+
+    pub fn current_depth(&self) -> usize {
+        self.execution.current_depth()
+    }
+
+    pub fn max_depth(&self) -> usize {
+        self.execution.max_depth()
+    }
+
+    pub fn connection(&self) -> Option<&Arc<Mutex<dyn Connection>>> {
+        self.connection.as_ref()
+    }
+
+    pub fn has_connection(&self) -> bool {
+        self.connection.is_some()
+    }
+
+    pub fn with_connection<R>(
+        &self,
+        f: impl FnOnce(&mut dyn Connection) -> Result<R, TaskError>,
+    ) -> Result<Option<R>, TaskError> {
+        let Some(connection) = &self.connection else {
+            return Ok(None);
+        };
+
+        let mut guard = connection.blocking_lock();
+
+        f(&mut *guard).map(Some)
+    }
+
+    pub async fn execute_command(&self, command: &str) -> Result<Option<String>, TaskError> {
+        let Some(connection) = &self.connection else {
+            return Ok(None);
+        };
+
+        let mut guard = connection.lock().await;
+        guard
+            .execute_command(command)
+            .await
+            .map(Some)
+            .map_err(|err| TaskError::new(std::io::Error::other(err)))
     }
 }
 
@@ -3087,9 +3191,30 @@ pub trait TaskProcessorResolver: Send + Sync {
     fn resolve_task_processor(&self, name: &str) -> Option<Arc<dyn TaskProcessor>>;
 }
 
+/// Opens or verifies task-scoped connections before execution.
+///
+/// The full runtime can implement this trait to ensure the connection selected by
+/// a task is available before the task body runs. Core task execution remains
+/// generic by depending only on this trait rather than on a concrete runtime type.
+#[async_trait]
+pub trait TaskConnectionResolver: Send + Sync {
+    /// Open or retrieve the connection required by `task` for `hostname`.
+    async fn resolve_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError>;
+}
+
 impl fmt::Debug for dyn TaskProcessorResolver {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TaskProcessorResolver")
+    }
+}
+
+impl fmt::Debug for dyn TaskConnectionResolver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TaskConnectionResolver")
     }
 }
 
@@ -3113,7 +3238,10 @@ impl fmt::Debug for dyn TaskProcessorResolver {
 /// # Example
 ///
 /// ```rust
-/// use genja_core::task::{Task, TaskDefinition, TaskInfo, SubTasks, HostTaskResult, TaskSuccess};
+/// use async_trait::async_trait;
+/// use genja_core::task::{
+///     HostTaskResult, Task, TaskDefinition, TaskInfo, TaskRuntimeContext, TaskSuccess, SubTasks,
+/// };
 /// use genja_core::inventory::Host;
 /// use std::sync::Arc;
 /// use serde_json::Value;
@@ -3127,12 +3255,13 @@ impl fmt::Debug for dyn TaskProcessorResolver {
 ///         &self.name
 ///     }
 ///
-///     fn connection_plugin_name(&self) -> &str {
-///         "ssh"
+///     fn connection_plugin_name(&self) -> Option<&str> {
+///         Some("ssh")
 ///     }
 ///
-///     fn get_connection_key(&self, hostname: &str) -> genja_core::inventory::ConnectionKey {
-///         genja_core::inventory::ConnectionKey::new(hostname, "ssh")
+///     fn get_connection_key(&self, hostname: &str) -> Option<genja_core::inventory::ConnectionKey> {
+///         self.connection_plugin_name()
+///             .map(|plugin_name| genja_core::inventory::ConnectionKey::new(hostname, plugin_name))
 ///     }
 ///
 ///     fn options(&self) -> Option<&Value> {
@@ -3146,8 +3275,13 @@ impl fmt::Debug for dyn TaskProcessorResolver {
 ///     }
 /// }
 ///
+/// #[async_trait]
 /// impl Task for MyTask {
-///     fn start(&self, _host: &Host) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///     async fn start(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 ///         Ok(HostTaskResult::passed(TaskSuccess::new()))
 ///     }
 /// }
@@ -3285,7 +3419,7 @@ impl TaskDefinition {
     /// This method currently does not return an error for depth overflow. When task
     /// nesting exceeds `max_depth`, it records an internal failed host result for that
     /// task node and returns `Ok(())`.
-    pub fn start(
+    pub async fn start(
         &self,
         hostname: &str,
         host: &Host,
@@ -3297,12 +3431,38 @@ impl TaskDefinition {
             hostname,
             host,
             results,
+            None,
             self.processor_resolver.as_deref(),
             self.processor_names(),
             None,
             0,
             max_depth,
         )
+        .await
+    }
+
+    /// Executes this task definition while ensuring task-scoped connections are opened.
+    pub async fn start_with_connection_resolver(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        max_depth: usize,
+    ) -> Result<(), crate::GenjaError> {
+        Self::start_with_depth(
+            self.inner.as_ref(),
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            self.processor_resolver.as_deref(),
+            self.processor_names(),
+            None,
+            0,
+            max_depth,
+        )
+        .await
     }
 
     /// Run aggregate task-start processors for this definition.
@@ -3327,8 +3487,8 @@ impl TaskDefinition {
     ///
     /// This internal helper method performs the actual recursive task execution,
     /// tracking the current depth to enforce the maximum depth limit. It executes
-    /// the task by calling its `start()` method, stores the result, then recursively
-    /// processes all sub-tasks returned by `sub_tasks()`.
+    /// the task by calling its runtime-aware `start()` method, stores the result,
+    /// then recursively processes all sub-tasks returned by `sub_tasks()`.
     ///
     /// Sub-tasks are executed in iteration order. Results are grouped by task name, so
     /// a sub-task named `"validate"` produces a single `TaskResults` node containing
@@ -3370,11 +3530,13 @@ impl TaskDefinition {
     /// Depth overflow is handled by inserting a failed host result with
     /// [`TaskFailureKind::Internal`]. This helper only returns an error if a future
     /// implementation path introduces one explicitly.
-    fn start_with_depth(
+    #[async_recursion]
+    async fn start_with_depth(
         task: &dyn Task,
         hostname: &str,
         host: &Host,
         results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
         processor_resolver: Option<&dyn TaskProcessorResolver>,
         processor_names: Vec<&str>,
         parent_task_name: Option<&str>,
@@ -3422,8 +3584,48 @@ impl TaskDefinition {
             processor.on_instance_start(&processor_context)?;
         }
 
+        let connection = if let Some(connection_resolver) = connection_resolver {
+            match connection_resolver
+                .resolve_task_connection(task, hostname)
+                .await
+            {
+                Ok(connection) => connection,
+                Err(error) => {
+                    let finished_at = SystemTime::now();
+                    let duration_ns = finished_at
+                        .duration_since(started_at)
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or(0);
+                    results.record_execution_timing(started_at, finished_at);
+
+                    warn!(
+                        "task '{}' failed to open connection for host '{}': {}",
+                        task.name(),
+                        hostname,
+                        error
+                    );
+
+                    let mut host_result = HostTaskResult::failed(
+                        TaskFailure::new(error)
+                            .with_kind(TaskFailureKind::Connection)
+                            .with_started_at(started_at)
+                            .with_finished_at(finished_at)
+                            .with_duration_ns(duration_ns),
+                    );
+                    for processor in &processors {
+                        processor.on_instance_finish(&processor_context, &mut host_result)?;
+                    }
+                    results.insert_host_result(hostname, host_result);
+                    return Ok(());
+                }
+            }
+        } else {
+            None
+        };
+
         let execution_context = TaskExecutionContext::new(depth, max_depth);
-        let host_result = task.start_with_context(host, &execution_context);
+        let runtime_context = TaskRuntimeContext::new(execution_context, connection);
+        let host_result = task.start(host, &runtime_context).await;
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
             .duration_since(started_at)
@@ -3549,12 +3751,14 @@ impl TaskDefinition {
                 hostname,
                 host,
                 sub_results,
+                connection_resolver,
                 processor_resolver,
                 sub_processor_names,
                 Some(task.name()),
                 depth + 1,
                 max_depth,
-            )?;
+            )
+            .await?;
             if sub_task_started {
                 let sub_context = TaskProcessorContext::new(
                     sub_task_name.as_str(),
@@ -3593,7 +3797,7 @@ impl TaskInfo for TaskDefinition {
     /// # Returns
     ///
     /// A string slice containing the connection plugin's name (e.g., "ssh", "netconf", "restconf").
-    fn connection_plugin_name(&self) -> &str {
+    fn connection_plugin_name(&self) -> Option<&str> {
         self.inner.connection_plugin_name()
     }
 
@@ -3609,9 +3813,9 @@ impl TaskInfo for TaskDefinition {
     ///
     /// # Returns
     ///
-    /// A `ConnectionKey` that uniquely identifies the connection to the specified host
-    /// using this task's plugin.
-    fn get_connection_key(&self, hostname: &str) -> crate::inventory::ConnectionKey {
+    /// An optional `ConnectionKey` that uniquely identifies the connection to the
+    /// specified host when this task declares a connection plugin.
+    fn get_connection_key(&self, hostname: &str) -> Option<crate::inventory::ConnectionKey> {
         self.inner.get_connection_key(hostname)
     }
 
@@ -3668,12 +3872,25 @@ impl DerefMut for Tasks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::{BaseBuilderHost, ConnectionKey, Host};
+    use crate::inventory::{
+        BaseBuilderHost, Connection, ConnectionKey, Host, ResolvedConnectionParams,
+    };
+    use async_trait::async_trait;
     use log::{LevelFilter, Log, Metadata, Record};
     use serde_json::json;
     use std::fmt;
+    use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
+    use tokio::runtime::Builder;
+
+    fn run_async<F: Future>(future: F) -> F::Output {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(future)
+    }
 
     #[derive(Debug)]
     struct TestTaskFailureError;
@@ -3720,17 +3937,43 @@ mod tests {
 
     struct SkippingTask;
 
+    #[derive(Debug)]
+    struct TestConnection {
+        key: ConnectionKey,
+        alive: bool,
+    }
+
+    #[async_trait]
+    impl Connection for TestConnection {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+            Box::new(Self {
+                key: key.clone(),
+                alive: false,
+            })
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            self.alive = true;
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.alive = false;
+            self.key.clone()
+        }
+    }
+
     impl TaskInfo for TestTask {
         fn name(&self) -> &str {
             self.name
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "ssh"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, "ssh")
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -3744,8 +3987,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for TestTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             self.counter.fetch_add(1, Ordering::SeqCst);
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
@@ -3756,12 +4004,8 @@ mod tests {
             self.name
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "ssh"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, "ssh")
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -3779,8 +4023,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for ProcessorTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
@@ -3833,12 +4082,8 @@ mod tests {
             "failing"
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "ssh"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, "ssh")
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -3852,8 +4097,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for FailingTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::failed(TaskFailure::new(
                 TestTaskFailureError,
             )))
@@ -3865,12 +4115,8 @@ mod tests {
             "skipping"
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "ssh"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, "ssh")
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -3884,8 +4130,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for SkippingTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::Skipped(
                 TaskSkip::new().with_reason("filtered"),
             ))
@@ -3974,8 +4225,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
 
         let mut results = TaskResults::new("root");
-        task.start("router1", &host, &mut results, 4)
-            .expect("start should succeed");
+        run_async(task.start("router1", &host, &mut results, 4)).expect("start should succeed");
         assert_eq!(counter.load(Ordering::SeqCst), 4);
         assert!(results.host_result("router1").is_some());
         assert!(results.sub_task("node").is_some());
@@ -4002,7 +4252,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
 
         let mut results = TaskResults::new("root");
-        task.start("router1", &host, &mut results, 4)
+        run_async(task.start("router1", &host, &mut results, 4))
             .expect("start should capture depth overflow as a host failure");
 
         assert_eq!(counter.load(Ordering::SeqCst), 5);
@@ -4045,8 +4295,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        task.start("router1", &host, &mut results, 0)
-            .expect("start should succeed");
+        run_async(task.start("router1", &host, &mut results, 0)).expect("start should succeed");
 
         let success = results
             .host_result("router1")
@@ -4064,7 +4313,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("failing");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should record a failed result");
 
         let failure = results
@@ -4083,7 +4332,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("skipping");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should record a skipped result");
 
         let skip = results
@@ -4109,8 +4358,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        task.start("router1", &host, &mut results, 0)
-            .expect("start should succeed");
+        run_async(task.start("router1", &host, &mut results, 0)).expect("start should succeed");
 
         let entries = logger.entries();
         assert!(entries.iter().any(|entry| {
@@ -4135,7 +4383,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("failing");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should record a failed result");
 
         let entries = logger.entries();
@@ -4159,7 +4407,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("skipping");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should record a skipped result");
 
         let entries = logger.entries();
@@ -4232,12 +4480,8 @@ mod tests {
             "erroring"
         }
 
-        fn connection_plugin_name(&self) -> &str {
-            "ssh"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, "ssh")
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
         }
 
         fn options(&self) -> Option<&Value> {
@@ -4251,8 +4495,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for ErroringTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Err(TaskError::new(ExternalTaskError))
         }
     }
@@ -4263,7 +4512,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("erroring");
 
-        task.start("router1", &host, &mut results, 0)
+        run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should capture task error as host failure");
 
         let failure = results
@@ -4425,8 +4674,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        task.start("router1", &host, &mut results, 3)
-            .expect("start should succeed");
+        run_async(task.start("router1", &host, &mut results, 3)).expect("start should succeed");
 
         let json = results
             .to_json_string()
@@ -4459,7 +4707,7 @@ mod tests {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("root");
 
-        task.start("router1", &host, &mut results, 3)
+        run_async(task.start("router1", &host, &mut results, 3))
             .expect("task execution should succeed");
 
         assert_eq!(processor_calls.load(Ordering::SeqCst), 4);
@@ -4532,6 +4780,40 @@ mod tests {
 
         assert_eq!(millis.duration_display(), Some("2.5ms".to_string()));
         assert_eq!(seconds.duration_display(), Some("1.5s".to_string()));
+    }
+
+    #[test]
+    fn task_runtime_context_helpers_expose_execution_and_connection() {
+        let execution = TaskExecutionContext::new(2, 5);
+        let key = ConnectionKey::new("router1", "ssh");
+        let connection = Arc::new(tokio::sync::Mutex::new(TestConnection {
+            key: key.clone(),
+            alive: true,
+        }));
+        let context = TaskRuntimeContext::new(execution.clone(), Some(connection));
+
+        assert_eq!(context.execution(), &execution);
+        assert_eq!(context.current_depth(), 2);
+        assert_eq!(context.max_depth(), 5);
+        assert!(context.has_connection());
+        assert!(context.connection().is_some());
+
+        let is_alive = context
+            .with_connection(|connection| Ok(connection.is_alive()))
+            .expect("connection helper should not fail");
+        assert_eq!(is_alive, Some(true));
+    }
+
+    #[test]
+    fn task_runtime_context_with_connection_returns_none_without_connection() {
+        let context = TaskRuntimeContext::new(TaskExecutionContext::new(0, 1), None);
+
+        let result = context
+            .with_connection(|connection| Ok(connection.is_alive()))
+            .expect("missing connection should not fail");
+
+        assert_eq!(result, None);
+        assert!(!context.has_connection());
     }
 
     #[test]
