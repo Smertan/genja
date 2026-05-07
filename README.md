@@ -106,7 +106,7 @@ That means the usual pattern is:
 
 1. Add `#[derive(TaskDerive)]` to the task struct.
 2. Declare `name`, and optionally `connection_plugin_name`, `options`, `processor_names`, and `#[task(subtask)]` fields.
-3. Implement `Task::start(&self, host)` manually.
+3. Implement the async `Task::start(&self, host, context)` method manually.
 
 ```rust
 use genja::Genja;
@@ -156,7 +156,7 @@ assert!(results.host_result("router1").unwrap().is_passed());
 Notes:
 
 - `max_depth` limits recursive sub-task execution. A task with no sub-tasks can use a small value like `1`.
-- `#[derive(TaskDerive)]` requires a `name` field and generates `TaskInfo` plus `SubTasks`, not `Task::start()`.
+- `#[derive(TaskDerive)]` requires a `name` field and generates `TaskInfo` plus `SubTasks`, not the async `Task::start(...)` implementation.
 - `connection_plugin_name` is optional, but usually needed for real task execution.
 - Rich task output lives in `TaskSuccess`, `TaskFailure`, `TaskSkip`, and `TaskResults`.
 - The lower-level task API is documented in `genja-core/src/task.rs`.
