@@ -1,5 +1,6 @@
-use ::genja::Genja as RuntimeGenja;
-use ::genja_core::inventory::{Hosts, Inventory};
+use genja::Genja as RuntimeGenja;
+use genja_core::inventory::{Hosts, Inventory};
+use genja_core::{GenjaError, Settings};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
@@ -54,7 +55,19 @@ impl PyGenja {
     }
 
     #[staticmethod]
-    fn from_settings_file(path: &str) -> PyResult<Self> {
+    #[pyo3(signature = (path, plugin_manager=None))]
+    fn from_settings_file(
+        path: &str,
+        plugin_manager: Option<PyRef<'_, PyPluginManager>>,
+    ) -> PyResult<Self> {
+        if let Some(plugin_manager) = plugin_manager {
+            let settings = Settings::from_file(path).map_err(|err| {
+                PyValueError::new_err(format!("failed to load settings from {path}: {err}"))
+            })?;
+            let plugin_manager = plugin_manager.take_inner()?;
+            return build_runtime_from_settings(settings, plugin_manager, None);
+        }
+
         let inner = RuntimeGenja::from_settings_file(path).map_err(|err| {
             PyValueError::new_err(format!(
                 "failed to build Genja runtime from settings file {path}: {err}"
@@ -229,7 +242,7 @@ fn inventory_hosts_to_py_dict(py: Python<'_>, hosts: &Hosts) -> PyResult<Py<PyAn
     Ok(payload.into_any().unbind())
 }
 
-fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
+pub(crate) fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
     let dict = obj.downcast::<PyDict>().map_err(|_| {
         PyValueError::new_err("hosts must be a dict mapping host id to host payload")
     })?;
@@ -242,6 +255,16 @@ fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
     }
 
     Ok(Inventory::builder().hosts(hosts).build())
+}
+
+pub(crate) fn python_inventory_to_rust_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
+    if let Ok(dict) = obj.clone().downcast::<PyDict>() {
+        if let Ok(Some(hosts)) = dict.get_item("hosts") {
+            return python_hosts_to_inventory(hosts);
+        }
+    }
+
+    python_hosts_to_inventory(obj)
 }
 
 fn build_runtime(
@@ -265,16 +288,78 @@ fn build_runtime(
     Ok(PyGenja { inner })
 }
 
+fn build_runtime_from_settings(
+    settings: Settings,
+    plugin_manager: genja_plugin_manager::PluginManager,
+    runner: Option<&str>,
+) -> PyResult<PyGenja> {
+    let inventory = load_inventory_from_settings(&settings, &plugin_manager)
+        .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?;
+    build_runtime(inventory, Some(settings), plugin_manager, runner)
+}
+
+fn load_inventory_from_settings(
+    settings: &Settings,
+    plugin_manager: &genja_plugin_manager::PluginManager,
+) -> Result<Inventory, GenjaError> {
+    let inventory_cfg = settings.inventory();
+    let plugin_name = inventory_cfg.plugin();
+
+    if !plugin_name.is_empty() {
+        if let Some(plugin) = plugin_manager.get_inventory_plugin(plugin_name) {
+            return plugin
+                .load(settings, plugin_manager)
+                .map_err(|err| GenjaError::InventoryLoad(err.to_string()));
+        }
+
+        if plugin_manager.get_plugin(plugin_name).is_some() {
+            return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
+        }
+
+        return Err(GenjaError::PluginNotFound(plugin_name.to_string()));
+    }
+
+    let default_name = "FileInventoryPlugin";
+    if let Some(plugin) = plugin_manager.get_inventory_plugin(default_name) {
+        return plugin
+            .load(settings, plugin_manager)
+            .map_err(|err| GenjaError::InventoryLoad(err.to_string()));
+    }
+
+    if plugin_manager.get_plugin(default_name).is_some() {
+        return Err(GenjaError::NotInventoryPlugin(default_name.to_string()));
+    }
+
+    Err(GenjaError::PluginNotFound(default_name.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::plugin_manager::PyPluginManager;
     use pyo3::types::PyString;
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::Once;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn init_python() {
         static INIT: Once = Once::new();
         INIT.call_once(pyo3::prepare_freethreaded_python);
+    }
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!(
+            "genja-core-python-{name}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("temp test dir should be created");
+        dir
     }
 
     #[test]
@@ -329,6 +414,31 @@ mod tests {
             assert!(err
                 .to_string()
                 .contains("hosts must be a dict mapping host id to host payload"));
+        });
+    }
+
+    #[test]
+    fn python_inventory_to_rust_inventory_accepts_hosts_key() {
+        init_python();
+        Python::with_gil(|py| {
+            let inventory = PyDict::new(py);
+            let hosts = PyDict::new(py);
+            let router = PyDict::new(py);
+            router.set_item("hostname", "10.0.0.1").unwrap();
+            router.set_item("platform", "ios").unwrap();
+            hosts.set_item("router1", router).unwrap();
+            inventory.set_item("hosts", hosts).unwrap();
+
+            let inventory = python_inventory_to_rust_inventory(inventory.into_any())
+                .expect("inventory payload should convert");
+            assert_eq!(
+                inventory
+                    .hosts()
+                    .get("router1")
+                    .expect("router1 should exist")
+                    .hostname(),
+                Some("10.0.0.1")
+            );
         });
     }
 
@@ -481,6 +591,59 @@ mod tests {
                     .unwrap(),
                 "10.0.0.1"
             );
+        });
+    }
+
+    #[test]
+    fn py_genja_from_settings_file_accepts_python_inventory_plugin_manager() {
+        init_python();
+        Python::with_gil(|py| {
+            let plugin_manager =
+                Py::new(py, PyPluginManager::new()).expect("plugin manager should be created");
+            let importlib = PyModule::import(py, "importlib").expect("importlib should import");
+            let module = importlib
+                .call_method1("import_module", ("tests.fixtures.inventory_plugins",))
+                .expect("inventory fixture module should import");
+            let plugin_class = module
+                .getattr("StaticInventoryPlugin")
+                .expect("inventory plugin should exist");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+            plugin_manager
+                .bind(py)
+                .call_method1("register_plugin", (plugin,))
+                .expect("inventory plugin should register");
+
+            let temp_dir = temp_test_dir("inventory-settings");
+            let settings_path = temp_dir.join("settings.yaml");
+            fs::write(
+                &settings_path,
+                "inventory:\n  plugin: python_inventory\n  options: {}\nrunner:\n  plugin: serial\n",
+            )
+            .expect("settings file should be written");
+
+            let runtime = PyGenja::from_settings_file(
+                settings_path.to_str().unwrap(),
+                Some(plugin_manager.bind(py).borrow()),
+            )
+            .expect("runtime should build from python inventory plugin");
+
+            assert!(runtime.inner.inventory_loaded());
+            let inventory = runtime
+                .inventory(py)
+                .expect("inventory accessor should work");
+            let inventory: Bound<'_, PyDict> = inventory.bind(py).clone().downcast_into().unwrap();
+            assert_eq!(
+                inventory
+                    .get_item("router1")
+                    .unwrap()
+                    .expect("router1 should exist")
+                    .get_item("hostname")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "10.10.10.1"
+            );
+            fs::remove_dir_all(&temp_dir).unwrap_or(());
         });
     }
 

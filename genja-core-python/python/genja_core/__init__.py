@@ -13,6 +13,7 @@ from .connection import (
     ConnectionProtocol,
     ResolvedConnectionParams,
 )
+from .inventory import InventoryPluginProtocol
 from .plugin_manager import PluginManager
 from .processor import TaskProcessorContext, TaskProcessorProtocol
 from .settings import (
@@ -47,6 +48,7 @@ __all__ = list(__all__) + [
     "ResolvedConnectionParams",
     "ConnectionProtocol",
     "ConnectionPluginProtocol",
+    "InventoryPluginProtocol",
     "PluginManager",
     "TaskProcessorContext",
     "TaskProcessorProtocol",

@@ -1,9 +1,13 @@
 use async_trait::async_trait;
 use genja::plugins::built_in_plugin_manager;
-use genja_core::inventory::{Connection, ConnectionKey, ResolvedConnectionParams};
+use genja_core::inventory::{Connection, ConnectionKey, Inventory, ResolvedConnectionParams};
+use genja_core::settings::Settings;
 use genja_core::task::{HostTaskResult, TaskProcessor, TaskProcessorContext, TaskResults};
+use genja_core::InventoryLoadError;
 use genja_plugin_manager::connection_factory::PluginConnectionAdapter;
-use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, PluginProcessor, Plugins};
+use genja_plugin_manager::plugin_types::{
+    Plugin, PluginConnection, PluginInventory, PluginProcessor, Plugins,
+};
 use genja_plugin_manager::PluginManager;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -12,6 +16,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::runtime::python_inventory_to_rust_inventory;
+use crate::settings::PySettings;
 use crate::task::{
     python_result_to_host_task_result, python_result_to_task_results, PyHostTaskResult,
     PyTaskResults,
@@ -99,7 +105,7 @@ impl PyPluginManager {
     /// accepting a bound Python object and delegating to the internal registration
     /// logic. The plugin must implement the required plugin interface methods
     /// (`name()` and `group()`) and belong to a supported plugin group
-    /// (currently "ProcessorPlugin" or "ConnectionPlugin").
+    /// (currently "ProcessorPlugin", "ConnectionPlugin", or "InventoryPlugin").
     ///
     /// # Parameters
     ///
@@ -116,7 +122,7 @@ impl PyPluginManager {
     /// - The plugin is missing required `name()` or `group()` methods
     /// - The plugin's `name()` or `group()` methods are not callable
     /// - The plugin's `name()` or `group()` returns an empty string
-    /// - The plugin's group is not a supported type ("ProcessorPlugin" or "ConnectionPlugin")
+    /// - The plugin's group is not a supported type ("ProcessorPlugin", "ConnectionPlugin", or "InventoryPlugin")
     ///
     /// # Errors
     ///
@@ -130,7 +136,7 @@ impl PyPluginManager {
     ///
     /// This method reads plugin definitions from the `[tool.genja.plugins]` section
     /// of a `pyproject.toml` file and registers them with the plugin manager. It
-    /// supports both "processor" and "connection" plugin types. Each plugin entry
+    /// supports "processor", "connection", and "inventory" plugin types. Each plugin entry
     /// must specify an import path in the format `module:attribute`, and the plugin's
     /// declared name (from its `name()` method) must match the key used in the manifest.
     ///
@@ -183,7 +189,7 @@ impl PyPluginManager {
             ))
         })?;
 
-        for section_name in ["processor", "connection"] {
+        for section_name in ["processor", "connection", "inventory"] {
             let Some(entries) = value
                 .get("tool")
                 .and_then(|tool| tool.get("genja"))
@@ -404,7 +410,7 @@ impl PyPluginManager {
     /// * `plugin` - A Python object implementing the plugin interface. The object
     ///   must define callable `name()` and `group()` methods that return non-empty
     ///   strings identifying the plugin. The plugin's group must be either
-    ///   "ProcessorPlugin" or "ConnectionPlugin".
+    ///   "ProcessorPlugin", "ConnectionPlugin", or "InventoryPlugin".
     ///
     /// # Returns
     ///
@@ -455,7 +461,7 @@ impl PyPluginManager {
 /// - The plugin is missing required `name()` or `group()` methods
 /// - The plugin's `name()` or `group()` methods are not callable
 /// - The plugin's `name()` or `group()` returns an empty string
-/// - The plugin's group is not "ProcessorPlugin" or "ConnectionPlugin"
+/// - The plugin's group is not "ProcessorPlugin", "ConnectionPlugin", or "InventoryPlugin"
 /// - Any Python error occurs during identity extraction
 ///
 /// # Errors
@@ -491,6 +497,13 @@ pub(crate) fn register_python_plugin_on_manager(
                 plugin: Arc::new(plugin),
             })));
         }
+        "InventoryPlugin" => {
+            manager.register_plugin(Plugins::Inventory(Box::new(PyInventoryPlugin {
+                name: declared_name,
+                group: declared_group,
+                plugin: Arc::new(plugin),
+            })));
+        }
         "ProcessorPlugin" => {
             manager.register_plugin(Plugins::Processor(Box::new(PyProcessorPlugin {
                 name: declared_name,
@@ -500,7 +513,7 @@ pub(crate) fn register_python_plugin_on_manager(
         }
         other => {
             return Err(PyValueError::new_err(format!(
-                "unsupported python plugin group '{other}'; only 'ProcessorPlugin' and 'ConnectionPlugin' are currently supported"
+                "unsupported python plugin group '{other}'; only 'ProcessorPlugin', 'ConnectionPlugin', and 'InventoryPlugin' are currently supported"
             )));
         }
     }
@@ -531,6 +544,88 @@ struct PyConnectionPlugin {
     name: String,
     group: String,
     plugin: Arc<Py<PyAny>>,
+}
+
+#[pyclass]
+#[derive(Clone)]
+struct PyLoadedPluginRegistry {
+    names: Vec<String>,
+    names_and_groups: Vec<(String, String)>,
+}
+
+#[pymethods]
+impl PyLoadedPluginRegistry {
+    fn plugin_names(&self) -> Vec<String> {
+        self.names.clone()
+    }
+
+    fn plugin_names_and_groups(&self) -> Vec<(String, String)> {
+        self.names_and_groups.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "LoadedPluginRegistry(plugin_count={})",
+            self.names_and_groups.len()
+        )
+    }
+}
+
+struct PyInventoryPlugin {
+    name: String,
+    group: String,
+    plugin: Arc<Py<PyAny>>,
+}
+
+impl Plugin for PyInventoryPlugin {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn group(&self) -> String {
+        self.group.clone()
+    }
+}
+
+impl PluginInventory for PyInventoryPlugin {
+    fn load(
+        &self,
+        settings: &Settings,
+        plugins: &PluginManager,
+    ) -> Result<Inventory, InventoryLoadError> {
+        Python::with_gil(|py| {
+            let plugin = self.plugin.bind(py);
+            let settings_payload = Py::new(
+                py,
+                PySettings {
+                    inner: settings.clone(),
+                },
+            )
+            .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+            let plugin_registry = Py::new(
+                py,
+                PyLoadedPluginRegistry {
+                    names: plugins
+                        .get_all_plugin_names()
+                        .into_iter()
+                        .map(|name| name.to_string())
+                        .collect(),
+                    names_and_groups: plugins.get_all_plugin_names_and_groups(),
+                },
+            )
+            .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+            let result = plugin
+                .call_method1(
+                    "load",
+                    (settings_payload.bind(py), plugin_registry.bind(py)),
+                )
+                .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+            let resolved = resolve_python_maybe_awaitable(py, result)
+                .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+            python_inventory_to_rust_inventory(resolved.bind(py).clone())
+                .map_err(|err| InventoryLoadError::from(err.to_string()))
+        })
+    }
 }
 
 impl Plugin for PyConnectionPlugin {
@@ -1101,9 +1196,11 @@ mod tests {
     use genja_core::inventory::ConnectionManager;
     use genja_plugin_manager::connection_factory::build_connection_factory;
     use serde_json::Value;
+    use std::env;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Once;
+    use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::runtime::Builder;
 
     fn run_async<F: std::future::Future>(future: F) -> F::Output {
@@ -1179,6 +1276,19 @@ mod tests {
         module.getattr(attr_name)
     }
 
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!(
+            "genja-core-python-{name}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("temp test dir should be created");
+        dir
+    }
+
     #[test]
     fn py_plugin_manager_new_includes_built_in_plugins() {
         let manager = PyPluginManager::new();
@@ -1247,6 +1357,36 @@ mod tests {
             assert!(groups
                 .iter()
                 .any(|(name, group)| name == "audit" && group == "Processor"));
+        });
+    }
+
+    #[test]
+    fn register_plugin_adds_inventory_plugin() {
+        init_python();
+        Python::with_gil(|py| {
+            let manager = PyPluginManager::new();
+            let plugin_class = import_fixture_attr(
+                py,
+                "tests.fixtures.inventory_plugins",
+                "StaticInventoryPlugin",
+            )
+            .expect("fixture plugin class should import");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+
+            manager
+                .register_plugin(plugin)
+                .expect("inventory plugin should register");
+
+            let names = manager
+                .plugin_names()
+                .expect("plugin names should be available");
+            assert!(names.iter().any(|name| name == "python_inventory"));
+            let groups = manager
+                .plugin_names_and_groups()
+                .expect("plugin groups should be available");
+            assert!(groups
+                .iter()
+                .any(|(name, group)| name == "python_inventory" && group == "Inventory"));
         });
     }
 
@@ -1401,6 +1541,55 @@ mod tests {
             assert_eq!(counters.create_calls, 1);
             assert_eq!(counters.open_calls, 1);
             assert_eq!(counters.close_calls, 1);
+        });
+    }
+
+    #[test]
+    fn load_python_plugins_from_pyproject_registers_inventory_plugins() {
+        init_python();
+        Python::with_gil(|py| {
+            let temp_dir = temp_test_dir("inventory-pyproject");
+            let module_path = temp_dir.join("inventory_plugins.py");
+            fs::write(
+                &module_path,
+                r#"
+from tests.fixtures.inventory_plugins import StaticInventoryPlugin as BaseInventoryPlugin
+
+class StaticInventoryPlugin(BaseInventoryPlugin):
+    pass
+"#,
+            )
+            .expect("inventory plugin fixture should be written");
+            let pyproject_path = temp_dir.join("pyproject.toml");
+            fs::write(
+                &pyproject_path,
+                r#"
+[tool.genja.plugins.inventory]
+python_inventory = "inventory_plugins:StaticInventoryPlugin"
+"#,
+            )
+            .expect("pyproject should be written");
+
+            let sys = PyModule::import(py, "sys").expect("sys module should import");
+            let path = sys.getattr("path").expect("sys.path should exist");
+            path.call_method1("insert", (0, temp_dir.display().to_string()))
+                .expect("tempdir should be added to sys.path");
+
+            let manager = PyPluginManager::new();
+            manager
+                .load_python_plugins_from_pyproject(Some(pyproject_path.to_str().unwrap()))
+                .expect("inventory plugin should load from pyproject");
+
+            path.call_method1("remove", (temp_dir.display().to_string(),))
+                .expect("tempdir should be removed from sys.path");
+            let modules = sys.getattr("modules").expect("sys.modules should exist");
+            modules.del_item("inventory_plugins").unwrap_or(());
+            fs::remove_dir_all(&temp_dir).unwrap_or(());
+
+            let names = manager
+                .plugin_names()
+                .expect("plugin names should be available");
+            assert!(names.iter().any(|name| name == "python_inventory"));
         });
     }
 
