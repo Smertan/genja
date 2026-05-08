@@ -1,3 +1,40 @@
+//! Python bindings for the Genja plugin management system.
+//!
+//! This module provides PyO3-based wrappers that expose Rust plugin functionality
+//! to Python code. It enables Python developers to create and register plugins
+//! (connection, inventory, and processor types) that integrate seamlessly with
+//! the Rust plugin system.
+//!
+//! # Architecture
+//!
+//! The module uses several adapter patterns to bridge Rust and Python:
+//!
+//! - **`PyPluginManager`**: A Python-facing wrapper around the Rust `PluginManager`
+//!   that handles plugin registration and lifecycle management.
+//!
+//! - **`PyLoadedPluginRegistry`**: A read-only snapshot of registered plugins,
+//!   passed to Python inventory plugins to prevent unsafe access to the full
+//!   plugin manager. See the struct documentation for design rationale.
+//!
+//! - **`PyConnectionPlugin`/`PyConnectionInstance`**: Factory and instance adapters
+//!   for Python connection plugins, implementing the two-phase creation pattern.
+//!
+//! - **`PyInventoryPlugin`**: Adapter for Python inventory plugins that handles
+//!   async/sync detection and data conversion.
+//!
+//! - **`PyProcessorPlugin`**: Adapter for Python processor plugins with lifecycle
+//!   hook support.
+//!
+//! # Safety Considerations
+//!
+//! Cross-language plugin systems require careful handling of ownership, lifetimes,
+//! and thread safety. This module uses several patterns to ensure safety:
+//!
+//! - Immutable snapshots (`PyLoadedPluginRegistry`) instead of shared references
+//! - `Arc<Py<PyAny>>` for shared ownership of Python objects across threads
+//! - Mutex-based synchronization for mutable state access
+//! - Explicit error conversion between Python and Rust error types
+
 use async_trait::async_trait;
 use genja::plugins::built_in_plugin_manager;
 use genja_core::inventory::{Connection, ConnectionKey, Inventory, ResolvedConnectionParams};
@@ -546,6 +583,75 @@ struct PyConnectionPlugin {
     plugin: Arc<Py<PyAny>>,
 }
 
+/// A Python-exposed snapshot of registered plugins for safe cross-language access.
+///
+/// This struct provides a read-only, point-in-time view of the plugins currently
+/// registered with the plugin manager. It serves as a safe boundary between Rust's
+/// `PluginManager` and Python code, particularly for inventory plugins that need
+/// to query available plugins during their `load()` operation.
+///
+/// # Purpose
+///
+/// The registry exists to solve several critical design challenges:
+///
+/// 1. **Safe Cross-Language Access**: Python code cannot safely hold references to
+///    the Rust `PluginManager` due to lifetime and ownership constraints. This
+///    snapshot provides owned data that Python can safely access.
+///
+/// 2. **Immutability Guarantee**: By providing only read access to plugin names
+///    and groups, the registry prevents Python code from modifying the plugin
+///    system state, avoiding potential race conditions and invariant violations.
+///
+/// 3. **Prevents Circular Dependencies**: Inventory plugins receive this snapshot
+///    instead of the full manager, preventing deadlocks that could occur if they
+///    tried to register additional plugins during loading.
+///
+/// 4. **Point-in-Time Consistency**: The snapshot captures the plugin state at a
+///    specific moment, ensuring that inventory plugins see a consistent view even
+///    if the plugin manager is modified concurrently.
+///
+/// # Usage
+///
+/// This type is primarily used internally when calling Python inventory plugins:
+///
+/// ```rust,ignore
+/// impl PluginInventory for PyInventoryPlugin {
+///     fn load(&self, settings: &Settings, plugins: &PluginManager) -> Result<...> {
+///         let registry = PyLoadedPluginRegistry {
+///             names: plugins.get_all_plugin_names()
+///                 .into_iter()
+///                 .map(|s| s.to_string())
+///                 .collect(),
+///             names_and_groups: plugins.get_all_plugin_names_and_groups(),
+///         };
+///
+///         // Pass snapshot to Python instead of full manager
+///         plugin.call_method1("load", (settings, registry))?;
+///     }
+/// }
+/// ```
+///
+/// From Python, inventory plugins receive this as a parameter:
+///
+/// ```python
+/// class MyInventoryPlugin:
+///     def load(self, settings, plugin_registry):
+///         # Query available connection plugins
+///         connection_plugins = [
+///             name for name, group in plugin_registry.plugin_names_and_groups()
+///             if group == "Connection"
+///         ]
+///         # Use this information to validate inventory configuration
+///         # ...
+/// ```
+///
+/// # Fields
+///
+/// * `names` - A vector containing the unique names of all registered plugins.
+///   Each name corresponds to the value returned by a plugin's `name()` method.
+/// * `names_and_groups` - A vector of tuples containing both the name and group
+///   identifier for each registered plugin. The group identifies the plugin type
+///   (e.g., "Processor", "Connection", "Inventory").
 #[pyclass]
 #[derive(Clone)]
 struct PyLoadedPluginRegistry {
@@ -555,14 +661,49 @@ struct PyLoadedPluginRegistry {
 
 #[pymethods]
 impl PyLoadedPluginRegistry {
+    /// Retrieves the names of all registered plugins in the registry.
+    ///
+    /// This method returns a cloned list of the unique names of all plugins that
+    /// were registered at the time this registry snapshot was created. The names
+    /// correspond to the values returned by each plugin's `name()` method.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Vec<String>` containing the names of all registered plugins.
+    /// The vector is a clone of the internal registry state, so modifications
+    /// to the returned vector will not affect the registry.
     fn plugin_names(&self) -> Vec<String> {
         self.names.clone()
     }
 
+    /// Retrieves the names and groups of all registered plugins in the registry.
+    ///
+    /// This method returns a cloned list of tuples containing both the unique name
+    /// and group identifier for each plugin that was registered at the time this
+    /// registry snapshot was created. Each tuple contains the plugin's name (from
+    /// its `name()` method) and its group (from its `group()` method), which
+    /// identifies the plugin type (e.g., "Processor", "Connection", "Inventory").
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Vec<(String, String)>` containing tuples of (name, group) for
+    /// all registered plugins. The vector is a clone of the internal registry
+    /// state, so modifications to the returned vector will not affect the registry.
     fn plugin_names_and_groups(&self) -> Vec<(String, String)> {
         self.names_and_groups.clone()
     }
 
+    /// Returns a string representation of the plugin registry for Python's `repr()`.
+    ///
+    /// This method provides a human-readable representation of the registry's state,
+    /// showing the total number of registered plugins. The format is
+    /// `LoadedPluginRegistry(plugin_count=N)`, where N is the number of plugins
+    /// in the registry snapshot.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `String` containing the registry representation with the plugin
+    /// count, formatted as `LoadedPluginRegistry(plugin_count=N)`.
     fn __repr__(&self) -> String {
         format!(
             "LoadedPluginRegistry(plugin_count={})",
@@ -571,6 +712,27 @@ impl PyLoadedPluginRegistry {
     }
 }
 
+/// A Rust adapter for Python inventory plugins.
+///
+/// This struct wraps a Python inventory plugin object and implements the `Plugin`
+/// and `PluginInventory` traits to integrate Python-based inventory plugins into
+/// the Rust plugin system. It enables Python code to provide inventory data by
+/// implementing a `load()` method that returns host and connection information.
+///
+/// The adapter handles the conversion between Python and Rust data types, manages
+/// async/sync detection for Python methods, and provides a safe snapshot of the
+/// plugin registry to prevent circular dependencies during inventory loading.
+///
+/// # Fields
+///
+/// * `name` - The unique identifier for this inventory plugin, matching the value
+///   returned by the Python plugin's `name()` method.
+/// * `group` - The group identifier for this plugin, matching the value returned by
+///   the Python plugin's `group()` method. For inventory plugins, this is typically
+///   "InventoryPlugin".
+/// * `plugin` - An `Arc`-wrapped Python object implementing the inventory plugin
+///   interface. The `Arc` allows the plugin to be shared safely across threads and
+///   ensures the Python object remains valid for the plugin's lifetime.
 struct PyInventoryPlugin {
     name: String,
     group: String,
@@ -588,6 +750,42 @@ impl Plugin for PyInventoryPlugin {
 }
 
 impl PluginInventory for PyInventoryPlugin {
+    /// Loads inventory data by calling the Python plugin's `load()` method.
+    ///
+    /// This method bridges the Rust inventory loading interface to Python by:
+    /// 1. Converting Rust `Settings` and `PluginManager` to Python-compatible types
+    /// 2. Calling the Python plugin's `load()` method with these converted parameters
+    /// 3. Handling both synchronous and asynchronous Python implementations
+    /// 4. Converting the Python inventory data back to Rust's `Inventory` type
+    ///
+    /// The method provides a safe snapshot of the plugin registry to prevent circular
+    /// dependencies and ensures the Python plugin cannot modify the plugin manager state.
+    ///
+    /// # Parameters
+    ///
+    /// * `settings` - A reference to the `Settings` object containing configuration
+    ///   data for the inventory plugin. This is wrapped in a `PySettings` object and
+    ///   passed to the Python plugin's `load()` method.
+    /// * `plugins` - A reference to the `PluginManager` containing all registered
+    ///   plugins. A read-only snapshot (`PyLoadedPluginRegistry`) is created from this
+    ///   manager and passed to the Python plugin, allowing it to query available plugins
+    ///   without modifying the plugin system state.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Inventory)` containing the loaded inventory data with hosts and
+    /// connections if the Python plugin successfully loads and returns valid inventory
+    /// data. Returns `Err(InventoryLoadError)` if:
+    /// - The Python plugin's `load()` method raises an exception
+    /// - The Python plugin returns invalid inventory data that cannot be converted
+    /// - Any Python object conversion or method call fails
+    /// - The async resolution of the Python method fails (if the plugin uses async)
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the Python plugin's `load()` method fails,
+    /// returns invalid data, or if any cross-language conversion fails during the
+    /// inventory loading process.
     fn load(
         &self,
         settings: &Settings,
@@ -717,6 +915,34 @@ impl PluginConnection for PyConnectionPlugin {
     }
 }
 
+/// A Rust adapter for Python connection instances created by connection plugin factories.
+///
+/// This struct represents an actual connection instance created by a Python connection
+/// plugin factory. Unlike `PyConnectionPlugin` which acts as a factory, this struct
+/// wraps an individual connection that can be opened, used to execute commands, and
+/// closed. It implements the `Plugin` and `PluginConnection` traits to integrate
+/// Python-based connection instances into the Rust plugin system.
+///
+/// The instance is created by calling the factory's `create()` method and stores any
+/// errors that occur during creation for later reporting. This design allows connection
+/// creation failures to be deferred until the connection is actually used, providing
+/// better error context.
+///
+/// # Fields
+///
+/// * `name` - The unique identifier for the connection plugin, inherited from the
+///   factory that created this instance.
+/// * `group` - The group identifier for the plugin, inherited from the factory.
+///   For connection plugins, this is typically "ConnectionPlugin".
+/// * `factory_plugin` - An `Arc`-wrapped reference to the Python factory plugin that
+///   created this instance. This reference is maintained to allow creating additional
+///   instances from the same factory.
+/// * `key` - The `ConnectionKey` identifying this specific connection, containing the
+///   hostname and plugin name.
+/// * `connection` - An optional `Arc`-wrapped Python connection object created by the
+///   factory's `create()` method. This is `None` if connection creation failed.
+/// * `create_error` - An optional error message captured if the factory's `create()`
+///   method failed. This allows deferred error reporting when the connection is used.
 struct PyConnectionInstance {
     name: String,
     group: String,
@@ -727,6 +953,35 @@ struct PyConnectionInstance {
 }
 
 impl PyConnectionInstance {
+    /// Creates a new connection instance by calling the factory plugin's `create()` method.
+    ///
+    /// This method invokes the Python factory plugin's `create()` method with the provided
+    /// connection key to instantiate a new connection object. The method handles both
+    /// synchronous and asynchronous Python implementations by detecting and resolving
+    /// awaitable return values. If the creation succeeds, the resulting Python connection
+    /// object is stored for later use. If creation fails, the error is captured and stored
+    /// to be reported when the connection is actually used.
+    ///
+    /// # Parameters
+    ///
+    /// * `factory_plugin` - An `Arc`-wrapped reference to the Python factory plugin that
+    ///   will create the connection instance. This factory must implement a `create()`
+    ///   method that accepts a connection key and returns a connection object.
+    /// * `name` - The unique identifier for the connection plugin, used to identify this
+    ///   instance in the plugin system.
+    /// * `group` - The group identifier for the plugin, typically "ConnectionPlugin" for
+    ///   connection plugins.
+    /// * `key` - The `ConnectionKey` identifying the target connection, containing the
+    ///   hostname and plugin name. This key is passed to the factory's `create()` method
+    ///   and stored for later reference.
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `PyConnectionInstance` containing either:
+    /// - A successfully created Python connection object in the `connection` field with
+    ///   `create_error` set to `None`, or
+    /// - A `None` connection with the error message stored in `create_error` if the
+    ///   factory's `create()` method failed or returned an invalid value.
     fn from_factory(
         factory_plugin: Arc<Py<PyAny>>,
         name: String,
@@ -761,6 +1016,36 @@ impl PyConnectionInstance {
     }
 }
 
+/// Extracts the underlying Python connection object from a runtime connection.
+///
+/// This function attempts to unwrap a runtime `Connection` trait object to retrieve
+/// the original Python connection object that may be wrapped inside. It performs a
+/// series of downcasts to traverse the adapter layers, first converting the connection
+/// to a `PluginConnectionAdapter`, then extracting the inner `PyConnectionInstance`,
+/// and finally returning the wrapped Python object. This is useful when Python code
+/// needs direct access to the connection object that was originally created by a
+/// Python connection plugin.
+///
+/// The function uses type downcasting to safely navigate through the adapter pattern
+/// used by the plugin system. If any downcast fails (indicating the connection is not
+/// a Python-based connection), the function returns `None`.
+///
+/// # Parameters
+///
+/// * `connection` - A reference to a trait object implementing the `Connection` trait.
+///   This is typically a runtime connection that may or may not be backed by a Python
+///   connection plugin. The function will attempt to extract the Python object if the
+///   connection was created by a Python plugin.
+///
+/// # Returns
+///
+/// Returns `Some(Py<PyAny>)` containing a reference to the Python connection object
+/// if the provided connection is backed by a Python plugin and all downcasts succeed.
+/// Returns `None` if:
+/// - The connection is not a `PluginConnectionAdapter`
+/// - The adapter does not contain a `PyConnectionInstance`
+/// - The Python connection instance does not have a connection object
+/// - Any downcast in the chain fails
 pub(crate) fn python_connection_from_runtime_connection(
     connection: &dyn Connection,
 ) -> Option<Py<PyAny>> {
@@ -775,6 +1060,39 @@ pub(crate) fn python_connection_from_runtime_connection(
     })
 }
 
+/// Resolves a Python value that may be awaitable (async) or synchronous.
+///
+/// This function inspects a Python value to determine if it is an awaitable object
+/// (such as a coroutine or async function result). If the value is awaitable, it
+/// uses Python's `asyncio.run()` to execute and resolve it synchronously. If the
+/// value is not awaitable, it is returned as-is. This allows Rust code to handle
+/// both synchronous and asynchronous Python plugin methods uniformly without
+/// requiring the caller to know whether the Python implementation is async.
+///
+/// # Parameters
+///
+/// * `py` - A Python GIL token that provides access to the Python interpreter.
+///   This token ensures that the Python interpreter is available and that the
+///   operation is performed safely within the GIL context.
+/// * `value` - A bound Python object that may or may not be awaitable. This is
+///   typically the return value from calling a Python plugin method. If the value
+///   is a coroutine or other awaitable object, it will be resolved using
+///   `asyncio.run()`. If it is a regular value, it will be returned unchanged.
+///
+/// # Returns
+///
+/// Returns `Ok(Py<PyAny>)` containing the resolved Python value. If the input
+/// was awaitable, this is the result of executing the coroutine. If the input
+/// was not awaitable, this is the original value. Returns `Err(PyErr)` if:
+/// - The `inspect` or `asyncio` modules cannot be imported
+/// - The `inspect.isawaitable()` call fails
+/// - The `asyncio.run()` call fails (for awaitable values)
+/// - Any other Python error occurs during inspection or resolution
+///
+/// # Errors
+///
+/// This function will return an error if any Python operation fails, including
+/// module imports, method calls, or async execution failures.
 pub(crate) fn resolve_python_maybe_awaitable<'py>(
     py: Python<'py>,
     value: Bound<'py, PyAny>,
@@ -801,6 +1119,26 @@ impl Plugin for PyConnectionInstance {
 
 #[async_trait]
 impl PluginConnection for PyConnectionInstance {
+    /// Creates a new connection instance from this connection instance's factory.
+    ///
+    /// This method creates a new independent connection instance by delegating to the
+    /// factory plugin that originally created this instance. The new instance will be
+    /// initialized with the same factory plugin, name, and group, but with the provided
+    /// connection key. This allows multiple connections to be created from the same
+    /// factory, each with its own state and lifecycle.
+    ///
+    /// # Parameters
+    ///
+    /// * `key` - A reference to the `ConnectionKey` identifying the target connection
+    ///   for the new instance. This key contains the hostname and plugin name and will
+    ///   be passed to the factory's `create()` method to initialize the new connection.
+    ///
+    /// # Returns
+    ///
+    /// Returns a boxed `PyConnectionInstance` that wraps the Python connection object
+    /// created by the factory plugin's `create()` method. The instance is ready to be
+    /// opened and used for executing commands. The returned instance is independent of
+    /// this instance and has its own connection state.
     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
         Box::new(Self::from_factory(
             Arc::clone(&self.factory_plugin),
@@ -810,6 +1148,36 @@ impl PluginConnection for PyConnectionInstance {
         ))
     }
 
+    /// Opens the Python connection instance with the provided connection parameters.
+    ///
+    /// This method establishes the connection by calling the Python connection object's
+    /// `open()` method with the resolved connection parameters. It first validates that
+    /// the connection instance was successfully created (no creation errors) and that
+    /// the connection object exists. The method handles both synchronous and asynchronous
+    /// Python implementations by detecting and resolving awaitable return values.
+    ///
+    /// # Parameters
+    ///
+    /// * `params` - A reference to the `ResolvedConnectionParams` containing the connection
+    ///   details such as hostname, port, username, password, platform, and any additional
+    ///   extras. These parameters are converted to a Python-compatible format and passed
+    ///   to the Python connection's `open()` method.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the connection was successfully opened. Returns `Err(String)`
+    /// containing an error message if:
+    /// - The connection instance was not successfully created (has a creation error)
+    /// - The connection object is missing from the instance
+    /// - The Python connection's `open()` method raises an exception
+    /// - The parameter conversion to Python format fails
+    /// - The async resolution of the Python method fails (if the plugin uses async)
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the connection instance is invalid, if the
+    /// Python `open()` method fails, or if any cross-language conversion fails during
+    /// the opening process.
     async fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
         if let Some(error) = self.create_error.as_ref() {
             return Err(format!(
@@ -832,6 +1200,36 @@ impl PluginConnection for PyConnectionInstance {
         })
     }
 
+    /// Executes a command on the Python connection instance and returns its output.
+    ///
+    /// This method delegates command execution to the Python connection object's
+    /// `execute_command()` method. It first validates that the connection instance
+    /// was successfully created (no creation errors) and that the connection object
+    /// exists. The method handles both synchronous and asynchronous Python implementations
+    /// by detecting and resolving awaitable return values. The command output is expected
+    /// to be a string that can be extracted from the Python return value.
+    ///
+    /// # Parameters
+    ///
+    /// * `command` - A string slice containing the command to execute on the connection.
+    ///   This command is passed directly to the Python connection's `execute_command()`
+    ///   method without modification.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(String)` containing the command output if execution succeeds.
+    /// Returns `Err(String)` containing an error message if:
+    /// - The connection instance was not successfully created (has a creation error)
+    /// - The connection object is missing from the instance
+    /// - The Python connection's `execute_command()` method raises an exception
+    /// - The async resolution of the Python method fails (if the plugin uses async)
+    /// - The Python return value cannot be extracted as a string
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the connection instance is invalid, if the
+    /// Python `execute_command()` method fails, or if the return value cannot be converted
+    /// to a Rust string.
     async fn execute_command(&mut self, command: &str) -> Result<String, String> {
         if let Some(error) = self.create_error.as_ref() {
             return Err(format!(
@@ -856,6 +1254,24 @@ impl PluginConnection for PyConnectionInstance {
         })
     }
 
+    /// Closes the Python connection instance and returns its connection key.
+    ///
+    /// This method terminates the connection by calling the Python connection object's
+    /// `close()` method. It handles both synchronous and asynchronous Python implementations
+    /// by detecting and resolving awaitable return values. The method attempts to extract
+    /// a connection key from the Python `close()` method's return value if one is provided.
+    /// If the connection object is missing, if the `close()` method fails, if it returns
+    /// `None`, or if the returned value cannot be converted to a connection key, the
+    /// method falls back to returning this instance's stored connection key.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `ConnectionKey` identifying the closed connection. This is either:
+    /// - A connection key extracted from the Python `close()` method's return value if
+    ///   the method succeeds and returns a valid connection key object
+    /// - The connection key stored in this instance (from when it was created) if the
+    ///   connection object is missing, the `close()` method fails, returns `None`, or
+    ///   returns a value that cannot be converted to a connection key
     fn close(&mut self) -> ConnectionKey {
         let Some(connection) = self.connection.as_ref() else {
             return self.key.clone();
@@ -880,6 +1296,27 @@ impl PluginConnection for PyConnectionInstance {
         })
     }
 
+    /// Checks if the Python connection instance is currently alive and operational.
+    ///
+    /// This method determines the connection's liveness by calling the Python connection
+    /// object's `is_alive()` method. It first validates that the connection instance was
+    /// successfully created (no creation errors) and that the connection object exists.
+    /// The method handles both synchronous and asynchronous Python implementations by
+    /// detecting and resolving awaitable return values. If any step in the liveness check
+    /// fails (missing connection, method call error, async resolution error, or invalid
+    /// return value), the method returns `false`.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the connection instance was successfully created, the connection
+    /// object exists, the Python `is_alive()` method executes successfully, and returns
+    /// a truthy value. Returns `false` if:
+    /// - The connection instance has a creation error
+    /// - The connection object is missing from the instance
+    /// - The Python connection's `is_alive()` method raises an exception
+    /// - The async resolution of the Python method fails (if the plugin uses async)
+    /// - The Python return value cannot be extracted as a boolean
+    /// - The Python return value is `false` or falsy
     fn is_alive(&self) -> bool {
         if self.create_error.is_some() {
             return false;

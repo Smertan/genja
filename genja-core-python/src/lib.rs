@@ -146,7 +146,6 @@
 //! - [`genja-plugin-manager`](../genja_plugin_manager/index.html) - Plugin system
 //! - [PyO3 Documentation](https://pyo3.rs/) - Python/Rust bindings framework
 
-
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
