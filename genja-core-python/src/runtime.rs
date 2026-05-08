@@ -648,6 +648,81 @@ mod tests {
     }
 
     #[test]
+    fn py_genja_from_settings_file_applies_python_transform_plugin() {
+        init_python();
+        Python::with_gil(|py| {
+            let plugin_manager =
+                Py::new(py, PyPluginManager::new()).expect("plugin manager should be created");
+            let importlib = PyModule::import(py, "importlib").expect("importlib should import");
+            let module = importlib
+                .call_method1("import_module", ("tests.fixtures.transform_plugins",))
+                .expect("transform fixture module should import");
+            let plugin_class = module
+                .getattr("HostnameSuffixTransformPlugin")
+                .expect("transform plugin should exist");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+            plugin_manager
+                .bind(py)
+                .call_method1("register_plugin", (plugin,))
+                .expect("transform plugin should register");
+
+            let temp_dir = temp_test_dir("transform-settings");
+            let hosts_path = temp_dir.join("hosts.yaml");
+            fs::write(
+                &hosts_path,
+                "router1:\n  hostname: 10.0.0.1\n  platform: ios\n",
+            )
+            .expect("hosts file should be written");
+            let settings_path = temp_dir.join("settings.yaml");
+            fs::write(
+                &settings_path,
+                format!(
+                    "inventory:\n  plugin: FileInventoryPlugin\n  options:\n    hosts_file: {}\n  transform_function: python_transform\n  transform_function_options:\n    suffix: -lab\nrunner:\n  plugin: serial\n",
+                    hosts_path.display()
+                ),
+            )
+            .expect("settings file should be written");
+
+            let runtime = PyGenja::from_settings_file(
+                settings_path.to_str().unwrap(),
+                Some(plugin_manager.bind(py).borrow()),
+            )
+            .expect("runtime should build from settings with python transform");
+
+            let inventory_hosts = runtime
+                .iter_inventory_hosts(py)
+                .expect("iter_inventory_hosts should work");
+            assert_eq!(inventory_hosts.len(), 1);
+            assert_eq!(inventory_hosts[0].0, "router1");
+            assert_eq!(
+                inventory_hosts[0]
+                    .1
+                    .bind(py)
+                    .get_item("hostname")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "10.0.0.1-lab"
+            );
+
+            let raw_hosts = runtime.hosts_raw(py).expect("hosts_raw should work");
+            let raw_hosts: Bound<'_, PyDict> = raw_hosts.bind(py).clone().downcast_into().unwrap();
+            assert_eq!(
+                raw_hosts
+                    .get_item("router1")
+                    .unwrap()
+                    .expect("router1 raw host should exist")
+                    .get_item("hostname")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "10.0.0.1"
+            );
+            fs::remove_dir_all(&temp_dir).unwrap_or(());
+        });
+    }
+
+    #[test]
     fn py_genja_filter_methods_return_filtered_runtime() {
         init_python();
         Python::with_gil(|py| {

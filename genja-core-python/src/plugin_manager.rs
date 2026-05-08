@@ -2,8 +2,8 @@
 //!
 //! This module provides PyO3-based wrappers that expose Rust plugin functionality
 //! to Python code. It enables Python developers to create and register plugins
-//! (connection, inventory, and processor types) that integrate seamlessly with
-//! the Rust plugin system.
+//! (connection, inventory, transform-function, and processor types) that
+//! integrate seamlessly with the Rust plugin system.
 //!
 //! # Architecture
 //!
@@ -22,6 +22,9 @@
 //! - **`PyInventoryPlugin`**: Adapter for Python inventory plugins that handles
 //!   async/sync detection and data conversion.
 //!
+//! - **`PyTransformFunctionPlugin`**: Adapter for Python transform plugins that
+//!   bridge host/group/defaults transforms through JSON-compatible payloads.
+//!
 //! - **`PyProcessorPlugin`**: Adapter for Python processor plugins with lifecycle
 //!   hook support.
 //!
@@ -37,18 +40,22 @@
 
 use async_trait::async_trait;
 use genja::plugins::built_in_plugin_manager;
-use genja_core::inventory::{Connection, ConnectionKey, Inventory, ResolvedConnectionParams};
+use genja_core::inventory::{
+    Connection, ConnectionKey, Defaults, Group, Host, Inventory, ResolvedConnectionParams,
+    Transform, TransformFunction, TransformFunctionOptions,
+};
 use genja_core::settings::Settings;
 use genja_core::task::{HostTaskResult, TaskProcessor, TaskProcessorContext, TaskResults};
 use genja_core::InventoryLoadError;
 use genja_plugin_manager::connection_factory::PluginConnectionAdapter;
 use genja_plugin_manager::plugin_types::{
-    Plugin, PluginConnection, PluginInventory, PluginProcessor, Plugins,
+    Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginTransformFunction, Plugins,
 };
 use genja_plugin_manager::PluginManager;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
+use serde::{de::DeserializeOwned, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -142,7 +149,8 @@ impl PyPluginManager {
     /// accepting a bound Python object and delegating to the internal registration
     /// logic. The plugin must implement the required plugin interface methods
     /// (`name()` and `group()`) and belong to a supported plugin group
-    /// (currently "ProcessorPlugin", "ConnectionPlugin", or "InventoryPlugin").
+    /// (currently "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin",
+    /// or "TransformFunctionPlugin").
     ///
     /// # Parameters
     ///
@@ -173,7 +181,8 @@ impl PyPluginManager {
     ///
     /// This method reads plugin definitions from the `[tool.genja.plugins]` section
     /// of a `pyproject.toml` file and registers them with the plugin manager. It
-    /// supports "processor", "connection", and "inventory" plugin types. Each plugin entry
+    /// supports "processor", "connection", "inventory", and "transform" plugin
+    /// types. Each plugin entry
     /// must specify an import path in the format `module:attribute`, and the plugin's
     /// declared name (from its `name()` method) must match the key used in the manifest.
     ///
@@ -226,7 +235,7 @@ impl PyPluginManager {
             ))
         })?;
 
-        for section_name in ["processor", "connection", "inventory"] {
+        for section_name in ["processor", "connection", "inventory", "transform"] {
             let Some(entries) = value
                 .get("tool")
                 .and_then(|tool| tool.get("genja"))
@@ -447,7 +456,8 @@ impl PyPluginManager {
     /// * `plugin` - A Python object implementing the plugin interface. The object
     ///   must define callable `name()` and `group()` methods that return non-empty
     ///   strings identifying the plugin. The plugin's group must be either
-    ///   "ProcessorPlugin", "ConnectionPlugin", or "InventoryPlugin".
+    ///   "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin", or
+    ///   "TransformFunctionPlugin".
     ///
     /// # Returns
     ///
@@ -498,7 +508,8 @@ impl PyPluginManager {
 /// - The plugin is missing required `name()` or `group()` methods
 /// - The plugin's `name()` or `group()` methods are not callable
 /// - The plugin's `name()` or `group()` returns an empty string
-/// - The plugin's group is not "ProcessorPlugin", "ConnectionPlugin", or "InventoryPlugin"
+/// - The plugin's group is not "ProcessorPlugin", "ConnectionPlugin",
+///   "InventoryPlugin", or "TransformFunctionPlugin"
 /// - Any Python error occurs during identity extraction
 ///
 /// # Errors
@@ -541,6 +552,15 @@ pub(crate) fn register_python_plugin_on_manager(
                 plugin: Arc::new(plugin),
             })));
         }
+        "TransformFunctionPlugin" => {
+            manager.register_plugin(Plugins::TransformFunction(Box::new(
+                PyTransformFunctionPlugin {
+                    name: declared_name,
+                    group: declared_group,
+                    plugin: Arc::new(plugin),
+                },
+            )));
+        }
         "ProcessorPlugin" => {
             manager.register_plugin(Plugins::Processor(Box::new(PyProcessorPlugin {
                 name: declared_name,
@@ -550,7 +570,7 @@ pub(crate) fn register_python_plugin_on_manager(
         }
         other => {
             return Err(PyValueError::new_err(format!(
-                "unsupported python plugin group '{other}'; only 'ProcessorPlugin', 'ConnectionPlugin', and 'InventoryPlugin' are currently supported"
+                "unsupported python plugin group '{other}'; only 'ProcessorPlugin', 'ConnectionPlugin', 'InventoryPlugin', and 'TransformFunctionPlugin' are currently supported"
             )));
         }
     }
@@ -823,6 +843,99 @@ impl PluginInventory for PyInventoryPlugin {
             python_inventory_to_rust_inventory(resolved.bind(py).clone())
                 .map_err(|err| InventoryLoadError::from(err.to_string()))
         })
+    }
+}
+
+struct PyTransformFunctionPlugin {
+    name: String,
+    group: String,
+    plugin: Arc<Py<PyAny>>,
+}
+
+impl Plugin for PyTransformFunctionPlugin {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn group(&self) -> String {
+        self.group.clone()
+    }
+}
+
+impl PluginTransformFunction for PyTransformFunctionPlugin {
+    fn transform_function(&self) -> TransformFunction {
+        TransformFunction::new_full(PyTransformBridge {
+            plugin: Arc::clone(&self.plugin),
+        })
+    }
+}
+
+struct PyTransformBridge {
+    plugin: Arc<Py<PyAny>>,
+}
+
+impl PyTransformBridge {
+    fn call_transform<T>(
+        &self,
+        method_name: &str,
+        value: &T,
+        options: Option<&TransformFunctionOptions>,
+    ) -> Result<Option<T>, String>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        Python::with_gil(|py| {
+            let plugin = self.plugin.bind(py);
+            if !plugin.hasattr(method_name).map_err(|err| err.to_string())? {
+                return Ok(None);
+            }
+
+            let value_payload =
+                serde_to_python_payload(py, value).map_err(|err| err.to_string())?;
+            let options_payload =
+                transform_options_to_python_payload(py, options).map_err(|err| err.to_string())?;
+            let result = plugin
+                .call_method1(
+                    method_name,
+                    (value_payload.bind(py), options_payload.bind(py)),
+                )
+                .map_err(|err| err.to_string())?;
+            let resolved =
+                resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
+            python_payload_to_rust_value(resolved.bind(py), "invalid transform payload")
+                .map(Some)
+                .map_err(|err| err.to_string())
+        })
+    }
+}
+
+impl Transform for PyTransformBridge {
+    fn transform_host(&self, host: &Host, options: Option<&TransformFunctionOptions>) -> Host {
+        match self.call_transform("transform_host", host, options) {
+            Ok(Some(host)) => host,
+            Ok(None) => host.clone(),
+            Err(err) => panic!("python transform plugin transform_host failed: {err}"),
+        }
+    }
+
+    fn transform_group(&self, group: &Group, options: Option<&TransformFunctionOptions>) -> Group {
+        match self.call_transform("transform_group", group, options) {
+            Ok(Some(group)) => group,
+            Ok(None) => group.clone(),
+            Err(err) => panic!("python transform plugin transform_group failed: {err}"),
+        }
+    }
+
+    fn transform_defaults(
+        &self,
+        defaults: &Defaults,
+        options: Option<&TransformFunctionOptions>,
+    ) -> Defaults {
+        match self.call_transform("transform_defaults", defaults, options) {
+            Ok(Some(defaults)) => defaults,
+            Ok(None) => defaults.clone(),
+            Err(err) => panic!("python transform plugin transform_defaults failed: {err}"),
+        }
     }
 }
 
@@ -1541,6 +1654,50 @@ fn build_python_processor_context<'py>(
     build_python_model(py, "genja_core.processor", "TaskProcessorContext", payload)
 }
 
+fn serde_to_python_payload<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
+where
+    T: Serialize,
+{
+    let dumped = serde_json::to_string(value)
+        .map_err(|err| PyValueError::new_err(format!("failed to serialize payload: {err}")))?;
+    let json = PyModule::import(py, "json")?;
+    Ok(json.call_method1("loads", (dumped,))?.unbind())
+}
+
+fn transform_options_to_python_payload(
+    py: Python<'_>,
+    options: Option<&TransformFunctionOptions>,
+) -> PyResult<Py<PyAny>> {
+    match options {
+        Some(options) => serde_to_python_payload(py, options),
+        None => Ok(py.None()),
+    }
+}
+
+fn python_payload_to_rust_value<T>(obj: &Bound<'_, PyAny>, error_prefix: &str) -> PyResult<T>
+where
+    T: DeserializeOwned,
+{
+    let normalized = if obj.hasattr("model_dump")? {
+        obj.call_method(
+            "model_dump",
+            (),
+            Some(&PyDict::from_sequence(
+                &[("mode", "json")].into_pyobject(obj.py())?,
+            )?),
+        )?
+    } else if obj.hasattr("to_dict")? {
+        obj.call_method0("to_dict")?
+    } else {
+        obj.clone()
+    };
+
+    let json = PyModule::import(obj.py(), "json")?;
+    let dumped: String = json.call_method1("dumps", (normalized,))?.extract()?;
+    serde_json::from_str(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("{error_prefix}: {err}")))
+}
+
 fn build_python_connection_key<'py>(py: Python<'py>, key: &ConnectionKey) -> PyResult<Py<PyAny>> {
     let payload = PyDict::new(py);
     payload.set_item("hostname", &key.hostname)?;
@@ -1828,6 +1985,36 @@ mod tests {
     }
 
     #[test]
+    fn register_plugin_adds_transform_plugin() {
+        init_python();
+        Python::with_gil(|py| {
+            let manager = PyPluginManager::new();
+            let plugin_class = import_fixture_attr(
+                py,
+                "tests.fixtures.transform_plugins",
+                "HostnameSuffixTransformPlugin",
+            )
+            .expect("fixture plugin class should import");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+
+            manager
+                .register_plugin(plugin)
+                .expect("transform plugin should register");
+
+            let names = manager
+                .plugin_names()
+                .expect("plugin names should be available");
+            assert!(names.iter().any(|name| name == "python_transform"));
+            let groups = manager
+                .plugin_names_and_groups()
+                .expect("plugin groups should be available");
+            assert!(groups
+                .iter()
+                .any(|(name, group)| name == "python_transform" && group == "TransformFunction"));
+        });
+    }
+
+    #[test]
     fn register_plugin_requires_name_and_group_methods() {
         init_python();
         Python::with_gil(|py| {
@@ -2027,6 +2214,55 @@ python_inventory = "inventory_plugins:StaticInventoryPlugin"
                 .plugin_names()
                 .expect("plugin names should be available");
             assert!(names.iter().any(|name| name == "python_inventory"));
+        });
+    }
+
+    #[test]
+    fn load_python_plugins_from_pyproject_registers_transform_plugins() {
+        init_python();
+        Python::with_gil(|py| {
+            let temp_dir = temp_test_dir("transform-pyproject");
+            let module_path = temp_dir.join("transform_plugins.py");
+            fs::write(
+                &module_path,
+                r#"
+from tests.fixtures.transform_plugins import HostnameSuffixTransformPlugin as BaseTransformPlugin
+
+class HostnameSuffixTransformPlugin(BaseTransformPlugin):
+    pass
+"#,
+            )
+            .expect("transform plugin fixture should be written");
+            let pyproject_path = temp_dir.join("pyproject.toml");
+            fs::write(
+                &pyproject_path,
+                r#"
+[tool.genja.plugins.transform]
+python_transform = "transform_plugins:HostnameSuffixTransformPlugin"
+"#,
+            )
+            .expect("pyproject should be written");
+
+            let sys = PyModule::import(py, "sys").expect("sys module should import");
+            let path = sys.getattr("path").expect("sys.path should exist");
+            path.call_method1("insert", (0, temp_dir.display().to_string()))
+                .expect("tempdir should be added to sys.path");
+
+            let manager = PyPluginManager::new();
+            manager
+                .load_python_plugins_from_pyproject(Some(pyproject_path.to_str().unwrap()))
+                .expect("transform plugin should load from pyproject");
+
+            path.call_method1("remove", (temp_dir.display().to_string(),))
+                .expect("tempdir should be removed from sys.path");
+            let modules = sys.getattr("modules").expect("sys.modules should exist");
+            modules.del_item("transform_plugins").unwrap_or(());
+            fs::remove_dir_all(&temp_dir).unwrap_or(());
+
+            let names = manager
+                .plugin_names()
+                .expect("plugin names should be available");
+            assert!(names.iter().any(|name| name == "python_transform"));
         });
     }
 

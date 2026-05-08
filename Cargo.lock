@@ -419,6 +419,7 @@ dependencies = [
  "genja-plugin-manager",
  "humantime",
  "pyo3",
+ "serde",
  "serde_json",
  "tokio",
  "toml",

@@ -36,6 +36,7 @@ from .task import (
     TaskSuccessResult,
     task,
 )
+from .transform import TransformFunctionPluginProtocol
 
 
 __doc__ = genja_core.__doc__
@@ -52,6 +53,7 @@ __all__ = list(__all__) + [
     "PluginManager",
     "TaskProcessorContext",
     "TaskProcessorProtocol",
+    "TransformFunctionPluginProtocol",
     "Settings",
     "CoreConfig",
     "InventoryConfig",

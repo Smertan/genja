@@ -31,6 +31,7 @@ from .task import (
     TaskSuccessResult,
     task,
 )
+from .transform import TransformFunctionPluginProtocol
 
 class HostTaskResult:
     @staticmethod
