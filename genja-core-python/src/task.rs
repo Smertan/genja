@@ -442,7 +442,7 @@ pub(crate) fn python_result_to_host_task_result(obj: Bound<'_, PyAny>) -> PyResu
 }
 
 pub(crate) fn python_result_to_task_results(obj: Bound<'_, PyAny>) -> PyResult<TaskResults> {
-    let value = normalize_python_json_payload(&obj, "invalid python task results")?;
+    let value = normalize_python_task_results_payload(&obj)?;
     json_to_task_results(&value)
 }
 
@@ -598,14 +598,14 @@ fn parse_message_level(level: &str) -> PyResult<MessageLevel> {
 
 fn parse_failure_kind(kind: &str) -> PyResult<TaskFailureKind> {
     match kind {
-        "connection" => Ok(TaskFailureKind::Connection),
-        "authentication" => Ok(TaskFailureKind::Authentication),
-        "validation" => Ok(TaskFailureKind::Validation),
-        "timeout" => Ok(TaskFailureKind::Timeout),
-        "command" => Ok(TaskFailureKind::Command),
-        "unsupported" => Ok(TaskFailureKind::Unsupported),
-        "internal" => Ok(TaskFailureKind::Internal),
-        "external" => Ok(TaskFailureKind::External),
+        "connection" | "Connection" => Ok(TaskFailureKind::Connection),
+        "authentication" | "Authentication" => Ok(TaskFailureKind::Authentication),
+        "validation" | "Validation" => Ok(TaskFailureKind::Validation),
+        "timeout" | "Timeout" => Ok(TaskFailureKind::Timeout),
+        "command" | "Command" => Ok(TaskFailureKind::Command),
+        "unsupported" | "Unsupported" => Ok(TaskFailureKind::Unsupported),
+        "internal" | "Internal" => Ok(TaskFailureKind::Internal),
+        "external" | "External" => Ok(TaskFailureKind::External),
         other => Err(PyValueError::new_err(format!(
             "unsupported task failure kind '{other}'"
         ))),
@@ -1029,6 +1029,17 @@ fn normalize_python_json_payload(obj: &Bound<'_, PyAny>, error_prefix: &str) -> 
         .map_err(|err| PyValueError::new_err(format!("{error_prefix}: {err}")))
 }
 
+fn normalize_python_task_results_payload(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if obj.hasattr("task_name")? && obj.hasattr("host_summary")? && obj.hasattr("task_summary")? {
+        let kwargs = PyDict::new(obj.py());
+        kwargs.set_item("raw", true)?;
+        let raw_payload = obj.call_method("to_dict", (), Some(&kwargs))?;
+        return normalize_python_json_payload(&raw_payload, "invalid python task results");
+    }
+
+    normalize_python_json_payload(obj, "invalid python task results")
+}
+
 fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
     let dumped = serde_json::to_string(value)
         .map_err(|err| PyValueError::new_err(format!("failed to serialize value: {err}")))?;
@@ -1086,6 +1097,7 @@ fn json_to_task_results(value: &Value) -> PyResult<TaskResults> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::genja_core::task::{TaskFailure, TaskFailureKind};
     use pyo3::types::PyModule;
     use pyo3::types::PyTuple;
     use std::path::PathBuf;
@@ -1385,6 +1397,39 @@ mod tests {
             assert_eq!(success.summary(), Some("async handled router1"));
             assert_eq!(success.metadata().unwrap()["current_depth"], json!(0));
             assert_eq!(success.metadata().unwrap()["max_depth"], json!(0));
+        });
+    }
+
+    #[test]
+    fn python_result_to_task_results_accepts_py_task_results_raw_shape() {
+        init_python();
+        Python::with_gil(|py| {
+            let mut results = TaskResults::new("backup");
+            results.insert_host_result(
+                "router1",
+                HostTaskResult::failed(
+                    TaskFailure::capture("boom").with_kind(TaskFailureKind::External),
+                ),
+            );
+            let payload = Py::new(
+                py,
+                PyTaskResults {
+                    inner: results.clone(),
+                },
+            )
+            .expect("task results wrapper should build");
+
+            let round_tripped = python_result_to_task_results(payload.bind(py).clone().into_any())
+                .expect("py task results should normalize through raw payload");
+
+            let host_result = round_tripped
+                .host_result("router1")
+                .expect("router1 result should exist");
+            assert!(host_result.failure().is_some());
+            assert!(matches!(
+                host_result.failure().map(|failure| failure.kind()),
+                Some(TaskFailureKind::External)
+            ));
         });
     }
 }
