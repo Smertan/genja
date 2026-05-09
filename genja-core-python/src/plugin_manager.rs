@@ -1916,7 +1916,6 @@ impl TaskProcessor for PyTaskProcessor {
     }
 }
 
-
 impl PyTaskProcessor {
     /// Invokes a Python processor hook method that operates on task-level results.
     ///
@@ -2554,9 +2553,15 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use genja_core::inventory::ConnectionManager;
+    use async_trait::async_trait;
+    use genja_core::inventory::{
+        BaseBuilderHost, ConnectionManager, Defaults, Group, Host, TransformFunctionOptions,
+    };
+    use genja_core::task::{
+        SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
+    };
     use genja_plugin_manager::connection_factory::build_connection_factory;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::env;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -2565,7 +2570,8 @@ mod tests {
     use tokio::runtime::Builder;
 
     fn run_async<F: std::future::Future>(future: F) -> F::Output {
-        Builder::new_current_thread()
+        Builder::new_multi_thread()
+            .worker_threads(2)
             .enable_all()
             .build()
             .expect("test runtime should build")
@@ -2648,6 +2654,35 @@ mod tests {
         ));
         fs::create_dir_all(&dir).expect("temp test dir should be created");
         dir
+    }
+
+    struct TestTask {
+        name: String,
+    }
+
+    impl TaskInfo for TestTask {
+        fn name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    impl SubTasks for TestTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    #[async_trait]
+    impl Task for TestTask {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary(format!("handled {}", self.name)),
+            ))
+        }
     }
 
     #[test]
@@ -2812,6 +2847,40 @@ mod tests {
     }
 
     #[test]
+    fn deregister_plugin_removes_registered_plugin() {
+        init_python();
+        Python::with_gil(|py| {
+            let manager = PyPluginManager::new();
+            let plugin_class = import_fixture_attr(
+                py,
+                "tests.fixtures.inventory_plugins",
+                "StaticInventoryPlugin",
+            )
+            .expect("fixture plugin class should import");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+            manager
+                .register_plugin(plugin)
+                .expect("inventory plugin should register");
+
+            let deregistered = manager
+                .deregister_plugin("python_inventory")
+                .expect("deregister should succeed");
+            assert_eq!(deregistered, Some("python_inventory".to_string()));
+            assert!(!manager
+                .plugin_names()
+                .expect("plugin names should be available")
+                .iter()
+                .any(|name| name == "python_inventory"));
+            assert_eq!(
+                manager
+                    .deregister_plugin("python_inventory")
+                    .expect("second deregister should succeed"),
+                None
+            );
+        });
+    }
+
+    #[test]
     fn register_plugin_requires_name_and_group_methods() {
         init_python();
         Python::with_gil(|py| {
@@ -2852,6 +2921,46 @@ mod tests {
             assert!(err
                 .to_string()
                 .contains("unsupported python plugin group 'UnknownPlugin'"));
+        });
+    }
+
+    #[test]
+    fn consumed_manager_rejects_remaining_public_methods() {
+        init_python();
+        Python::with_gil(|py| {
+            let manager = PyPluginManager::new();
+            let plugin_class = import_fixture_attr(
+                py,
+                "tests.fixtures.processor_plugins",
+                "MinimalAuditProcessor",
+            )
+            .expect("fixture plugin class should import");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+            manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+
+            let temp_dir = temp_test_dir("consumed-pyproject");
+            let pyproject_path = temp_dir.join("pyproject.toml");
+            fs::write(
+                &pyproject_path,
+                r#"
+[tool.genja.plugins.processor]
+audit = "tests.fixtures.processor_plugins:MinimalAuditProcessor"
+"#,
+            )
+            .expect("pyproject should be written");
+
+            assert!(manager.plugin_names_and_groups().is_err());
+            assert!(manager.deregister_plugin("audit").is_err());
+            assert!(manager.register_plugin(plugin).is_err());
+            assert!(manager
+                .load_python_plugins_from_pyproject(Some(pyproject_path.to_str().unwrap()))
+                .is_err());
+            assert!(manager
+                .load_rust_plugins_from_directory("/definitely/missing")
+                .is_err());
+            fs::remove_dir_all(&temp_dir).unwrap_or(());
         });
     }
 
@@ -3109,6 +3218,177 @@ python_transform = "transform_plugins:HostnameSuffixTransformPlugin"
                 .plugin_names()
                 .expect("plugin names should be available");
             assert!(names.iter().any(|name| name == "python_transform"));
+        });
+    }
+
+    #[test]
+    fn load_python_plugins_from_pyproject_rejects_name_mismatch() {
+        init_python();
+        Python::with_gil(|py| {
+            let temp_dir = temp_test_dir("name-mismatch-pyproject");
+            let module_path = temp_dir.join("processor_plugins.py");
+            fs::write(
+                &module_path,
+                r#"
+from tests.fixtures.processor_plugins import MinimalAuditProcessor
+"#,
+            )
+            .expect("processor plugin fixture should be written");
+            let pyproject_path = temp_dir.join("pyproject.toml");
+            fs::write(
+                &pyproject_path,
+                r#"
+[tool.genja.plugins.processor]
+wrong_name = "processor_plugins:MinimalAuditProcessor"
+"#,
+            )
+            .expect("pyproject should be written");
+
+            let sys = PyModule::import(py, "sys").expect("sys module should import");
+            let path = sys.getattr("path").expect("sys.path should exist");
+            path.call_method1("insert", (0, temp_dir.display().to_string()))
+                .expect("tempdir should be added to sys.path");
+
+            let manager = PyPluginManager::new();
+            let err = manager
+                .load_python_plugins_from_pyproject(Some(pyproject_path.to_str().unwrap()))
+                .expect_err("name mismatch should fail");
+
+            path.call_method1("remove", (temp_dir.display().to_string(),))
+                .expect("tempdir should be removed from sys.path");
+            let modules = sys.getattr("modules").expect("sys.modules should exist");
+            modules.del_item("processor_plugins").unwrap_or(());
+            fs::remove_dir_all(&temp_dir).unwrap_or(());
+
+            assert!(err.to_string().contains("plugin name mismatch"));
+        });
+    }
+
+    #[test]
+    fn load_python_plugins_from_pyproject_rejects_non_string_entry() {
+        init_python();
+        Python::with_gil(|_py| {
+            let temp_dir = temp_test_dir("non-string-pyproject");
+            let pyproject_path = temp_dir.join("pyproject.toml");
+            fs::write(
+                &pyproject_path,
+                r#"
+[tool.genja.plugins.processor]
+audit = { path = "processor_plugins:MinimalAuditProcessor" }
+"#,
+            )
+            .expect("pyproject should be written");
+
+            let manager = PyPluginManager::new();
+            let err = manager
+                .load_python_plugins_from_pyproject(Some(pyproject_path.to_str().unwrap()))
+                .expect_err("non-string entry should fail");
+            fs::remove_dir_all(&temp_dir).unwrap_or(());
+
+            assert!(err.to_string().contains("must be a string import path"));
+        });
+    }
+
+    #[test]
+    fn transform_plugin_falls_back_for_missing_group_and_defaults_methods() {
+        init_python();
+        Python::with_gil(|py| {
+            let manager = PyPluginManager::new();
+            let plugin_class = import_fixture_attr(
+                py,
+                "tests.fixtures.transform_plugins",
+                "HostOnlyTransformPlugin",
+            )
+            .expect("fixture plugin class should import");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+            manager
+                .register_plugin(plugin)
+                .expect("transform plugin should register");
+
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let transform = inner
+                .get_transform_function_plugin("python_host_only_transform")
+                .expect("transform plugin should exist")
+                .transform_function();
+            let options = TransformFunctionOptions::new(json!({"suffix": "-lab"}));
+
+            let host = Host::builder().hostname("10.0.0.1").platform("ios").build();
+            let group = Group::builder().platform("nxos").build();
+            let defaults = Defaults::builder().port(22).build();
+
+            let transformed_host = transform.transform_host(&host, Some(&options));
+            let transformed_group = transform.transform_group(&group, Some(&options));
+            let transformed_defaults = transform.transform_defaults(&defaults, Some(&options));
+
+            assert_eq!(transformed_host.hostname(), Some("10.0.0.1-lab"));
+            assert_eq!(transformed_group.platform(), group.platform());
+            assert_eq!(transformed_group.port(), group.port());
+            assert_eq!(transformed_defaults.port(), defaults.port());
+            assert_eq!(transformed_defaults.platform(), defaults.platform());
+        });
+    }
+
+    #[test]
+    fn runner_plugin_run_tasks_uses_python_run_tasks_when_available() {
+        init_python();
+        Python::with_gil(|py| {
+            let manager = PyPluginManager::new();
+            let plugin_class =
+                import_fixture_attr(py, "tests.fixtures.runner_plugins", "BatchRunnerPlugin")
+                    .expect("fixture plugin class should import");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+            manager
+                .register_plugin(plugin)
+                .expect("runner plugin should register");
+
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let runner = inner
+                .get_runner_plugin("python_batch_runner")
+                .expect("runner plugin should exist");
+
+            let mut hosts = genja_core::inventory::Hosts::new();
+            hosts.add_host(
+                "router1",
+                Host::builder().hostname("10.0.0.1").platform("ios").build(),
+            );
+            hosts.add_host(
+                "router2",
+                Host::builder()
+                    .hostname("10.0.0.2")
+                    .platform("nxos")
+                    .build(),
+            );
+
+            let mut tasks = Tasks::new();
+            tasks.add_task(TestTask {
+                name: "task_a".to_string(),
+            });
+            tasks.add_task(TestTask {
+                name: "task_b".to_string(),
+            });
+
+            let results = run_async(
+                runner.run_tasks(
+                    &tasks,
+                    &hosts,
+                    None,
+                    &RunnerConfig::builder()
+                        .plugin("python_batch_runner")
+                        .build(),
+                    2,
+                ),
+            )
+            .expect("run_tasks should succeed");
+
+            assert_eq!(results.len(), 2);
+            assert_eq!(results[0].task_name(), "task_a");
+            assert_eq!(results[1].task_name(), "task_b");
+            assert_eq!(results[0].passed_hosts().len(), 2);
+            assert_eq!(results[1].passed_hosts().len(), 2);
         });
     }
 
