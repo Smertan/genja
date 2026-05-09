@@ -11,6 +11,7 @@ Python-authored plugins currently support these groups:
 - ``ConnectionPlugin``
 - ``ProcessorPlugin``
 - ``InventoryPlugin``
+- ``RunnerPlugin``
 - ``TransformFunctionPlugin``
 """
 

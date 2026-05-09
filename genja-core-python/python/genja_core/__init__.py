@@ -16,6 +16,7 @@ from .connection import (
 from .inventory import InventoryPluginProtocol
 from .plugin_manager import PluginManager
 from .processor import TaskProcessorContext, TaskProcessorProtocol
+from .runner import RunnerPluginProtocol
 from .settings import (
     CoreConfig,
     InventoryConfig,
@@ -53,6 +54,7 @@ __all__ = list(__all__) + [
     "PluginManager",
     "TaskProcessorContext",
     "TaskProcessorProtocol",
+    "RunnerPluginProtocol",
     "TransformFunctionPluginProtocol",
     "Settings",
     "CoreConfig",

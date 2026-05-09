@@ -2,7 +2,7 @@
 //!
 //! This module provides PyO3-based wrappers that expose Rust plugin functionality
 //! to Python code. It enables Python developers to create and register plugins
-//! (connection, inventory, transform-function, and processor types) that
+//! (connection, inventory, runner, transform-function, and processor types) that
 //! integrate seamlessly with the Rust plugin system.
 //!
 //! # Architecture
@@ -25,6 +25,9 @@
 //! - **`PyTransformFunctionPlugin`**: Adapter for Python transform plugins that
 //!   bridge host/group/defaults transforms through JSON-compatible payloads.
 //!
+//! - **`PyRunnerPlugin`**: Adapter for Python runner plugins that orchestrate
+//!   task execution using Python-defined host ordering or rollout behavior.
+//!
 //! - **`PyProcessorPlugin`**: Adapter for Python processor plugins with lifecycle
 //!   hook support.
 //!
@@ -44,12 +47,16 @@ use genja_core::inventory::{
     Connection, ConnectionKey, Defaults, Group, Host, Inventory, ResolvedConnectionParams,
     Transform, TransformFunction, TransformFunctionOptions,
 };
-use genja_core::settings::Settings;
-use genja_core::task::{HostTaskResult, TaskProcessor, TaskProcessorContext, TaskResults};
+use genja_core::settings::{RunnerConfig, Settings};
+use genja_core::task::{
+    HostTaskResult, TaskConnectionResolver, TaskDefinition, TaskProcessor, TaskProcessorContext,
+    TaskResults, Tasks,
+};
 use genja_core::InventoryLoadError;
 use genja_plugin_manager::connection_factory::PluginConnectionAdapter;
 use genja_plugin_manager::plugin_types::{
-    Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginTransformFunction, Plugins,
+    Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
+    PluginTransformFunction, Plugins,
 };
 use genja_plugin_manager::PluginManager;
 use pyo3::exceptions::PyValueError;
@@ -61,10 +68,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::runtime::python_inventory_to_rust_inventory;
-use crate::settings::PySettings;
+use crate::settings::{PyRunnerConfig, PySettings};
 use crate::task::{
-    python_result_to_host_task_result, python_result_to_task_results, PyHostTaskResult,
-    PyTaskResults,
+    hosts_to_py_dict, python_result_to_host_task_result, python_result_to_task_results,
+    PyHostTaskResult, PyTaskConnectionResolver, PyTaskDefinition, PyTaskResults,
 };
 
 /// A Python-exposed wrapper around the Rust `PluginManager`.
@@ -150,6 +157,7 @@ impl PyPluginManager {
     /// logic. The plugin must implement the required plugin interface methods
     /// (`name()` and `group()`) and belong to a supported plugin group
     /// (currently "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin",
+    /// "RunnerPlugin",
     /// or "TransformFunctionPlugin").
     ///
     /// # Parameters
@@ -167,7 +175,9 @@ impl PyPluginManager {
     /// - The plugin is missing required `name()` or `group()` methods
     /// - The plugin's `name()` or `group()` methods are not callable
     /// - The plugin's `name()` or `group()` returns an empty string
-    /// - The plugin's group is not a supported type ("ProcessorPlugin", "ConnectionPlugin", or "InventoryPlugin")
+    /// - The plugin's group is not a supported type ("ProcessorPlugin",
+    ///   "ConnectionPlugin", "InventoryPlugin", "RunnerPlugin", or
+    ///   "TransformFunctionPlugin")
     ///
     /// # Errors
     ///
@@ -181,7 +191,8 @@ impl PyPluginManager {
     ///
     /// This method reads plugin definitions from the `[tool.genja.plugins]` section
     /// of a `pyproject.toml` file and registers them with the plugin manager. It
-    /// supports "processor", "connection", "inventory", and "transform" plugin
+    /// supports "processor", "connection", "inventory", "runner", and
+    /// "transform" plugin
     /// types. Each plugin entry
     /// must specify an import path in the format `module:attribute`, and the plugin's
     /// declared name (from its `name()` method) must match the key used in the manifest.
@@ -235,7 +246,13 @@ impl PyPluginManager {
             ))
         })?;
 
-        for section_name in ["processor", "connection", "inventory", "transform"] {
+        for section_name in [
+            "processor",
+            "connection",
+            "inventory",
+            "runner",
+            "transform",
+        ] {
             let Some(entries) = value
                 .get("tool")
                 .and_then(|tool| tool.get("genja"))
@@ -456,7 +473,7 @@ impl PyPluginManager {
     /// * `plugin` - A Python object implementing the plugin interface. The object
     ///   must define callable `name()` and `group()` methods that return non-empty
     ///   strings identifying the plugin. The plugin's group must be either
-    ///   "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin", or
+    ///   "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin", "RunnerPlugin", or
     ///   "TransformFunctionPlugin".
     ///
     /// # Returns
@@ -509,7 +526,7 @@ impl PyPluginManager {
 /// - The plugin's `name()` or `group()` methods are not callable
 /// - The plugin's `name()` or `group()` returns an empty string
 /// - The plugin's group is not "ProcessorPlugin", "ConnectionPlugin",
-///   "InventoryPlugin", or "TransformFunctionPlugin"
+///   "InventoryPlugin", "RunnerPlugin", or "TransformFunctionPlugin"
 /// - Any Python error occurs during identity extraction
 ///
 /// # Errors
@@ -552,6 +569,13 @@ pub(crate) fn register_python_plugin_on_manager(
                 plugin: Arc::new(plugin),
             })));
         }
+        "RunnerPlugin" => {
+            manager.register_plugin(Plugins::Runner(Box::new(PyRunnerPlugin {
+                name: declared_name,
+                group: declared_group,
+                plugin: Arc::new(plugin),
+            })));
+        }
         "TransformFunctionPlugin" => {
             manager.register_plugin(Plugins::TransformFunction(Box::new(
                 PyTransformFunctionPlugin {
@@ -570,7 +594,7 @@ pub(crate) fn register_python_plugin_on_manager(
         }
         other => {
             return Err(PyValueError::new_err(format!(
-                "unsupported python plugin group '{other}'; only 'ProcessorPlugin', 'ConnectionPlugin', 'InventoryPlugin', and 'TransformFunctionPlugin' are currently supported"
+                "unsupported python plugin group '{other}'; only 'ProcessorPlugin', 'ConnectionPlugin', 'InventoryPlugin', 'RunnerPlugin', and 'TransformFunctionPlugin' are currently supported"
             )));
         }
     }
@@ -936,6 +960,158 @@ impl Transform for PyTransformBridge {
             Ok(None) => defaults.clone(),
             Err(err) => panic!("python transform plugin transform_defaults failed: {err}"),
         }
+    }
+}
+
+struct PyRunnerPlugin {
+    name: String,
+    group: String,
+    plugin: Arc<Py<PyAny>>,
+}
+
+impl Plugin for PyRunnerPlugin {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn group(&self) -> String {
+        self.group.clone()
+    }
+}
+
+#[async_trait]
+impl PluginRunner for PyRunnerPlugin {
+    async fn run(
+        &self,
+        task: &TaskDefinition,
+        hosts: &genja_core::inventory::Hosts,
+        connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+        runner_config: &RunnerConfig,
+        max_depth: usize,
+    ) -> Result<TaskResults, genja_core::GenjaError> {
+        Python::with_gil(|py| {
+            let plugin = self.plugin.bind(py);
+            let task_payload = Py::new(py, PyTaskDefinition::from_runtime_definition(task.clone()))
+                .map_err(python_processor_error)?;
+            let hosts_payload = hosts_to_py_dict(py, hosts).map_err(python_processor_error)?;
+            let resolver_payload = match connection_resolver {
+                Some(ref resolver) => Py::new(
+                    py,
+                    PyTaskConnectionResolver {
+                        inner: Some(Arc::clone(resolver)),
+                    },
+                )
+                .map(|resolver| resolver.into_any())
+                .map_err(python_processor_error)?,
+                None => py.None(),
+            };
+            let runner_payload = Py::new(
+                py,
+                PyRunnerConfig {
+                    inner: runner_config.clone(),
+                },
+            )
+            .map_err(python_processor_error)?;
+            let result = plugin
+                .call_method1(
+                    "run",
+                    (
+                        task_payload.bind(py),
+                        hosts_payload.bind(py),
+                        resolver_payload.bind(py),
+                        runner_payload.bind(py),
+                        max_depth,
+                    ),
+                )
+                .map_err(python_processor_error)?;
+            let resolved =
+                resolve_python_maybe_awaitable(py, result).map_err(python_processor_error)?;
+            python_result_to_task_results(resolved.bind(py).clone()).map_err(python_processor_error)
+        })
+    }
+
+    async fn run_tasks(
+        &self,
+        tasks: &Tasks,
+        hosts: &genja_core::inventory::Hosts,
+        connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+        runner_config: &RunnerConfig,
+        max_depth: usize,
+    ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
+        let has_run_tasks = Python::with_gil(|py| {
+            self.plugin
+                .bind(py)
+                .hasattr("run_tasks")
+                .map_err(python_processor_error)
+        })?;
+        if !has_run_tasks {
+            let mut results = Vec::with_capacity(tasks.len());
+            for task in tasks.iter() {
+                results.push(
+                    self.run(
+                        task,
+                        hosts,
+                        connection_resolver.clone(),
+                        runner_config,
+                        max_depth,
+                    )
+                    .await?,
+                );
+            }
+            return Ok(results);
+        }
+
+        Python::with_gil(|py| {
+            let plugin = self.plugin.bind(py);
+            let task_payloads = tasks
+                .iter()
+                .map(|task| Py::new(py, PyTaskDefinition::from_runtime_definition(task.clone())))
+                .collect::<PyResult<Vec<_>>>()
+                .map_err(python_processor_error)?;
+            let hosts_payload = hosts_to_py_dict(py, hosts).map_err(python_processor_error)?;
+            let resolver_payload = match connection_resolver {
+                Some(ref resolver) => Py::new(
+                    py,
+                    PyTaskConnectionResolver {
+                        inner: Some(Arc::clone(resolver)),
+                    },
+                )
+                .map(|resolver| resolver.into_any())
+                .map_err(python_processor_error)?,
+                None => py.None(),
+            };
+            let runner_payload = Py::new(
+                py,
+                PyRunnerConfig {
+                    inner: runner_config.clone(),
+                },
+            )
+            .map_err(python_processor_error)?;
+            let result = plugin
+                .call_method1(
+                    "run_tasks",
+                    (
+                        task_payloads,
+                        hosts_payload.bind(py),
+                        resolver_payload.bind(py),
+                        runner_payload.bind(py),
+                        max_depth,
+                    ),
+                )
+                .map_err(python_processor_error)?;
+            let resolved =
+                resolve_python_maybe_awaitable(py, result).map_err(python_processor_error)?;
+            let sequence = resolved
+                .bind(py)
+                .try_iter()
+                .map_err(python_processor_error)?;
+            let mut results = Vec::new();
+            for item in sequence {
+                let item = item.map_err(python_processor_error)?;
+                results.push(python_result_to_task_results(item).map_err(python_processor_error)?);
+            }
+            Ok(results)
+        })
     }
 }
 
@@ -1985,6 +2161,36 @@ mod tests {
     }
 
     #[test]
+    fn register_plugin_adds_runner_plugin() {
+        init_python();
+        Python::with_gil(|py| {
+            let manager = PyPluginManager::new();
+            let plugin_class = import_fixture_attr(
+                py,
+                "tests.fixtures.runner_plugins",
+                "FirstHostOnlyRunnerPlugin",
+            )
+            .expect("fixture plugin class should import");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+
+            manager
+                .register_plugin(plugin)
+                .expect("runner plugin should register");
+
+            let names = manager
+                .plugin_names()
+                .expect("plugin names should be available");
+            assert!(names.iter().any(|name| name == "python_runner"));
+            let groups = manager
+                .plugin_names_and_groups()
+                .expect("plugin groups should be available");
+            assert!(groups
+                .iter()
+                .any(|(name, group)| name == "python_runner" && group == "Runner"));
+        });
+    }
+
+    #[test]
     fn register_plugin_adds_transform_plugin() {
         init_python();
         Python::with_gil(|py| {
@@ -2054,7 +2260,7 @@ mod tests {
                 .expect_err("unsupported plugin group should fail");
             assert!(err
                 .to_string()
-                .contains("unsupported python plugin group 'RunnerPlugin'"));
+                .contains("unsupported python plugin group 'UnknownPlugin'"));
         });
     }
 
@@ -2214,6 +2420,55 @@ python_inventory = "inventory_plugins:StaticInventoryPlugin"
                 .plugin_names()
                 .expect("plugin names should be available");
             assert!(names.iter().any(|name| name == "python_inventory"));
+        });
+    }
+
+    #[test]
+    fn load_python_plugins_from_pyproject_registers_runner_plugins() {
+        init_python();
+        Python::with_gil(|py| {
+            let temp_dir = temp_test_dir("runner-pyproject");
+            let module_path = temp_dir.join("runner_plugins.py");
+            fs::write(
+                &module_path,
+                r#"
+from tests.fixtures.runner_plugins import FirstHostOnlyRunnerPlugin as BaseRunnerPlugin
+
+class FirstHostOnlyRunnerPlugin(BaseRunnerPlugin):
+    pass
+"#,
+            )
+            .expect("runner plugin fixture should be written");
+            let pyproject_path = temp_dir.join("pyproject.toml");
+            fs::write(
+                &pyproject_path,
+                r#"
+[tool.genja.plugins.runner]
+python_runner = "runner_plugins:FirstHostOnlyRunnerPlugin"
+"#,
+            )
+            .expect("pyproject should be written");
+
+            let sys = PyModule::import(py, "sys").expect("sys module should import");
+            let path = sys.getattr("path").expect("sys.path should exist");
+            path.call_method1("insert", (0, temp_dir.display().to_string()))
+                .expect("tempdir should be added to sys.path");
+
+            let manager = PyPluginManager::new();
+            manager
+                .load_python_plugins_from_pyproject(Some(pyproject_path.to_str().unwrap()))
+                .expect("runner plugin should load from pyproject");
+
+            path.call_method1("remove", (temp_dir.display().to_string(),))
+                .expect("tempdir should be removed from sys.path");
+            let modules = sys.getattr("modules").expect("sys.modules should exist");
+            modules.del_item("runner_plugins").unwrap_or(());
+            fs::remove_dir_all(&temp_dir).unwrap_or(());
+
+            let names = manager
+                .plugin_names()
+                .expect("plugin names should be available");
+            assert!(names.iter().any(|name| name == "python_runner"));
         });
     }
 

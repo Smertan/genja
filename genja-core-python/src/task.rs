@@ -1,9 +1,9 @@
 use ::genja::Genja as RuntimeGenja;
-use ::genja_core::inventory::{ConnectionKey, Host};
+use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
-    HostTaskResult, MessageLevel, SubTasks, Task, TaskError, TaskFailure, TaskFailureKind,
-    TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskRuntimeContext, TaskSkip,
-    TaskSuccess,
+    HostTaskResult, MessageLevel, SubTasks, Task, TaskConnectionResolver, TaskDefinition,
+    TaskError, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
+    TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess,
 };
 use async_trait::async_trait;
 use humantime::format_rfc3339;
@@ -184,7 +184,14 @@ impl PythonBackedTask {
 #[pyclass(name = "TaskDefinition")]
 #[derive(Clone)]
 pub struct PyTaskDefinition {
-    spec: PythonTaskSpec,
+    spec: Option<PythonTaskSpec>,
+    inner: TaskDefinition,
+}
+
+#[pyclass(name = "TaskConnectionResolver")]
+#[derive(Clone)]
+pub struct PyTaskConnectionResolver {
+    pub(crate) inner: Option<Arc<dyn TaskConnectionResolver>>,
 }
 
 #[pymethods]
@@ -192,47 +199,115 @@ impl PyTaskDefinition {
     #[staticmethod]
     fn from_python_class(py_task_class: Bound<'_, PyAny>) -> PyResult<Self> {
         let spec = extract_python_task_spec(py_task_class)?;
-        Ok(Self { spec })
+        Ok(Self {
+            inner: task_definition_from_spec(&spec),
+            spec: Some(spec),
+        })
     }
 
     #[getter]
     fn name(&self) -> String {
-        self.spec.name.clone()
+        self.inner.name().to_string()
     }
 
     #[getter]
     fn connection_plugin_name(&self) -> Option<String> {
-        self.spec.connection_plugin_name.clone()
+        self.inner.connection_plugin_name().map(str::to_owned)
     }
 
     #[getter]
     fn sub_tasks(&self) -> Vec<Self> {
-        self.spec
-            .sub_tasks
-            .iter()
-            .cloned()
-            .map(|spec| Self { spec })
+        if let Some(spec) = self.spec.as_ref() {
+            return spec
+                .sub_tasks
+                .iter()
+                .cloned()
+                .map(|spec| Self {
+                    inner: task_definition_from_spec(&spec),
+                    spec: Some(spec),
+                })
+                .collect();
+        }
+
+        self.inner
+            .as_task()
+            .sub_tasks()
+            .into_iter()
+            .map(|task| Self {
+                inner: TaskDefinition::new(RuntimeTaskWrapper { inner: task }),
+                spec: None,
+            })
             .collect()
     }
 
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_value_to_py(py, &python_task_spec_to_json(&self.spec))
+        match self.spec.as_ref() {
+            Some(spec) => json_value_to_py(py, &python_task_spec_to_json(spec)),
+            None => json_value_to_py(py, &task_definition_to_json(&self.inner)),
+        }
     }
 
-    fn run_on_host(&self, host: Bound<'_, PyAny>) -> PyResult<PyHostTaskResult> {
+    #[pyo3(signature = (host, connection_resolver=None, max_depth=0))]
+    fn run_on_host(
+        &self,
+        host: Bound<'_, PyAny>,
+        connection_resolver: Option<PyRef<'_, PyTaskConnectionResolver>>,
+        max_depth: usize,
+    ) -> PyResult<PyTaskResults> {
         let host = python_host_to_rust_host(host)?;
-        let result = task_from_spec(&self.spec)
-            .run_python(&host, 0, None, None)
-            .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
-        Ok(PyHostTaskResult { inner: result })
+        let mut hosts = Hosts::new();
+        let host_id = host.hostname().unwrap_or("host").to_string();
+        hosts.add_host(host_id, host);
+        let inner = run_task_definition_on_hosts(
+            &self.inner,
+            &hosts,
+            connection_resolver.and_then(|resolver| resolver.inner.clone()),
+            max_depth,
+        )
+        .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
+        Ok(PyTaskResults { inner })
+    }
+
+    #[pyo3(signature = (hosts, connection_resolver=None, max_depth=0))]
+    fn run_on_hosts(
+        &self,
+        hosts: Bound<'_, PyAny>,
+        connection_resolver: Option<PyRef<'_, PyTaskConnectionResolver>>,
+        max_depth: usize,
+    ) -> PyResult<PyTaskResults> {
+        let hosts = python_hosts_to_rust_hosts(hosts)?;
+        let inner = run_task_definition_on_hosts(
+            &self.inner,
+            &hosts,
+            connection_resolver.and_then(|resolver| resolver.inner.clone()),
+            max_depth,
+        )
+        .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
+        Ok(PyTaskResults { inner })
     }
 
     fn __repr__(&self) -> String {
         format!(
             "TaskDefinition(name={:?}, connection_plugin_name={:?}, sub_tasks={})",
-            self.spec.name,
-            self.spec.connection_plugin_name,
-            self.spec.sub_tasks.len()
+            self.name(),
+            self.connection_plugin_name(),
+            self.sub_tasks().len()
+        )
+    }
+}
+
+impl PyTaskDefinition {
+    pub(crate) fn from_runtime_definition(inner: TaskDefinition) -> Self {
+        Self { spec: None, inner }
+    }
+}
+
+#[pymethods]
+impl PyTaskConnectionResolver {
+    fn __repr__(&self) -> String {
+        format!(
+            "TaskConnectionResolver(available={})",
+            self.inner.as_ref().is_some()
         )
     }
 }
@@ -275,6 +350,10 @@ impl PyTaskResults {
             .into_iter()
             .map(|host| host.to_string())
             .collect()
+    }
+
+    fn merge(&mut self, other: PyRef<'_, PyTaskResults>) {
+        self.inner.merge(other.inner.clone());
     }
 
     fn host_summary(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -352,6 +431,7 @@ pub fn run_task(
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyHostTaskResult>()?;
     module.add_class::<PyTaskDefinition>()?;
+    module.add_class::<PyTaskConnectionResolver>()?;
     module.add_class::<PyTaskResults>()?;
     Ok(())
 }
@@ -506,10 +586,10 @@ fn json_to_task_message(value: &Value) -> PyResult<TaskMessage> {
 
 fn parse_message_level(level: &str) -> PyResult<MessageLevel> {
     match level {
-        "info" => Ok(MessageLevel::Info),
-        "warning" | "warn" => Ok(MessageLevel::Warning),
-        "error" => Ok(MessageLevel::Error),
-        "debug" => Ok(MessageLevel::Debug),
+        "info" | "Info" => Ok(MessageLevel::Info),
+        "warning" | "warn" | "Warning" | "Warn" => Ok(MessageLevel::Warning),
+        "error" | "Error" => Ok(MessageLevel::Error),
+        "debug" | "Debug" => Ok(MessageLevel::Debug),
         other => Err(PyValueError::new_err(format!(
             "unsupported task message level '{other}'"
         ))),
@@ -622,6 +702,70 @@ fn format_timestamp(timestamp: SystemTime) -> String {
     format_rfc3339(timestamp).to_string()
 }
 
+fn task_definition_to_json(task_definition: &TaskDefinition) -> Value {
+    task_to_json(task_definition.as_task())
+}
+
+fn task_to_json(task: &dyn Task) -> Value {
+    json!({
+        "name": task.name(),
+        "connection_plugin_name": task.connection_plugin_name(),
+        "processors": task.processor_names(),
+        "options": task.options(),
+        "sub_task": task.sub_tasks().into_iter().next().map(|sub_task| task_to_json(sub_task.as_ref())),
+    })
+}
+
+fn run_task_definition_on_hosts(
+    task_definition: &TaskDefinition,
+    hosts: &Hosts,
+    connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+    max_depth: usize,
+) -> Result<TaskResults, ::genja_core::GenjaError> {
+    let future = async {
+        let started_at = SystemTime::now();
+        let mut results = TaskResults::new(task_definition.name()).with_started_at(started_at);
+        task_definition.process_task_start(&mut results)?;
+
+        for (host_id, host) in hosts.iter() {
+            let mut host_results = TaskResults::new(task_definition.name());
+            task_definition
+                .start_with_connection_resolver(
+                    host_id.as_str(),
+                    host,
+                    &mut host_results,
+                    connection_resolver.as_deref(),
+                    max_depth,
+                )
+                .await?;
+            results.merge(host_results);
+        }
+
+        let finished_at = SystemTime::now();
+        let duration_ns = finished_at
+            .duration_since(started_at)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        results = results
+            .with_finished_at(finished_at)
+            .with_duration_ns(duration_ns);
+        task_definition.process_task_finish(&mut results)?;
+        Ok(results)
+    };
+
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        tokio::task::block_in_place(|| handle.block_on(future))
+    } else {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| {
+                ::genja_core::GenjaError::Message(format!("failed to build async runtime: {err}"))
+            })?;
+        runtime.block_on(future)
+    }
+}
+
 fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonTaskSpec> {
     let class_dict = py_task_class.getattr("__dict__")?;
     let info_obj = class_dict
@@ -699,6 +843,10 @@ fn task_from_spec(spec: &PythonTaskSpec) -> PythonBackedTask {
     }
 }
 
+fn task_definition_from_spec(spec: &PythonTaskSpec) -> TaskDefinition {
+    TaskDefinition::new(task_from_spec(spec))
+}
+
 fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
     json!({
         "name": spec.name,
@@ -762,6 +910,14 @@ pub(crate) fn host_to_py_dict<'py>(py: Python<'py>, host: &Host) -> PyResult<Bou
     Ok(payload)
 }
 
+pub(crate) fn hosts_to_py_dict(py: Python<'_>, hosts: &Hosts) -> PyResult<Py<PyAny>> {
+    let payload = PyDict::new(py);
+    for (host_id, host) in hosts.iter() {
+        payload.set_item(host_id.as_str(), host_to_py_dict(py, host)?)?;
+    }
+    Ok(payload.into_any().unbind())
+}
+
 pub(crate) fn python_host_to_rust_host(obj: Bound<'_, PyAny>) -> PyResult<Host> {
     let normalized = if obj.hasattr("model_dump")? {
         obj.call_method(
@@ -785,8 +941,65 @@ pub(crate) fn python_host_to_rust_host(obj: Bound<'_, PyAny>) -> PyResult<Host> 
         .map_err(|err| PyValueError::new_err(format!("invalid host payload: {err}")))
 }
 
+pub(crate) fn python_hosts_to_rust_hosts(obj: Bound<'_, PyAny>) -> PyResult<Hosts> {
+    let dict = obj.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("hosts must be a dict mapping host id to host payload")
+    })?;
+
+    let mut hosts = Hosts::new();
+    for (host_id, host_obj) in dict.iter() {
+        let host_id: String = host_id.extract()?;
+        let host = python_host_to_rust_host(host_obj)?;
+        hosts.add_host(host_id, host);
+    }
+    Ok(hosts)
+}
+
 fn python_task_error(err: PyErr) -> TaskError {
     TaskError::new(std::io::Error::other(err.to_string()))
+}
+
+struct RuntimeTaskWrapper {
+    inner: Arc<dyn Task>,
+}
+
+impl TaskInfo for RuntimeTaskWrapper {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn connection_plugin_name(&self) -> Option<&str> {
+        self.inner.connection_plugin_name()
+    }
+
+    fn get_connection_key(&self, hostname: &str) -> Option<ConnectionKey> {
+        self.inner.get_connection_key(hostname)
+    }
+
+    fn processor_names(&self) -> Vec<&str> {
+        self.inner.processor_names()
+    }
+
+    fn options(&self) -> Option<&Value> {
+        self.inner.options()
+    }
+}
+
+impl SubTasks for RuntimeTaskWrapper {
+    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+        self.inner.sub_tasks()
+    }
+}
+
+#[async_trait]
+impl Task for RuntimeTaskWrapper {
+    async fn start(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        self.inner.start(host, context).await
+    }
 }
 
 fn py_any_to_json_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
@@ -1156,17 +1369,22 @@ mod tests {
             };
 
             let result = task_definition
-                .run_on_host(host.into_any())
+                .run_on_host(host.into_any(), None, 0)
                 .expect("async task should execute");
-            let data = result.to_dict(py).expect("result should convert");
-            let value = normalize_python_json_payload(&data.bind(py).clone(), "invalid result")
-                .expect("result payload should normalize");
-
-            assert_eq!(result.status(), "passed");
-            assert_eq!(value["changed"], json!(true));
-            assert_eq!(value["summary"], json!("async handled router1"));
-            assert_eq!(value["metadata"]["current_depth"], json!(0));
-            assert_eq!(value["metadata"]["max_depth"], Value::Null);
+            assert_eq!(result.passed_hosts(), vec!["router1".to_string()]);
+            let host_result = result
+                .inner
+                .host_result("router1")
+                .expect("router1 result should exist");
+            assert!(host_result.is_passed());
+            let success = match host_result {
+                HostTaskResult::Passed(success) => success,
+                _ => unreachable!("host result should be passed"),
+            };
+            assert_eq!(success.changed(), true);
+            assert_eq!(success.summary(), Some("async handled router1"));
+            assert_eq!(success.metadata().unwrap()["current_depth"], json!(0));
+            assert_eq!(success.metadata().unwrap()["max_depth"], json!(0));
         });
     }
 }

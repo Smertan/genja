@@ -41,10 +41,10 @@ class MinimalAuditProcessor:
 
 class UnsupportedGroupPlugin:
     def name(self):
-        return "runner"
+        return "unsupported"
 
     def group(self):
-        return "RunnerPlugin"
+        return "UnknownPlugin"
 
 
 class MissingIdentityPlugin:

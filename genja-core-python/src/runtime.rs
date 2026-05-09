@@ -507,6 +507,69 @@ mod tests {
     }
 
     #[test]
+    fn py_genja_run_task_uses_python_runner_plugin() {
+        init_python();
+        Python::with_gil(|py| {
+            let plugin_manager =
+                Py::new(py, PyPluginManager::new()).expect("plugin manager should be created");
+            let importlib = PyModule::import(py, "importlib").expect("importlib should import");
+            let module = importlib
+                .call_method1("import_module", ("tests.fixtures.runner_plugins",))
+                .expect("runner fixture module should import");
+            let plugin_class = module
+                .getattr("FirstHostOnlyRunnerPlugin")
+                .expect("runner plugin should exist");
+            let plugin = plugin_class.call0().expect("plugin instance should build");
+            plugin_manager
+                .bind(py)
+                .call_method1("register_plugin", (plugin,))
+                .expect("runner plugin should register");
+
+            let hosts = PyDict::new(py);
+            let router1 = PyDict::new(py);
+            router1.set_item("hostname", "10.0.0.1").unwrap();
+            router1.set_item("platform", "ios").unwrap();
+            let router2 = PyDict::new(py);
+            router2.set_item("hostname", "10.0.0.2").unwrap();
+            router2.set_item("platform", "nxos").unwrap();
+            hosts.set_item("router1", router1).unwrap();
+            hosts.set_item("router2", router2).unwrap();
+
+            let runtime = PyGenja::from_hosts(
+                hosts.into_any(),
+                None,
+                Some(plugin_manager.bind(py).borrow()),
+            )
+            .expect("runtime should build");
+            let runtime = runtime
+                .with_runner("python_runner")
+                .expect("python runner should be selectable");
+
+            let task_module = importlib
+                .call_method1("import_module", ("tests.fixtures.task_definitions",))
+                .expect("task fixture module should import");
+            let task_class = task_module
+                .getattr("AsyncRuntimeTask")
+                .expect("task fixture should exist");
+            let results = runtime
+                .run_task(py, task_class, Some(5))
+                .expect("task should execute through python runner");
+
+            assert_eq!(
+                results
+                    .inner
+                    .passed_hosts()
+                    .into_iter()
+                    .map(|host| host.to_string())
+                    .collect::<Vec<_>>(),
+                vec!["10.0.0.1".to_string()]
+            );
+            assert!(results.inner.failed_hosts().is_empty());
+            assert!(results.inner.skipped_hosts().is_empty());
+        });
+    }
+
+    #[test]
     fn py_genja_builder_consumes_previous_builder_instance() {
         init_python();
         Python::with_gil(|py| {
