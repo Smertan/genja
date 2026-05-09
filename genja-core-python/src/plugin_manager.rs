@@ -204,6 +204,15 @@ impl PyPluginManager {
     ///
     /// [tool.genja.plugins.connection]
     /// my_connection = "my_module:MyConnectionClass"
+    ///
+    /// [tool.genja.plugins.inventory]
+    /// my_inventory = "my_module:MyInventoryClass"
+    ///
+    /// [tool.genja.plugins.runner]
+    /// my_runner = "my_module:MyRunnerClass"
+    ///
+    /// [tool.genja.plugins.transform]
+    /// my_transform = "my_module:MyTransformClass"
     /// ```
     ///
     /// # Parameters
@@ -296,8 +305,8 @@ impl PyPluginManager {
     ///
     /// This method deregisters a previously registered plugin, removing it from the
     /// plugin manager's internal registry. After deregistration, the plugin will no
-    /// longer be available for use. The method returns the group name of the
-    /// deregistered plugin if it was found, or `None` if no plugin with the given
+    /// longer be available for use. The method returns the deregistered plugin's
+    /// declared name if it was found, or `None` if no plugin with the given
     /// name was registered.
     ///
     /// # Parameters
@@ -308,7 +317,7 @@ impl PyPluginManager {
     ///
     /// # Returns
     ///
-    /// Returns `Ok(Some(String))` containing the group name of the deregistered
+    /// Returns `Ok(Some(String))` containing the deregistered plugin name
     /// plugin if a plugin with the given name was found and removed, or `Ok(None)`
     /// if no plugin with that name was registered. Returns a `PyErr` if:
     /// - The plugin manager has already been consumed
@@ -472,9 +481,9 @@ impl PyPluginManager {
     ///
     /// * `plugin` - A Python object implementing the plugin interface. The object
     ///   must define callable `name()` and `group()` methods that return non-empty
-    ///   strings identifying the plugin. The plugin's group must be either
-    ///   "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin", "RunnerPlugin", or
-    ///   "TransformFunctionPlugin".
+    ///   strings identifying the plugin. The plugin's group must be one of
+    ///   "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin",
+    ///   "RunnerPlugin", or "TransformFunctionPlugin".
     ///
     /// # Returns
     ///
@@ -515,9 +524,10 @@ impl PyPluginManager {
 ///   handles plugin lifecycle operations.
 /// * `plugin` - A Python object implementing the plugin interface. The object
 ///   must define callable `name()` and `group()` methods that return non-empty
-///   strings. The plugin's group must be either "ProcessorPlugin" or
-///   "ConnectionPlugin". The plugin is wrapped in an `Arc` for shared ownership
-///   across the plugin system.
+///   strings. The plugin's group must be one of "ProcessorPlugin",
+///   "ConnectionPlugin", "InventoryPlugin", "RunnerPlugin", or
+///   "TransformFunctionPlugin". The plugin is wrapped in an `Arc` for shared
+///   ownership across the plugin system.
 ///
 /// # Returns
 ///
