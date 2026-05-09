@@ -1645,6 +1645,54 @@ impl Plugin for PyProcessorPlugin {
     }
 }
 
+/// Extracts and validates a plugin identity value by calling a specified method.
+///
+/// This function retrieves a string identity value (such as name or group) from a Python
+/// plugin object by calling a specified method. It performs comprehensive validation to
+/// ensure the method exists, is callable, returns a string value, and that the returned
+/// string is not empty. This is used during plugin registration to extract required
+/// identity information like plugin names and groups that are needed to register the
+/// plugin in the plugin manager.
+///
+/// The function enforces the plugin contract by validating that identity methods are
+/// present, callable, and return non-empty strings. This ensures that all registered
+/// plugins have valid, usable identity information.
+///
+/// # Parameters
+///
+/// * `plugin` - A reference to the bound Python plugin object from which to extract the
+///   identity value. This object must have the specified method defined as a callable
+///   attribute that returns a string when invoked with no arguments.
+/// * `method_name` - The name of the method to call on the plugin object to retrieve the
+///   identity value. Common examples include "name" for the plugin name or "group" for
+///   the plugin group. The method must exist on the plugin object and be callable.
+/// * `empty_message` - The error message to return if the method returns an empty or
+///   whitespace-only string. This allows callers to provide context-specific error
+///   messages for different identity values (e.g., "plugin name cannot be empty").
+/// * `plugin_kind` - A descriptive string identifying the type of plugin being validated,
+///   used in error messages to provide context. Examples include "InventoryPlugin",
+///   "RunnerPlugin", or "ProcessorPlugin". This helps users identify which plugin type
+///   is causing validation failures.
+///
+/// # Returns
+///
+/// Returns `Ok(String)` containing the extracted identity value if all validation passes:
+/// - The method exists on the plugin object
+/// - The method is callable
+/// - The method returns a string value
+/// - The string is not empty or whitespace-only
+///
+/// Returns `Err(PyErr)` if any validation fails:
+/// - `PyValueError` if the method does not exist on the plugin object
+/// - `PyValueError` if the method exists but is not callable
+/// - `PyErr` if calling the method raises a Python exception
+/// - `PyErr` if the method's return value cannot be extracted as a string
+/// - `PyValueError` if the extracted string is empty or contains only whitespace
+///
+/// # Errors
+///
+/// This function will return an error if the plugin does not conform to the expected
+/// interface, if the method call fails, or if the returned value is invalid.
 fn extract_plugin_identity_value(
     plugin: &Bound<'_, PyAny>,
     method_name: &str,
@@ -1676,11 +1724,55 @@ impl PluginProcessor for PyProcessorPlugin {
     }
 }
 
+/// A Rust adapter for Python task processor implementations.
+///
+/// This struct wraps a Python task processor object and implements the `TaskProcessor`
+/// trait to integrate Python-based processors into the Rust task execution system. It
+/// delegates all task processing lifecycle events to the corresponding methods on the
+/// wrapped Python processor object, handling cross-language communication and error
+/// conversion. The processor supports both synchronous and asynchronous Python
+/// implementations through automatic awaitable resolution.
+///
+/// The adapter checks for the presence of each lifecycle method on the Python processor
+/// before attempting to call it, allowing Python implementations to selectively implement
+/// only the hooks they need. This design provides flexibility for processor plugins to
+/// focus on specific aspects of task execution without requiring boilerplate for unused
+/// hooks.
+///
+/// # Fields
+///
+/// * `processor` - An `Arc`-wrapped reference to the Python processor object that
+///   implements the task processing lifecycle methods. This reference is shared across
+///   all task processing operations and allows the processor to maintain state between
+///   lifecycle events.
 struct PyTaskProcessor {
     processor: Arc<Py<PyAny>>,
 }
 
 impl TaskProcessor for PyTaskProcessor {
+    /// Invokes the Python processor's `on_task_start` hook when a task begins execution.
+    ///
+    /// This method is called at the beginning of task execution, before any host instances
+    /// are processed. It delegates to the Python processor's `on_task_start()` method if
+    /// it exists, allowing Python plugins to inspect and potentially modify the task results
+    /// before execution begins. The method handles cross-language communication and converts
+    /// any Python errors to Rust errors.
+    ///
+    /// # Parameters
+    ///
+    /// * `context` - A reference to the `TaskProcessorContext` containing metadata about the
+    ///   current task execution, including task name, parent task name, depth, and hostname.
+    ///   This context is converted to a Python-compatible format and passed to the Python hook.
+    /// * `results` - A mutable reference to the `TaskResults` that will be populated during
+    ///   task execution. The Python hook can modify these results before execution begins.
+    ///   If the Python hook returns a non-None value, the results will be replaced with the
+    ///   returned value.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the hook executes successfully or if the Python processor does not
+    /// implement the `on_task_start` method. Returns `Err(genja_core::GenjaError)` if the
+    /// Python hook raises an exception or if any cross-language conversion fails.
     fn on_task_start(
         &self,
         context: &TaskProcessorContext,
@@ -1689,6 +1781,29 @@ impl TaskProcessor for PyTaskProcessor {
         self.call_task_results_hook("on_task_start", context, results)
     }
 
+    /// Invokes the Python processor's `on_task_finish` hook when a task completes execution.
+    ///
+    /// This method is called after all host instances have been processed and the task
+    /// execution is complete. It delegates to the Python processor's `on_task_finish()` method
+    /// if it exists, allowing Python plugins to inspect and potentially modify the final task
+    /// results. The method handles cross-language communication and converts any Python errors
+    /// to Rust errors.
+    ///
+    /// # Parameters
+    ///
+    /// * `context` - A reference to the `TaskProcessorContext` containing metadata about the
+    ///   completed task execution, including task name, parent task name, depth, and hostname.
+    ///   This context is converted to a Python-compatible format and passed to the Python hook.
+    /// * `results` - A mutable reference to the `TaskResults` containing the final execution
+    ///   results for all host instances. The Python hook can modify these results after
+    ///   execution completes. If the Python hook returns a non-None value, the results will
+    ///   be replaced with the returned value.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the hook executes successfully or if the Python processor does not
+    /// implement the `on_task_finish` method. Returns `Err(genja_core::GenjaError)` if the
+    /// Python hook raises an exception or if any cross-language conversion fails.
     fn on_task_finish(
         &self,
         context: &TaskProcessorContext,
@@ -1697,6 +1812,27 @@ impl TaskProcessor for PyTaskProcessor {
         self.call_task_results_hook("on_task_finish", context, results)
     }
 
+    /// Invokes the Python processor's `on_instance_start` hook when a host instance begins execution.
+    ///
+    /// This method is called before executing a task on a specific host instance. It checks if
+    /// the Python processor implements the `on_instance_start()` method and calls it if present,
+    /// allowing Python plugins to perform setup or logging before the instance executes. Unlike
+    /// the task-level hooks, this method does not modify any results but provides a notification
+    /// point for instance-level processing.
+    ///
+    /// # Parameters
+    ///
+    /// * `context` - A reference to the `TaskProcessorContext` containing metadata about the
+    ///   current instance execution, including task name, parent task name, depth, and the
+    ///   specific hostname being processed. This context is converted to a Python-compatible
+    ///   format and passed to the Python hook.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the hook executes successfully or if the Python processor does not
+    /// implement the `on_instance_start` method. Returns `Err(genja_core::GenjaError)` if the
+    /// Python hook raises an exception, if checking for the method's existence fails, or if
+    /// any cross-language conversion fails.
     fn on_instance_start(
         &self,
         context: &TaskProcessorContext,
@@ -1718,6 +1854,31 @@ impl TaskProcessor for PyTaskProcessor {
         })
     }
 
+    /// Invokes the Python processor's `on_instance_finish` hook when a host instance completes execution.
+    ///
+    /// This method is called after executing a task on a specific host instance. It checks if
+    /// the Python processor implements the `on_instance_finish()` method and calls it if present,
+    /// allowing Python plugins to inspect and potentially modify the execution result for that
+    /// specific host. If the Python hook returns a non-None value, the host result will be
+    /// replaced with the returned value.
+    ///
+    /// # Parameters
+    ///
+    /// * `context` - A reference to the `TaskProcessorContext` containing metadata about the
+    ///   completed instance execution, including task name, parent task name, depth, and the
+    ///   specific hostname that was processed. This context is converted to a Python-compatible
+    ///   format and passed to the Python hook.
+    /// * `result` - A mutable reference to the `HostTaskResult` containing the execution result
+    ///   for the specific host instance. The Python hook can modify this result after execution
+    ///   completes. If the Python hook returns a non-None value, the result will be replaced
+    ///   with the returned value.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the hook executes successfully or if the Python processor does not
+    /// implement the `on_instance_finish` method. Returns `Err(genja_core::GenjaError)` if the
+    /// Python hook raises an exception, if checking for the method's existence fails, or if
+    /// any cross-language conversion fails.
     fn on_instance_finish(
         &self,
         context: &TaskProcessorContext,
@@ -1755,7 +1916,40 @@ impl TaskProcessor for PyTaskProcessor {
     }
 }
 
+
 impl PyTaskProcessor {
+    /// Invokes a Python processor hook method that operates on task-level results.
+    ///
+    /// This helper method provides a common implementation for calling Python processor
+    /// lifecycle hooks that receive task context and task results as parameters. It checks
+    /// if the specified method exists on the Python processor, calls it with the provided
+    /// context and results, and optionally replaces the results if the Python hook returns
+    /// a non-None value. This method handles cross-language communication, error conversion,
+    /// and result replacement logic that is shared between `on_task_start` and `on_task_finish`.
+    ///
+    /// # Parameters
+    ///
+    /// * `method_name` - The name of the Python processor method to invoke, such as
+    ///   "on_task_start" or "on_task_finish". The method must accept two parameters:
+    ///   a task processor context and task results object.
+    /// * `context` - A reference to the `TaskProcessorContext` containing metadata about
+    ///   the current task execution, including task name, parent task name, depth, and
+    ///   hostname. This context is converted to a Python-compatible format and passed
+    ///   to the Python hook.
+    /// * `results` - A mutable reference to the `TaskResults` containing the execution
+    ///   results for all host instances. The Python hook can modify these results, and
+    ///   if the hook returns a non-None value, the results will be replaced with the
+    ///   returned value.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the hook executes successfully or if the Python processor does
+    /// not implement the specified method. Returns `Err(genja_core::GenjaError)` if:
+    /// - Checking for the method's existence fails
+    /// - Converting the context to Python format fails
+    /// - Creating the Python results wrapper fails
+    /// - The Python hook raises an exception
+    /// - Converting the Python return value back to Rust `TaskResults` fails
     fn call_task_results_hook(
         &self,
         method_name: &str,
@@ -1791,6 +1985,50 @@ impl PyTaskProcessor {
     }
 }
 
+/// Imports and instantiates a Python plugin from a module path specification.
+///
+/// This function dynamically imports a Python plugin by parsing an import path string
+/// in the format "module:attribute.path" and using Python's `importlib` to load the
+/// specified module and traverse to the target attribute. The import path consists of
+/// a module name (which can include dots for nested packages) followed by a colon and
+/// an attribute path (which can also include dots for nested attributes). Once the
+/// target attribute is located, if it is callable (such as a class), it will be
+/// instantiated by calling it with no arguments. If it is not callable (such as an
+/// already-instantiated object), it will be returned as-is.
+///
+/// This function is used during plugin registration to load Python plugin classes or
+/// instances from configuration files, allowing plugins to be specified as import paths
+/// rather than requiring direct Python code execution.
+///
+/// # Parameters
+///
+/// * `py` - A Python GIL token that provides access to the Python interpreter. This
+///   token ensures that the Python interpreter is available and that the operation is
+///   performed safely within the GIL context.
+/// * `import_path` - A string slice specifying the plugin location in the format
+///   "module:attribute.path". The module name (before the colon) is passed to
+///   `importlib.import_module()`, and the attribute path (after the colon) is traversed
+///   using `getattr()` calls. For example, "my_plugins:ConnectionPlugin" would import
+///   the `my_plugins` module and retrieve the `ConnectionPlugin` attribute, while
+///   "my_plugins:nested.ConnectionPlugin" would import `my_plugins` and traverse through
+///   `nested` to reach `ConnectionPlugin`.
+///
+/// # Returns
+///
+/// Returns `Ok(Py<PyAny>)` containing the imported and potentially instantiated plugin
+/// object. If the target attribute is callable, this will be the result of calling it
+/// with no arguments. If the target attribute is not callable, this will be the
+/// attribute itself. Returns `Err(PyErr)` if:
+/// - The import path does not contain a colon separator
+/// - The module cannot be imported
+/// - Any attribute in the path does not exist
+/// - Calling the target attribute (if callable) raises an exception
+///
+/// # Errors
+///
+/// This function will return an error if the import path format is invalid, if the
+/// module or any attribute in the path cannot be found, or if instantiating a callable
+/// attribute fails.
 fn import_python_plugin<'py>(py: Python<'py>, import_path: &str) -> PyResult<Py<PyAny>> {
     let (module_name, attr_path) = import_path.split_once(':').ok_or_else(|| {
         PyValueError::new_err(format!(
@@ -1812,6 +2050,43 @@ fn import_python_plugin<'py>(py: Python<'py>, import_path: &str) -> PyResult<Py<
     Ok(instance.unbind())
 }
 
+/// Converts a Rust `TaskProcessorContext` into a Python model object.
+///
+/// This function creates a Python representation of a task processor context by extracting
+/// the context's fields (task name, parent task name, depth, and hostname) and packaging
+/// them into a Python dictionary. The dictionary is then used to instantiate a Python
+/// `TaskProcessorContext` model object from the `genja_core.processor` module. This
+/// conversion enables Rust task processor contexts to be passed to Python processor
+/// plugins, allowing Python code to access task execution metadata.
+///
+/// The function handles optional fields (parent task name and hostname) by converting
+/// `None` values to Python's `None` object, ensuring that the Python model receives
+/// properly typed null values rather than missing keys.
+///
+/// # Parameters
+///
+/// * `py` - A Python GIL token that provides access to the Python interpreter. This
+///   token ensures that the Python interpreter is available and that the operation is
+///   performed safely within the GIL context.
+/// * `context` - A reference to the `TaskProcessorContext` containing the task execution
+///   metadata to be converted. This includes the task name, optional parent task name,
+///   execution depth, and optional hostname. All fields are extracted and converted to
+///   Python-compatible types.
+///
+/// # Returns
+///
+/// Returns `Ok(Py<PyAny>)` containing a Python `TaskProcessorContext` model object
+/// with all fields populated from the Rust context. The returned object can be passed
+/// to Python processor plugin methods. Returns `Err(PyErr)` if:
+/// - Setting any dictionary item fails
+/// - Importing the `genja_core.processor` module fails
+/// - Instantiating the `TaskProcessorContext` class fails
+/// - Any other Python operation encounters an error
+///
+/// # Errors
+///
+/// This function will return an error if any Python operation fails during the
+/// conversion process, including dictionary manipulation or model instantiation.
 fn build_python_processor_context<'py>(
     py: Python<'py>,
     context: &TaskProcessorContext,
@@ -1830,6 +2105,39 @@ fn build_python_processor_context<'py>(
     build_python_model(py, "genja_core.processor", "TaskProcessorContext", payload)
 }
 
+/// Converts a Rust value that implements `Serialize` into a Python object.
+///
+/// This function serializes a Rust value to JSON using `serde_json`, then deserializes
+/// it into a Python object using Python's `json.loads()`. This provides a generic way
+/// to convert Rust data structures into Python-compatible representations that can be
+/// passed to Python plugin methods or used in cross-language communication. The function
+/// handles the serialization and deserialization process, converting any serialization
+/// errors into Python exceptions.
+///
+/// # Parameters
+///
+/// * `py` - A Python GIL token that provides access to the Python interpreter. This
+///   token ensures that the Python interpreter is available and that the operation is
+///   performed safely within the GIL context.
+/// * `value` - A reference to the Rust value to be converted to Python. The value must
+///   implement the `Serialize` trait from `serde`, allowing it to be serialized to JSON.
+///   Common types include structs, enums, collections, and primitive types that derive
+///   or implement `Serialize`.
+///
+/// # Returns
+///
+/// Returns `Ok(Py<PyAny>)` containing the Python object representation of the serialized
+/// value. The returned object can be passed to Python functions or methods. Returns
+/// `Err(PyErr)` if:
+/// - The Rust value cannot be serialized to JSON (wrapped as `PyValueError`)
+/// - The `json` module cannot be imported
+/// - The `json.loads()` call fails to parse the serialized JSON
+/// - Any other Python operation encounters an error
+///
+/// # Errors
+///
+/// This function will return an error if serialization fails or if any Python operation
+/// fails during the conversion process.
 fn serde_to_python_payload<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
 where
     T: Serialize,
@@ -1840,6 +2148,41 @@ where
     Ok(json.call_method1("loads", (dumped,))?.unbind())
 }
 
+/// Converts optional transform function options into a Python object or None.
+///
+/// This function handles the conversion of Rust transform function options into a
+/// Python-compatible representation that can be passed to Python transform plugins.
+/// If options are provided, they are serialized to JSON and then deserialized into
+/// a Python object using the `serde_to_python_payload` helper. If no options are
+/// provided, the function returns Python's `None` object. This allows transform
+/// plugins to receive either a populated options object or `None`, matching the
+/// optional nature of transform function configuration.
+///
+/// # Parameters
+///
+/// * `py` - A Python GIL token that provides access to the Python interpreter. This
+///   token ensures that the Python interpreter is available and that the operation is
+///   performed safely within the GIL context.
+/// * `options` - An optional reference to `TransformFunctionOptions` containing the
+///   configuration parameters for a transform function. If `Some`, the options will
+///   be serialized and converted to a Python object. If `None`, Python's `None` will
+///   be returned.
+///
+/// # Returns
+///
+/// Returns `Ok(Py<PyAny>)` containing either a Python object representation of the
+/// transform options (if provided) or Python's `None` object (if no options were
+/// provided). The returned object can be passed to Python transform plugin methods.
+/// Returns `Err(PyErr)` if:
+/// - The options cannot be serialized to JSON (wrapped as `PyValueError`)
+/// - The `json` module cannot be imported
+/// - The `json.loads()` call fails to parse the serialized JSON
+/// - Any other Python operation encounters an error during conversion
+///
+/// # Errors
+///
+/// This function will return an error if serialization fails or if any Python operation
+/// fails during the conversion process when options are provided.
 fn transform_options_to_python_payload(
     py: Python<'_>,
     options: Option<&TransformFunctionOptions>,
@@ -1850,6 +2193,46 @@ fn transform_options_to_python_payload(
     }
 }
 
+/// Converts a Python object into a Rust value by deserializing through JSON.
+///
+/// This function converts a Python object into a Rust type by first normalizing the
+/// Python object into a JSON-serializable format, then serializing it to a JSON string,
+/// and finally deserializing it into the target Rust type using `serde_json`. The
+/// normalization step handles different Python object types by attempting to call
+/// `model_dump()` (for Pydantic models), `to_dict()` (for custom classes), or using
+/// the object directly if neither method is available. This provides a flexible way
+/// to convert Python plugin return values into strongly-typed Rust data structures.
+///
+/// # Parameters
+///
+/// * `obj` - A reference to the bound Python object to be converted. The object should
+///   either implement `model_dump()` (Pydantic models), `to_dict()` (custom classes),
+///   or be directly JSON-serializable by Python's `json.dumps()`. The object is
+///   normalized before serialization to ensure compatibility with JSON conversion.
+/// * `error_prefix` - A string slice that will be prepended to any deserialization
+///   error messages. This allows callers to provide context-specific error messages
+///   that help identify which conversion operation failed (e.g., "failed to convert
+///   task results" or "invalid connection key payload").
+///
+/// # Returns
+///
+/// Returns `Ok(T)` containing the deserialized Rust value if the conversion succeeds.
+/// The type `T` must implement `DeserializeOwned` from `serde`. Returns `Err(PyErr)`
+/// if:
+/// - Checking for the `model_dump` or `to_dict` attributes fails
+/// - Calling `model_dump()` or `to_dict()` raises a Python exception
+/// - Creating the `mode="json"` parameter dictionary fails
+/// - Importing the `json` module fails
+/// - The `json.dumps()` call fails to serialize the normalized object
+/// - Extracting the JSON string from the Python return value fails
+/// - The `serde_json::from_str()` deserialization fails (wrapped as `PyValueError`
+///   with the provided error prefix)
+///
+/// # Errors
+///
+/// This function will return an error if any step in the normalization, serialization,
+/// or deserialization process fails, or if the Python object cannot be converted to
+/// the target Rust type.
 fn python_payload_to_rust_value<T>(obj: &Bound<'_, PyAny>, error_prefix: &str) -> PyResult<T>
 where
     T: DeserializeOwned,
@@ -1874,6 +2257,39 @@ where
         .map_err(|err| PyValueError::new_err(format!("{error_prefix}: {err}")))
 }
 
+/// Converts a Rust `ConnectionKey` into a Python model object.
+///
+/// This function creates a Python representation of a connection key by extracting
+/// the key's fields (hostname and plugin name) and packaging them into a Python
+/// dictionary. The dictionary is then used to instantiate a Python `ConnectionKey`
+/// model object from the `genja_core.connection` module. This conversion enables
+/// Rust connection keys to be passed to Python connection plugins, allowing Python
+/// code to identify and reference specific connections.
+///
+/// # Parameters
+///
+/// * `py` - A Python GIL token that provides access to the Python interpreter. This
+///   token ensures that the Python interpreter is available and that the operation is
+///   performed safely within the GIL context.
+/// * `key` - A reference to the `ConnectionKey` containing the connection identifier
+///   to be converted. This includes the hostname and plugin name that uniquely
+///   identify a connection instance. Both fields are extracted and converted to
+///   Python-compatible types.
+///
+/// # Returns
+///
+/// Returns `Ok(Py<PyAny>)` containing a Python `ConnectionKey` model object with
+/// all fields populated from the Rust connection key. The returned object can be
+/// passed to Python connection plugin methods. Returns `Err(PyErr)` if:
+/// - Setting any dictionary item fails
+/// - Importing the `genja_core.connection` module fails
+/// - Instantiating the `ConnectionKey` class fails
+/// - Any other Python operation encounters an error
+///
+/// # Errors
+///
+/// This function will return an error if any Python operation fails during the
+/// conversion process, including dictionary manipulation or model instantiation.
 fn build_python_connection_key<'py>(py: Python<'py>, key: &ConnectionKey) -> PyResult<Py<PyAny>> {
     let payload = PyDict::new(py);
     payload.set_item("hostname", &key.hostname)?;
@@ -1881,6 +2297,50 @@ fn build_python_connection_key<'py>(py: Python<'py>, key: &ConnectionKey) -> PyR
     build_python_model(py, "genja_core.connection", "ConnectionKey", payload)
 }
 
+/// Converts a Rust `ResolvedConnectionParams` into a Python model object.
+///
+/// This function creates a Python representation of resolved connection parameters by
+/// extracting all parameter fields (hostname, port, username, password, platform, and
+/// extras) and packaging them into a Python dictionary. The dictionary is then used to
+/// instantiate a Python `ResolvedConnectionParams` model object from the
+/// `genja_core.connection` module. This conversion enables Rust connection parameters
+/// to be passed to Python connection plugins, allowing Python code to access all
+/// connection configuration details needed to establish connections.
+///
+/// The function handles optional fields (port, username, password, platform, and extras)
+/// by converting `None` values to Python's `None` object, ensuring that the Python model
+/// receives properly typed null values rather than missing keys. The extras field, if
+/// present, is serialized to JSON and then deserialized into a Python object to preserve
+/// its structure and allow Python code to access nested configuration values.
+///
+/// # Parameters
+///
+/// * `py` - A Python GIL token that provides access to the Python interpreter. This
+///   token ensures that the Python interpreter is available and that the operation is
+///   performed safely within the GIL context.
+/// * `params` - A reference to the `ResolvedConnectionParams` containing the connection
+///   configuration to be converted. This includes the hostname, optional port, optional
+///   username, optional password, optional platform identifier, and optional extras map.
+///   All fields are extracted and converted to Python-compatible types.
+///
+/// # Returns
+///
+/// Returns `Ok(Py<PyAny>)` containing a Python `ResolvedConnectionParams` model object
+/// with all fields populated from the Rust connection parameters. The returned object
+/// can be passed to Python connection plugin methods. Returns `Err(PyErr)` if:
+/// - Setting any dictionary item fails
+/// - Serializing the extras map to JSON fails (wrapped as `PyValueError`)
+/// - Importing the `json` module fails
+/// - Deserializing the JSON extras string fails
+/// - Importing the `genja_core.connection` module fails
+/// - Instantiating the `ResolvedConnectionParams` class fails
+/// - Any other Python operation encounters an error
+///
+/// # Errors
+///
+/// This function will return an error if any Python operation fails during the
+/// conversion process, including dictionary manipulation, JSON serialization/deserialization,
+/// or model instantiation.
 fn build_python_resolved_connection_params<'py>(
     py: Python<'py>,
     params: &ResolvedConnectionParams,
@@ -1909,6 +2369,45 @@ fn build_python_resolved_connection_params<'py>(
     )
 }
 
+/// Converts a Python object into a Rust `ConnectionKey` by deserializing through JSON.
+///
+/// This function converts a Python object representing a connection key into a Rust
+/// `ConnectionKey` by first normalizing the Python object into a JSON-serializable format,
+/// then serializing it to a JSON string, and finally extracting the required fields
+/// (hostname and plugin_name) to construct a `ConnectionKey`. The normalization step
+/// handles different Python object types by attempting to call `model_dump()` (for
+/// Pydantic models), `to_dict()` (for custom classes), or using the object directly if
+/// neither method is available. This provides a flexible way to convert Python connection
+/// key representations into strongly-typed Rust connection keys.
+///
+/// # Parameters
+///
+/// * `obj` - A reference to the bound Python object to be converted into a connection key.
+///   The object should either implement `model_dump()` (Pydantic models), `to_dict()`
+///   (custom classes), or be directly JSON-serializable by Python's `json.dumps()`. The
+///   object must contain `hostname` and `plugin_name` fields that can be extracted as
+///   strings from the JSON representation.
+///
+/// # Returns
+///
+/// Returns `Ok(ConnectionKey)` containing the constructed connection key with hostname
+/// and plugin_name extracted from the Python object. Returns `Err(PyErr)` if:
+/// - Checking for the `model_dump` or `to_dict` attributes fails
+/// - Calling `model_dump()` or `to_dict()` raises a Python exception
+/// - Creating the `mode="json"` parameter dictionary fails
+/// - Importing the `json` module fails
+/// - The `json.dumps()` call fails to serialize the normalized object
+/// - Extracting the JSON string from the Python return value fails
+/// - The `serde_json::from_str()` deserialization fails (wrapped as `PyValueError`)
+/// - The JSON payload is missing the required `hostname` field
+/// - The JSON payload is missing the required `plugin_name` field
+/// - Either field cannot be extracted as a string
+///
+/// # Errors
+///
+/// This function will return an error if any step in the normalization, serialization,
+/// or field extraction process fails, or if the Python object does not contain the
+/// required connection key fields.
 fn py_any_to_connection_key(obj: &Bound<'_, PyAny>) -> PyResult<ConnectionKey> {
     let normalized = if obj.hasattr("model_dump")? {
         obj.call_method(
@@ -1940,6 +2439,51 @@ fn py_any_to_connection_key(obj: &Bound<'_, PyAny>) -> PyResult<ConnectionKey> {
     Ok(ConnectionKey::new(hostname, plugin_name))
 }
 
+/// Instantiates a Python model class with keyword arguments from a specified module.
+///
+/// This function dynamically imports a Python module, retrieves a class from that module,
+/// and instantiates it by calling the class constructor with the provided keyword arguments.
+/// The function is used throughout the plugin system to create Python model objects (such as
+/// `TaskProcessorContext`, `ConnectionKey`, or `ResolvedConnectionParams`) from Rust data
+/// structures. It provides a generic way to construct Python objects that conform to expected
+/// model interfaces, enabling cross-language data transfer between Rust and Python plugin code.
+///
+/// The function handles the complete instantiation process: importing the module, retrieving
+/// the class attribute, calling the class constructor with keyword arguments, and unbinding
+/// the result to create a GIL-independent reference that can be stored or passed across
+/// Python calls.
+///
+/// # Parameters
+///
+/// * `py` - A Python GIL token that provides access to the Python interpreter. This token
+///   ensures that the Python interpreter is available and that the operation is performed
+///   safely within the GIL context.
+/// * `module_name` - The fully qualified name of the Python module to import, such as
+///   "genja_core.processor" or "genja_core.connection". The module must be available in
+///   the Python environment and contain the specified class.
+/// * `class_name` - The name of the class to retrieve from the imported module and instantiate.
+///   The class must exist as an attribute of the module and be callable (typically a class
+///   constructor). Common examples include "TaskProcessorContext", "ConnectionKey", or
+///   "ResolvedConnectionParams".
+/// * `kwargs` - A bound Python dictionary containing the keyword arguments to pass to the
+///   class constructor. The dictionary keys should match the parameter names expected by
+///   the class's `__init__` method, and the values should be Python-compatible objects.
+///
+/// # Returns
+///
+/// Returns `Ok(Py<PyAny>)` containing a GIL-independent reference to the instantiated Python
+/// model object. The returned object can be stored, passed to other Python functions, or
+/// converted back to Rust types. Returns `Err(PyErr)` if:
+/// - The specified module cannot be imported
+/// - The class attribute does not exist in the module
+/// - Calling the class constructor with the provided keyword arguments fails
+/// - Any other Python operation encounters an error during instantiation
+///
+/// # Errors
+///
+/// This function will return an error if the module import fails, if the class does not
+/// exist in the module, or if the class constructor raises an exception when called with
+/// the provided keyword arguments.
 fn build_python_model<'py>(
     py: Python<'py>,
     module_name: &str,
@@ -1951,10 +2495,57 @@ fn build_python_model<'py>(
     Ok(class.call((), Some(&kwargs))?.unbind())
 }
 
+/// Converts a Python error into a Genja core error.
+///
+/// This function provides a simple conversion from PyO3's `PyErr` type to the
+/// `genja_core::GenjaError` type by extracting the error message as a string.
+/// It is used throughout the plugin system to convert Python exceptions raised
+/// during plugin operations into Rust errors that can be propagated through the
+/// Genja core error handling system. The conversion preserves the error message
+/// but loses Python-specific error type information, presenting all Python errors
+/// as generic message errors in the Rust error system.
+///
+/// # Parameters
+///
+/// * `err` - The Python error to be converted. This error typically originates
+///   from Python plugin method calls, attribute access, or other Python operations
+///   that can raise exceptions. The error's string representation (obtained via
+///   `to_string()`) is extracted and wrapped in a Genja error.
+///
+/// # Returns
+///
+/// Returns a `genja_core::GenjaError::Message` variant containing the string
+/// representation of the Python error. This error can be propagated through
+/// Rust code and will display the original Python error message when formatted.
 fn python_processor_error(err: PyErr) -> genja_core::GenjaError {
     genja_core::GenjaError::Message(err.to_string())
 }
 
+/// Registers the `PyPluginManager` class with a Python module.
+///
+/// This function adds the `PyPluginManager` class to the specified Python module,
+/// making it available for import and use in Python code. It is typically called
+/// during the module initialization process to expose the plugin manager functionality
+/// to Python. The function handles the registration process and propagates any errors
+/// that occur during class registration.
+///
+/// # Parameters
+///
+/// * `module` - A reference to the bound Python module where the `PyPluginManager`
+///   class should be registered. The module must be valid and accessible within the
+///   current Python GIL context. After successful registration, Python code can import
+///   and instantiate `PyPluginManager` from this module.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if the `PyPluginManager` class is successfully added to the module.
+/// Returns `Err(PyErr)` if the class registration fails, which can occur if the module
+/// is invalid or if there are conflicts with existing module attributes.
+///
+/// # Errors
+///
+/// This function will return an error if adding the class to the module fails, typically
+/// due to module state issues or attribute conflicts.
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyPluginManager>()?;
     Ok(())
