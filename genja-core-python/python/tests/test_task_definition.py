@@ -153,6 +153,28 @@ def test_task_decorator_rejects_empty_connection_plugin_name():
                 return TaskSuccessResult(summary="noop")
 
 
+def test_task_decorator_rejects_empty_name():
+    with pytest.raises(TypeError, match="name must be a non-empty string"):
+
+        @task(name="   ", connection_plugin_name="ssh")
+        class InvalidTask:
+            def run(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
+def test_task_decorator_rejects_non_json_serializable_options():
+    with pytest.raises(TypeError, match="options must be JSON-serializable"):
+
+        @task(
+            name="backup_config",
+            connection_plugin_name="ssh",
+            options={"callback": lambda: None},
+        )
+        class InvalidTask:
+            def run(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
 def test_task_definition_from_python_class_rejects_empty_connection_plugin_name_in_metadata():
     @task(name="backup_config", connection_plugin_name="ssh")
     class InvalidTask:

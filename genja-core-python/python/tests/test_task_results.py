@@ -62,6 +62,16 @@ def test_host_task_result_from_python_failure_result_round_trips():
     assert data["details"]["timeout_seconds"] == 30
 
 
+def test_task_success_result_rejects_non_json_serializable_metadata():
+    with pytest.raises(TypeError, match="metadata must be JSON-serializable"):
+        TaskSuccessResult(metadata={"callback": lambda: None})
+
+
+def test_task_failure_result_rejects_non_json_serializable_details():
+    with pytest.raises(TypeError, match="details must be JSON-serializable"):
+        TaskFailureResult(message="boom", details={"callback": lambda: None})
+
+
 def test_host_task_result_from_python_skip_result_round_trips():
     result = TaskSkipResult(
         reason="maintenance_mode",

@@ -80,11 +80,24 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+import json
 from typing import Any, Awaitable, Literal, Protocol, TypeVar, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 _TaskClassT = TypeVar("_TaskClassT", bound=type)
+
+
+def _ensure_json_serializable(value: Any, field_name: str) -> Any:
+    if value is None:
+        return value
+
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError) as err:
+        raise TypeError(f"{field_name} must be JSON-serializable") from err
+
+    return value
 
 
 class _GenjaModel(BaseModel):
@@ -220,6 +233,10 @@ def task(
             raise TypeError(
                 f"@task-decorated class '{cls.__name__}' attribute 'run' must be callable"
             )
+        if not isinstance(name, str) or not name.strip():
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' name must be a non-empty string"
+            )
 
         if sub_task is not None:
             if not isinstance(sub_task, type):
@@ -248,6 +265,7 @@ def task(
                     raise TypeError(
                         f"@task-decorated class '{cls.__name__}' processors must contain non-empty strings"
                     )
+        _ensure_json_serializable(options, "options")
 
         task_cls = cast(type[GenjaTaskProtocol], cls)
         task_cls.__genja_task_info__ = {
@@ -343,6 +361,11 @@ class TaskSuccessResult(_GenjaModel):
         description="Additional JSON-serializable metadata for the result.",
     )
 
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _validate_metadata(cls, value: Any) -> Any:
+        return _ensure_json_serializable(value, "metadata")
+
 
 class TaskFailureResult(_GenjaModel):
     """Failed task outcome returned from ``run(...)``."""
@@ -372,6 +395,11 @@ class TaskFailureResult(_GenjaModel):
         default_factory=list,
         description="Structured messages emitted before the failure occurred.",
     )
+
+    @field_validator("details", mode="before")
+    @classmethod
+    def _validate_details(cls, value: Any) -> Any:
+        return _ensure_json_serializable(value, "details")
 
 
 class TaskSkipResult(_GenjaModel):
