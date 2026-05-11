@@ -18,9 +18,12 @@ The canonical authoring shape is:
 
     from genja_core.task import (
         Host,
+        TaskFailureKind,
+        TaskFailureResult,
         TaskRuntimeContext,
         TaskInfo,
         TaskMessage,
+        TaskMessageLevel,
         TaskSuccessResult,
         task,
     )
@@ -46,7 +49,7 @@ The canonical authoring shape is:
                 ),
                 messages=[
                     TaskMessage(
-                        level="info",
+                        level=TaskMessageLevel.INFO,
                         text=(
                             f"task={task.name} "
                             f"depth={context.current_depth}/{context.max_depth}"
@@ -58,6 +61,19 @@ The canonical authoring shape is:
                     "backup_path": task.options["backup_path"],
                     "compress": task.options["compress"],
                 },
+            )
+
+    class ValidateBackupTask:
+        def run(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskFailureResult:
+            return TaskFailureResult(
+                message=f"backup validation timed out for {host.hostname}",
+                kind=TaskFailureKind.TIMEOUT,
+                retryable=True,
             )
 
 ``run(...)`` may be implemented as ``def`` or ``async def`` and must resolve to
@@ -126,9 +142,12 @@ class _GenjaModel(BaseModel):
             Any: The value of the requested attribute.
         
         Raises:
-            AttributeError: If the specified attribute does not exist on the model.
+            KeyError: If the specified field does not exist on the model.
         """
-        return getattr(self, key)
+        try:
+            return getattr(self, key)
+        except AttributeError as err:
+            raise KeyError(key) from err
 
 
 class TaskInfo(_GenjaModel):

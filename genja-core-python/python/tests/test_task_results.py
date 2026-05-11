@@ -67,6 +67,14 @@ def test_task_success_result_rejects_non_json_serializable_metadata():
         TaskSuccessResult(metadata={"callback": lambda: None})
 
 
+def test_task_success_result_supports_dict_style_access_and_missing_keys_raise_key_error():
+    result = TaskSuccessResult(summary="backup complete")
+
+    assert result["summary"] == "backup complete"
+    with pytest.raises(KeyError, match="missing_field"):
+        result["missing_field"]
+
+
 def test_task_failure_result_rejects_non_json_serializable_details():
     with pytest.raises(TypeError, match="details must be JSON-serializable"):
         TaskFailureResult(message="boom", details={"callback": lambda: None})
