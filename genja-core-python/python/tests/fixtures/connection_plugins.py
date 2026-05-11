@@ -4,7 +4,7 @@ class TestConnection:
     def __init__(self, key):
         self.key = key
         self.alive = False
-        self.opened_with = None
+        self.opened_with: dict[str, object] | None = None
 
     def open(self, params):
         self.opened_with = params.to_dict()
@@ -33,13 +33,14 @@ class AsyncConnection:
     def __init__(self, key):
         self.key = key
         self.alive = False
-        self.opened_with = None
+        self.opened_with: dict[str, object] | None = None
 
     async def open(self, params):
         self.opened_with = params.to_dict()
         self.alive = True
 
     async def execute_command(self, command):
+        assert self.opened_with is not None
         return f"{self.opened_with['hostname']}:{command}"
 
     async def close(self):

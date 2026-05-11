@@ -80,7 +80,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Awaitable, Literal, Protocol, TypeVar
+from typing import Any, Awaitable, Literal, Protocol, TypeVar, cast
 
 from pydantic import BaseModel, Field
 
@@ -249,7 +249,8 @@ def task(
                         f"@task-decorated class '{cls.__name__}' processors must contain non-empty strings"
                     )
 
-        cls.__genja_task_info__ = {
+        task_cls = cast(type[GenjaTaskProtocol], cls)
+        task_cls.__genja_task_info__ = {
             "name": name,
             "connection_plugin_name": connection_plugin_name,
             "processors": list(processors or []),

@@ -2,12 +2,15 @@ import genja_core
 import pytest
 from genja_core.task import (
     Host,
+    GenjaTaskProtocol,
     TaskRuntimeContext,
+    TaskMessageLevel,
     TaskInfo,
     TaskMessage,
     TaskSuccessResult,
     task,
 )
+from typing import cast
 
 
 @task(
@@ -25,7 +28,7 @@ class VerifyBackupTask:
         assert task.options == {"mode": "strict"}
         return TaskSuccessResult(
             summary=f"verified {host.hostname}",
-            messages=[TaskMessage(level="info", text=task.name)],
+            messages=[TaskMessage(level=TaskMessageLevel.INFO, text=task.name)],
         )
 
 
@@ -64,7 +67,7 @@ class VerifyBackupPlainTask:
         assert task.options == {"mode": "strict"}
         return TaskSuccessResult(
             summary=f"verified {host.hostname}",
-            messages=[TaskMessage(level="info", text=task.name)],
+            messages=[TaskMessage(level=TaskMessageLevel.INFO, text=task.name)],
         )
 
 
@@ -156,7 +159,9 @@ def test_task_definition_from_python_class_rejects_empty_connection_plugin_name_
         def run(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
-    InvalidTask.__genja_task_info__["connection_plugin_name"] = ""
+    cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__[
+        "connection_plugin_name"
+    ] = ""
 
     with pytest.raises(ValueError, match="connection_plugin_name.*must not be empty"):
         genja_core.TaskDefinition.from_python_class(InvalidTask)

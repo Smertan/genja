@@ -3,8 +3,10 @@ from datetime import datetime, timezone
 import genja_core
 import pytest
 from genja_core.task import (
+    TaskFailureKind,
     TaskFailureResult,
     TaskMessage,
+    TaskMessageLevel,
     TaskSkipResult,
     TaskSuccessResult,
 )
@@ -17,7 +19,7 @@ def test_host_task_result_from_python_success_result_round_trips():
         warnings=["using fallback path"],
         messages=[
             TaskMessage(
-                level="info",
+                level=TaskMessageLevel.INFO,
                 text="backup complete",
                 code="BACKUP_DONE",
                 timestamp=datetime(2026, 4, 29, 12, 0, tzinfo=timezone.utc),
@@ -43,11 +45,11 @@ def test_host_task_result_from_python_success_result_round_trips():
 def test_host_task_result_from_python_failure_result_round_trips():
     result = TaskFailureResult(
         message="connection timeout",
-        kind="timeout",
+        kind=TaskFailureKind.TIMEOUT,
         retryable=True,
         details={"timeout_seconds": 30},
         warnings=["slow link detected"],
-        messages=[TaskMessage(level="error", text="failed to connect")],
+        messages=[TaskMessage(level=TaskMessageLevel.ERROR, text="failed to connect")],
     )
 
     host_result = genja_core.HostTaskResult.from_python_result(result)

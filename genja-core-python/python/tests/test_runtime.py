@@ -1,5 +1,11 @@
 import genja_core
-from genja_core.task import Host, TaskMessage, TaskSuccessResult, task
+from genja_core.task import (
+    Host,
+    TaskMessage,
+    TaskMessageLevel,
+    TaskSuccessResult,
+    task,
+)
 from tests.fixtures.connection_plugins import ConnectionPlugin, TestConnection
 
 
@@ -9,7 +15,7 @@ class RuntimeBackupTask:
         return TaskSuccessResult(
             changed=True,
             summary=f"runtime handled {host.hostname}",
-            messages=[TaskMessage(level="info", text=task.name)],
+            messages=[TaskMessage(level=TaskMessageLevel.INFO, text=task.name)],
             metadata={"platform": host.platform},
         )
 
