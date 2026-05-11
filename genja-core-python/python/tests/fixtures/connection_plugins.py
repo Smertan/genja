@@ -1,4 +1,6 @@
 class TestConnection:
+    __test__ = False
+
     def __init__(self, key):
         self.key = key
         self.alive = False

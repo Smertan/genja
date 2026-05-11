@@ -51,6 +51,45 @@ class BackupConfigTask:
         )
 
 
+@task(
+    name="verify_backup_plain",
+    connection_plugin_name="ssh",
+    options={"mode": "strict"},
+)
+class VerifyBackupPlainTask:
+    def run(self, task, host, context):
+        assert isinstance(task, TaskInfo)
+        assert isinstance(host, Host)
+        assert isinstance(context, TaskRuntimeContext)
+        assert task.options == {"mode": "strict"}
+        return TaskSuccessResult(
+            summary=f"verified {host.hostname}",
+            messages=[TaskMessage(level="info", text=task.name)],
+        )
+
+
+@task(
+    name="backup_config_plain",
+    connection_plugin_name="ssh",
+    sub_task=VerifyBackupPlainTask,
+    options={"backup_path": "/tmp/configs", "compress": True},
+)
+class BackupConfigPlainTask:
+    def run(self, task, host, context):
+        assert isinstance(task, TaskInfo)
+        assert isinstance(host, Host)
+        assert isinstance(context, TaskRuntimeContext)
+        assert task.options == {"backup_path": "/tmp/configs", "compress": True}
+        return TaskSuccessResult(
+            changed=True,
+            summary=f"backed up {host.hostname}",
+            metadata={
+                "sub_task_name": task.sub_task.name,
+                "backup_path": task.options["backup_path"],
+            },
+        )
+
+
 def test_task_definition_from_python_class_extracts_metadata():
     task_definition = genja_core.TaskDefinition.from_python_class(BackupConfigTask)
 
@@ -67,7 +106,7 @@ def test_task_definition_from_python_class_extracts_metadata():
 
 
 def test_task_definition_run_on_host_executes_python_body():
-    task_definition = genja_core.TaskDefinition.from_python_class(BackupConfigTask)
+    task_definition = genja_core.TaskDefinition.from_python_class(BackupConfigPlainTask)
 
     result = task_definition.run_on_host(Host(hostname="router1", platform="ios"))
     data = result.to_dict()
@@ -75,7 +114,7 @@ def test_task_definition_run_on_host_executes_python_body():
     assert result.passed_hosts == ["router1"]
     assert data["hosts"]["router1"]["status"] == "passed"
     assert data["hosts"]["router1"]["summary"] == "backed up router1"
-    assert data["hosts"]["router1"]["metadata"]["sub_task_name"] == "verify_backup"
+    assert data["hosts"]["router1"]["metadata"]["sub_task_name"] == "verify_backup_plain"
     assert data["hosts"]["router1"]["metadata"]["backup_path"] == "/tmp/configs"
 
 

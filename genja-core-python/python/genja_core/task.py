@@ -79,7 +79,8 @@ Task metadata comes from ``@task(...)``:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Awaitable, Protocol, TypeVar
+from enum import Enum
+from typing import Any, Awaitable, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -87,40 +88,99 @@ _TaskClassT = TypeVar("_TaskClassT", bound=type)
 
 
 class _GenjaModel(BaseModel):
+    """Base model class for Genja data structures with dictionary-like access.
+    
+    Extends Pydantic's BaseModel to provide convenient dictionary conversion
+    and attribute access via subscript notation for all Genja model classes.
+    """
+
     def to_dict(self) -> dict[str, Any]:
+        """Convert the model instance to a JSON-serializable dictionary.
+        
+        Returns:
+            dict[str, Any]: A dictionary representation of the model with all
+                fields serialized in JSON-compatible format.
+        """
         return self.model_dump(mode="json")
 
     def __getitem__(self, key: str) -> Any:
+        """Enable dictionary-style attribute access using subscript notation.
+        
+        Args:
+            key (str): The name of the attribute to retrieve.
+        
+        Returns:
+            Any: The value of the requested attribute.
+        
+        Raises:
+            AttributeError: If the specified attribute does not exist on the model.
+        """
         return getattr(self, key)
 
 
 class TaskInfo(_GenjaModel):
     """Task metadata passed into Python task ``run(...)`` methods."""
 
-    name: str
-    connection_plugin_name: str | None = None
-    processors: list[str] = Field(default_factory=list)
-    options: Any | None = None
-    sub_task: TaskInfo | None = None
+    name: str = Field(description="Unique task name.")
+    connection_plugin_name: str | None = Field(
+        default=None,
+        description="Connection plugin name used to execute this task.",
+    )
+    processors: list[str] = Field(
+        default_factory=list,
+        description="Processor plugin names applied to this task.",
+    )
+    options: Any | None = Field(
+        default=None,
+        description="JSON-serializable task options payload.",
+    )
+    sub_task: TaskInfo | None = Field(
+        default=None,
+        description="Nested task metadata for an optional sub-task.",
+    )
 
 
 class Host(_GenjaModel):
     """Host payload passed into Python task ``run(...)`` methods."""
 
-    hostname: str
-    port: int | None = None
-    username: str | None = None
-    password: str | None = None
-    platform: str | None = None
-    data: Any | None = None
+    hostname: str = Field(description="Inventory hostname for the current target.")
+    port: int | None = Field(
+        default=None,
+        description="Network port used for the current host connection.",
+    )
+    username: str | None = Field(
+        default=None,
+        description="Username used for the current host connection.",
+    )
+    password: str | None = Field(
+        default=None,
+        description="Password used for the current host connection.",
+    )
+    platform: str | None = Field(
+        default=None,
+        description="Platform identifier associated with the current host.",
+    )
+    data: Any | None = Field(
+        default=None,
+        description="Additional inventory data attached to the host.",
+    )
 
 
 class TaskRuntimeContext(_GenjaModel):
     """Runtime context passed into Python task ``run(...)`` methods."""
 
-    current_depth: int = 0
-    max_depth: int | None = None
-    connection: Any | None = None
+    current_depth: int = Field(
+        default=0,
+        description="Current task execution depth.",
+    )
+    max_depth: int | None = Field(
+        default=None,
+        description="Maximum allowed execution depth, if configured.",
+    )
+    connection: Any | None = Field(
+        default=None,
+        description="Resolved connection object available to the task.",
+    )
 
 
 class GenjaTaskProtocol(Protocol):
@@ -204,43 +264,130 @@ def task(
 class TaskMessage(_GenjaModel):
     """A structured message attached to a task result."""
 
-    level: str
-    text: str
-    code: str | None = None
-    timestamp: datetime | None = None
+    level: TaskMessageLevel = Field(description="Message severity level.")
+    text: str = Field(description="Human-readable message text.")
+    code: str | None = Field(
+        default=None,
+        description="Optional machine-readable message code.",
+    )
+    timestamp: datetime | None = Field(
+        default=None,
+        description="Timestamp associated with the message.",
+    )
+
+
+class TaskStatus(str, Enum):
+    """Canonical task status values returned by Genja task results."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class TaskFailureKind(str, Enum):
+    """Canonical task failure categories returned by Genja task results."""
+
+    CONNECTION = "connection"
+    AUTHENTICATION = "authentication"
+    VALIDATION = "validation"
+    TIMEOUT = "timeout"
+    COMMAND = "command"
+    UNSUPPORTED = "unsupported"
+    INTERNAL = "internal"
+    EXTERNAL = "external"
+
+
+class TaskMessageLevel(str, Enum):
+    """Canonical task message severity levels returned by Genja task results."""
+
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    DEBUG = "debug"
 
 
 class TaskSuccessResult(_GenjaModel):
     """Successful task outcome returned from ``run(...)``."""
 
-    status: str = "passed"
-    result: Any | None = None
-    changed: bool = False
-    diff: str | None = None
-    summary: str | None = None
-    warnings: list[str] = Field(default_factory=list)
-    messages: list[TaskMessage] = Field(default_factory=list)
-    metadata: Any | None = None
+    status: Literal[TaskStatus.PASSED] = Field(
+        default=TaskStatus.PASSED,
+        description="Task status for a successful result.",
+    )
+    result: Any | None = Field(
+        default=None,
+        description="Primary task result payload.",
+    )
+    changed: bool = Field(
+        default=False,
+        description="Whether the task changed remote or managed state.",
+    )
+    diff: str | None = Field(
+        default=None,
+        description="Optional human-readable diff for the applied change.",
+    )
+    summary: str | None = Field(
+        default=None,
+        description="Short summary of the successful task outcome.",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal warnings produced during task execution.",
+    )
+    messages: list[TaskMessage] = Field(
+        default_factory=list,
+        description="Structured messages emitted during task execution.",
+    )
+    metadata: Any | None = Field(
+        default=None,
+        description="Additional JSON-serializable metadata for the result.",
+    )
 
 
 class TaskFailureResult(_GenjaModel):
     """Failed task outcome returned from ``run(...)``."""
 
-    message: str
-    status: str = "failed"
-    kind: str = "external"
-    retryable: bool = False
-    details: Any | None = None
-    warnings: list[str] = Field(default_factory=list)
-    messages: list[TaskMessage] = Field(default_factory=list)
+    message: str = Field(description="Human-readable failure message.")
+    status: Literal[TaskStatus.FAILED] = Field(
+        default=TaskStatus.FAILED,
+        description="Task status for a failed result.",
+    )
+    kind: TaskFailureKind = Field(
+        default=TaskFailureKind.EXTERNAL,
+        description="Failure category identifier.",
+    )
+    retryable: bool = Field(
+        default=False,
+        description="Whether the failure may succeed on retry.",
+    )
+    details: Any | None = Field(
+        default=None,
+        description="Additional JSON-serializable failure details.",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal warnings produced before the failure occurred.",
+    )
+    messages: list[TaskMessage] = Field(
+        default_factory=list,
+        description="Structured messages emitted before the failure occurred.",
+    )
 
 
 class TaskSkipResult(_GenjaModel):
     """Skipped task outcome returned from ``run(...)``."""
 
-    status: str = "skipped"
-    reason: str | None = None
-    message: str | None = None
+    status: Literal[TaskStatus.SKIPPED] = Field(
+        default=TaskStatus.SKIPPED,
+        description="Task status for a skipped result.",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Machine-readable reason the task was skipped.",
+    )
+    message: str | None = Field(
+        default=None,
+        description="Human-readable explanation for the skipped task.",
+    )
 
 
 __all__ = [
@@ -250,6 +397,9 @@ __all__ = [
     "Host",
     "TaskRuntimeContext",
     "TaskMessage",
+    "TaskMessageLevel",
+    "TaskStatus",
+    "TaskFailureKind",
     "TaskSuccessResult",
     "TaskFailureResult",
     "TaskSkipResult",

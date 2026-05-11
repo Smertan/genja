@@ -72,8 +72,10 @@ def test_genja_runtime_runs_python_task_definition():
     assert results.skipped_hosts == []
     assert summary == {"passed": 2, "failed": 0, "skipped": 0, "total": 2}
     assert data["task_name"] == "runtime_backup"
-    assert data["hosts"]["router1"]["Passed"]["summary"] == "runtime handled 10.0.0.1"
-    assert data["hosts"]["router2"]["Passed"]["metadata"]["platform"] == "ios"
+    assert data["hosts"]["router1"]["status"] == "passed"
+    assert data["hosts"]["router1"]["summary"] == "runtime handled 10.0.0.1"
+    assert data["hosts"]["router2"]["status"] == "passed"
+    assert data["hosts"]["router2"]["metadata"]["platform"] == "ios"
 
 
 def test_genja_inventory_accessors_expose_host_payloads():
@@ -160,7 +162,8 @@ def test_genja_runtime_passes_python_connection_into_runtime_context():
     results = runtime.run_task(RuntimeConnectionTask)
     data = results.to_dict()
 
-    assert data["hosts"]["router1"]["Passed"]["metadata"] == {
+    assert data["hosts"]["router1"]["status"] == "passed"
+    assert data["hosts"]["router1"]["metadata"] == {
         "connection_alive": True,
         "connection_hostname": "router1",
         "opened_with": {
