@@ -1,7 +1,7 @@
-use ::genja_core::Settings;
 use ::genja_core::settings::{
     CoreConfig, InventoryConfig, LoggingConfig, OptionsConfig, RunnerConfig, SSHConfig,
 };
+use ::genja_core::Settings;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
@@ -328,8 +328,8 @@ mod tests {
     fn register_adds_settings_classes_to_module() {
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
-            let module = PyModule::new(py, "test_settings_module")
-                .expect("test module should be created");
+            let module =
+                PyModule::new(py, "test_settings_module").expect("test module should be created");
 
             register(&module).expect("settings classes should register");
 

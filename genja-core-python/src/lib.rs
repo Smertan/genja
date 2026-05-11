@@ -1,12 +1,180 @@
+//! Python bindings for Genja Core.
+//!
+//! This module provides Python bindings for the Genja infrastructure automation framework,
+//! enabling Python applications to leverage Genja's task execution, inventory management,
+//! and plugin system capabilities.
+//!
+//! # Overview
+//!
+//! The `genja_core` Python module exposes the following core components:
+//!
+//! - **Runtime** (`Genja`) - Main entry point for task execution and inventory management
+//! - **Plugin Manager** (`PluginManager`) - Dynamic plugin loading and management
+//! - **Settings** (`Settings`, `CoreConfig`) - Configuration management with file and environment variable support
+//! - **Task System** (`TaskDefinition`, `TaskResults`, `HostTaskResult`) - Task definition and execution results
+//!
+//! # Architecture
+//!
+//! This crate uses PyO3 to bridge Rust and Python, providing:
+//!
+//! 1. **Type Conversion** - Automatic conversion between Rust and Python types
+//! 2. **Error Handling** - Rust errors are converted to Python exceptions
+//! 3. **Memory Safety** - Rust's ownership model ensures safe Python/Rust interop
+//! 4. **Performance** - Native Rust performance with Python convenience
+//!
+//! # Module Structure
+//!
+//! The Python module is organized into submodules that mirror the Rust crate structure:
+//!
+//! ```text
+//! genja_core/
+//! ├── Genja              (runtime execution)
+//! ├── PluginManager      (plugin management)
+//! ├── Settings           (configuration)
+//! ├── CoreConfig         (core settings)
+//! ├── TaskDefinition     (task definitions)
+//! ├── TaskResults        (execution results)
+//! └── HostTaskResult     (per-host results)
+//! ```
+//!
+//! # Python Usage Examples
+//!
+//! ## Basic Task Execution
+//!
+//! ```python
+//! from genja_core import Genja, Settings
+//!
+//! # Load configuration
+//! settings = Settings.from_file("config.yaml")
+//!
+//! # Create Genja instance with inventory
+//! genja = Genja.builder(inventory).with_settings(settings).build()
+//!
+//! # Execute task
+//! results = genja.run(task_definition, max_depth=10)
+//! ```
+//!
+//! ## Plugin Management
+//!
+//! ```python
+//! from genja_core import PluginManager
+//!
+//! # Create plugin manager
+//! manager = PluginManager.new()
+//!
+//! # Load plugins from directory
+//! manager.with_path("/path/to/plugins")
+//!
+//! # Get specific plugin
+//! plugin = manager.get_plugin("my_plugin")
+//! ```
+//!
+//! ## Configuration Management
+//!
+//! ```python
+//! from genja_core import Settings, CoreConfig
+//!
+//! # Load from file
+//! settings = Settings.from_file("config.yaml")
+//!
+//! # Access configuration
+//! core_config = settings.core()
+//! if core_config.raise_on_error():
+//!     print("Errors will cause immediate termination")
+//! ```
+//!
+//! # Python Stub Files
+//!
+//! This module includes `.pyi` stub files for type checking and IDE support.
+//! These stubs provide type hints for all exposed classes and functions, enabling:
+//!
+//! - Static type checking with mypy
+//! - IDE autocomplete and documentation
+//! - Better development experience
+//!
+//! # Thread Safety
+//!
+//! The Python bindings are designed to work with Python's Global Interpreter Lock (GIL):
+//!
+//! - All Rust operations that may block release the GIL when appropriate
+//! - Async operations are properly bridged to Python's asyncio
+//! - Thread-safe operations are marked as such in the Python API
+//!
+//! # Error Handling
+//!
+//! Rust errors are automatically converted to Python exceptions:
+//!
+//! ```python
+//! try:
+//!     settings = Settings.from_file("missing.yaml")
+//! except Exception as e:
+//!     print(f"Configuration error: {e}")
+//! ```
+//!
+//! # Performance Considerations
+//!
+//! - **Zero-copy where possible** - Data is shared between Rust and Python when safe
+//! - **Minimal conversions** - Type conversions are optimized for common cases
+//! - **Native execution** - Core logic runs at native Rust speed
+//! - **GIL management** - Long-running operations release the GIL to allow concurrency
+//!
+//! # Development
+//!
+//! ## Building
+//!
+//! ```bash
+//! # Build the Python extension
+//! cargo build --release
+//!
+//! # Install in development mode
+//! pip install -e .
+//! ```
+//!
+//! ## Testing
+//!
+//! ```bash
+//! # Run Rust tests
+//! cargo test
+//!
+//! # Run Python tests
+//! pytest tests/
+//! ```
+//!
+//! # See Also
+//!
+//! - [`genja-core`](../genja_core/index.html) - Core Rust implementation
+//! - [`genja-plugin-manager`](../genja_plugin_manager/index.html) - Plugin system
+//! - [PyO3 Documentation](https://pyo3.rs/) - Python/Rust bindings framework
+
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
+mod plugin_manager;
 mod runtime;
 mod settings;
 mod task;
 
+/// Initializes the `genja_core` Python module by registering all submodules.
+///
+/// This function serves as the entry point for the PyO3-based Python extension module.
+/// It registers all core components of the Genja framework, including plugin management,
+/// runtime, settings, and task functionality.
+///
+/// # Parameters
+///
+/// * `_py` - A reference to the Python interpreter. This parameter is prefixed with an
+///   underscore as it's required by the PyO3 framework but not directly used in this function.
+/// * `module` - A bound reference to the Python module being initialized. This is the module
+///   object that will contain all registered classes, functions, and submodules.
+///
+/// # Returns
+///
+/// Returns `PyResult<()>` which is:
+/// * `Ok(())` if all submodules are successfully registered
+/// * `Err(PyErr)` if any submodule registration fails
 #[pymodule]
 fn genja_core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    plugin_manager::register(module)?;
     runtime::register(module)?;
     settings::register(module)?;
     task::register(module)?;
@@ -33,6 +201,7 @@ mod tests {
             genja_core(py, &module).expect("module initialization should succeed");
 
             assert!(module.getattr("Genja").is_ok());
+            assert!(module.getattr("PluginManager").is_ok());
             assert!(module.getattr("Settings").is_ok());
             assert!(module.getattr("CoreConfig").is_ok());
             assert!(module.getattr("TaskDefinition").is_ok());

@@ -22,7 +22,7 @@
 //! - `GENJA_INVENTORY_PLUGIN` - Inventory plugin name (default: "FileInventoryPlugin")
 //! - `GENJA_RUNNER_PLUGIN` - Runner plugin name (default: "threaded")
 //! - `GENJA_LOGGING_LEVEL` - Log level (default: "info")
-//! - `GENJA_LOGGING_LOG_FILE` - Log file path (default: "./genja.log")
+//! - `GENJA_LOGGING_LOG_FILE` - Log file path (default: "genja.log")
 //! - `GENJA_LOGGING_TO_CONSOLE` - Enable console logging (default: false)
 //!
 //! # Settings Reference
@@ -1132,21 +1132,21 @@ impl Default for SSHConfigBuilder {
 ///
 /// This struct defines how tasks should be executed in Genja, specifying which
 /// runner plugin to use and its configuration options. The runner plugin controls
-/// the execution strategy (e.g., sequential, threaded, async) and behavior for
-/// running tasks across hosts.
+/// the execution strategy (e.g., serial or threaded) and behavior for running
+/// tasks across hosts.
 ///
 /// # Fields
 ///
 /// * `plugin` - The name of the runner plugin to use for task execution.
 ///   Defaults to the value from the `GENJA_RUNNER_PLUGIN` environment variable,
 ///   or "threaded" if not set. Common values include "threaded" for concurrent
-///   execution or "sequential" for one-at-a-time execution.
+///   execution or "serial" for one-at-a-time execution.
 /// * `options` - A JSON object containing plugin-specific configuration options.
 ///   The structure and available options depend on the selected plugin. Defaults
 ///   to an empty object.
 /// * `worker_count` - Optional worker count for runner implementations that support
 ///   a fixed concurrency setting. For the built-in `"threaded"` runner, this is the
-///   canonical way to control the number of worker threads.
+///   canonical way to control the maximum number of concurrent host executions.
 /// * `max_task_depth` - Maximum recursion depth for task/sub-task execution.
 ///   Defaults to `10`.
 /// * `max_connection_attempts` - Maximum number of connection attempts before retries
@@ -1454,9 +1454,8 @@ impl LoggingConfig {
 ///   value from the `GENJA_LOGGING_LEVEL` environment variable or "info" will be used.
 /// * `log_file` - Optional file path where logs should be written. When set to
 ///   `Some(path)`, logs will be written to the specified file. If `None`, the default
-///   value from the `GENJA_LOGGING_LOG_FILE` environment variable or `genja.log` in
-///   the current working directory
-///   `genja.log` file will be used in the current working directory.
+///   value from the `GENJA_LOGGING_LOG_FILE` environment variable or `genja.log`
+///   in the current working directory will be used.
 /// * `to_console` - Optional flag controlling whether logs should be written to the
 ///   console in addition to the log file. When set to `Some(true)`, console logging
 ///   will be enabled. When set to `Some(false)`, console logging will be disabled.

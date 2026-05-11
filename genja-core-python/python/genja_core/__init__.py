@@ -7,6 +7,16 @@ for compatibility, but new code should prefer:
 """
 
 from .genja_core import *
+from .connection import (
+    ConnectionKey,
+    ConnectionPluginProtocol,
+    ConnectionProtocol,
+    ResolvedConnectionParams,
+)
+from .inventory import InventoryPluginProtocol
+from .plugin_manager import PluginManager
+from .processor import TaskProcessorContext, TaskProcessorProtocol
+from .runner import RunnerPluginProtocol
 from .settings import (
     CoreConfig,
     InventoryConfig,
@@ -19,7 +29,7 @@ from .settings import (
 from .task import (
     GenjaTaskProtocol,
     Host,
-    TaskExecutionContext,
+    TaskRuntimeContext,
     TaskFailureResult,
     TaskInfo,
     TaskMessage,
@@ -27,6 +37,7 @@ from .task import (
     TaskSuccessResult,
     task,
 )
+from .transform import TransformFunctionPluginProtocol
 
 
 __doc__ = genja_core.__doc__
@@ -35,6 +46,16 @@ if hasattr(genja_core, "__all__"):
 
 __all__ = list(__all__) + [
     "task",
+    "ConnectionKey",
+    "ResolvedConnectionParams",
+    "ConnectionProtocol",
+    "ConnectionPluginProtocol",
+    "InventoryPluginProtocol",
+    "PluginManager",
+    "TaskProcessorContext",
+    "TaskProcessorProtocol",
+    "RunnerPluginProtocol",
+    "TransformFunctionPluginProtocol",
     "Settings",
     "CoreConfig",
     "InventoryConfig",
@@ -45,7 +66,7 @@ __all__ = list(__all__) + [
     "GenjaTaskProtocol",
     "TaskInfo",
     "Host",
-    "TaskExecutionContext",
+    "TaskRuntimeContext",
     "TaskMessage",
     "TaskSuccessResult",
     "TaskFailureResult",

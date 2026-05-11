@@ -2,7 +2,7 @@ import genja_core
 import pytest
 from genja_core.task import (
     Host,
-    TaskExecutionContext,
+    TaskRuntimeContext,
     TaskInfo,
     TaskMessage,
     TaskSuccessResult,
@@ -10,12 +10,18 @@ from genja_core.task import (
 )
 
 
-@task(name="verify_backup", plugin_name="ssh", options={"mode": "strict"})
+@task(
+    name="verify_backup",
+    connection_plugin_name="ssh",
+    processors=["audit"],
+    options={"mode": "strict"},
+)
 class VerifyBackupTask:
     def run(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
-        assert isinstance(context, TaskExecutionContext)
+        assert isinstance(context, TaskRuntimeContext)
+        assert task.processors == ["audit"]
         assert task.options == {"mode": "strict"}
         return TaskSuccessResult(
             summary=f"verified {host.hostname}",
@@ -25,7 +31,7 @@ class VerifyBackupTask:
 
 @task(
     name="backup_config",
-    plugin_name="ssh",
+    connection_plugin_name="ssh",
     sub_task=VerifyBackupTask,
     options={"backup_path": "/tmp/configs", "compress": True},
 )
@@ -33,7 +39,7 @@ class BackupConfigTask:
     def run(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
-        assert isinstance(context, TaskExecutionContext)
+        assert isinstance(context, TaskRuntimeContext)
         assert task.options == {"backup_path": "/tmp/configs", "compress": True}
         return TaskSuccessResult(
             changed=True,
@@ -49,13 +55,14 @@ def test_task_definition_from_python_class_extracts_metadata():
     task_definition = genja_core.TaskDefinition.from_python_class(BackupConfigTask)
 
     assert task_definition.name == "backup_config"
-    assert task_definition.plugin_name == "ssh"
+    assert task_definition.connection_plugin_name == "ssh"
     assert len(task_definition.sub_tasks) == 1
     assert task_definition.sub_tasks[0].name == "verify_backup"
     assert task_definition.to_dict()["options"] == {
         "backup_path": "/tmp/configs",
         "compress": True,
     }
+    assert task_definition.sub_tasks[0].to_dict()["processors"] == ["audit"]
     assert task_definition.sub_tasks[0].to_dict()["options"] == {"mode": "strict"}
 
 
@@ -65,11 +72,11 @@ def test_task_definition_run_on_host_executes_python_body():
     result = task_definition.run_on_host(Host(hostname="router1", platform="ios"))
     data = result.to_dict()
 
-    assert result.status == "passed"
-    assert data["changed"] is True
-    assert data["summary"] == "backed up router1"
-    assert data["metadata"]["sub_task_name"] == "verify_backup"
-    assert data["metadata"]["backup_path"] == "/tmp/configs"
+    assert result.passed_hosts == ["router1"]
+    assert data["hosts"]["router1"]["status"] == "passed"
+    assert data["hosts"]["router1"]["summary"] == "backed up router1"
+    assert data["hosts"]["router1"]["metadata"]["sub_task_name"] == "verify_backup"
+    assert data["hosts"]["router1"]["metadata"]["backup_path"] == "/tmp/configs"
 
 
 def test_task_definition_from_python_class_requires_decorator_metadata():
@@ -81,19 +88,45 @@ def test_task_definition_from_python_class_requires_decorator_metadata():
         genja_core.TaskDefinition.from_python_class(MissingMetadataTask)
 
 
-def test_task_definition_from_python_class_rejects_empty_plugin_name():
-    @task(name="backup_config", plugin_name="")
+def test_task_definition_from_python_class_allows_missing_connection_plugin_name():
+    @task(name="backup_config")
+    class NoConnectionTask:
+        def run(self, task, host, context):
+            return TaskSuccessResult(summary="noop")
+
+    task_definition = genja_core.TaskDefinition.from_python_class(NoConnectionTask)
+
+    assert task_definition.connection_plugin_name is None
+    assert task_definition.to_dict()["connection_plugin_name"] is None
+
+
+def test_task_decorator_rejects_empty_connection_plugin_name():
+    with pytest.raises(
+        TypeError, match="connection_plugin_name must be a non-empty string or None"
+    ):
+
+        @task(name="backup_config", connection_plugin_name="")
+        class InvalidTask:
+            def run(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
+def test_task_definition_from_python_class_rejects_empty_connection_plugin_name_in_metadata():
+    @task(name="backup_config", connection_plugin_name="ssh")
     class InvalidTask:
         def run(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
-    with pytest.raises(ValueError, match="plugin_name.*must not be empty"):
+    InvalidTask.__genja_task_info__["connection_plugin_name"] = ""
+
+    with pytest.raises(ValueError, match="connection_plugin_name.*must not be empty"):
         genja_core.TaskDefinition.from_python_class(InvalidTask)
 
 
 def test_task_decorator_requires_callable_run_method():
     with pytest.raises(TypeError, match="must define a 'run' method"):
-        @task(name="backup_config", plugin_name="ssh")
+
+        @task(name="backup_config", connection_plugin_name="ssh")
         class InvalidTask:
             pass
 
@@ -104,7 +137,12 @@ def test_task_decorator_rejects_undecorated_sub_task():
             return TaskSuccessResult(summary="noop")
 
     with pytest.raises(TypeError, match="must also be decorated with @task"):
-        @task(name="backup_config", plugin_name="ssh", sub_task=PlainSubTask)
+
+        @task(
+            name="backup_config",
+            connection_plugin_name="ssh",
+            sub_task=PlainSubTask,
+        )
         class InvalidTask:
             def run(self, task, host, context):
                 return TaskSuccessResult(summary="noop")

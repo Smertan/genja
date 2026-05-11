@@ -8,7 +8,7 @@ classifiers = [
 ]
 # dynamic = ["version"]
 dependencies = [
-    "pip>=25.0.1",
+    "pip>=26.1",
     "pydantic>=2.11.0",
 ]
 version = "0.1.0"
@@ -28,11 +28,13 @@ distribution = false
 
 [tool.pdm.scripts]
 test = { shell = "maturin develop && pytest -v python/tests" }
+typecheck = { shell = "maturin develop && ty check python/tests/typecheck" }
 
 [dependency-groups]
 dev = [
     "patchelf>=0.17.2.4",
     "pytest>=9.0.3",
+    "ty>=0.0.34",
 ]
 
 [build-system]
