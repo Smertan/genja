@@ -84,6 +84,25 @@ def test_genja_runtime_runs_python_task_definition():
     assert data["hosts"]["router2"]["metadata"]["platform"] == "ios"
 
 
+def test_task_results_to_dict_normalizes_non_raw_and_preserves_raw_shape():
+    runtime = genja_core.Genja.from_hosts(
+        {
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }
+    ).with_runner("serial")
+    results = runtime.run_task(RuntimeBackupTask)
+
+    normalized = results.to_dict()
+    raw = results.to_dict(raw=True)
+
+    assert normalized["hosts"]["router1"]["status"] == "passed"
+    assert normalized["hosts"]["router1"]["summary"] == "runtime handled 10.0.0.1"
+    assert "Passed" not in normalized["hosts"]["router1"]
+
+    assert raw["hosts"]["router1"]["Passed"]["summary"] == "runtime handled 10.0.0.1"
+    assert "status" not in raw["hosts"]["router1"]
+
+
 def test_genja_inventory_accessors_expose_host_payloads():
     runtime = genja_core.Genja.from_hosts(
         {
