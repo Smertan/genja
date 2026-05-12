@@ -1,5 +1,11 @@
 import genja_core
-from genja_core.task import Host, TaskMessage, TaskSuccessResult, task
+from genja_core.task import (
+    Host,
+    TaskMessage,
+    TaskMessageLevel,
+    TaskSuccessResult,
+    task,
+)
 from tests.fixtures.connection_plugins import ConnectionPlugin, TestConnection
 
 
@@ -9,7 +15,7 @@ class RuntimeBackupTask:
         return TaskSuccessResult(
             changed=True,
             summary=f"runtime handled {host.hostname}",
-            messages=[TaskMessage(level="info", text=task.name)],
+            messages=[TaskMessage(level=TaskMessageLevel.INFO, text=task.name)],
             metadata={"platform": host.platform},
         )
 
@@ -72,8 +78,29 @@ def test_genja_runtime_runs_python_task_definition():
     assert results.skipped_hosts == []
     assert summary == {"passed": 2, "failed": 0, "skipped": 0, "total": 2}
     assert data["task_name"] == "runtime_backup"
-    assert data["hosts"]["router1"]["Passed"]["summary"] == "runtime handled 10.0.0.1"
-    assert data["hosts"]["router2"]["Passed"]["metadata"]["platform"] == "ios"
+    assert data["hosts"]["router1"]["status"] == "passed"
+    assert data["hosts"]["router1"]["summary"] == "runtime handled 10.0.0.1"
+    assert data["hosts"]["router2"]["status"] == "passed"
+    assert data["hosts"]["router2"]["metadata"]["platform"] == "ios"
+
+
+def test_task_results_to_dict_normalizes_non_raw_and_preserves_raw_shape():
+    runtime = genja_core.Genja.from_hosts(
+        {
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }
+    ).with_runner("serial")
+    results = runtime.run_task(RuntimeBackupTask)
+
+    normalized = results.to_dict()
+    raw = results.to_dict(raw=True)
+
+    assert normalized["hosts"]["router1"]["status"] == "passed"
+    assert normalized["hosts"]["router1"]["summary"] == "runtime handled 10.0.0.1"
+    assert "Passed" not in normalized["hosts"]["router1"]
+
+    assert raw["hosts"]["router1"]["Passed"]["summary"] == "runtime handled 10.0.0.1"
+    assert "status" not in raw["hosts"]["router1"]
 
 
 def test_genja_inventory_accessors_expose_host_payloads():
@@ -160,7 +187,8 @@ def test_genja_runtime_passes_python_connection_into_runtime_context():
     results = runtime.run_task(RuntimeConnectionTask)
     data = results.to_dict()
 
-    assert data["hosts"]["router1"]["Passed"]["metadata"] == {
+    assert data["hosts"]["router1"]["status"] == "passed"
+    assert data["hosts"]["router1"]["metadata"] == {
         "connection_alive": True,
         "connection_hostname": "router1",
         "opened_with": {

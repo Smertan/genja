@@ -2,12 +2,15 @@ import genja_core
 import pytest
 from genja_core.task import (
     Host,
+    GenjaTaskProtocol,
     TaskRuntimeContext,
+    TaskMessageLevel,
     TaskInfo,
     TaskMessage,
     TaskSuccessResult,
     task,
 )
+from typing import cast
 
 
 @task(
@@ -25,7 +28,7 @@ class VerifyBackupTask:
         assert task.options == {"mode": "strict"}
         return TaskSuccessResult(
             summary=f"verified {host.hostname}",
-            messages=[TaskMessage(level="info", text=task.name)],
+            messages=[TaskMessage(level=TaskMessageLevel.INFO, text=task.name)],
         )
 
 
@@ -36,6 +39,45 @@ class VerifyBackupTask:
     options={"backup_path": "/tmp/configs", "compress": True},
 )
 class BackupConfigTask:
+    def run(self, task, host, context):
+        assert isinstance(task, TaskInfo)
+        assert isinstance(host, Host)
+        assert isinstance(context, TaskRuntimeContext)
+        assert task.options == {"backup_path": "/tmp/configs", "compress": True}
+        return TaskSuccessResult(
+            changed=True,
+            summary=f"backed up {host.hostname}",
+            metadata={
+                "sub_task_name": task.sub_task.name,
+                "backup_path": task.options["backup_path"],
+            },
+        )
+
+
+@task(
+    name="verify_backup_plain",
+    connection_plugin_name="ssh",
+    options={"mode": "strict"},
+)
+class VerifyBackupPlainTask:
+    def run(self, task, host, context):
+        assert isinstance(task, TaskInfo)
+        assert isinstance(host, Host)
+        assert isinstance(context, TaskRuntimeContext)
+        assert task.options == {"mode": "strict"}
+        return TaskSuccessResult(
+            summary=f"verified {host.hostname}",
+            messages=[TaskMessage(level=TaskMessageLevel.INFO, text=task.name)],
+        )
+
+
+@task(
+    name="backup_config_plain",
+    connection_plugin_name="ssh",
+    sub_task=VerifyBackupPlainTask,
+    options={"backup_path": "/tmp/configs", "compress": True},
+)
+class BackupConfigPlainTask:
     def run(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
@@ -67,7 +109,7 @@ def test_task_definition_from_python_class_extracts_metadata():
 
 
 def test_task_definition_run_on_host_executes_python_body():
-    task_definition = genja_core.TaskDefinition.from_python_class(BackupConfigTask)
+    task_definition = genja_core.TaskDefinition.from_python_class(BackupConfigPlainTask)
 
     result = task_definition.run_on_host(Host(hostname="router1", platform="ios"))
     data = result.to_dict()
@@ -75,7 +117,7 @@ def test_task_definition_run_on_host_executes_python_body():
     assert result.passed_hosts == ["router1"]
     assert data["hosts"]["router1"]["status"] == "passed"
     assert data["hosts"]["router1"]["summary"] == "backed up router1"
-    assert data["hosts"]["router1"]["metadata"]["sub_task_name"] == "verify_backup"
+    assert data["hosts"]["router1"]["metadata"]["sub_task_name"] == "verify_backup_plain"
     assert data["hosts"]["router1"]["metadata"]["backup_path"] == "/tmp/configs"
 
 
@@ -111,15 +153,65 @@ def test_task_decorator_rejects_empty_connection_plugin_name():
                 return TaskSuccessResult(summary="noop")
 
 
+def test_task_decorator_rejects_empty_name():
+    with pytest.raises(TypeError, match="name must be a non-empty string"):
+
+        @task(name="   ", connection_plugin_name="ssh")
+        class InvalidTask:
+            def run(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
+def test_task_decorator_rejects_non_json_serializable_options():
+    with pytest.raises(TypeError, match="options must be JSON-serializable"):
+
+        @task(
+            name="backup_config",
+            connection_plugin_name="ssh",
+            options={"callback": lambda: None},
+        )
+        class InvalidTask:
+            def run(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
 def test_task_definition_from_python_class_rejects_empty_connection_plugin_name_in_metadata():
     @task(name="backup_config", connection_plugin_name="ssh")
     class InvalidTask:
         def run(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
-    InvalidTask.__genja_task_info__["connection_plugin_name"] = ""
+    cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__[
+        "connection_plugin_name"
+    ] = ""
 
     with pytest.raises(ValueError, match="connection_plugin_name.*must not be empty"):
+        genja_core.TaskDefinition.from_python_class(InvalidTask)
+
+
+def test_task_definition_from_python_class_rejects_empty_name_in_metadata():
+    @task(name="backup_config", connection_plugin_name="ssh")
+    class InvalidTask:
+        def run(self, task, host, context):
+            return TaskSuccessResult(summary="noop")
+
+    cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__["name"] = "   "
+
+    with pytest.raises(ValueError, match="field 'name' must not be empty"):
+        genja_core.TaskDefinition.from_python_class(InvalidTask)
+
+
+def test_task_definition_from_python_class_rejects_non_json_serializable_options_in_metadata():
+    @task(name="backup_config", connection_plugin_name="ssh")
+    class InvalidTask:
+        def run(self, task, host, context):
+            return TaskSuccessResult(summary="noop")
+
+    cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__["options"] = {
+        "callback": lambda: None
+    }
+
+    with pytest.raises(TypeError, match="not JSON serializable"):
         genja_core.TaskDefinition.from_python_class(InvalidTask)
 
 

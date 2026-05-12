@@ -2,40 +2,88 @@ from __future__ import annotations
 
 from typing import Any
 
-from .connection import (
-    ConnectionKey,
-    ConnectionPluginProtocol,
-    ConnectionProtocol,
-    ResolvedConnectionParams,
-)
-from .inventory import InventoryPluginProtocol
-from .plugin_manager import PluginManager
-from .processor import TaskProcessorContext, TaskProcessorProtocol
-from .runner import RunnerPluginProtocol
-from .settings import (
-    CoreConfig,
-    InventoryConfig,
-    LoggingConfig,
-    OptionsConfig,
-    RunnerConfig,
-    SSHConfig,
-    Settings,
-)
-from .task import (
-    GenjaTaskProtocol,
-    Host,
-    TaskFailureKind,
-    TaskRuntimeContext,
-    TaskFailureResult,
-    TaskInfo,
-    TaskMessage,
-    TaskMessageLevel,
-    TaskSkipResult,
-    TaskStatus,
-    TaskSuccessResult,
-    task,
-)
-from .transform import TransformFunctionPluginProtocol
+from .task import GenjaTaskProtocol
+
+
+class PluginManager:
+    def __init__(self) -> None: ...
+    def load_rust_plugins_from_directory(self, path: str) -> None: ...
+    def register_plugin(self, plugin: Any) -> None: ...
+    def load_python_plugins_from_pyproject(self, path: str | None = None) -> None: ...
+    def deregister_plugin(self, name: str) -> str | None: ...
+    def plugin_names(self) -> list[str]: ...
+    def plugin_names_and_groups(self) -> list[tuple[str, str]]: ...
+
+
+class OptionsConfig:
+    @property
+    def hosts_file(self) -> str | None: ...
+    @property
+    def groups_file(self) -> str | None: ...
+    @property
+    def defaults_file(self) -> str | None: ...
+
+
+class CoreConfig:
+    @property
+    def raise_on_error(self) -> bool: ...
+
+
+class InventoryConfig:
+    @property
+    def plugin(self) -> str: ...
+    @property
+    def options(self) -> OptionsConfig: ...
+    @property
+    def transform_function(self) -> str | None: ...
+
+
+class SSHConfig:
+    @property
+    def config_file(self) -> str | None: ...
+
+
+class RunnerConfig:
+    @property
+    def plugin(self) -> str: ...
+    @property
+    def worker_count(self) -> int | None: ...
+    @property
+    def max_task_depth(self) -> int: ...
+    @property
+    def max_connection_attempts(self) -> int: ...
+
+
+class LoggingConfig:
+    @property
+    def enabled(self) -> bool: ...
+    @property
+    def level(self) -> str: ...
+    @property
+    def log_file(self) -> str: ...
+    @property
+    def to_console(self) -> bool: ...
+    @property
+    def file_size(self) -> int: ...
+    @property
+    def max_file_count(self) -> int: ...
+
+
+class Settings:
+    def __init__(self) -> None: ...
+    @staticmethod
+    def from_file(path: str) -> Settings: ...
+    @property
+    def core(self) -> CoreConfig: ...
+    @property
+    def inventory(self) -> InventoryConfig: ...
+    @property
+    def ssh(self) -> SSHConfig: ...
+    @property
+    def runner(self) -> RunnerConfig: ...
+    @property
+    def logging(self) -> LoggingConfig: ...
+
 
 class HostTaskResult:
     @staticmethod
@@ -44,7 +92,9 @@ class HostTaskResult:
     def status(self) -> str: ...
     def to_dict(self) -> dict[str, Any]: ...
 
+
 class TaskConnectionResolver: ...
+
 
 class TaskDefinition:
     @staticmethod
@@ -69,6 +119,7 @@ class TaskDefinition:
         max_depth: int = 0,
     ) -> TaskResults: ...
 
+
 class TaskResults:
     @property
     def task_name(self) -> str: ...
@@ -83,6 +134,7 @@ class TaskResults:
     def merge(self, other: TaskResults) -> None: ...
     def to_dict(self, *, raw: bool = False) -> dict[str, Any]: ...
     def to_json(self, *, raw: bool = False, pretty: bool = False) -> str: ...
+
 
 class Genja:
     @staticmethod
@@ -114,46 +166,12 @@ class Genja:
         max_depth: int | None = None,
     ) -> TaskResults: ...
 
+
 class GenjaBuilder:
     def with_plugin(self, plugin: Any) -> GenjaBuilder: ...
     def with_plugin_manager(self, plugin_manager: PluginManager) -> GenjaBuilder: ...
     def with_runner(self, runner: str) -> GenjaBuilder: ...
     def build(self) -> Genja: ...
 
-__all__ = [
-    "HostTaskResult",
-    "TaskConnectionResolver",
-    "TaskDefinition",
-    "TaskResults",
-    "Genja",
-    "GenjaBuilder",
-    "task",
-    "ConnectionKey",
-    "ResolvedConnectionParams",
-    "ConnectionProtocol",
-    "ConnectionPluginProtocol",
-    "InventoryPluginProtocol",
-    "PluginManager",
-    "TaskProcessorContext",
-    "TaskProcessorProtocol",
-    "RunnerPluginProtocol",
-    "TransformFunctionPluginProtocol",
-    "Settings",
-    "CoreConfig",
-    "InventoryConfig",
-    "OptionsConfig",
-    "SSHConfig",
-    "RunnerConfig",
-    "LoggingConfig",
-    "GenjaTaskProtocol",
-    "TaskInfo",
-    "Host",
-    "TaskRuntimeContext",
-    "TaskMessage",
-    "TaskMessageLevel",
-    "TaskStatus",
-    "TaskFailureKind",
-    "TaskSuccessResult",
-    "TaskFailureResult",
-    "TaskSkipResult",
-]
+
+__all__: list[str]

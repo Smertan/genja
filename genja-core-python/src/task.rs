@@ -10,7 +10,7 @@ use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -386,18 +386,41 @@ impl PyTaskResults {
         let value: Value = serde_json::from_str(&dumped).map_err(|err| {
             PyValueError::new_err(format!("failed to parse task results json: {err}"))
         })?;
+        let value = if raw {
+            value
+        } else {
+            normalize_task_results_json(&value)
+        };
         json_value_to_py(py, &value)
     }
 
     #[pyo3(signature = (*, raw=false, pretty=false))]
     fn to_json(&self, raw: bool, pretty: bool) -> PyResult<String> {
-        match (raw, pretty) {
+        let dumped = match (raw, pretty) {
             (true, true) => self.inner.to_raw_pretty_json_string(),
             (true, false) => self.inner.to_raw_json_string(),
             (false, true) => self.inner.to_pretty_json_string(),
             (false, false) => self.inner.to_json_string(),
         }
-        .map_err(|err| PyValueError::new_err(format!("failed to serialize task results: {err}")))
+        .map_err(|err| PyValueError::new_err(format!("failed to serialize task results: {err}")))?;
+
+        if raw {
+            return Ok(dumped);
+        }
+
+        let value: Value = serde_json::from_str(&dumped).map_err(|err| {
+            PyValueError::new_err(format!("failed to parse task results json: {err}"))
+        })?;
+        let normalized = normalize_task_results_json(&value);
+        if pretty {
+            serde_json::to_string_pretty(&normalized).map_err(|err| {
+                PyValueError::new_err(format!("failed to serialize task results: {err}"))
+            })
+        } else {
+            serde_json::to_string(&normalized).map_err(|err| {
+                PyValueError::new_err(format!("failed to serialize task results: {err}"))
+            })
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -639,6 +662,41 @@ fn host_task_result_to_json(result: &HostTaskResult) -> Value {
             "message": skip.message(),
         }),
     }
+}
+
+fn normalize_task_results_json(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return value.clone();
+    };
+
+    let mut normalized = object.clone();
+
+    if let Some(hosts) = object.get("hosts").and_then(Value::as_object) {
+        let normalized_hosts = hosts
+            .iter()
+            .map(|(hostname, result)| {
+                let normalized_result = host_task_result_from_payload(result)
+                    .map(|result| host_task_result_to_json(&result));
+                (
+                    hostname.clone(),
+                    normalized_result.unwrap_or_else(|_| result.clone()),
+                )
+            })
+            .collect::<serde_json::Map<String, Value>>();
+        normalized.insert("hosts".to_string(), Value::Object(normalized_hosts));
+    }
+
+    if let Some(sub_tasks) = object.get("sub_tasks").and_then(Value::as_object) {
+        let normalized_sub_tasks = sub_tasks
+            .iter()
+            .map(|(task_name, sub_results)| {
+                (task_name.clone(), normalize_task_results_json(sub_results))
+            })
+            .collect::<serde_json::Map<String, Value>>();
+        normalized.insert("sub_tasks".to_string(), Value::Object(normalized_sub_tasks));
+    }
+
+    Value::Object(normalized)
 }
 
 fn task_results_summary_to_json(summary: &TaskResultsSummary) -> Value {
@@ -1188,16 +1246,18 @@ mod tests {
             result
                 .set_item(
                     "messages",
-                    vec![json_value_to_py(
-                        py,
-                        &json!({
-                            "level": "info",
-                            "text": "backup complete",
-                            "code": "BACKUP_DONE",
-                            "timestamp": "2026-04-29T12:00:00Z",
-                        }),
-                    )
-                    .unwrap()],
+                    vec![
+                        json_value_to_py(
+                            py,
+                            &json!({
+                                "level": "info",
+                                "text": "backup complete",
+                                "code": "BACKUP_DONE",
+                                "timestamp": "2026-04-29T12:00:00Z",
+                            }),
+                        )
+                        .unwrap(),
+                    ],
                 )
                 .unwrap();
             result
@@ -1230,9 +1290,10 @@ mod tests {
 
             let err = python_result_to_host_task_result(result.into_any())
                 .expect_err("unknown status should fail");
-            assert!(err
-                .to_string()
-                .contains("unsupported python task result status 'unknown'"));
+            assert!(
+                err.to_string()
+                    .contains("unsupported python task result status 'unknown'")
+            );
         });
     }
 
@@ -1329,9 +1390,11 @@ mod tests {
             let err = extract_python_task_spec(task)
                 .err()
                 .expect("empty plugin should fail");
-            assert!(err
-                .to_string()
-                .contains("python task metadata field 'connection_plugin_name' must not be empty"));
+            assert!(
+                err.to_string().contains(
+                    "python task metadata field 'connection_plugin_name' must not be empty"
+                )
+            );
         });
     }
 
