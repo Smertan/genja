@@ -189,6 +189,32 @@ def test_task_definition_from_python_class_rejects_empty_connection_plugin_name_
         genja_core.TaskDefinition.from_python_class(InvalidTask)
 
 
+def test_task_definition_from_python_class_rejects_empty_name_in_metadata():
+    @task(name="backup_config", connection_plugin_name="ssh")
+    class InvalidTask:
+        def run(self, task, host, context):
+            return TaskSuccessResult(summary="noop")
+
+    cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__["name"] = "   "
+
+    with pytest.raises(ValueError, match="field 'name' must not be empty"):
+        genja_core.TaskDefinition.from_python_class(InvalidTask)
+
+
+def test_task_definition_from_python_class_rejects_non_json_serializable_options_in_metadata():
+    @task(name="backup_config", connection_plugin_name="ssh")
+    class InvalidTask:
+        def run(self, task, host, context):
+            return TaskSuccessResult(summary="noop")
+
+    cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__["options"] = {
+        "callback": lambda: None
+    }
+
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        genja_core.TaskDefinition.from_python_class(InvalidTask)
+
+
 def test_task_decorator_requires_callable_run_method():
     with pytest.raises(TypeError, match="must define a 'run' method"):
 

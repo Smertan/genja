@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 import genja_core
+from pydantic import ValidationError
 import pytest
 from genja_core.task import (
     TaskFailureKind,
@@ -78,6 +79,31 @@ def test_task_success_result_supports_dict_style_access_and_missing_keys_raise_k
 def test_task_failure_result_rejects_non_json_serializable_details():
     with pytest.raises(TypeError, match="details must be JSON-serializable"):
         TaskFailureResult(message="boom", details={"callback": lambda: None})
+
+
+def test_task_message_rejects_invalid_message_level():
+    with pytest.raises(ValidationError):
+        TaskMessage(level="verbose", text="unexpected level")
+
+
+def test_task_failure_result_rejects_invalid_failure_kind():
+    with pytest.raises(ValidationError):
+        TaskFailureResult(message="boom", kind="network")
+
+
+def test_task_success_result_rejects_invalid_status_literal():
+    with pytest.raises(ValidationError):
+        TaskSuccessResult(status="failed")
+
+
+def test_task_failure_result_rejects_invalid_status_literal():
+    with pytest.raises(ValidationError):
+        TaskFailureResult(message="boom", status="passed")
+
+
+def test_task_skip_result_rejects_invalid_status_literal():
+    with pytest.raises(ValidationError):
+        TaskSkipResult(status="failed")
 
 
 def test_host_task_result_from_python_skip_result_round_trips():
