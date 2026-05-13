@@ -150,14 +150,14 @@ def _ensure_json_serializable(value: Any, field_name: str) -> Any:
 
 class _GenjaModel(BaseModel):
     """Base model class for Genja data structures with dictionary-like access.
-    
+
     Extends Pydantic's BaseModel to provide convenient dictionary conversion
     and attribute access via subscript notation for all Genja model classes.
     """
 
     def to_dict(self) -> dict[str, Any]:
         """Convert the model instance to a JSON-serializable dictionary.
-        
+
         Returns:
             dict[str, Any]: A dictionary representation of the model with all
                 fields serialized in JSON-compatible format.
@@ -166,13 +166,13 @@ class _GenjaModel(BaseModel):
 
     def __getitem__(self, key: str) -> Any:
         """Enable dictionary-style attribute access using subscript notation.
-        
+
         Args:
             key (str): The name of the attribute to retrieve.
-        
+
         Returns:
             Any: The value of the requested attribute.
-        
+
         Raises:
             KeyError: If the specified field does not exist on the model.
         """
@@ -184,7 +184,7 @@ class _GenjaModel(BaseModel):
 
 class TaskInfo(_GenjaModel):
     """Task metadata passed into Python task ``run(...)`` methods.
-    
+
     This class encapsulates all metadata associated with a task execution,
     including the task name, connection configuration, processor plugins,
     custom options, and optional nested sub-task information. Instances of
@@ -201,7 +201,7 @@ class TaskInfo(_GenjaModel):
         ``TaskRuntimeContext`` for runtime execution state, ``task`` for the
         decorator that populates this metadata, and ``GenjaTaskProtocol`` for
         the task class contract.
-    
+
     Attributes:
         name (str): Unique task name that identifies this task within the
             Genja execution environment.
@@ -247,13 +247,13 @@ class TaskInfo(_GenjaModel):
 
 class Host(_GenjaModel):
     """Host payload passed into Python task ``run(...)`` methods.
-    
+
     This class encapsulates all host-specific information required for task
     execution, including connection credentials, platform details, and
     additional inventory data. Instances of this class are provided to task
     ``run(...)`` methods to give tasks access to the target host's
     configuration and connection parameters.
-    
+
     Attributes:
         hostname (str): Inventory hostname for the current target. This is
             the unique identifier for the host within the inventory system.
@@ -298,12 +298,12 @@ class Host(_GenjaModel):
 
 class TaskRuntimeContext(_GenjaModel):
     """Runtime context passed into Python task ``run(...)`` methods.
-    
+
     This class encapsulates runtime execution context information provided to
     task ``run(...)`` methods during execution. It includes depth tracking for
     nested task execution, depth limits, and the resolved connection object
     that the task can use to interact with the target host.
-    
+
     Attributes:
         current_depth (int): The current execution depth in the task call stack.
             This value starts at 0 for top-level tasks and increments for each
@@ -333,15 +333,16 @@ class TaskRuntimeContext(_GenjaModel):
         description="Resolved connection object available to the task.",
     )
 
+
 class GenjaTaskProtocol(Protocol):
     """Structural typing contract for Python-authored Genja task classes.
-    
+
     This protocol defines the interface that all Genja task classes must
     implement to be recognized and executed by the Genja task runtime. Task
     classes decorated with @task automatically conform to this protocol by
     having the required __genja_task_info__ attribute and run method added
     or validated during decoration.
-    
+
     Attributes:
         __genja_task_info__ (dict[str, Any]): Dictionary containing task
             metadata set by the @task decorator, including name, connection
@@ -355,17 +356,20 @@ class GenjaTaskProtocol(Protocol):
         task: TaskInfo,
         host: Host,
         context: TaskRuntimeContext,
-    ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult | Awaitable[
-        TaskSuccessResult | TaskFailureResult | TaskSkipResult
-    ]:
+    ) -> (
+        TaskSuccessResult
+        | TaskFailureResult
+        | TaskSkipResult
+        | Awaitable[TaskSuccessResult | TaskFailureResult | TaskSkipResult]
+    ):
         """Execute the task logic against a target host.
-        
+
         This method contains the core task implementation and is invoked by
         the Genja task runtime when the task is executed. It can be implemented
         as either a synchronous function (def) or an asynchronous function
         (async def). The method receives all necessary context about the task,
         target host, and runtime environment to perform its operations.
-        
+
         Args:
             task (TaskInfo): Metadata about the current task execution,
                 including the task name, connection plugin configuration,
@@ -378,7 +382,7 @@ class GenjaTaskProtocol(Protocol):
                 the current execution depth, maximum depth limit, and the
                 resolved connection object for communicating with the target
                 host.
-        
+
         Returns:
             TaskSuccessResult | TaskFailureResult | TaskSkipResult | Awaitable[
                 TaskSuccessResult | TaskFailureResult | TaskSkipResult
@@ -399,13 +403,13 @@ def task(
     options: Any | None = None,
 ):
     """Attach Genja task metadata to a Python task class.
-    
+
     This decorator function attaches execution metadata to a Python class to
     register it as a Genja task. The decorated class must implement a ``run``
     method that conforms to the GenjaTaskProtocol interface. The decorator
     validates all provided metadata and stores it in the class's
     ``__genja_task_info__`` attribute for use by the Genja task runtime.
-    
+
     Args:
         name (str): Required unique task name. Must be a non-empty string that
             identifies this task within the Genja execution environment.
@@ -423,12 +427,12 @@ def task(
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure. If None, no options are provided to the task.
-    
+
     Returns:
         Callable[[_TaskClassT], _TaskClassT]: A decorator function that accepts
             a task class and returns the same class with Genja task metadata
             attached via the ``__genja_task_info__`` attribute.
-    
+
     Raises:
         TypeError: If the decorator is applied to a non-class object, if the
             decorated class does not define a callable ``run`` method, if the
@@ -500,7 +504,7 @@ def task(
 
 class TaskMessage(_GenjaModel):
     """A structured message attached to a task result.
-    
+
     This class represents a single diagnostic or informational message that
     can be attached to task execution results. Messages provide structured
     logging and diagnostic information about task execution, including
@@ -508,7 +512,7 @@ class TaskMessage(_GenjaModel):
     and timestamps. Multiple TaskMessage instances can be included in
     TaskSuccessResult, TaskFailureResult, or other result types to provide
     detailed execution context.
-    
+
     Attributes:
         level (TaskMessageLevel): The severity level of the message, indicating
             its importance and type (INFO, WARNING, ERROR, or DEBUG). This helps
@@ -539,12 +543,12 @@ class TaskMessage(_GenjaModel):
 
 class TaskStatus(str, Enum):
     """Canonical task status values returned by Genja task results.
-    
+
     This enumeration defines the possible execution states that a Genja task
     can return upon completion. Each status represents a distinct outcome
     category that determines how the task result should be interpreted and
     processed by the Genja execution engine.
-    
+
     Attributes:
         PASSED (str): Indicates the task completed successfully without errors.
             This status is returned by TaskSuccessResult and signifies that the
@@ -566,13 +570,13 @@ class TaskStatus(str, Enum):
 
 class TaskFailureKind(str, Enum):
     """Canonical task failure categories returned by Genja task results.
-    
+
     This enumeration defines the types of failures that can occur during task
     execution. Each failure kind categorizes the root cause of a task failure,
     enabling consumers to understand the nature of the error and determine
     appropriate remediation strategies. These categories are used in
     TaskFailureResult to provide structured failure classification.
-    
+
     Attributes:
         CONNECTION (str): Indicates a failure related to establishing or
             maintaining network connectivity to the target host. This includes
@@ -615,13 +619,13 @@ class TaskFailureKind(str, Enum):
 
 class TaskMessageLevel(str, Enum):
     """Canonical task message severity levels returned by Genja task results.
-    
+
     This enumeration defines the severity levels for structured messages
     emitted during task execution. Each level indicates the importance and
     nature of the message, enabling consumers to filter, prioritize, and
     display messages appropriately. These levels are used in TaskMessage
     instances attached to task results.
-    
+
     Attributes:
         INFO (str): Indicates an informational message that provides general
             context, progress updates, or non-critical details about task
@@ -649,13 +653,13 @@ class TaskMessageLevel(str, Enum):
 
 class TaskSuccessResult(_GenjaModel):
     """Successful task outcome returned from ``run(...)`` methods.
-    
+
     This class represents the result of a successfully completed task execution.
     It encapsulates all information about what the task accomplished, including
     the primary result payload, state change indicators, diagnostic messages,
     and additional metadata. Instances of this class are returned by task
     ``run(...)`` methods when the task completes without errors.
-    
+
     Attributes:
         status (Literal[TaskStatus.PASSED]): The task execution status, always
             set to TaskStatus.PASSED for successful results. This field is
@@ -731,22 +735,22 @@ class TaskSuccessResult(_GenjaModel):
     @classmethod
     def _validate_metadata(cls, value: Any) -> Any:
         """Validate that the metadata field contains only JSON-serializable data.
-        
+
         This validator is executed before Pydantic's standard validation to ensure
         that the metadata field can be safely serialized to JSON. It delegates to
         the _ensure_json_serializable helper function to perform the actual
         serialization check.
-        
+
         Args:
             cls (type): The TaskSuccessResult class being validated. This parameter
                 is automatically provided by Pydantic's field_validator decorator.
             value (Any): The metadata value to validate for JSON serializability.
                 This can be any Python object, but must be convertible to JSON.
-        
+
         Returns:
             Any: The original metadata value if it is None or successfully passes
                 JSON serialization validation.
-        
+
         Raises:
             TypeError: If the metadata value cannot be serialized to JSON, with a
                 message indicating that the metadata field must be JSON-serializable.
@@ -756,7 +760,7 @@ class TaskSuccessResult(_GenjaModel):
 
 class TaskFailureResult(_GenjaModel):
     """Failed task outcome returned from ``run(...)`` methods.
-    
+
     This class represents the result of a task execution that encountered an
     error and could not complete successfully. It encapsulates all information
     about the failure, including the error message, failure category, retry
@@ -777,7 +781,7 @@ class TaskFailureResult(_GenjaModel):
         ...         )
         ...     ],
         ... )
-    
+
     Attributes:
         message (str): Human-readable description of the failure that occurred
             during task execution. This message should clearly explain what went
@@ -842,22 +846,22 @@ class TaskFailureResult(_GenjaModel):
     @classmethod
     def _validate_details(cls, value: Any) -> Any:
         """Validate that the details field contains only JSON-serializable data.
-        
+
         This validator is executed before Pydantic's standard validation to ensure
         that the details field can be safely serialized to JSON. It delegates to
         the _ensure_json_serializable helper function to perform the actual
         serialization check.
-        
+
         Args:
             cls (type): The TaskFailureResult class being validated. This parameter
                 is automatically provided by Pydantic's field_validator decorator.
             value (Any): The details value to validate for JSON serializability.
                 This can be any Python object, but must be convertible to JSON.
-        
+
         Returns:
             Any: The original details value if it is None or successfully passes
                 JSON serialization validation.
-        
+
         Raises:
             TypeError: If the details value cannot be serialized to JSON, with a
                 message indicating that the details field must be JSON-serializable.
@@ -867,7 +871,7 @@ class TaskFailureResult(_GenjaModel):
 
 class TaskSkipResult(_GenjaModel):
     """Skipped task outcome returned from ``run(...)`` methods.
-    
+
     This class represents the result of a task execution that was intentionally
     bypassed and did not execute its main logic. It encapsulates information
     about why the task was skipped, including both machine-readable reason codes
@@ -880,7 +884,7 @@ class TaskSkipResult(_GenjaModel):
         ...     reason="maintenance_mode",
         ...     message="Host is currently in maintenance mode",
         ... )
-    
+
     Attributes:
         status (Literal[TaskStatus.SKIPPED]): The task execution status, always
             set to TaskStatus.SKIPPED for skipped results. This field is

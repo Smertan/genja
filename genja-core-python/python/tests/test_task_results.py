@@ -126,5 +126,7 @@ def test_host_task_result_from_python_result_rejects_missing_status():
 
 
 def test_host_task_result_from_python_result_rejects_unknown_status():
-    with pytest.raises(ValueError, match="unsupported python task result status 'unknown'"):
+    with pytest.raises(
+        ValueError, match="unsupported python task result status 'unknown'"
+    ):
         genja_core.HostTaskResult.from_python_result({"status": "unknown"})

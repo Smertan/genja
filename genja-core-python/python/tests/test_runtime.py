@@ -63,12 +63,10 @@ class RuntimeConnectionTask:
 
 
 def test_genja_runtime_runs_python_task_definition():
-    runtime = genja_core.Genja.from_hosts(
-        {
-            "router1": Host(hostname="10.0.0.1", platform="ios"),
-            "router2": Host(hostname="10.0.0.2", platform="ios"),
-        }
-    ).with_runner("serial")
+    runtime = genja_core.Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+        "router2": Host(hostname="10.0.0.2", platform="ios"),
+    }).with_runner("serial")
     results = runtime.run_task(RuntimeBackupTask)
     data = results.to_dict()
     summary = results.host_summary()
@@ -86,11 +84,9 @@ def test_genja_runtime_runs_python_task_definition():
 
 
 def test_task_results_to_dict_normalizes_non_raw_and_preserves_raw_shape():
-    runtime = genja_core.Genja.from_hosts(
-        {
-            "router1": Host(hostname="10.0.0.1", platform="ios"),
-        }
-    ).with_runner("serial")
+    runtime = genja_core.Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
     results = runtime.run_task(RuntimeBackupTask)
 
     normalized = results.to_dict()
@@ -105,12 +101,10 @@ def test_task_results_to_dict_normalizes_non_raw_and_preserves_raw_shape():
 
 
 def test_genja_inventory_accessors_expose_host_payloads():
-    runtime = genja_core.Genja.from_hosts(
-        {
-            "router1": Host(hostname="10.0.0.1", platform="ios"),
-            "router2": Host(hostname="10.0.0.2", port=2222, platform="nxos"),
-        }
-    )
+    runtime = genja_core.Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+        "router2": Host(hostname="10.0.0.2", port=2222, platform="nxos"),
+    })
 
     inventory = runtime.inventory()
     raw_hosts = runtime.hosts_raw()
@@ -185,20 +179,18 @@ def test_genja_from_inventory_preserves_groups_and_defaults():
 
 
 def test_genja_filter_accessors_and_execution_respect_selected_hosts():
-    runtime = genja_core.Genja.from_hosts(
-        {
-            "router1": Host(
-                hostname="10.0.0.1",
-                platform="ios",
-                data={"site": {"role": "core"}},
-            ),
-            "router2": Host(
-                hostname="10.0.0.2",
-                platform="nxos",
-                data={"site": {"role": "edge"}},
-            ),
-        }
-    ).with_runner("serial")
+    runtime = genja_core.Genja.from_hosts({
+        "router1": Host(
+            hostname="10.0.0.1",
+            platform="ios",
+            data={"site": {"role": "core"}},
+        ),
+        "router2": Host(
+            hostname="10.0.0.2",
+            platform="nxos",
+            data={"site": {"role": "edge"}},
+        ),
+    }).with_runner("serial")
 
     filtered = runtime.filter_by_key_value("data.site.role", "^core$")
     results = filtered.run_task(RuntimeBackupTask)
@@ -209,11 +201,9 @@ def test_genja_filter_accessors_and_execution_respect_selected_hosts():
 
 
 def test_genja_runtime_passes_real_task_context_depth():
-    runtime = genja_core.Genja.from_hosts(
-        {
-            "router1": Host(hostname="10.0.0.1", platform="ios"),
-        }
-    ).with_runner("serial")
+    runtime = genja_core.Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
     results = runtime.run_task(RuntimeParentTask, max_depth=1)
     data = results.to_dict(raw=True)
 
@@ -265,17 +255,16 @@ def test_genja_runtime_passes_python_connection_into_runtime_context():
 
 def test_genja_builder_registers_plugin_and_builds_runtime():
     runtime = (
-        genja_core.Genja.builder(
-            {
-                "router1": Host(
-                    hostname="10.0.0.1",
-                    port=22,
-                    username="admin",
-                    password="secret",
-                    platform="ios",
-                ),
-            }
-        )
+        genja_core.Genja
+        .builder({
+            "router1": Host(
+                hostname="10.0.0.1",
+                port=22,
+                username="admin",
+                password="secret",
+                platform="ios",
+            ),
+        })
         .with_plugin(ConnectionPlugin())
         .with_runner("serial")
         .build()

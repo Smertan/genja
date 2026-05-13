@@ -88,9 +88,12 @@ class ConnectionProtocol(Protocol):
 
     def close(
         self,
-    ) -> ConnectionKey | dict[str, Any] | None | Awaitable[
-        ConnectionKey | dict[str, Any] | None
-    ]: ...
+    ) -> (
+        ConnectionKey
+        | dict[str, Any]
+        | None
+        | Awaitable[ConnectionKey | dict[str, Any] | None]
+    ): ...
 
     def is_alive(self) -> bool | Awaitable[bool]: ...
 

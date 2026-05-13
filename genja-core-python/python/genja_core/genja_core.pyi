@@ -4,7 +4,6 @@ from typing import Any
 
 from .task import GenjaTaskProtocol
 
-
 class PluginManager:
     def __init__(self) -> None: ...
     def load_rust_plugins_from_directory(self, path: str) -> None: ...
@@ -14,7 +13,6 @@ class PluginManager:
     def plugin_names(self) -> list[str]: ...
     def plugin_names_and_groups(self) -> list[tuple[str, str]]: ...
 
-
 class OptionsConfig:
     @property
     def hosts_file(self) -> str | None: ...
@@ -23,11 +21,9 @@ class OptionsConfig:
     @property
     def defaults_file(self) -> str | None: ...
 
-
 class CoreConfig:
     @property
     def raise_on_error(self) -> bool: ...
-
 
 class InventoryConfig:
     @property
@@ -37,11 +33,9 @@ class InventoryConfig:
     @property
     def transform_function(self) -> str | None: ...
 
-
 class SSHConfig:
     @property
     def config_file(self) -> str | None: ...
-
 
 class RunnerConfig:
     @property
@@ -52,7 +46,6 @@ class RunnerConfig:
     def max_task_depth(self) -> int: ...
     @property
     def max_connection_attempts(self) -> int: ...
-
 
 class LoggingConfig:
     @property
@@ -67,7 +60,6 @@ class LoggingConfig:
     def file_size(self) -> int: ...
     @property
     def max_file_count(self) -> int: ...
-
 
 class Settings:
     def __init__(self) -> None: ...
@@ -84,7 +76,6 @@ class Settings:
     @property
     def logging(self) -> LoggingConfig: ...
 
-
 class HostTaskResult:
     @staticmethod
     def from_python_result(result: Any) -> HostTaskResult: ...
@@ -92,9 +83,7 @@ class HostTaskResult:
     def status(self) -> str: ...
     def to_dict(self) -> dict[str, Any]: ...
 
-
 class TaskConnectionResolver: ...
-
 
 class TaskDefinition:
     @staticmethod
@@ -119,7 +108,6 @@ class TaskDefinition:
         max_depth: int = 0,
     ) -> TaskResults: ...
 
-
 class TaskResults:
     @property
     def task_name(self) -> str: ...
@@ -134,7 +122,6 @@ class TaskResults:
     def merge(self, other: TaskResults) -> None: ...
     def to_dict(self, *, raw: bool = False) -> dict[str, Any]: ...
     def to_json(self, *, raw: bool = False, pretty: bool = False) -> str: ...
-
 
 class Genja:
     @staticmethod
@@ -180,12 +167,10 @@ class Genja:
         max_depth: int | None = None,
     ) -> TaskResults: ...
 
-
 class GenjaBuilder:
     def with_plugin(self, plugin: Any) -> GenjaBuilder: ...
     def with_plugin_manager(self, plugin_manager: PluginManager) -> GenjaBuilder: ...
     def with_runner(self, runner: str) -> GenjaBuilder: ...
     def build(self) -> Genja: ...
-
 
 __all__: list[str]

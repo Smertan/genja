@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 class OptionsConfig:
     @property
     def hosts_file(self) -> str | None: ...
@@ -9,11 +8,9 @@ class OptionsConfig:
     @property
     def defaults_file(self) -> str | None: ...
 
-
 class CoreConfig:
     @property
     def raise_on_error(self) -> bool: ...
-
 
 class InventoryConfig:
     @property
@@ -23,11 +20,9 @@ class InventoryConfig:
     @property
     def transform_function(self) -> str | None: ...
 
-
 class SSHConfig:
     @property
     def config_file(self) -> str | None: ...
-
 
 class RunnerConfig:
     @property
@@ -38,7 +33,6 @@ class RunnerConfig:
     def max_task_depth(self) -> int: ...
     @property
     def max_connection_attempts(self) -> int: ...
-
 
 class LoggingConfig:
     @property
@@ -54,13 +48,10 @@ class LoggingConfig:
     @property
     def max_file_count(self) -> int: ...
 
-
 class Settings:
     def __init__(self) -> None: ...
-
     @staticmethod
     def from_file(path: str) -> Settings: ...
-
     @property
     def core(self) -> CoreConfig: ...
     @property
@@ -71,6 +62,5 @@ class Settings:
     def runner(self) -> RunnerConfig: ...
     @property
     def logging(self) -> LoggingConfig: ...
-
 
 __all__: list[str]
