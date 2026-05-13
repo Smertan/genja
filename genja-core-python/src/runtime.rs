@@ -83,6 +83,49 @@ impl PyGenja {
         Ok(Self { inner })
     }
 
+    fn plugins_loaded(&self) -> bool {
+        self.inner.plugins_loaded()
+    }
+
+    fn inventory_loaded(&self) -> bool {
+        self.inner.inventory_loaded()
+    }
+
+    fn settings(&self) -> PySettings {
+        PySettings {
+            inner: self.inner.settings().clone(),
+        }
+    }
+
+    fn host_count(&self) -> usize {
+        self.inner.host_count()
+    }
+
+    fn host_ids(&self) -> Vec<String> {
+        self.inner
+            .host_ids()
+            .iter()
+            .map(|host_id| host_id.to_string())
+            .collect()
+    }
+
+    fn iter_selected_hosts(&self, py: Python<'_>) -> PyResult<Vec<(String, Py<PyAny>)>> {
+        let hosts = self.inner.iter_selected_hosts().map_err(|err| {
+            PyValueError::new_err(format!("failed to iterate selected hosts: {err}"))
+        })?;
+        let selected_ids = self.host_ids();
+        selected_ids
+            .into_iter()
+            .zip(hosts.into_iter())
+            .map(|(host_id, host)| {
+                Ok((
+                    host_id,
+                    task::host_to_py_dict(py, &host)?.into_any().unbind(),
+                ))
+            })
+            .collect()
+    }
+
     fn filter_by_key(&self, key: &str) -> PyResult<Self> {
         let inner = self.inner.filter_by_key(key).map_err(|err| {
             PyValueError::new_err(format!("failed to filter hosts by key {key}: {err}"))
@@ -455,8 +498,11 @@ mod tests {
             let runtime =
                 PyGenja::from_hosts(hosts.into_any(), None, None).expect("runtime should build");
 
-            assert!(runtime.inner.plugins_loaded());
-            assert!(runtime.inner.inventory_loaded());
+            assert!(runtime.plugins_loaded());
+            assert!(runtime.inventory_loaded());
+            assert_eq!(runtime.host_count(), 1);
+            assert_eq!(runtime.host_ids(), vec!["router1".to_string()]);
+            assert_eq!(runtime.settings().runner().plugin(), "threaded");
             assert!(runtime.__repr__().contains("Genja("));
         });
     }
@@ -603,9 +649,19 @@ mod tests {
             router1.set_item("hostname", "10.0.0.1").unwrap();
             router1.set_item("platform", "ios").unwrap();
             hosts.set_item("router1", router1).unwrap();
+            let router2 = PyDict::new(py);
+            router2.set_item("hostname", "10.0.0.2").unwrap();
+            router2.set_item("platform", "nxos").unwrap();
+            hosts.set_item("router2", router2).unwrap();
 
             let runtime =
                 PyGenja::from_hosts(hosts.into_any(), None, None).expect("runtime should build");
+
+            assert_eq!(runtime.host_count(), 2);
+            assert_eq!(
+                runtime.host_ids(),
+                vec!["router1".to_string(), "router2".to_string()]
+            );
 
             let inventory = runtime
                 .inventory(py)
@@ -642,7 +698,7 @@ mod tests {
             let inventory_hosts = runtime
                 .iter_inventory_hosts(py)
                 .expect("iter_inventory_hosts should work");
-            assert_eq!(inventory_hosts.len(), 1);
+            assert_eq!(inventory_hosts.len(), 2);
             assert_eq!(inventory_hosts[0].0, "router1");
             assert_eq!(
                 inventory_hosts[0]
@@ -654,6 +710,55 @@ mod tests {
                     .unwrap(),
                 "10.0.0.1"
             );
+
+            let selected_hosts = runtime
+                .iter_selected_hosts(py)
+                .expect("iter_selected_hosts should work");
+            assert_eq!(selected_hosts.len(), 2);
+            assert_eq!(selected_hosts[1].0, "router2");
+            assert_eq!(
+                selected_hosts[1]
+                    .1
+                    .bind(py)
+                    .get_item("platform")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "nxos"
+            );
+        });
+    }
+
+    #[test]
+    fn py_genja_iter_selected_hosts_respects_filters() {
+        init_python();
+        Python::with_gil(|py| {
+            let hosts = PyDict::new(py);
+
+            let router1 = PyDict::new(py);
+            router1.set_item("hostname", "10.0.0.1").unwrap();
+            router1.set_item("platform", "ios").unwrap();
+            hosts.set_item("router1", router1).unwrap();
+
+            let router2 = PyDict::new(py);
+            router2.set_item("hostname", "10.0.0.2").unwrap();
+            router2.set_item("platform", "nxos").unwrap();
+            hosts.set_item("router2", router2).unwrap();
+
+            let runtime =
+                PyGenja::from_hosts(hosts.into_any(), None, None).expect("runtime should build");
+            let filtered = runtime
+                .filter_by_key_value("platform", "^ios$")
+                .expect("filter_by_key_value should work");
+
+            assert_eq!(filtered.host_count(), 1);
+            assert_eq!(filtered.host_ids(), vec!["router1".to_string()]);
+
+            let selected_hosts = filtered
+                .iter_selected_hosts(py)
+                .expect("iter_selected_hosts should work on filtered runtime");
+            assert_eq!(selected_hosts.len(), 1);
+            assert_eq!(selected_hosts[0].0, "router1");
         });
     }
 

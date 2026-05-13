@@ -15,17 +15,17 @@ pub struct PyOptionsConfig {
 #[pymethods]
 impl PyOptionsConfig {
     #[getter]
-    fn hosts_file(&self) -> Option<String> {
+    pub(crate) fn hosts_file(&self) -> Option<String> {
         self.inner.hosts_file().map(str::to_owned)
     }
 
     #[getter]
-    fn groups_file(&self) -> Option<String> {
+    pub(crate) fn groups_file(&self) -> Option<String> {
         self.inner.groups_file().map(str::to_owned)
     }
 
     #[getter]
-    fn defaults_file(&self) -> Option<String> {
+    pub(crate) fn defaults_file(&self) -> Option<String> {
         self.inner.defaults_file().map(str::to_owned)
     }
 
@@ -48,7 +48,7 @@ pub struct PyCoreConfig {
 #[pymethods]
 impl PyCoreConfig {
     #[getter]
-    fn raise_on_error(&self) -> bool {
+    pub(crate) fn raise_on_error(&self) -> bool {
         self.inner.raise_on_error()
     }
 
@@ -66,19 +66,19 @@ pub struct PyInventoryConfig {
 #[pymethods]
 impl PyInventoryConfig {
     #[getter]
-    fn plugin(&self) -> String {
+    pub(crate) fn plugin(&self) -> String {
         self.inner.plugin().to_owned()
     }
 
     #[getter]
-    fn options(&self) -> PyOptionsConfig {
+    pub(crate) fn options(&self) -> PyOptionsConfig {
         PyOptionsConfig {
             inner: self.inner.options().clone(),
         }
     }
 
     #[getter]
-    fn transform_function(&self) -> Option<String> {
+    pub(crate) fn transform_function(&self) -> Option<String> {
         self.inner.transform_function().map(str::to_owned)
     }
 
@@ -101,7 +101,7 @@ pub struct PySSHConfig {
 #[pymethods]
 impl PySSHConfig {
     #[getter]
-    fn config_file(&self) -> Option<String> {
+    pub(crate) fn config_file(&self) -> Option<String> {
         self.inner.config_file().map(str::to_owned)
     }
 
@@ -119,22 +119,22 @@ pub struct PyRunnerConfig {
 #[pymethods]
 impl PyRunnerConfig {
     #[getter]
-    fn plugin(&self) -> String {
+    pub(crate) fn plugin(&self) -> String {
         self.inner.plugin().to_owned()
     }
 
     #[getter]
-    fn worker_count(&self) -> Option<usize> {
+    pub(crate) fn worker_count(&self) -> Option<usize> {
         self.inner.worker_count()
     }
 
     #[getter]
-    fn max_task_depth(&self) -> usize {
+    pub(crate) fn max_task_depth(&self) -> usize {
         self.inner.max_task_depth()
     }
 
     #[getter]
-    fn max_connection_attempts(&self) -> usize {
+    pub(crate) fn max_connection_attempts(&self) -> usize {
         self.inner.max_connection_attempts()
     }
 
@@ -158,32 +158,32 @@ pub struct PyLoggingConfig {
 #[pymethods]
 impl PyLoggingConfig {
     #[getter]
-    fn enabled(&self) -> bool {
+    pub(crate) fn enabled(&self) -> bool {
         self.inner.enabled()
     }
 
     #[getter]
-    fn level(&self) -> String {
+    pub(crate) fn level(&self) -> String {
         self.inner.level().to_owned()
     }
 
     #[getter]
-    fn log_file(&self) -> String {
+    pub(crate) fn log_file(&self) -> String {
         self.inner.log_file().to_owned()
     }
 
     #[getter]
-    fn to_console(&self) -> bool {
+    pub(crate) fn to_console(&self) -> bool {
         self.inner.to_console()
     }
 
     #[getter]
-    fn file_size(&self) -> u64 {
+    pub(crate) fn file_size(&self) -> u64 {
         self.inner.file_size()
     }
 
     #[getter]
-    fn max_file_count(&self) -> usize {
+    pub(crate) fn max_file_count(&self) -> usize {
         self.inner.max_file_count()
     }
 
@@ -224,35 +224,35 @@ impl PySettings {
     }
 
     #[getter]
-    fn core(&self) -> PyCoreConfig {
+    pub(crate) fn core(&self) -> PyCoreConfig {
         PyCoreConfig {
             inner: self.inner.core().clone(),
         }
     }
 
     #[getter]
-    fn inventory(&self) -> PyInventoryConfig {
+    pub(crate) fn inventory(&self) -> PyInventoryConfig {
         PyInventoryConfig {
             inner: self.inner.inventory().clone(),
         }
     }
 
     #[getter]
-    fn ssh(&self) -> PySSHConfig {
+    pub(crate) fn ssh(&self) -> PySSHConfig {
         PySSHConfig {
             inner: self.inner.ssh().clone(),
         }
     }
 
     #[getter]
-    fn runner(&self) -> PyRunnerConfig {
+    pub(crate) fn runner(&self) -> PyRunnerConfig {
         PyRunnerConfig {
             inner: self.inner.runner().clone(),
         }
     }
 
     #[getter]
-    fn logging(&self) -> PyLoggingConfig {
+    pub(crate) fn logging(&self) -> PyLoggingConfig {
         PyLoggingConfig {
             inner: self.inner.logging().clone(),
         }
