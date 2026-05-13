@@ -686,6 +686,20 @@ mod tests {
     }
 
     #[test]
+    fn python_inventory_to_rust_inventory_fails_with_invalid_host_structure() {
+        init_python();
+        Python::with_gil(|py| {
+            let hosts = PyDict::new(py);
+            hosts.set_item("router1", "not-a-dict").unwrap();
+
+            let err = python_inventory_to_rust_inventory(hosts.into_any())
+                .err()
+                .expect("invalid host structure should fail");
+            assert!(err.to_string().contains("invalid host payload"));
+        });
+    }
+
+    #[test]
     fn py_genja_from_hosts_builds_runtime() {
         init_python();
         Python::with_gil(|py| {
@@ -1078,6 +1092,38 @@ mod tests {
                     .unwrap(),
                 "10.10.10.1"
             );
+            fs::remove_dir_all(&temp_dir).unwrap_or(());
+        });
+    }
+
+    #[test]
+    fn py_genja_from_settings_file_fails_with_invalid_path() {
+        init_python();
+        Python::with_gil(|_py| {
+            let err = PyGenja::from_settings_file("/nonexistent/path/settings.yaml", None)
+                .err()
+                .expect("invalid path should fail");
+            assert!(err
+                .to_string()
+                .contains("failed to build Genja runtime from settings file"));
+        });
+    }
+
+    #[test]
+    fn py_genja_from_settings_file_fails_with_malformed_content() {
+        init_python();
+        Python::with_gil(|_py| {
+            let temp_dir = temp_test_dir("malformed-settings");
+            let settings_path = temp_dir.join("settings.yaml");
+            fs::write(&settings_path, "invalid: yaml: content: [")
+                .expect("malformed file should be written");
+
+            let err = PyGenja::from_settings_file(settings_path.to_str().unwrap(), None)
+                .err()
+                .expect("malformed settings should fail");
+            assert!(err
+                .to_string()
+                .contains("failed to build Genja runtime from settings file"));
             fs::remove_dir_all(&temp_dir).unwrap_or(());
         });
     }

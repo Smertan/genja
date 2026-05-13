@@ -10,6 +10,27 @@ from genja_core.task import (
 from tests.fixtures.connection_plugins import ConnectionPlugin, TestConnection
 
 
+def test_genja_from_settings_file_rejects_invalid_path():
+    try:
+        genja_core.Genja.from_settings_file("/nonexistent/path/settings.yaml")
+    except ValueError as err:
+        assert "failed to build Genja runtime from settings file" in str(err)
+    else:
+        raise AssertionError("invalid settings path should fail")
+
+
+def test_genja_from_settings_file_rejects_malformed_content(tmp_path):
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("invalid: yaml: content: [")
+
+    try:
+        genja_core.Genja.from_settings_file(str(settings_path))
+    except ValueError as err:
+        assert "failed to build Genja runtime from settings file" in str(err)
+    else:
+        raise AssertionError("malformed settings content should fail")
+
+
 @task(name="runtime_backup")
 class RuntimeBackupTask:
     def run(self, task, host, context):
