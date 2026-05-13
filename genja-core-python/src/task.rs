@@ -1098,7 +1098,7 @@ fn normalize_python_task_results_payload(obj: &Bound<'_, PyAny>) -> PyResult<Val
     normalize_python_json_payload(obj, "invalid python task results")
 }
 
-fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
+pub(crate) fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
     let dumped = serde_json::to_string(value)
         .map_err(|err| PyValueError::new_err(format!("failed to serialize value: {err}")))?;
     let json_module = PyModule::import(py, "json")?;

@@ -1,4 +1,5 @@
 import genja_core
+from genja_core.inventory import Defaults, Group, Host as InventoryHost, Inventory
 from genja_core.task import (
     Host,
     TaskMessage,
@@ -121,6 +122,66 @@ def test_genja_inventory_accessors_expose_host_payloads():
         ("router1", inventory["router1"]),
         ("router2", inventory["router2"]),
     ]
+
+
+def test_inventory_models_serialize_to_expected_python_payloads():
+    inventory = Inventory(
+        hosts={
+            "router1": InventoryHost(
+                hostname="10.0.0.1",
+                platform="ios",
+                groups=["core"],
+                data={"site": "a"},
+            )
+        },
+        groups={
+            "core": Group(
+                platform="ios",
+                data={"role": "core"},
+            )
+        },
+        defaults=Defaults(
+            username="admin",
+            port=22,
+        ),
+    )
+
+    data = inventory.to_dict()
+
+    assert data["hosts"]["router1"]["groups"] == ["core"]
+    assert data["groups"]["core"]["data"] == {"role": "core"}
+    assert data["defaults"] == {"username": "admin", "port": 22}
+
+
+def test_genja_from_inventory_preserves_groups_and_defaults():
+    runtime = genja_core.Genja.from_inventory(
+        Inventory(
+            hosts={
+                "router1": InventoryHost(
+                    hostname="10.0.0.1",
+                    groups=["core"],
+                )
+            },
+            groups={
+                "core": Group(
+                    platform="ios",
+                    data={"role": "core"},
+                )
+            },
+            defaults=Defaults(
+                username="admin",
+                port=22,
+            ),
+        )
+    )
+
+    inventory_full = runtime.inventory_full()
+    inventory_raw = runtime.inventory_raw()
+
+    assert inventory_full["hosts"]["router1"]["groups"] == ["core"]
+    assert inventory_full["groups"]["core"]["platform"] == "ios"
+    assert inventory_raw["defaults"]["username"] == "admin"
+    assert inventory_raw["defaults"]["port"] == 22
 
 
 def test_genja_filter_accessors_and_execution_respect_selected_hosts():

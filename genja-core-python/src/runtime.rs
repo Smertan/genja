@@ -1,9 +1,10 @@
 use genja::Genja as RuntimeGenja;
-use genja_core::inventory::{Hosts, Inventory};
+use genja_core::inventory::{Defaults, Groups, Hosts, Inventory};
 use genja_core::{GenjaError, Settings};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
+use serde::de::DeserializeOwned;
 use std::sync::Mutex;
 
 use crate::plugin_manager::{register_python_plugin_on_manager, PyPluginManager};
@@ -25,7 +26,7 @@ impl PyGenja {
         settings: Option<PyRef<'_, PySettings>>,
         plugin_manager: Option<PyRef<'_, PyPluginManager>>,
     ) -> PyResult<PyGenjaBuilder> {
-        let inventory = python_hosts_to_inventory(hosts)?;
+        let inventory = python_inventory_to_rust_inventory(hosts)?;
         let settings = settings.map(|settings| settings.inner.clone());
         let plugin_manager = if let Some(plugin_manager) = plugin_manager {
             plugin_manager.take_inner()?
@@ -51,6 +52,17 @@ impl PyGenja {
         plugin_manager: Option<PyRef<'_, PyPluginManager>>,
     ) -> PyResult<Self> {
         let builder = Self::builder(hosts, settings, plugin_manager)?;
+        builder.build()
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (inventory, settings=None, plugin_manager=None))]
+    fn from_inventory(
+        inventory: Bound<'_, PyAny>,
+        settings: Option<PyRef<'_, PySettings>>,
+        plugin_manager: Option<PyRef<'_, PyPluginManager>>,
+    ) -> PyResult<Self> {
+        let builder = Self::builder(inventory, settings, plugin_manager)?;
         builder.build()
     }
 
@@ -120,7 +132,7 @@ impl PyGenja {
             .map(|(host_id, host)| {
                 Ok((
                     host_id,
-                    task::host_to_py_dict(py, &host)?.into_any().unbind(),
+                    entity_to_py_dict(py, &host, "failed to convert selected host payload")?,
                 ))
             })
             .collect()
@@ -152,6 +164,20 @@ impl PyGenja {
         inventory_hosts_to_py_dict(py, inventory.hosts_raw())
     }
 
+    fn inventory_full(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let inventory = self.inner.inventory().map_err(|err| {
+            PyValueError::new_err(format!("failed to access loaded inventory: {err}"))
+        })?;
+        inventory_to_py_dict(py, inventory)
+    }
+
+    fn inventory_raw(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let inventory = self.inner.inventory().map_err(|err| {
+            PyValueError::new_err(format!("failed to access loaded inventory: {err}"))
+        })?;
+        raw_inventory_to_py_dict(py, inventory)
+    }
+
     fn iter_inventory_hosts(&self, py: Python<'_>) -> PyResult<Vec<(String, Py<PyAny>)>> {
         let hosts = self.inner.iter_inventory_hosts().map_err(|err| {
             PyValueError::new_err(format!("failed to iterate inventory hosts: {err}"))
@@ -161,7 +187,7 @@ impl PyGenja {
             .map(|(host_id, host)| {
                 Ok((
                     host_id.to_string(),
-                    task::host_to_py_dict(py, &host)?.into_any().unbind(),
+                    entity_to_py_dict(py, &host, "failed to convert inventory host payload")?,
                 ))
             })
             .collect()
@@ -277,10 +303,87 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+fn entity_to_py_dict<T>(py: Python<'_>, entity: &T, error_context: &str) -> PyResult<Py<PyAny>>
+where
+    T: serde::Serialize,
+{
+    let value = serde_json::to_value(entity)
+        .map_err(|err| PyValueError::new_err(format!("{error_context}: {err}")))?;
+    task::json_value_to_py(py, &value)
+}
+
 fn inventory_hosts_to_py_dict(py: Python<'_>, hosts: &Hosts) -> PyResult<Py<PyAny>> {
     let payload = PyDict::new(py);
     for (host_id, host) in hosts.iter() {
-        payload.set_item(host_id.as_str(), task::host_to_py_dict(py, &host)?)?;
+        payload.set_item(
+            host_id.as_str(),
+            entity_to_py_dict(py, &host, "failed to convert host payload")?,
+        )?;
+    }
+    Ok(payload.into_any().unbind())
+}
+
+fn groups_to_py_dict(py: Python<'_>, groups: &Groups) -> PyResult<Py<PyAny>> {
+    let payload = PyDict::new(py);
+    for (group_id, group) in groups.iter() {
+        payload.set_item(
+            group_id.as_str(),
+            entity_to_py_dict(py, &group, "failed to convert group payload")?,
+        )?;
+    }
+    Ok(payload.into_any().unbind())
+}
+
+fn defaults_to_py(py: Python<'_>, defaults: &Defaults) -> PyResult<Py<PyAny>> {
+    entity_to_py_dict(py, defaults, "failed to convert defaults payload")
+}
+
+fn inventory_to_py_dict(py: Python<'_>, inventory: &Inventory) -> PyResult<Py<PyAny>> {
+    let payload = PyDict::new(py);
+    let hosts = PyDict::new(py);
+    for (host_id, host) in inventory.hosts().iter() {
+        hosts.set_item(
+            host_id.as_str(),
+            entity_to_py_dict(py, &host, "failed to convert transformed host payload")?,
+        )?;
+    }
+    payload.set_item("hosts", hosts)?;
+
+    match inventory.groups() {
+        Some(groups) => {
+            let groups_payload = PyDict::new(py);
+            for (group_id, group) in groups.iter() {
+                groups_payload.set_item(
+                    group_id.as_str(),
+                    entity_to_py_dict(py, &group, "failed to convert transformed group payload")?,
+                )?;
+            }
+            payload.set_item("groups", groups_payload)?;
+        }
+        None => payload.set_item("groups", py.None())?,
+    }
+
+    match inventory.defaults() {
+        Some(defaults) => payload.set_item(
+            "defaults",
+            defaults_to_py(py, &defaults)?,
+        )?,
+        None => payload.set_item("defaults", py.None())?,
+    }
+
+    Ok(payload.into_any().unbind())
+}
+
+fn raw_inventory_to_py_dict(py: Python<'_>, inventory: &Inventory) -> PyResult<Py<PyAny>> {
+    let payload = PyDict::new(py);
+    payload.set_item("hosts", inventory_hosts_to_py_dict(py, inventory.hosts_raw())?)?;
+    match inventory.groups_raw() {
+        Some(groups) => payload.set_item("groups", groups_to_py_dict(py, groups)?)?,
+        None => payload.set_item("groups", py.None())?,
+    }
+    match inventory.defaults_raw() {
+        Some(defaults) => payload.set_item("defaults", defaults_to_py(py, defaults)?)?,
+        None => payload.set_item("defaults", py.None())?,
     }
     Ok(payload.into_any().unbind())
 }
@@ -301,13 +404,46 @@ pub(crate) fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inven
 }
 
 pub(crate) fn python_inventory_to_rust_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
-    if let Ok(dict) = obj.clone().downcast::<PyDict>() {
-        if let Ok(Some(hosts)) = dict.get_item("hosts") {
-            return python_hosts_to_inventory(hosts);
+    let normalized = normalize_python_mapping_payload(obj)?;
+    if let Ok(dict) = normalized.clone().downcast::<PyDict>() {
+        let has_inventory_keys = dict.contains("hosts")?
+            || dict.contains("groups")?
+            || dict.contains("defaults")?;
+        if has_inventory_keys {
+            return python_json_to_rust(normalized, "invalid inventory payload");
         }
     }
 
-    python_hosts_to_inventory(obj)
+    python_hosts_to_inventory(normalized)
+}
+
+fn python_json_to_rust<T>(obj: Bound<'_, PyAny>, error_context: &str) -> PyResult<T>
+where
+    T: DeserializeOwned,
+{
+    let normalized = normalize_python_mapping_payload(obj)?;
+
+    let json_module = PyModule::import(normalized.py(), "json")?;
+    let dumped: String = json_module.call_method1("dumps", (normalized,))?.extract()?;
+    serde_json::from_str(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("{error_context}: {err}")))
+}
+
+fn normalize_python_mapping_payload(obj: Bound<'_, PyAny>) -> PyResult<Bound<'_, PyAny>> {
+    if obj.hasattr("model_dump")? {
+        let kwargs = PyDict::new(obj.py());
+        kwargs.set_item("mode", "json")?;
+        kwargs.set_item("exclude_none", true)?;
+        obj.call_method(
+            "model_dump",
+            (),
+            Some(&kwargs),
+        )
+    } else if obj.hasattr("to_dict")? {
+        obj.call_method0("to_dict")
+    } else {
+        Ok(obj)
+    }
 }
 
 fn build_runtime(
@@ -486,6 +622,70 @@ mod tests {
     }
 
     #[test]
+    fn python_inventory_to_rust_inventory_accepts_groups_and_defaults() {
+        init_python();
+        Python::with_gil(|py| {
+            let inventory = PyDict::new(py);
+
+            let hosts = PyDict::new(py);
+            let router = PyDict::new(py);
+            router.set_item("hostname", "10.0.0.1").unwrap();
+            router
+                .set_item("groups", vec!["core", "site-a"])
+                .unwrap();
+            hosts.set_item("router1", router).unwrap();
+
+            let groups = PyDict::new(py);
+            let core = PyDict::new(py);
+            core.set_item("platform", "ios").unwrap();
+            groups.set_item("core", core).unwrap();
+            let site = PyDict::new(py);
+            site.set_item("data", task::json_value_to_py(py, &serde_json::json!({"site": "a"})).unwrap())
+                .unwrap();
+            groups.set_item("site-a", site).unwrap();
+
+            let defaults = PyDict::new(py);
+            defaults.set_item("username", "admin").unwrap();
+            defaults.set_item("port", 22).unwrap();
+
+            inventory.set_item("hosts", hosts).unwrap();
+            inventory.set_item("groups", groups).unwrap();
+            inventory.set_item("defaults", defaults).unwrap();
+
+            let inventory = python_inventory_to_rust_inventory(inventory.into_any())
+                .expect("inventory payload should convert");
+            assert_eq!(
+                inventory
+                    .hosts()
+                    .get("router1")
+                    .expect("router1 should exist")
+                    .groups()
+                    .expect("router1 groups should exist")
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                vec!["core", "site-a"]
+            );
+            assert_eq!(
+                inventory
+                    .groups()
+                    .expect("groups should exist")
+                    .get("core")
+                    .expect("core group should exist")
+                    .platform(),
+                Some("ios")
+            );
+            assert_eq!(
+                inventory
+                    .defaults()
+                    .expect("defaults should exist")
+                    .username(),
+                Some("admin")
+            );
+        });
+    }
+
+    #[test]
     fn py_genja_from_hosts_builds_runtime() {
         init_python();
         Python::with_gil(|py| {
@@ -504,6 +704,73 @@ mod tests {
             assert_eq!(runtime.host_ids(), vec!["router1".to_string()]);
             assert_eq!(runtime.settings().runner().plugin(), "threaded");
             assert!(runtime.__repr__().contains("Genja("));
+        });
+    }
+
+    #[test]
+    fn py_genja_from_inventory_builds_runtime_with_groups_and_defaults() {
+        init_python();
+        Python::with_gil(|py| {
+            let inventory = PyDict::new(py);
+
+            let hosts = PyDict::new(py);
+            let router = PyDict::new(py);
+            router.set_item("hostname", "10.0.0.1").unwrap();
+            router.set_item("groups", vec!["core"]).unwrap();
+            hosts.set_item("router1", router).unwrap();
+
+            let groups = PyDict::new(py);
+            let core = PyDict::new(py);
+            core.set_item("platform", "ios").unwrap();
+            groups.set_item("core", core).unwrap();
+
+            let defaults = PyDict::new(py);
+            defaults.set_item("username", "admin").unwrap();
+
+            inventory.set_item("hosts", hosts).unwrap();
+            inventory.set_item("groups", groups).unwrap();
+            inventory.set_item("defaults", defaults).unwrap();
+
+            let runtime = PyGenja::from_inventory(inventory.into_any(), None, None)
+                .expect("runtime should build from full inventory");
+
+            let full_inventory = runtime
+                .inventory_full(py)
+                .expect("inventory_full should work");
+            let full_inventory: Bound<'_, PyDict> =
+                full_inventory.bind(py).clone().downcast_into().unwrap();
+            let full_groups: Bound<'_, PyDict> = full_inventory
+                .get_item("groups")
+                .unwrap()
+                .expect("groups should exist")
+                .downcast_into()
+                .unwrap();
+            assert_eq!(
+                full_groups
+                    .get_item("core")
+                    .unwrap()
+                    .expect("core group should exist")
+                    .get_item("platform")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "ios"
+            );
+
+            let raw_inventory = runtime.inventory_raw(py).expect("inventory_raw should work");
+            let raw_inventory: Bound<'_, PyDict> =
+                raw_inventory.bind(py).clone().downcast_into().unwrap();
+            assert_eq!(
+                raw_inventory
+                    .get_item("defaults")
+                    .unwrap()
+                    .expect("defaults should exist")
+                    .get_item("username")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "admin"
+            );
         });
     }
 
