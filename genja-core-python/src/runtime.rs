@@ -67,7 +67,7 @@
 //! from genja_core import Genja, PluginManager
 //!
 //! plugin_manager = PluginManager()
-//! plugin_manager.load_plugins_from_directory("./plugins")
+//! plugin_manager.load_rust_plugins_from_directory("./plugins")
 //!
 //! runtime = (Genja.builder(hosts)
 //!     .with_plugin_manager(plugin_manager)
@@ -82,10 +82,10 @@
 //! ## Accessing Inventory
 //!
 //! ```python
-//! # Get all hosts (transformed with groups/defaults applied)
+//! # Get raw hosts only
 //! hosts = runtime.inventory()
 //!
-//! # Get full inventory structure
+//! # Get full inventory structure with transforms applied
 //! full = runtime.inventory_full()
 //!
 //! # Get raw inventory (before transformation)
@@ -125,21 +125,21 @@
 //!
 //! # Task Execution
 //!
-//! Execute tasks across hosts with automatic parallelization:
+//! Execute decorated Python task classes across hosts:
 //!
 //! ```python
-//! from genja_core import Task
+//! from genja_core.task import Host, TaskSuccessResult, task
 //!
-//! class MyTask(Task):
-//!     async def start(self, host):
-//!         # Task implementation
-//!         return {"status": "success"}
+//! @task(name="backup_config")
+//! class BackupTask:
+//!     def run(self, task, host: Host, context):
+//!         return TaskSuccessResult(summary=f"backed up {host.hostname}")
 //!
 //! # Run task with default depth limit
-//! results = runtime.run_task(MyTask)
+//! results = runtime.run_task(BackupTask)
 //!
 //! # Run with custom depth limit for sub-tasks
-//! results = runtime.run_task(MyTask, max_depth=5)
+//! results = runtime.run_task(BackupTask, max_depth=5)
 //! ```
 //!
 //! # Plugin Integration
@@ -153,7 +153,7 @@
 //!
 //! # Load from directory
 //! plugin_manager = PluginManager()
-//! plugin_manager.load_plugins_from_directory("./plugins")
+//! plugin_manager.load_rust_plugins_from_directory("./plugins")
 //!
 //! # Use with runtime
 //! runtime = Genja.from_hosts(hosts, plugin_manager=plugin_manager)
@@ -187,15 +187,12 @@
 //!
 //! # Settings Integration
 //!
-//! Provide custom settings for runtime behavior:
+//! Provide settings loaded from a file or defaults:
 //!
 //! ```python
 //! from genja_core import Settings
 //!
-//! settings = Settings()
-//! settings.logging.level = "debug"
-//! settings.runner.plugin = "threaded"
-//!
+//! settings = Settings.from_file("config.yaml")
 //! runtime = Genja.from_hosts(hosts, settings=settings)
 //! ```
 //!
@@ -284,9 +281,15 @@
 //!
 //! ```python
 //! import threading
+//! from genja_core.task import TaskSuccessResult, task
+//!
+//! @task(name="show_version")
+//! class ShowVersionTask:
+//!     def run(self, task, host, context):
+//!         return TaskSuccessResult(summary=f"checked {host.hostname}")
 //!
 //! def worker(runtime):
-//!     results = runtime.run_task(MyTask)
+//!     results = runtime.run_task(ShowVersionTask)
 //!     print(results)
 //!
 //! runtime = Genja.from_hosts(hosts)
@@ -300,7 +303,7 @@
 //! # Performance Considerations
 //!
 //! - Filtering operations create new runtime instances but share the underlying inventory
-//! - Inventory transformations are applied once during runtime creation
+//! - Inventory transformations are applied when using transformed inventory accessors
 //! - Task execution parallelism is controlled by the runner plugin
 //! - Python-Rust conversions happen at API boundaries
 //!
@@ -309,16 +312,22 @@
 //! ## Complete Workflow
 //!
 //! ```python
-//! from genja_core import Genja, PluginManager, Task
+//! from genja_core import Genja, PluginManager
+//! from genja_core.task import TaskSuccessResult, task
 //!
 //! # Setup
 //! plugin_manager = PluginManager()
-//! plugin_manager.load_plugins_from_directory("./plugins")
+//! plugin_manager.load_rust_plugins_from_directory("./plugins")
 //!
 //! hosts = {
 //!     "router1": {"hostname": "10.0.0.1", "platform": "ios"},
 //!     "router2": {"hostname": "10.0.0.2", "platform": "nxos"}
 //! }
+//!
+//! @task(name="show_version")
+//! class ShowVersionTask:
+//!     def run(self, task, host, context):
+//!         return TaskSuccessResult(summary=f"checked {host.hostname}")
 //!
 //! # Create runtime
 //! runtime = (Genja.builder(hosts)
@@ -328,11 +337,11 @@
 //!
 //! # Filter and execute
 //! ios_runtime = runtime.filter_by_key_value("platform", "ios")
-//! results = ios_runtime.run_task(MyTask)
+//! results = ios_runtime.run_task(ShowVersionTask)
 //!
 //! # Process results
-//! for host_id, result in results.items():
-//!     print(f"{host_id}: {result}")
+//! for host_id, result in results.to_dict()["hosts"].items():
+//!     print(f"{host_id}: {result['status']}")
 //! ```
 //!
 //! ## Settings File Workflow
@@ -348,7 +357,7 @@
 //! #   worker_count: 10
 //!
 //! runtime = Genja.from_settings_file("config.yaml")
-//! results = runtime.run_task(MyTask)
+//! results = runtime.run_task(ShowVersionTask)
 //! ```
 
 use genja::Genja as RuntimeGenja;
@@ -389,17 +398,21 @@ use crate::task::{self, PyTaskResults};
 ///
 /// ```python
 /// from genja_core import Genja
+/// from genja_core.task import TaskSuccessResult, task
 ///
-/// # Create from hosts dictionary
+/// @task(name="show_version")
+/// class ShowVersionTask:
+///     def run(self, task, host, context):
+///         return TaskSuccessResult(summary=f"checked {host.hostname}")
+///
 /// hosts = {
 ///     "router1": {"hostname": "10.0.0.1", "platform": "ios"},
 ///     "router2": {"hostname": "10.0.0.2", "platform": "nxos"}
 /// }
 /// runtime = Genja.from_hosts(hosts)
 ///
-/// # Filter and execute tasks
 /// ios_runtime = runtime.filter_by_key_value("platform", "ios")
-/// results = ios_runtime.run_task(MyTask)
+/// results = ios_runtime.run_task(ShowVersionTask)
 /// ```
 #[pyclass(name = "Genja")]
 #[derive(Clone)]
@@ -519,16 +532,15 @@ impl PyGenja {
     ///
     /// # Returns
     ///
-    /// Returns a `PyResult<Self>` containing the initialized runtime instance with
-    /// transformed inventory (groups and defaults applied) on success, or a `PyValueError`
-    /// if the inventory structure is invalid or the runtime cannot be built.
+    /// Returns a `PyResult<Self>` containing the initialized runtime instance on success,
+    /// or a `PyValueError` if the inventory structure is invalid or the runtime cannot
+    /// be built.
     ///
     /// # Errors
     ///
     /// This method will return an error if:
     /// - The `inventory` parameter is not a valid dictionary structure
     /// - The inventory structure contains invalid or inconsistent data
-    /// - Host references to non-existent groups are detected
     /// - The runtime builder fails to construct the runtime instance
     #[staticmethod]
     #[pyo3(signature = (inventory, settings=None, plugin_manager=None))]
@@ -802,7 +814,7 @@ impl PyGenja {
         Ok(Self { inner })
     }
 
-    /// Retrieves the transformed inventory hosts as a Python dictionary.
+    /// Retrieves the raw inventory hosts as a Python dictionary.
     ///
     /// This method returns the raw hosts from the inventory (before group and default
     /// transformations are applied) as a Python dictionary mapping host IDs to host payloads.

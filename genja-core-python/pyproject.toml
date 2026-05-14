@@ -16,7 +16,7 @@ description = "Default template for PDM package"
 authors = [
     {name = "Andre Bowen-Brown", email = "contact@genja.co.uk"},
 ]
-# readme = "README.md"
+readme = "README.md"
 license = {text = "MIT"}
 
 [tool.maturin]
