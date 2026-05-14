@@ -1,6 +1,6 @@
-import genja_core
-from genja_core.inventory import Defaults, Group, Host as InventoryHost, Inventory
-from genja_core.task import (
+import genja
+from genja.inventory import Defaults, Group, Host as InventoryHost, Inventory
+from genja.task import (
     Host,
     TaskMessage,
     TaskMessageLevel,
@@ -12,7 +12,7 @@ from tests.fixtures.connection_plugins import ConnectionPlugin, TestConnection
 
 def test_genja_from_settings_file_rejects_invalid_path():
     try:
-        genja_core.Genja.from_settings_file("/nonexistent/path/settings.yaml")
+        genja.Genja.from_settings_file("/nonexistent/path/settings.yaml")
     except ValueError as err:
         assert "failed to build Genja runtime from settings file" in str(err)
     else:
@@ -24,7 +24,7 @@ def test_genja_from_settings_file_rejects_malformed_content(tmp_path):
     settings_path.write_text("invalid: yaml: content: [")
 
     try:
-        genja_core.Genja.from_settings_file(str(settings_path))
+        genja.Genja.from_settings_file(str(settings_path))
     except ValueError as err:
         assert "failed to build Genja runtime from settings file" in str(err)
     else:
@@ -84,7 +84,7 @@ class RuntimeConnectionTask:
 
 
 def test_genja_runtime_runs_python_task_definition():
-    runtime = genja_core.Genja.from_hosts({
+    runtime = genja.Genja.from_hosts({
         "router1": Host(hostname="10.0.0.1", platform="ios"),
         "router2": Host(hostname="10.0.0.2", platform="ios"),
     }).with_runner("serial")
@@ -105,7 +105,7 @@ def test_genja_runtime_runs_python_task_definition():
 
 
 def test_task_results_to_dict_normalizes_non_raw_and_preserves_raw_shape():
-    runtime = genja_core.Genja.from_hosts({
+    runtime = genja.Genja.from_hosts({
         "router1": Host(hostname="10.0.0.1", platform="ios"),
     }).with_runner("serial")
     results = runtime.run_task(RuntimeBackupTask)
@@ -122,7 +122,7 @@ def test_task_results_to_dict_normalizes_non_raw_and_preserves_raw_shape():
 
 
 def test_genja_inventory_accessors_expose_host_payloads():
-    runtime = genja_core.Genja.from_hosts({
+    runtime = genja.Genja.from_hosts({
         "router1": Host(hostname="10.0.0.1", platform="ios"),
         "router2": Host(hostname="10.0.0.2", port=2222, platform="nxos"),
     })
@@ -169,7 +169,7 @@ def test_inventory_models_serialize_to_expected_python_payloads():
 
 
 def test_genja_from_inventory_preserves_groups_and_defaults():
-    runtime = genja_core.Genja.from_inventory(
+    runtime = genja.Genja.from_inventory(
         Inventory(
             hosts={
                 "router1": InventoryHost(
@@ -200,7 +200,7 @@ def test_genja_from_inventory_preserves_groups_and_defaults():
 
 
 def test_genja_filter_accessors_and_execution_respect_selected_hosts():
-    runtime = genja_core.Genja.from_hosts({
+    runtime = genja.Genja.from_hosts({
         "router1": Host(
             hostname="10.0.0.1",
             platform="ios",
@@ -222,7 +222,7 @@ def test_genja_filter_accessors_and_execution_respect_selected_hosts():
 
 
 def test_genja_runtime_passes_real_task_context_depth():
-    runtime = genja_core.Genja.from_hosts({
+    runtime = genja.Genja.from_hosts({
         "router1": Host(hostname="10.0.0.1", platform="ios"),
     }).with_runner("serial")
     results = runtime.run_task(RuntimeParentTask, max_depth=1)
@@ -241,10 +241,10 @@ def test_genja_runtime_passes_real_task_context_depth():
 
 
 def test_genja_runtime_passes_python_connection_into_runtime_context():
-    plugins = genja_core.PluginManager()
+    plugins = genja.PluginManager()
     plugins.register_plugin(ConnectionPlugin())
 
-    runtime = genja_core.Genja.from_hosts(
+    runtime = genja.Genja.from_hosts(
         {
             "router1": Host(
                 hostname="10.0.0.1",
@@ -276,7 +276,7 @@ def test_genja_runtime_passes_python_connection_into_runtime_context():
 
 def test_genja_builder_registers_plugin_and_builds_runtime():
     runtime = (
-        genja_core.Genja
+        genja.Genja
         .builder({
             "router1": Host(
                 hostname="10.0.0.1",

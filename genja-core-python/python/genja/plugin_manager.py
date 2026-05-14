@@ -1,8 +1,8 @@
 """Python plugin-manager API for Genja.
 
-Import plugin-manager helpers from this module instead of from ``genja_core``
+Import plugin-manager helpers from this module instead of from ``genja``
 directly. The top-level package re-exports these names for compatibility, but
-``genja_core.plugin_manager`` is the primary public surface for:
+``genja.plugin_manager`` is the primary public surface for:
 
 - ``PluginManager``
 
@@ -20,7 +20,7 @@ owned plugin registry into the runtime, so the same manager instance should not
 be reused afterward.
 """
 
-from .genja_core import PluginManager
+from .genja import PluginManager
 
 
 __all__ = ["PluginManager"]

@@ -1,5 +1,5 @@
 [project]
-name = "genja-core-python"
+name = "genja"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",
@@ -12,7 +12,7 @@ dependencies = [
     "pydantic>=2.11.0",
 ]
 version = "0.1.0"
-description = "Default template for PDM package"
+description = "Python bindings for the Genja runtime"
 authors = [
     {name = "Andre Bowen-Brown", email = "contact@genja.co.uk"},
 ]

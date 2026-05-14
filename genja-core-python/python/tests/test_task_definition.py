@@ -1,6 +1,6 @@
-import genja_core
+import genja
 import pytest
-from genja_core.task import (
+from genja.task import (
     Host,
     GenjaTaskProtocol,
     TaskRuntimeContext,
@@ -94,7 +94,7 @@ class BackupConfigPlainTask:
 
 
 def test_task_definition_from_python_class_extracts_metadata():
-    task_definition = genja_core.TaskDefinition.from_python_class(BackupConfigTask)
+    task_definition = genja.TaskDefinition.from_python_class(BackupConfigTask)
 
     assert task_definition.name == "backup_config"
     assert task_definition.connection_plugin_name == "ssh"
@@ -109,7 +109,7 @@ def test_task_definition_from_python_class_extracts_metadata():
 
 
 def test_task_definition_run_on_host_executes_python_body():
-    task_definition = genja_core.TaskDefinition.from_python_class(BackupConfigPlainTask)
+    task_definition = genja.TaskDefinition.from_python_class(BackupConfigPlainTask)
 
     result = task_definition.run_on_host(Host(hostname="router1", platform="ios"))
     data = result.to_dict()
@@ -129,7 +129,7 @@ def test_task_definition_from_python_class_requires_decorator_metadata():
             return TaskSuccessResult(summary="noop")
 
     with pytest.raises(ValueError, match="missing __genja_task_info__"):
-        genja_core.TaskDefinition.from_python_class(MissingMetadataTask)
+        genja.TaskDefinition.from_python_class(MissingMetadataTask)
 
 
 def test_task_definition_from_python_class_allows_missing_connection_plugin_name():
@@ -138,7 +138,7 @@ def test_task_definition_from_python_class_allows_missing_connection_plugin_name
         def run(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
-    task_definition = genja_core.TaskDefinition.from_python_class(NoConnectionTask)
+    task_definition = genja.TaskDefinition.from_python_class(NoConnectionTask)
 
     assert task_definition.connection_plugin_name is None
     assert task_definition.to_dict()["connection_plugin_name"] is None
@@ -188,7 +188,7 @@ def test_task_definition_from_python_class_rejects_empty_connection_plugin_name_
     ] = ""
 
     with pytest.raises(ValueError, match="connection_plugin_name.*must not be empty"):
-        genja_core.TaskDefinition.from_python_class(InvalidTask)
+        genja.TaskDefinition.from_python_class(InvalidTask)
 
 
 def test_task_definition_from_python_class_rejects_empty_name_in_metadata():
@@ -200,7 +200,7 @@ def test_task_definition_from_python_class_rejects_empty_name_in_metadata():
     cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__["name"] = "   "
 
     with pytest.raises(ValueError, match="field 'name' must not be empty"):
-        genja_core.TaskDefinition.from_python_class(InvalidTask)
+        genja.TaskDefinition.from_python_class(InvalidTask)
 
 
 def test_task_definition_from_python_class_rejects_non_json_serializable_options_in_metadata():
@@ -214,7 +214,7 @@ def test_task_definition_from_python_class_rejects_non_json_serializable_options
     }
 
     with pytest.raises(TypeError, match="not JSON serializable"):
-        genja_core.TaskDefinition.from_python_class(InvalidTask)
+        genja.TaskDefinition.from_python_class(InvalidTask)
 
 
 def test_task_decorator_requires_callable_run_method():

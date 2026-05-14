@@ -1,8 +1,8 @@
 """Python runner plugin authoring API for Genja.
 
-Import runner-facing helpers from this module instead of from ``genja_core``
+Import runner-facing helpers from this module instead of from ``genja``
 directly. The top-level package re-exports these names for compatibility, but
-``genja_core.runner`` is the primary public surface for:
+``genja.runner`` is the primary public surface for:
 
 - ``RunnerPluginProtocol``
 

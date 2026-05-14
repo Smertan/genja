@@ -1,8 +1,8 @@
 """Python processor authoring API for Genja.
 
-Import processor-facing helpers from this module instead of from ``genja_core``
+Import processor-facing helpers from this module instead of from ``genja``
 directly. The top-level package re-exports these names for compatibility, but
-``genja_core.processor`` is the primary public surface for:
+``genja.processor`` is the primary public surface for:
 
 - ``TaskProcessorContext``
 - ``TaskProcessorProtocol``
@@ -12,9 +12,9 @@ metadata:
 
 .. code-block:: python
 
-    import genja_core
-    from genja_core.processor import TaskProcessorContext
-    from genja_core.task import Host, TaskSuccessResult, task
+    import genja
+    from genja.processor import TaskProcessorContext
+    from genja.task import Host, TaskSuccessResult, task
 
     class AuditProcessor:
         def name(self) -> str:
@@ -36,7 +36,7 @@ metadata:
         def run(self, task, host, context):
             return TaskSuccessResult(summary=f"backed up {host.hostname}")
 
-    plugins = genja_core.PluginManager()
+    plugins = genja.PluginManager()
     plugins.register_plugin(AuditProcessor())
 """
 

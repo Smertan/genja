@@ -1,8 +1,8 @@
 """Python settings API for Genja.
 
-Import settings-facing helpers from this module instead of from ``genja_core``
+Import settings-facing helpers from this module instead of from ``genja``
 directly. The top-level package re-exports these names for compatibility, but
-``genja_core.settings`` is the primary public surface for:
+``genja.settings`` is the primary public surface for:
 
 - ``Settings``
 - ``CoreConfig``
@@ -13,7 +13,7 @@ directly. The top-level package re-exports these names for compatibility, but
 - ``LoggingConfig``
 """
 
-from .genja_core import (
+from .genja import (
     CoreConfig,
     InventoryConfig,
     LoggingConfig,

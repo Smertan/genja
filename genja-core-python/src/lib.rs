@@ -6,7 +6,7 @@
 //!
 //! # Overview
 //!
-//! The `genja_core` Python module exposes the following core components:
+//! The `genja` Python module exposes the following core components:
 //!
 //! - **Runtime** (`Genja`) - Main entry point for task execution and inventory management
 //! - **Plugin Manager** (`PluginManager`) - Dynamic plugin loading and management
@@ -27,7 +27,7 @@
 //! The Python module is organized into submodules that mirror the Rust crate structure:
 //!
 //! ```text
-//! genja_core/
+//! genja/
 //! ├── Genja              (runtime execution)
 //! ├── PluginManager      (plugin management)
 //! ├── Settings           (configuration)
@@ -42,7 +42,7 @@
 //! ## Basic Task Execution
 //!
 //! ```python
-//! from genja_core import Genja, Settings
+//! from genja import Genja, Settings
 //!
 //! # Load configuration
 //! settings = Settings.from_file("config.yaml")
@@ -57,7 +57,7 @@
 //! ## Plugin Management
 //!
 //! ```python
-//! from genja_core import PluginManager
+//! from genja import PluginManager
 //!
 //! # Create plugin manager
 //! manager = PluginManager.new()
@@ -72,7 +72,7 @@
 //! ## Configuration Management
 //!
 //! ```python
-//! from genja_core import Settings, CoreConfig
+//! from genja import Settings, CoreConfig
 //!
 //! # Load from file
 //! settings = Settings.from_file("config.yaml")
@@ -142,7 +142,7 @@
 //!
 //! # See Also
 //!
-//! - [`genja-core`](../genja_core/index.html) - Core Rust implementation
+//! - `genja-core` - Core Rust implementation
 //! - [`genja-plugin-manager`](../genja_plugin_manager/index.html) - Plugin system
 //! - [PyO3 Documentation](https://pyo3.rs/) - Python/Rust bindings framework
 
@@ -154,7 +154,7 @@ mod runtime;
 mod settings;
 mod task;
 
-/// Initializes the `genja_core` Python module by registering all submodules.
+/// Initializes the `genja` Python module by registering all submodules.
 ///
 /// This function serves as the entry point for the PyO3-based Python extension module.
 /// It registers all core components of the Genja framework, including plugin management,
@@ -173,7 +173,7 @@ mod task;
 /// * `Ok(())` if all submodules are successfully registered
 /// * `Err(PyErr)` if any submodule registration fails
 #[pymodule]
-fn genja_core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn genja(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     plugin_manager::register(module)?;
     runtime::register(module)?;
     settings::register(module)?;
@@ -192,13 +192,13 @@ mod tests {
     }
 
     #[test]
-    fn genja_core_module_registers_public_classes() {
+    fn genja_module_registers_public_classes() {
         init_python();
         Python::with_gil(|py| {
             let module =
-                PyModule::new(py, "test_genja_core_module").expect("test module should be created");
+                PyModule::new(py, "test_genja_module").expect("test module should be created");
 
-            genja_core(py, &module).expect("module initialization should succeed");
+            genja(py, &module).expect("module initialization should succeed");
 
             assert!(module.getattr("Genja").is_ok());
             assert!(module.getattr("PluginManager").is_ok());

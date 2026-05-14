@@ -1,8 +1,8 @@
-# genja-core-python
+# genja
 
 Python bindings for the Genja runtime.
 
-This package exposes the `genja_core` module, which wraps the Rust runtime and
+This package exposes the `genja` module, which wraps the Rust runtime and
 lets Python code:
 
 - build a runtime from hosts, a full inventory, or a settings file
@@ -15,7 +15,13 @@ lets Python code:
 For end users, install the package with `pip`:
 
 ```bash
-pip install genja-core-python
+pip install genja
+```
+
+The package currently exposes the `genja` Python module:
+
+```python
+import genja
 ```
 
 ## Quick Start
@@ -23,8 +29,8 @@ pip install genja-core-python
 Create a runtime from a simple host mapping:
 
 ```python
-import genja_core
-from genja_core.task import TaskSuccessResult, task
+import genja
+from genja.task import TaskSuccessResult, task
 
 
 @task(name="backup_config")
@@ -33,7 +39,7 @@ class BackupTask:
         return TaskSuccessResult(summary=f"backed up {host.hostname}")
 
 
-genja = genja_core.Genja.from_hosts(
+genja = genja.Genja.from_hosts(
     {
         "router1": {"hostname": "10.0.0.1", "platform": "ios"},
         "router2": {"hostname": "10.0.0.2", "platform": "nxos"},
@@ -46,11 +52,11 @@ print(results.to_dict())
 
 ## Full Inventory
 
-Use `genja_core.inventory` when you need groups and defaults:
+Use `genja.inventory` when you need groups and defaults:
 
 ```python
-import genja_core
-from genja_core.inventory import Defaults, Group, Host, Inventory
+import genja
+from genja.inventory import Defaults, Group, Host, Inventory
 
 inventory = Inventory(
     hosts={
@@ -62,7 +68,7 @@ inventory = Inventory(
     defaults=Defaults(username="admin", port=22),
 )
 
-genja = genja_core.Genja.from_inventory(inventory)
+genja = genja.Genja.from_inventory(inventory)
 
 print(genja.inventory_full())
 print(genja.inventory_raw())
@@ -81,7 +87,7 @@ The runtime exposes three inventory views:
 You can register Python plugins directly:
 
 ```python
-import genja_core
+import genja
 
 
 class MyProcessorPlugin:
@@ -95,14 +101,14 @@ class MyProcessorPlugin:
         return None
 
 
-plugins = genja_core.PluginManager()
+plugins = genja.PluginManager()
 plugins.register_plugin(MyProcessorPlugin())
 ```
 
 Rust plugins can be loaded from a directory:
 
 ```python
-plugins = genja_core.PluginManager()
+plugins = genja.PluginManager()
 plugins.load_rust_plugins_from_directory("./plugins")
 ```
 
@@ -111,16 +117,16 @@ plugins.load_rust_plugins_from_directory("./plugins")
 Build a runtime from a settings file:
 
 ```python
-import genja_core
+import genja
 
-genja = genja_core.Genja.from_settings_file("config.yaml")
+genja = genja.Genja.from_settings_file("config.yaml")
 ```
 
 If you need Python plugins during settings-file loading, provide a plugin manager:
 
 ```python
-plugins = genja_core.PluginManager()
-genja = genja_core.Genja.from_settings_file("config.yaml", plugin_manager=plugins)
+plugins = genja.PluginManager()
+genja = genja.Genja.from_settings_file("config.yaml", plugin_manager=plugins)
 ```
 
 ## Development

@@ -1,9 +1,9 @@
 import sys
 import textwrap
 
-import genja_core
+import genja
 from tests.fixtures.processor_plugins import AuditProcessor
-from genja_core.task import Host, TaskSuccessResult, task
+from genja.task import Host, TaskSuccessResult, task
 
 
 @task(name="processor_backup", connection_plugin_name="ssh", processors=["audit"])
@@ -16,11 +16,11 @@ class ProcessorBackupTask:
 
 
 def test_plugin_manager_register_plugin_executes_python_processor():
-    plugins = genja_core.PluginManager()
+    plugins = genja.PluginManager()
     processor = AuditProcessor()
     plugins.register_plugin(processor)
 
-    runtime = genja_core.Genja.from_hosts(
+    runtime = genja.Genja.from_hosts(
         {"router1": Host(hostname="10.0.0.1", platform="ios")},
         plugin_manager=plugins,
     ).with_runner("serial")
@@ -69,10 +69,10 @@ def test_plugin_manager_loads_python_processors_from_pyproject(tmp_path):
 
     sys.path.insert(0, str(tmp_path))
     try:
-        plugins = genja_core.PluginManager()
+        plugins = genja.PluginManager()
         plugins.load_python_plugins_from_pyproject(str(pyproject_path))
 
-        runtime = genja_core.Genja.from_hosts(
+        runtime = genja.Genja.from_hosts(
             {"router1": Host(hostname="10.0.0.1", platform="ios")},
             plugin_manager=plugins,
         ).with_runner("serial")

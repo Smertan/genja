@@ -1,11 +1,11 @@
 from pathlib import Path
 
-import genja_core
+import genja
 
 
 def test_settings_from_file_loads_yaml():
     settings_file = Path(__file__).parent / "fixtures" / "settings.yaml"
-    settings = genja_core.Settings.from_file(str(settings_file))
+    settings = genja.Settings.from_file(str(settings_file))
 
     assert settings.core.raise_on_error is False
     assert settings.inventory.plugin == "FileInventoryPlugin"

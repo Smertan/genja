@@ -3,8 +3,8 @@ import textwrap
 
 import pytest
 
-import genja_core
-from genja_core.task import Host, TaskSuccessResult, task
+import genja
+from genja.task import Host, TaskSuccessResult, task
 from tests.fixtures.connection_plugins import ConnectionPlugin
 from tests.fixtures.inventory_plugins import StaticInventoryPlugin
 from tests.fixtures.processor_plugins import (
@@ -28,7 +28,7 @@ class PluginManagerRunnerTaskTwo:
 
 
 def test_plugin_manager_registers_all_supported_python_plugin_groups():
-    manager = genja_core.PluginManager()
+    manager = genja.PluginManager()
     manager.register_plugin(ConnectionPlugin())
     manager.register_plugin(MinimalAuditProcessor())
     manager.register_plugin(StaticInventoryPlugin())
@@ -51,7 +51,7 @@ def test_plugin_manager_registers_all_supported_python_plugin_groups():
 
 
 def test_plugin_manager_deregister_plugin_removes_plugin():
-    manager = genja_core.PluginManager()
+    manager = genja.PluginManager()
     manager.register_plugin(StaticInventoryPlugin())
 
     assert manager.deregister_plugin("python_inventory") == "python_inventory"
@@ -60,7 +60,7 @@ def test_plugin_manager_deregister_plugin_removes_plugin():
 
 
 def test_plugin_manager_rejects_unsupported_group_from_python():
-    manager = genja_core.PluginManager()
+    manager = genja.PluginManager()
 
     with pytest.raises(
         ValueError, match="unsupported python plugin group 'UnknownPlugin'"
@@ -69,8 +69,8 @@ def test_plugin_manager_rejects_unsupported_group_from_python():
 
 
 def test_plugin_manager_is_consumed_after_runtime_build():
-    manager = genja_core.PluginManager()
-    runtime = genja_core.Genja.from_hosts(
+    manager = genja.PluginManager()
+    runtime = genja.Genja.from_hosts(
         {"router1": Host(hostname="10.0.0.1", platform="ios")},
         plugin_manager=manager,
     )
@@ -83,9 +83,9 @@ def test_plugin_manager_is_consumed_after_runtime_build():
 
 
 def test_runner_plugin_run_tasks_executes_from_python_side():
-    manager = genja_core.PluginManager()
+    manager = genja.PluginManager()
     manager.register_plugin(BatchRunnerPlugin())
-    runtime = genja_core.Genja.from_hosts(
+    runtime = genja.Genja.from_hosts(
         {
             "router1": Host(hostname="10.0.0.1", platform="ios"),
             "router2": Host(hostname="10.0.0.2", platform="nxos"),
@@ -101,9 +101,9 @@ def test_runner_plugin_run_tasks_executes_from_python_side():
 
 
 def test_transform_plugin_with_host_only_method_still_builds_runtime():
-    manager = genja_core.PluginManager()
+    manager = genja.PluginManager()
     manager.register_plugin(HostOnlyTransformPlugin())
-    runtime = genja_core.Genja.from_hosts(
+    runtime = genja.Genja.from_hosts(
         {"router1": Host(hostname="10.0.0.1", platform="ios")},
         plugin_manager=manager,
     )
@@ -134,7 +134,7 @@ def test_plugin_manager_load_python_plugins_from_pyproject_rejects_name_mismatch
 
     sys.path.insert(0, str(tmp_path))
     try:
-        manager = genja_core.PluginManager()
+        manager = genja.PluginManager()
         with pytest.raises(ValueError, match="plugin name mismatch"):
             manager.load_python_plugins_from_pyproject(str(pyproject_path))
     finally:
@@ -155,6 +155,6 @@ def test_plugin_manager_load_python_plugins_from_pyproject_rejects_non_string_en
         )
     )
 
-    manager = genja_core.PluginManager()
+    manager = genja.PluginManager()
     with pytest.raises(ValueError, match="must be a string import path"):
         manager.load_python_plugins_from_pyproject(str(pyproject_path))

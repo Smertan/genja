@@ -946,7 +946,7 @@ fn build_python_task_model<'py>(
     class_name: &str,
     kwargs: Bound<'py, PyDict>,
 ) -> PyResult<Py<PyAny>> {
-    let task_module = PyModule::import(py, "genja_core.task")?;
+    let task_module = PyModule::import(py, "genja.task")?;
     let class = task_module.getattr(class_name)?;
     Ok(class.call((), Some(&kwargs))?.unbind())
 }
@@ -1172,30 +1172,30 @@ mod tests {
                 path.call_method1("insert", (0, python_source.display().to_string()))
                     .expect("python source path should be inserted");
                 let modules = sys.getattr("modules").expect("sys.modules should exist");
-                let genja_core = PyModule::from_code(
+                let genja = PyModule::from_code(
                     py,
                     pyo3::ffi::c_str!("__path__ = []\n"),
-                    pyo3::ffi::c_str!("genja_core/__init__.py"),
-                    pyo3::ffi::c_str!("genja_core"),
+                    pyo3::ffi::c_str!("genja/__init__.py"),
+                    pyo3::ffi::c_str!("genja"),
                 )
-                .expect("genja_core stub should build");
+                .expect("genja stub should build");
                 let task = PyModule::from_code(
                     py,
                     pyo3::ffi::c_str!(
                         "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    pass\n"
                     ),
-                    pyo3::ffi::c_str!("genja_core/task.py"),
-                    pyo3::ffi::c_str!("genja_core.task"),
+                    pyo3::ffi::c_str!("genja/task.py"),
+                    pyo3::ffi::c_str!("genja.task"),
                 )
                 .expect("task stub should build");
-                genja_core
+                genja
                     .add("task", &task)
                     .expect("task module should attach to package");
                 modules
-                    .set_item("genja_core", &genja_core)
-                    .expect("genja_core stub should register");
+                    .set_item("genja", &genja)
+                    .expect("genja stub should register");
                 modules
-                    .set_item("genja_core.task", &task)
+                    .set_item("genja.task", &task)
                     .expect("task stub should register");
             });
         });

@@ -1,8 +1,8 @@
 """Python connection plugin authoring API for Genja.
 
-Import connection-facing helpers from this module instead of from ``genja_core``
+Import connection-facing helpers from this module instead of from ``genja``
 directly. The top-level package re-exports these names for compatibility, but
-``genja_core.connection`` is the primary public surface for:
+``genja.connection`` is the primary public surface for:
 
 - ``ConnectionKey``
 - ``ResolvedConnectionParams``
@@ -17,8 +17,8 @@ Connection factories and connection methods may be implemented as either
 
 .. code-block:: python
 
-    import genja_core
-    from genja_core.connection import ConnectionKey, ResolvedConnectionParams
+    import genja
+    from genja.connection import ConnectionKey, ResolvedConnectionParams
 
     class NetmikoConnection:
         def __init__(self, key: ConnectionKey):
@@ -45,7 +45,7 @@ Connection factories and connection methods may be implemented as either
         def create(self, key: ConnectionKey) -> NetmikoConnection:
             return NetmikoConnection(key)
 
-    plugins = genja_core.PluginManager()
+    plugins = genja.PluginManager()
     plugins.register_plugin(NetmikoPlugin())
 """
 

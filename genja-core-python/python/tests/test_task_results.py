@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 
-import genja_core
+import genja
 from pydantic import ValidationError
 import pytest
-from genja_core.task import (
+from genja.task import (
     TaskFailureKind,
     TaskFailureResult,
     TaskMessage,
@@ -29,7 +29,7 @@ def test_host_task_result_from_python_success_result_round_trips():
         metadata={"backup_file": "/tmp/router1.cfg"},
     )
 
-    host_result = genja_core.HostTaskResult.from_python_result(result)
+    host_result = genja.HostTaskResult.from_python_result(result)
     data = host_result.to_dict()
 
     assert host_result.status == "passed"
@@ -53,7 +53,7 @@ def test_host_task_result_from_python_failure_result_round_trips():
         messages=[TaskMessage(level=TaskMessageLevel.ERROR, text="failed to connect")],
     )
 
-    host_result = genja_core.HostTaskResult.from_python_result(result)
+    host_result = genja.HostTaskResult.from_python_result(result)
     data = host_result.to_dict()
 
     assert host_result.status == "failed"
@@ -112,7 +112,7 @@ def test_host_task_result_from_python_skip_result_round_trips():
         message="host is in maintenance mode",
     )
 
-    host_result = genja_core.HostTaskResult.from_python_result(result)
+    host_result = genja.HostTaskResult.from_python_result(result)
     data = host_result.to_dict()
 
     assert host_result.status == "skipped"
@@ -122,11 +122,11 @@ def test_host_task_result_from_python_skip_result_round_trips():
 
 def test_host_task_result_from_python_result_rejects_missing_status():
     with pytest.raises(ValueError, match="missing 'status'"):
-        genja_core.HostTaskResult.from_python_result({"summary": "backup complete"})
+        genja.HostTaskResult.from_python_result({"summary": "backup complete"})
 
 
 def test_host_task_result_from_python_result_rejects_unknown_status():
     with pytest.raises(
         ValueError, match="unsupported python task result status 'unknown'"
     ):
-        genja_core.HostTaskResult.from_python_result({"status": "unknown"})
+        genja.HostTaskResult.from_python_result({"status": "unknown"})

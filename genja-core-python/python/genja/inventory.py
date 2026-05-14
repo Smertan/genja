@@ -1,8 +1,8 @@
 """Python inventory models and plugin authoring API for Genja.
 
-Import inventory-facing helpers from this module instead of from ``genja_core``
+Import inventory-facing helpers from this module instead of from ``genja``
 directly. The top-level package re-exports these names for compatibility, but
-``genja_core.inventory`` is the primary public surface for:
+``genja.inventory`` is the primary public surface for:
 
 - ``ConnectionOptions``
 - ``Host``
@@ -22,8 +22,8 @@ shape accepted by ``Genja.from_hosts(...)`` or a full ``Inventory`` payload:
 
 .. code-block:: python
 
-    import genja_core
-    from genja_core.inventory import InventoryPluginProtocol
+    import genja
+    from genja.inventory import InventoryPluginProtocol
 
     class StaticInventoryPlugin:
         def name(self) -> str:
@@ -40,7 +40,7 @@ shape accepted by ``Genja.from_hosts(...)`` or a full ``Inventory`` payload:
                 }
             }
 
-    manager = genja_core.PluginManager()
+    manager = genja.PluginManager()
     manager.register_plugin(StaticInventoryPlugin())
 """
 

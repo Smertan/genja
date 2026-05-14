@@ -18,7 +18,7 @@
 //! The simplest approach for basic host management:
 //!
 //! ```python
-//! from genja_core import Genja
+//! from genja import Genja
 //!
 //! hosts = {
 //!     "router1": {"hostname": "10.0.0.1", "platform": "ios"},
@@ -64,7 +64,7 @@
 //! For advanced configuration with plugins:
 //!
 //! ```python
-//! from genja_core import Genja, PluginManager
+//! from genja import Genja, PluginManager
 //!
 //! plugin_manager = PluginManager()
 //! plugin_manager.load_rust_plugins_from_directory("./plugins")
@@ -128,7 +128,7 @@
 //! Execute decorated Python task classes across hosts:
 //!
 //! ```python
-//! from genja_core.task import Host, TaskSuccessResult, task
+//! from genja.task import Host, TaskSuccessResult, task
 //!
 //! @task(name="backup_config")
 //! class BackupTask:
@@ -149,7 +149,7 @@
 //! Plugins can be loaded from directories or registered individually:
 //!
 //! ```python
-//! from genja_core import PluginManager
+//! from genja import PluginManager
 //!
 //! # Load from directory
 //! plugin_manager = PluginManager()
@@ -190,7 +190,7 @@
 //! Provide settings loaded from a file or defaults:
 //!
 //! ```python
-//! from genja_core import Settings
+//! from genja import Settings
 //!
 //! settings = Settings.from_file("config.yaml")
 //! runtime = Genja.from_hosts(hosts, settings=settings)
@@ -281,7 +281,7 @@
 //!
 //! ```python
 //! import threading
-//! from genja_core.task import TaskSuccessResult, task
+//! from genja.task import TaskSuccessResult, task
 //!
 //! @task(name="show_version")
 //! class ShowVersionTask:
@@ -312,8 +312,8 @@
 //! ## Complete Workflow
 //!
 //! ```python
-//! from genja_core import Genja, PluginManager
-//! from genja_core.task import TaskSuccessResult, task
+//! from genja import Genja, PluginManager
+//! from genja.task import TaskSuccessResult, task
 //!
 //! # Setup
 //! plugin_manager = PluginManager()
@@ -397,8 +397,8 @@ use crate::task::{self, PyTaskResults};
 /// # Examples
 ///
 /// ```python
-/// from genja_core import Genja
-/// from genja_core.task import TaskSuccessResult, task
+/// from genja import Genja
+/// from genja.task import TaskSuccessResult, task
 ///
 /// @task(name="show_version")
 /// class ShowVersionTask:

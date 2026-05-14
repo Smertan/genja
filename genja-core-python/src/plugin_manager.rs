@@ -2064,7 +2064,7 @@ fn import_python_plugin<'py>(py: Python<'py>, import_path: &str) -> PyResult<Py<
 /// This function creates a Python representation of a task processor context by extracting
 /// the context's fields (task name, parent task name, depth, and hostname) and packaging
 /// them into a Python dictionary. The dictionary is then used to instantiate a Python
-/// `TaskProcessorContext` model object from the `genja_core.processor` module. This
+/// `TaskProcessorContext` model object from the `genja.processor` module. This
 /// conversion enables Rust task processor contexts to be passed to Python processor
 /// plugins, allowing Python code to access task execution metadata.
 ///
@@ -2088,7 +2088,7 @@ fn import_python_plugin<'py>(py: Python<'py>, import_path: &str) -> PyResult<Py<
 /// with all fields populated from the Rust context. The returned object can be passed
 /// to Python processor plugin methods. Returns `Err(PyErr)` if:
 /// - Setting any dictionary item fails
-/// - Importing the `genja_core.processor` module fails
+/// - Importing the `genja.processor` module fails
 /// - Instantiating the `TaskProcessorContext` class fails
 /// - Any other Python operation encounters an error
 ///
@@ -2111,7 +2111,7 @@ fn build_python_processor_context<'py>(
         Some(hostname) => payload.set_item("hostname", hostname)?,
         None => payload.set_item("hostname", py.None())?,
     }
-    build_python_model(py, "genja_core.processor", "TaskProcessorContext", payload)
+    build_python_model(py, "genja.processor", "TaskProcessorContext", payload)
 }
 
 /// Converts a Rust value that implements `Serialize` into a Python object.
@@ -2271,7 +2271,7 @@ where
 /// This function creates a Python representation of a connection key by extracting
 /// the key's fields (hostname and plugin name) and packaging them into a Python
 /// dictionary. The dictionary is then used to instantiate a Python `ConnectionKey`
-/// model object from the `genja_core.connection` module. This conversion enables
+/// model object from the `genja.connection` module. This conversion enables
 /// Rust connection keys to be passed to Python connection plugins, allowing Python
 /// code to identify and reference specific connections.
 ///
@@ -2291,7 +2291,7 @@ where
 /// all fields populated from the Rust connection key. The returned object can be
 /// passed to Python connection plugin methods. Returns `Err(PyErr)` if:
 /// - Setting any dictionary item fails
-/// - Importing the `genja_core.connection` module fails
+/// - Importing the `genja.connection` module fails
 /// - Instantiating the `ConnectionKey` class fails
 /// - Any other Python operation encounters an error
 ///
@@ -2303,7 +2303,7 @@ fn build_python_connection_key<'py>(py: Python<'py>, key: &ConnectionKey) -> PyR
     let payload = PyDict::new(py);
     payload.set_item("hostname", &key.hostname)?;
     payload.set_item("plugin_name", &key.plugin_name)?;
-    build_python_model(py, "genja_core.connection", "ConnectionKey", payload)
+    build_python_model(py, "genja.connection", "ConnectionKey", payload)
 }
 
 /// Converts a Rust `ResolvedConnectionParams` into a Python model object.
@@ -2312,7 +2312,7 @@ fn build_python_connection_key<'py>(py: Python<'py>, key: &ConnectionKey) -> PyR
 /// extracting all parameter fields (hostname, port, username, password, platform, and
 /// extras) and packaging them into a Python dictionary. The dictionary is then used to
 /// instantiate a Python `ResolvedConnectionParams` model object from the
-/// `genja_core.connection` module. This conversion enables Rust connection parameters
+/// `genja.connection` module. This conversion enables Rust connection parameters
 /// to be passed to Python connection plugins, allowing Python code to access all
 /// connection configuration details needed to establish connections.
 ///
@@ -2341,7 +2341,7 @@ fn build_python_connection_key<'py>(py: Python<'py>, key: &ConnectionKey) -> PyR
 /// - Serializing the extras map to JSON fails (wrapped as `PyValueError`)
 /// - Importing the `json` module fails
 /// - Deserializing the JSON extras string fails
-/// - Importing the `genja_core.connection` module fails
+/// - Importing the `genja.connection` module fails
 /// - Instantiating the `ResolvedConnectionParams` class fails
 /// - Any other Python operation encounters an error
 ///
@@ -2372,7 +2372,7 @@ fn build_python_resolved_connection_params<'py>(
     }
     build_python_model(
         py,
-        "genja_core.connection",
+        "genja.connection",
         "ResolvedConnectionParams",
         payload,
     )
@@ -2468,7 +2468,7 @@ fn py_any_to_connection_key(obj: &Bound<'_, PyAny>) -> PyResult<ConnectionKey> {
 ///   ensures that the Python interpreter is available and that the operation is performed
 ///   safely within the GIL context.
 /// * `module_name` - The fully qualified name of the Python module to import, such as
-///   "genja_core.processor" or "genja_core.connection". The module must be available in
+///   "genja.processor" or "genja.connection". The module must be available in
 ///   the Python environment and contain the specified class.
 /// * `class_name` - The name of the class to retrieve from the imported module and instantiate.
 ///   The class must exist as an attribute of the module and be callable (typically a class
@@ -2599,45 +2599,45 @@ mod tests {
                 path.call_method1("insert", (0, python_source.display().to_string()))
                     .expect("python source path should be inserted");
                 let modules = sys.getattr("modules").expect("sys.modules should exist");
-                let genja_core = PyModule::from_code(
+                let genja = PyModule::from_code(
                     py,
                     pyo3::ffi::c_str!("__path__ = []\n"),
-                    pyo3::ffi::c_str!("genja_core/__init__.py"),
-                    pyo3::ffi::c_str!("genja_core"),
+                    pyo3::ffi::c_str!("genja/__init__.py"),
+                    pyo3::ffi::c_str!("genja"),
                 )
-                .expect("genja_core stub should build");
+                .expect("genja stub should build");
                 let processor = PyModule::from_code(
                     py,
                     pyo3::ffi::c_str!(
                         "class TaskProcessorContext:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
                     ),
-                    pyo3::ffi::c_str!("genja_core/processor.py"),
-                    pyo3::ffi::c_str!("genja_core.processor"),
+                    pyo3::ffi::c_str!("genja/processor.py"),
+                    pyo3::ffi::c_str!("genja.processor"),
                 )
                 .expect("processor stub should build");
-                genja_core
+                genja
                     .add("processor", &processor)
                     .expect("processor module should attach to package");
                 modules
-                    .set_item("genja_core", &genja_core)
-                    .expect("genja_core stub should register");
+                    .set_item("genja", &genja)
+                    .expect("genja stub should register");
                 modules
-                    .set_item("genja_core.processor", &processor)
+                    .set_item("genja.processor", &processor)
                     .expect("processor stub should register");
                 let connection = PyModule::from_code(
                     py,
                     pyo3::ffi::c_str!(
                         "class ConnectionKey:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass ResolvedConnectionParams:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
                     ),
-                    pyo3::ffi::c_str!("genja_core/connection.py"),
-                    pyo3::ffi::c_str!("genja_core.connection"),
+                    pyo3::ffi::c_str!("genja/connection.py"),
+                    pyo3::ffi::c_str!("genja.connection"),
                 )
                 .expect("connection stub should build");
-                genja_core
+                genja
                     .add("connection", &connection)
                     .expect("connection module should attach to package");
                 modules
-                    .set_item("genja_core.connection", &connection)
+                    .set_item("genja.connection", &connection)
                     .expect("connection stub should register");
             });
         });

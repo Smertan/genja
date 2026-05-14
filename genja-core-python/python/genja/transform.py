@@ -1,8 +1,8 @@
 """Python transform-function plugin authoring API for Genja.
 
-Import transform-facing helpers from this module instead of from ``genja_core``
+Import transform-facing helpers from this module instead of from ``genja``
 directly. The top-level package re-exports these names for compatibility, but
-``genja_core.transform`` is the primary public surface for:
+``genja.transform`` is the primary public surface for:
 
 - ``TransformFunctionPluginProtocol``
 
@@ -13,8 +13,8 @@ form.
 
 .. code-block:: python
 
-    import genja_core
-    from genja_core.transform import TransformFunctionPluginProtocol
+    import genja
+    from genja.transform import TransformFunctionPluginProtocol
 
     class HostnameSuffixTransform:
         def name(self) -> str:
@@ -30,7 +30,7 @@ form.
                 "hostname": f"{host['hostname']}{suffix}",
             }
 
-    plugins = genja_core.PluginManager()
+    plugins = genja.PluginManager()
     plugins.register_plugin(HostnameSuffixTransform())
 """
 

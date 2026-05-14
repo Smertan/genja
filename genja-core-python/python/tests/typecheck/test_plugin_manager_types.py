@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from genja_core.plugin_manager import PluginManager
+from genja.plugin_manager import PluginManager
 
 
 class DummyPlugin:

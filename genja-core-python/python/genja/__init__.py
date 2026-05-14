@@ -1,12 +1,12 @@
 """Python bindings for Genja core.
 
-Task authoring helpers live in ``genja_core.task``. They are re-exported here
+Task authoring helpers live in ``genja.task``. They are re-exported here
 for compatibility, but new code should prefer:
 
-    from genja_core.task import task, TaskMessage, TaskSuccessResult
+    from genja.task import task, TaskMessage, TaskSuccessResult
 """
 
-from .genja_core import (
+from .genja import (
     CoreConfig,
     Genja,
     GenjaBuilder,

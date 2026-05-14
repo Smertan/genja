@@ -1,8 +1,8 @@
 """Python task authoring API for Genja.
 
-Import task-facing helpers from this module instead of from ``genja_core``
+Import task-facing helpers from this module instead of from ``genja``
 directly. The top-level package re-exports these names for compatibility, but
-``genja_core.task`` is the primary public surface for:
+``genja.task`` is the primary public surface for:
 
 - ``@task(...)`` task metadata decoration
 - task processor selection metadata
@@ -16,7 +16,7 @@ The canonical authoring shape is:
 
 .. code-block:: python
 
-    from genja_core.task import (
+    from genja.task import (
         Host,
         TaskFailureKind,
         TaskFailureResult,
