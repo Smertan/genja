@@ -34,20 +34,43 @@
 //! - **Plugins**: Extensible plugin system for inventory sources and task runners
 //! - **Settings**: Configuration loaded from files or environment variables
 //!
+//! ## Plugin Runtime Layout
+//!
+//! Built-in plugins are always available. Dynamic plugins are loaded from a
+//! `plugins` directory beside the running executable. A typical build output
+//! layout looks like:
+//!
+//! ```text
+//! target/
+//!   debug/
+//!     your_app
+//!     plugins/
+//!       libyour_plugin.so
+//! ```
+//!
+//! When using `genja_plugin_manager::build_support::copy_plugins_from_manifest()`
+//! from an end-user application's `build.rs`, plugin artifacts declared in that
+//! application's `[package.metadata.plugins]` are copied into this
+//! profile-specific `plugins` directory automatically.
+//!
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
+use async_trait::async_trait;
 pub use genja_core::GenjaError;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
-    Task, TaskDefinition, TaskInfo, TaskProcessorResolver, TaskResults, TaskResultsSummary,
+    Task, TaskConnectionResolver, TaskDefinition, TaskInfo, TaskProcessorResolver, TaskResults,
+    TaskResultsSummary,
 };
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
 use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
 use log::info;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::runtime::Builder;
 
 // GenjaError is re-exported from genja-core.
 
@@ -90,6 +113,47 @@ pub struct Genja {
 
 pub mod plugins;
 
+#[derive(Debug, Clone)]
+struct RuntimeTaskConnectionResolver {
+    inventory: Arc<Inventory>,
+}
+
+impl RuntimeTaskConnectionResolver {
+    fn new(inventory: Arc<Inventory>) -> Self {
+        Self { inventory }
+    }
+}
+
+#[async_trait]
+impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
+    async fn resolve_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn genja_core::inventory::Connection>>>, GenjaError>
+    {
+        let Some(key) = task.get_connection_key(hostname) else {
+            return Ok(None);
+        };
+
+        let params = self
+            .inventory
+            .resolve_connection_params(hostname, &key.plugin_name)
+            .ok_or_else(|| {
+                GenjaError::Message(format!(
+                    "failed to resolve connection params for host '{}' using plugin '{}'",
+                    hostname, key.plugin_name
+                ))
+            })?;
+
+        self.inventory
+            .connections()
+            .open_connection(&key, &params)
+            .await
+            .map_err(GenjaError::Message)
+    }
+}
+
 impl Genja {
     /// Returns a builder that requires an inventory up front.
     ///
@@ -124,7 +188,7 @@ impl Genja {
 
     /// Creates a `Genja` instance from an existing `Inventory`.
     ///
-    /// Initializes default settings and an empty plugin manager, and derives
+    /// Initializes default settings and the built-in plugin manager, and derives
     /// the host ID cache from the provided inventory.
     ///
     /// # Examples
@@ -163,9 +227,14 @@ impl Genja {
     /// # Errors
     ///
     /// Returns `Err(GenjaError::ConfigLoad)` if the settings file cannot be read
-    /// or parsed. Returns `Err(GenjaError::PluginsNotLoaded)` if plugin loading
-    /// fails. Returns `Err(GenjaError::InventoryNotLoaded)` if inventory loading
-    /// fails.
+    /// or parsed.
+    ///
+    /// Returns `Err(GenjaError::PluginLoad)` if plugin discovery or dynamic plugin
+    /// loading fails.
+    ///
+    /// Returns inventory-related errors from loading the configured inventory plugin,
+    /// including `GenjaError::InventoryLoad`, `GenjaError::PluginNotFound`, and
+    /// `GenjaError::NotInventoryPlugin`.
     ///
     /// # Examples
     ///
@@ -238,58 +307,26 @@ impl Genja {
         Err(GenjaError::PluginNotFound(default_name.to_string()))
     }
 
-    /// Loads plugins from the plugin directory or registers default plugins.
+    /// Loads plugins from the executable-relative plugin directory.
     ///
-    /// This method attempts to activate plugins using the plugin manager. If no
-    /// plugins are found in the manifest, it falls back to registering the default
-    /// `FileInventoryPlugin`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(GenjaError::PluginLoad)` if plugin loading fails for reasons
-    /// other than missing plugin metadata.
+    /// Built-in plugins are always registered first. Then any dynamic plugin
+    /// libraries found in a sibling `plugins` directory next to the current
+    /// executable are loaded and registered.
     fn load_plugins(&mut self) -> Result<(), GenjaError> {
-        match PluginManager::new().activate_plugins() {
-            Ok(mut manager) => {
-                if manager
-                    .get_inventory_plugin("FileInventoryPlugin")
-                    .is_none()
-                {
-                    manager.register_plugin(Plugins::Inventory(Box::new(
-                        crate::plugins::DefaultInventoryPlugin,
-                    )));
-                }
-                if manager.get_runner_plugin("serial").is_none() {
-                    manager.register_plugin(Plugins::Runner(Box::new(
-                        crate::plugins::SerialRunnerPlugin,
-                    )));
-                }
-                if manager.get_runner_plugin("threaded").is_none() {
-                    manager.register_plugin(Plugins::Runner(Box::new(
-                        crate::plugins::ThreadedRunnerPlugin,
-                    )));
-                }
-                self.plugins = Arc::new(manager);
-                self.plugins_loaded = true;
-                Ok(())
-            }
-            Err(err) => {
-                let msg = err.to_string();
-                if msg.contains("No plugin metadata found in manifest") {
-                    let manager = crate::plugins::built_in_plugin_manager();
-                    self.plugins = Arc::new(manager);
-                    self.plugins_loaded = true;
-                    Ok(())
-                } else {
-                    Err(GenjaError::PluginLoad(err.to_string()))
-                }
-            }
-        }
+        let plugin_dir =
+            current_plugin_directory().map_err(|err| GenjaError::PluginLoad(err.to_string()))?;
+        let manager = crate::plugins::built_in_plugin_manager()
+            .load_plugins_from_directory(&plugin_dir)
+            .map_err(|err| GenjaError::PluginLoad(err.to_string()))?;
+        self.plugins = Arc::new(manager);
+        self.plugins_loaded = true;
+        Ok(())
     }
 
     /// Loads an `Inventory` into the runtime and caches host identifiers.
     ///
-    /// This replaces any previously loaded inventory and updates the internal
+    /// This replaces any previously loaded inventory, wires the inventory's
+    /// connection factory from the current plugin manager, and updates the internal
     /// host ID cache used by runtime operations.
     ///
     /// # Examples
@@ -347,7 +384,9 @@ impl Genja {
     /// Returns a new `Genja` with the selected runner plugin activated.
     ///
     /// The named plugin must already be loaded in the current plugin manager and
-    /// must be registered as a runner plugin.
+    /// must be registered as a runner plugin. The returned instance preserves the
+    /// current runner options and limits, while changing only the selected runner
+    /// plugin name.
     ///
     /// # Errors
     ///
@@ -721,9 +760,11 @@ impl Genja {
     /// The execution flow:
     /// 1. Retrieves the currently selected hosts
     /// 2. Wraps the task in a `TaskDefinition`
-    /// 3. Obtains the configured runner plugin
-    /// 4. Executes the task across all selected hosts
-    /// 5. Logs a summary of the results
+    /// 3. Attaches the plugin manager as a processor resolver
+    /// 4. Builds a runtime connection resolver from the loaded inventory
+    /// 5. Obtains the configured runner plugin
+    /// 6. Builds a Tokio runtime and executes the task across all selected hosts
+    /// 7. Logs a summary of the results
     ///
     /// # Parameters
     ///
@@ -747,14 +788,18 @@ impl Genja {
     /// * `GenjaError::PluginsNotLoaded` - Plugins have not been loaded
     /// * `GenjaError::PluginNotFound` - The configured runner plugin does not exist
     /// * `GenjaError::NotRunnerPlugin` - The configured plugin is not a runner plugin
+    /// * `GenjaError::Message` - The internal async runtime could not be created
     /// * Other errors from the runner plugin's execution
     ///
     /// # Examples
     ///
     /// ```
+    /// use async_trait::async_trait;
     /// use genja::Genja;
-    /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost, ConnectionKey};
-    /// use genja_core::task::{Task, TaskInfo, TaskError, HostTaskResult, TaskSuccess, SubTasks};
+    /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+    /// use genja_core::task::{
+    ///     HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    /// };
     /// use serde_json::Value;
     /// use std::sync::Arc;
     ///
@@ -762,10 +807,6 @@ impl Genja {
     ///
     /// impl TaskInfo for MyTask {
     ///     fn name(&self) -> &str { "my-task" }
-    ///     fn plugin_name(&self) -> &str { "test" }
-    ///     fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-    ///         ConnectionKey::new(hostname, self.plugin_name())
-    ///     }
     ///     fn options(&self) -> Option<&Value> { None }
     /// }
     ///
@@ -773,8 +814,13 @@ impl Genja {
     ///     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> { Vec::new() }
     /// }
     ///
+    /// #[async_trait]
     /// impl Task for MyTask {
-    ///     fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+    ///     async fn start(
+    ///         &self,
+    ///         _host: &Host,
+    ///         _context: &TaskRuntimeContext,
+    ///     ) -> Result<HostTaskResult, TaskError> {
     ///         Ok(HostTaskResult::passed(TaskSuccess::new()))
     ///     }
     /// }
@@ -795,7 +841,13 @@ impl Genja {
     ) -> Result<TaskResults, GenjaError> {
         let hosts = self.selected_hosts()?;
         let host_count = hosts.len();
+        let inventory = self
+            .inventory
+            .as_ref()
+            .ok_or(GenjaError::InventoryNotLoaded)?;
         let processor_resolver: Arc<dyn TaskProcessorResolver> = self.plugins.clone();
+        let connection_resolver: Arc<dyn TaskConnectionResolver> =
+            Arc::new(RuntimeTaskConnectionResolver::new(Arc::clone(inventory)));
         let task_definition = TaskDefinition::new(task).with_processor_resolver(processor_resolver);
         let runner_name = self.settings.runner().plugin();
         info!(
@@ -811,11 +863,33 @@ impl Genja {
             host_count
         );
         let runner = self.get_runner_plugin(runner_name)?;
-        let results = runner.run(&task_definition, &hosts, self.settings.runner(), max_depth)?;
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
+        let results = runtime.block_on(async {
+            runner
+                .run(
+                    &task_definition,
+                    &hosts,
+                    Some(connection_resolver),
+                    self.settings.runner(),
+                    max_depth,
+                )
+                .await
+        })?;
         let summary = results.task_summary();
         log_task_summary(&summary, host_count, 0);
         Ok(results)
     }
+}
+
+fn current_plugin_directory() -> Result<PathBuf, std::io::Error> {
+    let executable = std::env::current_exe()?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| std::io::Error::other("executable has no parent directory"))?;
+    Ok(directory.join("plugins"))
 }
 
 fn log_task_summary(summary: &TaskResultsSummary, host_count: usize, depth: usize) {
@@ -876,12 +950,20 @@ impl Default for Genja {
 #[cfg(test)]
 mod tests {
     use super::{Genja, GenjaError};
+    use async_trait::async_trait;
     use genja_core::Settings;
-    use genja_core::inventory::{BaseBuilderHost, ConnectionKey, Data, Host, Hosts, Inventory};
+    use genja_core::inventory::{
+        BaseBuilderHost, Connection, ConnectionKey, Data, Host, Hosts, Inventory,
+        ResolvedConnectionParams,
+    };
     use genja_core::settings::RunnerConfig;
-    use genja_core::task::{HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskSuccess};
+    use genja_core::task::{
+        HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    };
+    use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, Plugins};
     use serde_json::{Value, json};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     struct TestTask {
         name: String,
@@ -892,12 +974,8 @@ mod tests {
             &self.name
         }
 
-        fn plugin_name(&self) -> &str {
-            "test"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.plugin_name())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            None
         }
 
         fn options(&self) -> Option<&Value> {
@@ -911,8 +989,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for TestTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
@@ -924,12 +1007,8 @@ mod tests {
             "failed-task"
         }
 
-        fn plugin_name(&self) -> &str {
-            "test"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.plugin_name())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            None
         }
 
         fn options(&self) -> Option<&Value> {
@@ -943,8 +1022,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for FailedTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::failed(genja_core::task::TaskFailure::new(
                 std::io::Error::other("boom"),
             )))
@@ -958,12 +1042,8 @@ mod tests {
             "skipped-task"
         }
 
-        fn plugin_name(&self) -> &str {
-            "test"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.plugin_name())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            None
         }
 
         fn options(&self) -> Option<&Value> {
@@ -977,8 +1057,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for SkippedTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::skipped_with_reason("filtered"))
         }
     }
@@ -990,12 +1075,8 @@ mod tests {
             "child-task"
         }
 
-        fn plugin_name(&self) -> &str {
-            "test"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.plugin_name())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            None
         }
 
         fn options(&self) -> Option<&Value> {
@@ -1009,13 +1090,31 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for ChildTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
 
     struct ParentTask;
+
+    #[derive(Debug)]
+    struct TestConnectionPlugin;
+
+    #[derive(Debug)]
+    struct TestRuntimeConnection {
+        key: ConnectionKey,
+        alive: bool,
+    }
+
+    struct ConnectionAwareTask {
+        saw_connection: Arc<AtomicBool>,
+    }
 
     #[derive(genja_core_derive::Task)]
     struct DerivedProcessorTask {
@@ -1034,12 +1133,8 @@ mod tests {
             "parent-task"
         }
 
-        fn plugin_name(&self) -> &str {
-            "test"
-        }
-
-        fn get_connection_key(&self, hostname: &str) -> ConnectionKey {
-            ConnectionKey::new(hostname, self.plugin_name())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            None
         }
 
         fn options(&self) -> Option<&Value> {
@@ -1053,20 +1148,153 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Task for ParentTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
 
+    impl Plugin for TestConnectionPlugin {
+        fn name(&self) -> String {
+            "test".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl PluginConnection for TestConnectionPlugin {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+            Box::new(TestRuntimeConnection {
+                key: key.clone(),
+                alive: false,
+            })
+        }
+
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            Err("factory should not be opened directly".to_string())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            ConnectionKey::new("", "test")
+        }
+
+        fn is_alive(&self) -> bool {
+            false
+        }
+    }
+
+    impl Plugin for TestRuntimeConnection {
+        fn name(&self) -> String {
+            "test".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl PluginConnection for TestRuntimeConnection {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+            Box::new(Self {
+                key: key.clone(),
+                alive: false,
+            })
+        }
+
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            self.alive = true;
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.alive = false;
+            self.key.clone()
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+    }
+
+    #[async_trait]
+    impl Connection for TestRuntimeConnection {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+            Box::new(Self {
+                key: key.clone(),
+                alive: false,
+            })
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            self.alive = true;
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.alive = false;
+            self.key.clone()
+        }
+    }
+
+    impl TaskInfo for ConnectionAwareTask {
+        fn name(&self) -> &str {
+            "connection-aware"
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("test")
+        }
+    }
+
+    impl SubTasks for ConnectionAwareTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    #[async_trait]
+    impl Task for ConnectionAwareTask {
+        async fn start(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let alive = if let Some(connection) = context.connection() {
+                let guard = connection.lock().await;
+                guard.is_alive()
+            } else {
+                false
+            };
+            self.saw_connection.store(alive, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_changed(alive),
+            ))
+        }
+    }
+
+    #[async_trait]
     impl Task for DerivedProcessorTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
 
+    #[async_trait]
     impl Task for DerivedAttributeProcessorTask {
-        fn start(&self, _host: &Host) -> Result<HostTaskResult, TaskError> {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
@@ -1430,6 +1658,36 @@ mod tests {
     }
 
     #[test]
+    fn run_passes_open_connection_into_task_runtime_context() {
+        let saw_connection = Arc::new(AtomicBool::new(false));
+        let mut plugin_manager = crate::plugins::built_in_plugin_manager();
+        plugin_manager.register_plugin(Plugins::Connection(Box::new(TestConnectionPlugin)));
+
+        let genja = Genja::builder(test_inventory())
+            .with_plugin_manager(plugin_manager)
+            .build()
+            .expect("genja should build with connection plugin");
+
+        let results = genja
+            .run(
+                ConnectionAwareTask {
+                    saw_connection: Arc::clone(&saw_connection),
+                },
+                0,
+            )
+            .expect("run should succeed");
+
+        assert!(saw_connection.load(Ordering::SeqCst));
+        assert_eq!(results.passed_hosts().len(), 2);
+        assert!(
+            results
+                .host_result("router1")
+                .expect("router1 result should exist")
+                .is_passed()
+        );
+    }
+
+    #[test]
     fn run_builds_recursive_sub_task_summary_with_duration() {
         let genja = Genja::from_inventory(test_inventory());
 
@@ -1593,7 +1851,8 @@ impl GenjaBuilder {
     ///
     /// # Errors
     ///
-    /// Returns `Err(GenjaError::PluginsNotLoaded)` if plugin loading fails.
+    /// Returns `Err(GenjaError::PluginLoad)` if plugin discovery or dynamic plugin
+    /// loading fails.
     ///
     /// # Examples
     ///

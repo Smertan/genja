@@ -1,3 +1,6 @@
+[dependencies]
+async-trait = "0.1.89"
+
 [dependencies.genja-plugin-manager]
 path = "../../"
 

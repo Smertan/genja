@@ -1,0 +1,20 @@
+[package]
+name = "genja-core-python"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "genja"
+crate-type = ["cdylib"]
+
+[dependencies]
+async-trait = "0.1.89"
+genja = { path = "../genja" }
+genja-core = { path = "../genja-core" }
+genja-plugin-manager = { path = "../genja-plugin-manager" }
+humantime = "2.2.0"
+pyo3 = "0.24.0"
+serde = "1.0.219"
+serde_json = "1.0.145"
+toml = "0.9.8"
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "sync"] }

@@ -13,7 +13,7 @@ pub use runners::{SerialRunnerPlugin, ThreadedRunnerPlugin};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::plugin_types::Plugins;
 
-pub(crate) fn built_in_plugin_manager() -> PluginManager {
+pub fn built_in_plugin_manager() -> PluginManager {
     let mut manager = PluginManager::new();
     manager.register_plugin(Plugins::Inventory(Box::new(DefaultInventoryPlugin)));
     manager.register_plugin(Plugins::Runner(Box::new(SerialRunnerPlugin)));

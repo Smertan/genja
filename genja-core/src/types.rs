@@ -142,7 +142,7 @@ impl PartialOrd for NatString {
 ///
 /// ## Fields
 ///
-/// * `0` - The underlying `BTreeMap` with `NatString` keys and `String` values.
+/// * `0` - The underlying `BTreeMap` with `NatString` keys and generic `V` values.
 ///
 /// ## Examples
 ///
