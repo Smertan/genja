@@ -2222,6 +2222,117 @@ mod tests {
     }
 
     #[test]
+    fn settings_from_file_loads_populated_yaml() {
+        let ssh_context = write_temp_ssh_config("Host example\n  HostName example.com\n");
+        let tempdir = tempfile::tempdir().unwrap();
+        let file_path = tempdir.path().join("config.yaml");
+        let yaml = format!(
+            r#"
+core:
+  raise_on_error: "yes"
+inventory:
+  plugin: "CustomInventoryPlugin"
+  options:
+    hosts_file: "./inventory/hosts.yaml"
+    groups_file: "./inventory/groups.yaml"
+    defaults_file: "./inventory/defaults.yaml"
+  transform_function: "normalize_inventory"
+  transform_function_options:
+    mode: "strict"
+    retries: 2
+ssh:
+  config_file: "{}"
+runner:
+  plugin: "serial"
+  options:
+    queue: "fast"
+  worker_count: 6
+  max_task_depth: 5
+  max_connection_attempts: 7
+logging:
+  enabled: "no"
+  level: "debug"
+  log_file: "./custom.log"
+  to_console: "yes"
+  file_size: 2048
+  max_file_count: 4
+"#,
+            ssh_context.filename.display()
+        );
+        std::fs::write(&file_path, yaml).unwrap();
+
+        let settings = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap();
+
+        assert!(settings.core().raise_on_error());
+        assert_eq!(settings.inventory().plugin(), "CustomInventoryPlugin");
+        assert_eq!(
+            settings.inventory().options().hosts_file(),
+            Some("./inventory/hosts.yaml")
+        );
+        assert_eq!(
+            settings.inventory().options().groups_file(),
+            Some("./inventory/groups.yaml")
+        );
+        assert_eq!(
+            settings.inventory().options().defaults_file(),
+            Some("./inventory/defaults.yaml")
+        );
+        assert_eq!(
+            settings.inventory().transform_function(),
+            Some("normalize_inventory")
+        );
+        assert_eq!(
+            settings
+                .inventory()
+                .transform_function_options()
+                .and_then(|options| options.get("mode"))
+                .and_then(|value| value.as_str()),
+            Some("strict")
+        );
+        assert_eq!(
+            settings
+                .inventory()
+                .transform_function_options()
+                .and_then(|options| options.get("retries"))
+                .and_then(|value| value.as_u64()),
+            Some(2)
+        );
+        assert_eq!(
+            settings.ssh().config_file(),
+            Some(ssh_context.filename.to_string_lossy().as_ref())
+        );
+        assert_eq!(settings.runner().plugin(), "serial");
+        assert_eq!(settings.runner().options(), &json!({ "queue": "fast" }));
+        assert_eq!(settings.runner().worker_count(), Some(6));
+        assert_eq!(settings.runner().max_task_depth(), 5);
+        assert_eq!(settings.runner().max_connection_attempts(), 7);
+        assert!(!settings.logging().enabled());
+        assert_eq!(settings.logging().level(), "debug");
+        assert_eq!(settings.logging().log_file(), "./custom.log");
+        assert!(settings.logging().to_console());
+        assert_eq!(settings.logging().file_size(), 2048);
+        assert_eq!(settings.logging().max_file_count(), 4);
+    }
+
+    #[test]
+    fn settings_from_file_errors_on_invalid_ssh_config() {
+        let ssh_context = write_temp_ssh_config("Contents that are not valid ssh config contents\n");
+        let tempdir = tempfile::tempdir().unwrap();
+        let file_path = tempdir.path().join("config.yaml");
+        let yaml = format!(
+            r#"
+ssh:
+  config_file: "{}"
+"#,
+            ssh_context.filename.display()
+        );
+        std::fs::write(&file_path, yaml).unwrap();
+
+        let err = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap_err();
+        assert!(err.to_string().contains("Failed to parse SSH config file"));
+    }
+
+    #[test]
     fn inventory_loads_empty_files() {
         let tempdir = tempfile::tempdir().unwrap();
         let hosts_path = tempdir.path().join("hosts.json");
