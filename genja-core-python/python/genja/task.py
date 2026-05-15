@@ -1,0 +1,932 @@
+"""Python task authoring API for Genja.
+
+Import task-facing helpers from this module instead of from ``genja``
+directly. The top-level package re-exports these names for compatibility, but
+``genja.task`` is the primary public surface for:
+
+- ``@task(...)`` task metadata decoration
+- task processor selection metadata
+- ``TaskMessage``
+- ``TaskSuccessResult``
+- ``TaskFailureResult``
+- ``TaskSkipResult``
+- task ``options`` metadata
+
+The canonical authoring shape is:
+
+.. code-block:: python
+
+    from genja.task import (
+        Host,
+        TaskFailureKind,
+        TaskFailureResult,
+        TaskRuntimeContext,
+        TaskInfo,
+        TaskMessage,
+        TaskMessageLevel,
+        TaskSuccessResult,
+        task,
+    )
+
+    @task(
+        name="backup_config",
+        connection_plugin_name="ssh",
+        processors=["audit"],
+        options={"backup_path": "/tmp/configs", "compress": True},
+    )
+    class BackupConfigTask:
+        def run(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskSuccessResult:
+            return TaskSuccessResult(
+                changed=True,
+                summary=(
+                    f"backed up {host.hostname} to "
+                    f"{task.options['backup_path']}"
+                ),
+                messages=[
+                    TaskMessage(
+                        level=TaskMessageLevel.INFO,
+                        text=(
+                            f"task={task.name} "
+                            f"depth={context.current_depth}/{context.max_depth}"
+                        ),
+                    )
+                ],
+                metadata={
+                    "platform": host.platform,
+                    "backup_path": task.options["backup_path"],
+                    "compress": task.options["compress"],
+                },
+            )
+
+    class ValidateBackupTask:
+        def run(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskFailureResult:
+            return TaskFailureResult(
+                message=f"backup validation timed out for {host.hostname}",
+                kind=TaskFailureKind.TIMEOUT,
+                retryable=True,
+            )
+
+    @task(name="async_backup", connection_plugin_name="ssh")
+    class AsyncBackupTask:
+        async def run(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskSuccessResult:
+            return TaskSuccessResult(
+                summary=f"asynchronously backed up {host.hostname}",
+            )
+
+``run(...)`` may be implemented as ``def`` or ``async def`` and must resolve to
+one of:
+
+- ``TaskSuccessResult``
+- ``TaskFailureResult``
+- ``TaskSkipResult``
+
+Task metadata comes from ``@task(...)``:
+
+- ``name``: required and must be non-empty
+- ``connection_plugin_name``: optional; when provided it must be non-empty
+- ``sub_task``: optional decorated task class
+- ``processors``: optional list of processor plugin names
+- ``options``: optional JSON-serializable task options payload
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+import json
+from typing import Any, Awaitable, Literal, Protocol, TypeVar, cast
+
+from pydantic import BaseModel, Field, field_validator
+
+_TaskClassT = TypeVar("_TaskClassT", bound=type)
+
+
+def _ensure_json_serializable(value: Any, field_name: str) -> Any:
+    """Validate that a value can be serialized to JSON.
+
+    Attempts to serialize the provided value using json.dumps() to ensure
+    it contains only JSON-compatible types. If the value is None, it is
+    considered valid and returned immediately without serialization checks.
+
+    Args:
+        value (Any): The value to validate for JSON serializability.
+        field_name (str): The name of the field being validated, used in
+            error messages to provide context about which field failed
+            validation.
+
+    Returns:
+        Any: The original value if it is None or successfully serializes
+            to JSON.
+
+    Raises:
+        TypeError: If the value cannot be serialized to JSON, with a
+            message indicating which field failed validation.
+    """
+    if value is None:
+        return value
+
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError) as err:
+        raise TypeError(f"{field_name} must be JSON-serializable") from err
+
+    return value
+
+
+class _GenjaModel(BaseModel):
+    """Base model class for Genja data structures with dictionary-like access.
+
+    Extends Pydantic's BaseModel to provide convenient dictionary conversion
+    and attribute access via subscript notation for all Genja model classes.
+    """
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert the model instance to a JSON-serializable dictionary.
+
+        Returns:
+            dict[str, Any]: A dictionary representation of the model with all
+                fields serialized in JSON-compatible format.
+        """
+        return self.model_dump(mode="json")
+
+    def __getitem__(self, key: str) -> Any:
+        """Enable dictionary-style attribute access using subscript notation.
+
+        Args:
+            key (str): The name of the attribute to retrieve.
+
+        Returns:
+            Any: The value of the requested attribute.
+
+        Raises:
+            KeyError: If the specified field does not exist on the model.
+        """
+        try:
+            return getattr(self, key)
+        except AttributeError as err:
+            raise KeyError(key) from err
+
+
+class TaskInfo(_GenjaModel):
+    """Task metadata passed into Python task ``run(...)`` methods.
+
+    This class encapsulates all metadata associated with a task execution,
+    including the task name, connection configuration, processor plugins,
+    custom options, and optional nested sub-task information. Instances of
+    this class are provided to task ``run(...)`` methods to give tasks
+    access to their configuration and execution context.
+
+    Note:
+        When a task has a sub-task, the parent receives a ``TaskInfo`` with
+        ``sub_task`` populated for introspection. When the sub-task executes,
+        it receives its own separate ``TaskInfo`` instance with its metadata at
+        the top level rather than nested under the parent.
+
+    See Also:
+        ``TaskRuntimeContext`` for runtime execution state, ``task`` for the
+        decorator that populates this metadata, and ``GenjaTaskProtocol`` for
+        the task class contract.
+
+    Attributes:
+        name (str): Unique task name that identifies this task within the
+            Genja execution environment.
+        connection_plugin_name (str | None): Optional name of the connection
+            plugin used to establish connectivity for this task. Connection
+            plugins provide the transport used to talk to target hosts, and
+            the resolved connection object is exposed through
+            ``TaskRuntimeContext.connection``. If None, no specific connection
+            plugin is configured.
+        processors (list[str]): List of processor plugin names that should be
+            applied to this task's execution. Processors are lifecycle hooks
+            that can observe or modify task execution before and after task or
+            host-level result handling. Defaults to an empty list if no
+            processors are specified.
+        options (Any | None): Optional JSON-serializable payload containing
+            task-specific configuration options. Can be any JSON-compatible
+            data structure or None if no options are provided.
+        sub_task (TaskInfo | None): Optional nested TaskInfo instance
+            representing a sub-task that will be executed after this task.
+            This field allows parent tasks to introspect their execution graph.
+            When the sub-task runs, it receives its own TaskInfo instance
+            (not this nested one).
+    """
+
+    name: str = Field(description="Unique task name.")
+    connection_plugin_name: str | None = Field(
+        default=None,
+        description="Connection plugin name used to execute this task.",
+    )
+    processors: list[str] = Field(
+        default_factory=list,
+        description="Processor plugin names applied to this task.",
+    )
+    options: Any | None = Field(
+        default=None,
+        description="JSON-serializable task options payload.",
+    )
+    sub_task: TaskInfo | None = Field(
+        default=None,
+        description="Nested task metadata for an optional sub-task.",
+    )
+
+
+class Host(_GenjaModel):
+    """Host payload passed into Python task ``run(...)`` methods.
+
+    This class encapsulates all host-specific information required for task
+    execution, including connection credentials, platform details, and
+    additional inventory data. Instances of this class are provided to task
+    ``run(...)`` methods to give tasks access to the target host's
+    configuration and connection parameters.
+
+    Attributes:
+        hostname (str): Inventory hostname for the current target. This is
+            the unique identifier for the host within the inventory system.
+        port (int | None): Network port used for the current host connection.
+            If None, the default port for the connection type will be used.
+        username (str | None): Username used for the current host connection.
+            If None, authentication may use other methods or default credentials.
+        password (str | None): Password used for the current host connection.
+            If None, authentication may use other methods such as SSH keys or
+            tokens.
+        platform (str | None): Platform identifier associated with the current
+            host, such as "linux", "windows", or vendor-specific identifiers.
+            If None, the platform is either unknown or not specified.
+        data (Any | None): Additional inventory data attached to the host.
+            This can contain any JSON-serializable data structure with
+            host-specific variables, metadata, or configuration. If None, no
+            additional data is available.
+    """
+
+    hostname: str = Field(description="Inventory hostname for the current target.")
+    port: int | None = Field(
+        default=None,
+        description="Network port used for the current host connection.",
+    )
+    username: str | None = Field(
+        default=None,
+        description="Username used for the current host connection.",
+    )
+    password: str | None = Field(
+        default=None,
+        description="Password used for the current host connection.",
+    )
+    platform: str | None = Field(
+        default=None,
+        description="Platform identifier associated with the current host.",
+    )
+    data: Any | None = Field(
+        default=None,
+        description="Additional inventory data attached to the host.",
+    )
+
+
+class TaskRuntimeContext(_GenjaModel):
+    """Runtime context passed into Python task ``run(...)`` methods.
+
+    This class encapsulates runtime execution context information provided to
+    task ``run(...)`` methods during execution. It includes depth tracking for
+    nested task execution, depth limits, and the resolved connection object
+    that the task can use to interact with the target host.
+
+    Attributes:
+        current_depth (int): The current execution depth in the task call stack.
+            This value starts at 0 for top-level tasks and increments for each
+            level of nested sub-task execution. It allows tasks to understand
+            their position in the execution hierarchy.
+        max_depth (int | None): The maximum allowed execution depth for nested
+            tasks. If None, no depth limit is enforced. When set, the execution
+            engine will prevent tasks from executing beyond this depth to avoid
+            infinite recursion or excessive nesting.
+        connection (Any | None): The resolved connection object that the task
+            can use to communicate with the target host. The type and capabilities
+            of this object depend on the connection plugin specified in the task
+            metadata. If None, no connection was established or the task does not
+            require a connection.
+    """
+
+    current_depth: int = Field(
+        default=0,
+        description="Current task execution depth.",
+    )
+    max_depth: int | None = Field(
+        default=None,
+        description="Maximum allowed execution depth, if configured.",
+    )
+    connection: Any | None = Field(
+        default=None,
+        description="Resolved connection object available to the task.",
+    )
+
+
+class GenjaTaskProtocol(Protocol):
+    """Structural typing contract for Python-authored Genja task classes.
+
+    This protocol defines the interface that all Genja task classes must
+    implement to be recognized and executed by the Genja task runtime. Task
+    classes decorated with @task automatically conform to this protocol by
+    having the required __genja_task_info__ attribute and run method added
+    or validated during decoration.
+
+    Attributes:
+        __genja_task_info__ (dict[str, Any]): Dictionary containing task
+            metadata set by the @task decorator, including name, connection
+            plugin name, processors, options, and optional sub-task reference.
+    """
+
+    __genja_task_info__: dict[str, Any]
+
+    def run(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> (
+        TaskSuccessResult
+        | TaskFailureResult
+        | TaskSkipResult
+        | Awaitable[TaskSuccessResult | TaskFailureResult | TaskSkipResult]
+    ):
+        """Execute the task logic against a target host.
+
+        This method contains the core task implementation and is invoked by
+        the Genja task runtime when the task is executed. It can be implemented
+        as either a synchronous function (def) or an asynchronous function
+        (async def). The method receives all necessary context about the task,
+        target host, and runtime environment to perform its operations.
+
+        Args:
+            task (TaskInfo): Metadata about the current task execution,
+                including the task name, connection plugin configuration,
+                processor plugins, custom options, and optional sub-task
+                information.
+            host (Host): Information about the target host where the task
+                will be executed, including hostname, connection credentials,
+                platform identifier, and additional inventory data.
+            context (TaskRuntimeContext): Runtime execution context providing
+                the current execution depth, maximum depth limit, and the
+                resolved connection object for communicating with the target
+                host.
+
+        Returns:
+            TaskSuccessResult | TaskFailureResult | TaskSkipResult | Awaitable[
+                TaskSuccessResult | TaskFailureResult | TaskSkipResult
+            ]: The outcome of the task execution. For synchronous implementations,
+                returns one of TaskSuccessResult (task completed successfully),
+                TaskFailureResult (task encountered an error), or TaskSkipResult
+                (task was skipped). For asynchronous implementations, returns an
+                awaitable that resolves to one of these result types.
+        """
+        ...
+
+
+def task(
+    name: str,
+    connection_plugin_name: str | None = None,
+    sub_task: type[GenjaTaskProtocol] | None = None,
+    processors: list[str] | None = None,
+    options: Any | None = None,
+):
+    """Attach Genja task metadata to a Python task class.
+
+    This decorator function attaches execution metadata to a Python class to
+    register it as a Genja task. The decorated class must implement a ``run``
+    method that conforms to the GenjaTaskProtocol interface. The decorator
+    validates all provided metadata and stores it in the class's
+    ``__genja_task_info__`` attribute for use by the Genja task runtime.
+
+    Args:
+        name (str): Required unique task name. Must be a non-empty string that
+            identifies this task within the Genja execution environment.
+        connection_plugin_name (str | None): Optional name of the connection
+            plugin to use when executing this task. If provided, must be a
+            non-empty string. If None, the task will execute without a specific
+            connection plugin.
+        sub_task (type[GenjaTaskProtocol] | None): Optional nested task class
+            to execute after this task completes. If provided, must be a class
+            that has already been decorated with @task. If None, no sub-task
+            will be executed.
+        processors (list[str] | None): Optional list of processor plugin names
+            to apply to this task's execution. If provided, must be a list of
+            non-empty strings. If None, no processors will be applied.
+        options (Any | None): Optional JSON-serializable payload containing
+            task-specific configuration options. Can be any JSON-compatible
+            data structure. If None, no options are provided to the task.
+
+    Returns:
+        Callable[[_TaskClassT], _TaskClassT]: A decorator function that accepts
+            a task class and returns the same class with Genja task metadata
+            attached via the ``__genja_task_info__`` attribute.
+
+    Raises:
+        TypeError: If the decorator is applied to a non-class object, if the
+            decorated class does not define a callable ``run`` method, if the
+            name is not a non-empty string, if connection_plugin_name is not
+            a non-empty string or None, if sub_task is not a @task-decorated
+            class or None, if processors is not a list of non-empty strings
+            or None, or if options is not JSON-serializable.
+    """
+
+    def wrap(cls: _TaskClassT) -> _TaskClassT:
+        if not isinstance(cls, type):
+            raise TypeError("@task can only decorate classes")
+
+        run = getattr(cls, "run", None)
+        if run is None:
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' must define a 'run' method"
+            )
+        if not callable(run):
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' attribute 'run' must be callable"
+            )
+        if not isinstance(name, str) or not name.strip():
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' name must be a non-empty string"
+            )
+
+        if sub_task is not None:
+            if not isinstance(sub_task, type):
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' sub_task must be a task class or None"
+                )
+            if not hasattr(sub_task, "__genja_task_info__"):
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' sub_task '{sub_task.__name__}' must also be decorated with @task"
+                )
+        if connection_plugin_name is not None:
+            if (
+                not isinstance(connection_plugin_name, str)
+                or not connection_plugin_name.strip()
+            ):
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' connection_plugin_name must be a non-empty string or None"
+                )
+        if processors is not None:
+            if not isinstance(processors, list):
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' processors must be a list of processor names or None"
+                )
+            for processor_name in processors:
+                if not isinstance(processor_name, str) or not processor_name.strip():
+                    raise TypeError(
+                        f"@task-decorated class '{cls.__name__}' processors must contain non-empty strings"
+                    )
+        _ensure_json_serializable(options, "options")
+
+        task_cls = cast(type[GenjaTaskProtocol], cls)
+        task_cls.__genja_task_info__ = {
+            "name": name,
+            "connection_plugin_name": connection_plugin_name,
+            "processors": list(processors or []),
+            "options": options,
+            "sub_task": sub_task,
+        }
+        return cls
+
+    return wrap
+
+
+class TaskMessage(_GenjaModel):
+    """A structured message attached to a task result.
+
+    This class represents a single diagnostic or informational message that
+    can be attached to task execution results. Messages provide structured
+    logging and diagnostic information about task execution, including
+    severity levels, human-readable text, optional machine-readable codes,
+    and timestamps. Multiple TaskMessage instances can be included in
+    TaskSuccessResult, TaskFailureResult, or other result types to provide
+    detailed execution context.
+
+    Attributes:
+        level (TaskMessageLevel): The severity level of the message, indicating
+            its importance and type (INFO, WARNING, ERROR, or DEBUG). This helps
+            consumers filter and prioritize messages based on their significance.
+        text (str): Human-readable message text that describes the event,
+            condition, or diagnostic information. This is the primary content
+            of the message intended for display to users or in logs.
+        code (str | None): Optional machine-readable message code that can be
+            used for programmatic message identification, filtering, or
+            internationalization. If None, no specific code is associated with
+            this message.
+        timestamp (datetime | None): Optional timestamp indicating when the
+            message was generated during task execution. If None, no specific
+            timestamp is recorded for this message.
+    """
+
+    level: TaskMessageLevel = Field(description="Message severity level.")
+    text: str = Field(description="Human-readable message text.")
+    code: str | None = Field(
+        default=None,
+        description="Optional machine-readable message code.",
+    )
+    timestamp: datetime | None = Field(
+        default=None,
+        description="Timestamp associated with the message.",
+    )
+
+
+class TaskStatus(str, Enum):
+    """Canonical task status values returned by Genja task results.
+
+    This enumeration defines the possible execution states that a Genja task
+    can return upon completion. Each status represents a distinct outcome
+    category that determines how the task result should be interpreted and
+    processed by the Genja execution engine.
+
+    Attributes:
+        PASSED (str): Indicates the task completed successfully without errors.
+            This status is returned by TaskSuccessResult and signifies that the
+            task's intended operation was performed as expected.
+        FAILED (str): Indicates the task encountered an error and could not
+            complete successfully. This status is returned by TaskFailureResult
+            and signifies that the task's operation failed due to an exception,
+            validation error, or other failure condition.
+        SKIPPED (str): Indicates the task was intentionally bypassed and did
+            not execute its main logic. This status is returned by TaskSkipResult
+            and signifies that the task determined it should not run based on
+            conditional logic, prerequisites, or other criteria.
+    """
+
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class TaskFailureKind(str, Enum):
+    """Canonical task failure categories returned by Genja task results.
+
+    This enumeration defines the types of failures that can occur during task
+    execution. Each failure kind categorizes the root cause of a task failure,
+    enabling consumers to understand the nature of the error and determine
+    appropriate remediation strategies. These categories are used in
+    TaskFailureResult to provide structured failure classification.
+
+    Attributes:
+        CONNECTION (str): Indicates a failure related to establishing or
+            maintaining network connectivity to the target host. This includes
+            network timeouts, connection refused errors, and other transport-level
+            issues.
+        AUTHENTICATION (str): Indicates a failure related to authenticating
+            with the target host or service. This includes invalid credentials,
+            expired tokens, insufficient permissions, and other authentication
+            mechanism failures.
+        VALIDATION (str): Indicates a failure related to input validation,
+            configuration validation, or precondition checks. This includes
+            invalid parameters, malformed data, or unmet prerequisites.
+        TIMEOUT (str): Indicates a failure caused by an operation exceeding
+            its allowed execution time. This includes command timeouts, response
+            timeouts, and other time-bound operation failures.
+        COMMAND (str): Indicates a failure related to executing a command or
+            operation on the target host. This includes command execution errors,
+            non-zero exit codes, and other command-level failures.
+        UNSUPPORTED (str): Indicates a failure caused by attempting an operation
+            that is not supported by the target platform, connection plugin, or
+            current configuration. This includes unsupported features, incompatible
+            versions, and unavailable capabilities.
+        INTERNAL (str): Indicates a failure caused by an internal error within
+            the Genja task implementation or runtime. This includes programming
+            errors, unexpected exceptions, and other internal system failures.
+        EXTERNAL (str): Indicates a failure caused by an external system or
+            dependency. This includes third-party service failures, external API
+            errors, and other failures outside the direct control of the task.
+    """
+
+    CONNECTION = "connection"
+    AUTHENTICATION = "authentication"
+    VALIDATION = "validation"
+    TIMEOUT = "timeout"
+    COMMAND = "command"
+    UNSUPPORTED = "unsupported"
+    INTERNAL = "internal"
+    EXTERNAL = "external"
+
+
+class TaskMessageLevel(str, Enum):
+    """Canonical task message severity levels returned by Genja task results.
+
+    This enumeration defines the severity levels for structured messages
+    emitted during task execution. Each level indicates the importance and
+    nature of the message, enabling consumers to filter, prioritize, and
+    display messages appropriately. These levels are used in TaskMessage
+    instances attached to task results.
+
+    Attributes:
+        INFO (str): Indicates an informational message that provides general
+            context, progress updates, or non-critical details about task
+            execution. These messages are typically used for logging normal
+            operational events.
+        WARNING (str): Indicates a warning message that highlights a potential
+            issue, unexpected condition, or non-fatal problem that occurred
+            during task execution. These messages alert users to conditions
+            that may require attention but did not prevent task completion.
+        ERROR (str): Indicates an error message that describes a failure,
+            exception, or critical problem that occurred during task execution.
+            These messages provide diagnostic information about task failures
+            and are typically associated with TaskFailureResult outcomes.
+        DEBUG (str): Indicates a debug message that provides detailed technical
+            information useful for troubleshooting and development. These
+            messages contain verbose diagnostic data and are typically filtered
+            out in production environments unless debug logging is enabled.
+    """
+
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    DEBUG = "debug"
+
+
+class TaskSuccessResult(_GenjaModel):
+    """Successful task outcome returned from ``run(...)`` methods.
+
+    This class represents the result of a successfully completed task execution.
+    It encapsulates all information about what the task accomplished, including
+    the primary result payload, state change indicators, diagnostic messages,
+    and additional metadata. Instances of this class are returned by task
+    ``run(...)`` methods when the task completes without errors.
+
+    Attributes:
+        status (Literal[TaskStatus.PASSED]): The task execution status, always
+            set to TaskStatus.PASSED for successful results. This field is
+            automatically populated and indicates that the task completed
+            successfully without errors.
+        result (Any | None): The primary output or return value produced by
+            the task execution. This can contain any JSON-serializable data
+            structure representing the task's main result. If None, the task
+            completed successfully but did not produce a specific result payload.
+        changed (bool): Indicates whether the task modified any remote or
+            managed state during execution. Set to True if the task made changes
+            to the target system (e.g., modified files, updated configuration,
+            created resources). Set to False if the task was idempotent and no
+            changes were necessary. Defaults to False.
+        diff (str | None): Optional human-readable representation of the changes
+            made by the task, typically in unified diff format. This provides
+            visibility into what was modified when changed is True. If None, no
+            diff information is available or applicable.
+        summary (str | None): Optional brief human-readable description of what
+            the task accomplished. This provides a concise overview of the task
+            outcome suitable for display in logs or user interfaces. If None, no
+            summary is provided.
+        warnings (list[str]): List of non-fatal warning messages that occurred
+            during task execution. These warnings indicate potential issues or
+            unexpected conditions that did not prevent task completion. Defaults
+            to an empty list if no warnings were generated.
+        messages (list[TaskMessage]): List of structured diagnostic messages
+            emitted during task execution. These messages provide detailed
+            logging and diagnostic information with severity levels, timestamps,
+            and optional machine-readable codes. Defaults to an empty list if no
+            messages were generated.
+        metadata (Any | None): Optional JSON-serializable dictionary or data
+            structure containing additional task-specific metadata about the
+            execution. This can include performance metrics, resource identifiers,
+            or any other supplementary information. If None, no additional
+            metadata is provided.
+    """
+
+    status: Literal[TaskStatus.PASSED] = Field(
+        default=TaskStatus.PASSED,
+        description="Task status for a successful result.",
+    )
+    result: Any | None = Field(
+        default=None,
+        description="Primary task result payload.",
+    )
+    changed: bool = Field(
+        default=False,
+        description="Whether the task changed remote or managed state.",
+    )
+    diff: str | None = Field(
+        default=None,
+        description="Optional human-readable diff for the applied change.",
+    )
+    summary: str | None = Field(
+        default=None,
+        description="Short summary of the successful task outcome.",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal warnings produced during task execution.",
+    )
+    messages: list[TaskMessage] = Field(
+        default_factory=list,
+        description="Structured messages emitted during task execution.",
+    )
+    metadata: Any | None = Field(
+        default=None,
+        description="Additional JSON-serializable metadata for the result.",
+    )
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _validate_metadata(cls, value: Any) -> Any:
+        """Validate that the metadata field contains only JSON-serializable data.
+
+        This validator is executed before Pydantic's standard validation to ensure
+        that the metadata field can be safely serialized to JSON. It delegates to
+        the _ensure_json_serializable helper function to perform the actual
+        serialization check.
+
+        Args:
+            cls (type): The TaskSuccessResult class being validated. This parameter
+                is automatically provided by Pydantic's field_validator decorator.
+            value (Any): The metadata value to validate for JSON serializability.
+                This can be any Python object, but must be convertible to JSON.
+
+        Returns:
+            Any: The original metadata value if it is None or successfully passes
+                JSON serialization validation.
+
+        Raises:
+            TypeError: If the metadata value cannot be serialized to JSON, with a
+                message indicating that the metadata field must be JSON-serializable.
+        """
+        return _ensure_json_serializable(value, "metadata")
+
+
+class TaskFailureResult(_GenjaModel):
+    """Failed task outcome returned from ``run(...)`` methods.
+
+    This class represents the result of a task execution that encountered an
+    error and could not complete successfully. It encapsulates all information
+    about the failure, including the error message, failure category, retry
+    eligibility, diagnostic messages, and additional failure details. Instances
+    of this class are returned by task ``run(...)`` methods when the task
+    encounters an error condition.
+
+    Example:
+        >>> result = TaskFailureResult(
+        ...     message="Failed to connect to router1",
+        ...     kind=TaskFailureKind.CONNECTION,
+        ...     retryable=True,
+        ...     details={"error_code": "ETIMEDOUT", "timeout_seconds": 30},
+        ...     messages=[
+        ...         TaskMessage(
+        ...             level=TaskMessageLevel.ERROR,
+        ...             text="Connection attempt 1 of 3 failed",
+        ...         )
+        ...     ],
+        ... )
+
+    Attributes:
+        message (str): Human-readable description of the failure that occurred
+            during task execution. This message should clearly explain what went
+            wrong and provide context for troubleshooting the failure.
+        status (Literal[TaskStatus.FAILED]): The task execution status, always
+            set to TaskStatus.FAILED for failure results. This field is
+            automatically populated and indicates that the task encountered an
+            error and did not complete successfully.
+        kind (TaskFailureKind): The category of failure that occurred, classifying
+            the root cause of the error. This enables consumers to understand the
+            nature of the failure and determine appropriate remediation strategies.
+            Defaults to TaskFailureKind.EXTERNAL if not specified.
+        retryable (bool): Indicates whether retrying the task may succeed. Set to
+            True if the failure was caused by a transient condition (e.g., network
+            timeout, temporary resource unavailability) that may resolve on retry.
+            Set to False if the failure is permanent and retrying will not help
+            (e.g., invalid credentials, unsupported operation). Defaults to False.
+        details (Any | None): Optional JSON-serializable dictionary or data
+            structure containing additional technical details about the failure.
+            This can include stack traces, error codes, diagnostic data, or any
+            other supplementary information useful for troubleshooting. If None,
+            no additional failure details are provided.
+        warnings (list[str]): List of non-fatal warning messages that occurred
+            before the failure. These warnings provide context about conditions
+            or issues that were encountered during task execution prior to the
+            final failure. Defaults to an empty list if no warnings were generated.
+        messages (list[TaskMessage]): List of structured diagnostic messages
+            emitted before the failure occurred. These messages provide detailed
+            logging and diagnostic information with severity levels, timestamps,
+            and optional machine-readable codes that can help understand the
+            execution context leading up to the failure. Defaults to an empty
+            list if no messages were generated.
+    """
+
+    message: str = Field(description="Human-readable failure message.")
+    status: Literal[TaskStatus.FAILED] = Field(
+        default=TaskStatus.FAILED,
+        description="Task status for a failed result.",
+    )
+    kind: TaskFailureKind = Field(
+        default=TaskFailureKind.EXTERNAL,
+        description="Failure category identifier.",
+    )
+    retryable: bool = Field(
+        default=False,
+        description="Whether the failure may succeed on retry.",
+    )
+    details: Any | None = Field(
+        default=None,
+        description="Additional JSON-serializable failure details.",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal warnings produced before the failure occurred.",
+    )
+    messages: list[TaskMessage] = Field(
+        default_factory=list,
+        description="Structured messages emitted before the failure occurred.",
+    )
+
+    @field_validator("details", mode="before")
+    @classmethod
+    def _validate_details(cls, value: Any) -> Any:
+        """Validate that the details field contains only JSON-serializable data.
+
+        This validator is executed before Pydantic's standard validation to ensure
+        that the details field can be safely serialized to JSON. It delegates to
+        the _ensure_json_serializable helper function to perform the actual
+        serialization check.
+
+        Args:
+            cls (type): The TaskFailureResult class being validated. This parameter
+                is automatically provided by Pydantic's field_validator decorator.
+            value (Any): The details value to validate for JSON serializability.
+                This can be any Python object, but must be convertible to JSON.
+
+        Returns:
+            Any: The original details value if it is None or successfully passes
+                JSON serialization validation.
+
+        Raises:
+            TypeError: If the details value cannot be serialized to JSON, with a
+                message indicating that the details field must be JSON-serializable.
+        """
+        return _ensure_json_serializable(value, "details")
+
+
+class TaskSkipResult(_GenjaModel):
+    """Skipped task outcome returned from ``run(...)`` methods.
+
+    This class represents the result of a task execution that was intentionally
+    bypassed and did not execute its main logic. It encapsulates information
+    about why the task was skipped, including both machine-readable reason codes
+    and human-readable explanatory messages. Instances of this class are returned
+    by task ``run(...)`` methods when the task determines it should not execute
+    based on conditional logic, prerequisites, or other criteria.
+
+    Example:
+        >>> result = TaskSkipResult(
+        ...     reason="maintenance_mode",
+        ...     message="Host is currently in maintenance mode",
+        ... )
+
+    Attributes:
+        status (Literal[TaskStatus.SKIPPED]): The task execution status, always
+            set to TaskStatus.SKIPPED for skipped results. This field is
+            automatically populated and indicates that the task was intentionally
+            bypassed and did not execute its main logic.
+        reason (str | None): Optional machine-readable code or identifier that
+            categorizes why the task was skipped. This can be used for programmatic
+            filtering, conditional logic, or analytics to understand skip patterns.
+            Common examples might include "condition_not_met", "already_configured",
+            or "platform_unsupported". If None, no specific reason code is provided.
+        message (str | None): Optional human-readable explanation describing why
+            the task was skipped. This message provides context for users or logs
+            about the skip decision and should clearly explain the conditions or
+            logic that led to the task being bypassed. If None, no explanatory
+            message is provided.
+    """
+
+    status: Literal[TaskStatus.SKIPPED] = Field(
+        default=TaskStatus.SKIPPED,
+        description="Task status for a skipped result.",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Machine-readable reason the task was skipped.",
+    )
+    message: str | None = Field(
+        default=None,
+        description="Human-readable explanation for the skipped task.",
+    )
+
+
+__all__ = [
+    "task",
+    "GenjaTaskProtocol",
+    "TaskInfo",
+    "Host",
+    "TaskRuntimeContext",
+    "TaskMessage",
+    "TaskMessageLevel",
+    "TaskStatus",
+    "TaskFailureKind",
+    "TaskSuccessResult",
+    "TaskFailureResult",
+    "TaskSkipResult",
+]

@@ -96,7 +96,7 @@ It generates `TaskInfo` and `SubTasks`, then you provide the execution logic by 
 The derive macro maps fields like this:
 
 - `name` is required and becomes `TaskInfo::name()`.
-- `plugin_name` is optional and becomes `TaskInfo::plugin_name()`.
+- `connection_plugin_name` is optional and becomes `TaskInfo::connection_plugin_name()`.
 - `options` is optional and becomes `TaskInfo::options()`.
 - `processor_names` is optional and becomes `TaskInfo::processor_names()`.
 - `#[task(processors = ["audit"])]` can be used when processor names are fixed at compile time.
@@ -105,28 +105,33 @@ The derive macro maps fields like this:
 That means the usual pattern is:
 
 1. Add `#[derive(TaskDerive)]` to the task struct.
-2. Declare `name`, and optionally `plugin_name`, `options`, `processor_names`, and `#[task(subtask)]` fields.
-3. Implement `Task::start(&self, host)` manually.
+2. Declare `name`, and optionally `connection_plugin_name`, `options`, `processor_names`, and `#[task(subtask)]` fields.
+3. Implement the async `Task::start(&self, host, context)` method manually.
 
 ```rust
 use genja::Genja;
 use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
-use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
 use genja_core_derive::Task as TaskDerive;
 
 #[derive(TaskDerive)]
 struct CheckConfigTask {
     name: String,
-    plugin_name: Option<String>,
+    connection_plugin_name: Option<String>,
 }
 
+#[async_trait::async_trait]
 impl Task for CheckConfigTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(
             TaskSuccess::new()
                 .with_summary("configuration is present")
                 .with_changed(false),
-        )
+        ))
     }
 }
 
@@ -139,7 +144,7 @@ let genja = Genja::builder(inventory).build()?;
 let results = genja.run(
     CheckConfigTask {
         name: "check_config".to_string(),
-        plugin_name: Some("ssh".to_string()),
+        connection_plugin_name: Some("ssh".to_string()),
     },
     10,
 )?;
@@ -151,8 +156,8 @@ assert!(results.host_result("router1").unwrap().is_passed());
 Notes:
 
 - `max_depth` limits recursive sub-task execution. A task with no sub-tasks can use a small value like `1`.
-- `#[derive(TaskDerive)]` requires a `name` field and generates `TaskInfo` plus `SubTasks`, not `Task::start()`.
-- `plugin_name` is optional, but usually needed for real task execution.
+- `#[derive(TaskDerive)]` requires a `name` field and generates `TaskInfo` plus `SubTasks`, not the async `Task::start(...)` implementation.
+- `connection_plugin_name` is optional, but usually needed for real task execution.
 - Rich task output lives in `TaskSuccess`, `TaskFailure`, `TaskSkip`, and `TaskResults`.
 - The lower-level task API is documented in `genja-core/src/task.rs`.
 
@@ -164,19 +169,24 @@ Tasks opt into processors by name:
 
 ```rust
 use genja_core::inventory::Host;
-use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
 use genja_core_derive::Task as TaskDerive;
 
 #[derive(TaskDerive)]
 #[task(processors = ["audit"])]
 struct DeployTask {
     name: &'static str,
-    plugin_name: Option<String>,
+    connection_plugin_name: Option<String>,
 }
 
+#[async_trait::async_trait]
 impl Task for DeployTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(TaskSuccess::new())
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
     }
 }
 ```
@@ -243,32 +253,46 @@ use std::sync::Arc;
 
 use genja::Genja;
 use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
-use genja_core::task::{HostTaskResult, Task, TaskSuccess};
+use genja_core::task::{HostTaskResult, Task, TaskError, TaskSuccess};
 use genja_core_derive::Task as TaskDerive;
 
 #[derive(TaskDerive)]
 struct ValidateTask {
     name: String,
-    plugin_name: Option<String>,
+    connection_plugin_name: Option<String>,
 }
 
+#[async_trait::async_trait]
 impl Task for ValidateTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(TaskSuccess::new().with_summary("validation passed"))
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(
+            TaskSuccess::new().with_summary("validation passed"),
+        ))
     }
 }
 
 #[derive(TaskDerive)]
 struct DeployTask {
     name: String,
-    plugin_name: Option<String>,
+    connection_plugin_name: Option<String>,
     #[task(subtask)]
     validate: Arc<dyn Task>,
 }
 
+#[async_trait::async_trait]
 impl Task for DeployTask {
-    fn start(&self, _host: &Host) -> HostTaskResult {
-        HostTaskResult::passed(TaskSuccess::new().with_summary("deployment complete"))
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &genja_core::task::TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(
+            TaskSuccess::new().with_summary("deployment complete"),
+        ))
     }
 }
 
@@ -279,10 +303,10 @@ let genja = Genja::builder(inventory).build()?;
 
 let task = DeployTask {
     name: "deploy".to_string(),
-    plugin_name: Some("ssh".to_string()),
+    connection_plugin_name: Some("ssh".to_string()),
     validate: Arc::new(ValidateTask {
         name: "validate".to_string(),
-        plugin_name: Some("ssh".to_string()),
+        connection_plugin_name: Some("ssh".to_string()),
     }),
 };
 

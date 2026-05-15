@@ -86,6 +86,7 @@
 //! Connection plugins must implement the `PluginConnection` trait:
 //!
 //! ```no_run
+//! use async_trait::async_trait;
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginConnection};
 //! use genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
 //!
@@ -99,13 +100,15 @@
 //!     }
 //! }
 //!
+//! #[async_trait]
 //! impl PluginConnection for MyConnectionPlugin {
 //!     fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
 //!         Box::new(MyConnectionPlugin { key: key.clone() })
 //!     }
 //!
-//!     fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
+//!     async fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
 //!         // Establish connection
+//!         let _ = params;
 //!         Ok(())
 //!     }
 //!
@@ -193,6 +196,7 @@
 //!     BaseBuilderHost, Host, Hosts, Inventory,
 //! };
 //! use std::sync::Arc;
+//! use tokio::runtime::Builder;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // Set up plugin manager with connection plugins
@@ -231,11 +235,12 @@
 //!     platform: Some("cisco_ios".to_string()),
 //!     extras: None,
 //! };
-//! let connection = connection_manager
-//!     .open_connection(&key, &params)?
+//! let runtime = Builder::new_current_thread().enable_all().build()?;
+//! let connection = runtime
+//!     .block_on(async { connection_manager.open_connection(&key, &params).await })?
 //!     .expect("connection plugin not found");
 //!
-//! let conn = connection.lock().unwrap();
+//! let conn = runtime.block_on(connection.lock());
 //!
 //! // Use connection...
 //! assert!(conn.is_alive());
@@ -256,10 +261,12 @@
 
 use crate::PluginManager;
 use crate::plugin_types::{PluginConnection, Plugins};
+use async_trait::async_trait;
 use genja_core::inventory::{
     Connection, ConnectionFactory, ConnectionKey, ResolvedConnectionParams,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Adapter that bridges `PluginConnection` trait objects to the `Connection` trait.
 ///
@@ -343,8 +350,14 @@ impl PluginConnectionAdapter {
             alive: false,
         }
     }
+
+    #[doc(hidden)]
+    pub fn inner_plugin_connection(&self) -> &dyn PluginConnection {
+        self.inner.as_ref()
+    }
 }
 
+#[async_trait]
 impl Connection for PluginConnectionAdapter {
     /// Creates a new connection instance for the specified key.
     ///
@@ -442,12 +455,16 @@ impl Connection for PluginConnectionAdapter {
     /// // };
     /// // adapter.open(&params)?;
     /// ```
-    fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
-        let result = self.inner.open(params);
+    async fn open(&mut self, params: &ResolvedConnectionParams) -> Result<(), String> {
+        let result = self.inner.open(params).await;
         if result.is_ok() {
             self.alive = true;
         }
         result
+    }
+
+    async fn execute_command(&mut self, command: &str) -> Result<String, String> {
+        self.inner.execute_command(command).await
     }
 
     /// Closes the connection and returns its key.
@@ -563,6 +580,16 @@ mod tests {
     use genja_core::inventory::Connection;
     use genja_core::inventory::ConnectionManager;
     use genja_core::task::Tasks;
+    use std::future::Future;
+    use tokio::runtime::Builder;
+
+    fn run_async<F: Future>(future: F) -> F::Output {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(future)
+    }
 
     #[derive(Debug)]
     struct TestConnection {
@@ -587,12 +614,13 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl PluginConnection for TestConnection {
         fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
             Box::new(Self::new(self.name, key.clone()))
         }
 
-        fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
             self.alive = true;
             Ok(())
         }
@@ -618,21 +646,28 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl PluginRunner for DummyRunner {
-        fn run(
+        async fn run(
             &self,
             _task: &genja_core::task::TaskDefinition,
             _hosts: &genja_core::inventory::Hosts,
+            _connection_resolver: Option<
+                std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>,
+            >,
             _runner_config: &genja_core::settings::RunnerConfig,
             _max_depth: usize,
         ) -> Result<genja_core::task::TaskResults, genja_core::GenjaError> {
             Ok(genja_core::task::TaskResults::new("runner"))
         }
 
-        fn run_tasks(
+        async fn run_tasks(
             &self,
             _tasks: &Tasks,
             _hosts: &genja_core::inventory::Hosts,
+            _connection_resolver: Option<
+                std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>,
+            >,
             _runner_config: &genja_core::settings::RunnerConfig,
             _max_depth: usize,
         ) -> Result<Vec<genja_core::task::TaskResults>, genja_core::GenjaError> {
@@ -659,7 +694,7 @@ mod tests {
         let mut adapter = PluginConnectionAdapter::new(Box::new(plugin));
         assert!(!adapter.is_alive());
 
-        adapter.open(&default_params()).unwrap();
+        run_async(adapter.open(&default_params())).unwrap();
         assert!(adapter.is_alive());
 
         let closed_key = adapter.close();
@@ -704,9 +739,9 @@ mod tests {
         let connection = factory(&key).expect("expected connection plugin");
 
         {
-            let mut guard = connection.lock().unwrap();
+            let mut guard = run_async(connection.lock());
             assert!(!guard.is_alive());
-            guard.open(&default_params()).unwrap();
+            run_async(guard.open(&default_params())).unwrap();
             assert!(guard.is_alive());
             let closed_key = guard.close();
             assert_eq!(closed_key, key);
@@ -726,8 +761,7 @@ mod tests {
         let connection_manager = ConnectionManager::with_connection_factory(factory);
 
         let params = default_params();
-        let connection = connection_manager
-            .open_connection(&key, &params)
+        let connection = run_async(connection_manager.open_connection(&key, &params))
             .unwrap()
             .unwrap();
 
@@ -756,8 +790,7 @@ mod tests {
         let connection_manager = ConnectionManager::with_connection_factory(factory);
 
         let params = default_params();
-        connection_manager
-            .open_connection(&key, &params)
+        run_async(connection_manager.open_connection(&key, &params))
             .unwrap()
             .unwrap();
 
@@ -765,8 +798,7 @@ mod tests {
         assert_eq!(counters_after_first.create_calls, 1);
         assert_eq!(counters_after_first.open_calls, 1);
 
-        connection_manager
-            .open_connection(&key, &params)
+        run_async(connection_manager.open_connection(&key, &params))
             .unwrap()
             .unwrap();
 
@@ -781,9 +813,7 @@ mod tests {
         let key = ConnectionKey::new("host1", "ssh");
         let params = default_params();
 
-        let err = connection_manager
-            .open_connection(&key, &params)
-            .unwrap_err();
+        let err = run_async(connection_manager.open_connection(&key, &params)).unwrap_err();
         assert_eq!(err, "connection factory not set");
     }
 
@@ -803,12 +833,10 @@ mod tests {
         let connection_manager = ConnectionManager::with_connection_factory(factory);
 
         let params = default_params();
-        connection_manager
-            .open_connection(&key_ssh, &params)
+        run_async(connection_manager.open_connection(&key_ssh, &params))
             .unwrap()
             .unwrap();
-        connection_manager
-            .open_connection(&key_telnet, &params)
+        run_async(connection_manager.open_connection(&key_telnet, &params))
             .unwrap()
             .unwrap();
 
@@ -881,8 +909,7 @@ mod tests {
         let key_a = key.clone();
         let thread_a = std::thread::spawn(move || {
             barrier_a.wait();
-            manager_a
-                .open_connection(&key_a, &params_a)
+            run_async(manager_a.open_connection(&key_a, &params_a))
                 .unwrap()
                 .unwrap();
         });
@@ -893,8 +920,7 @@ mod tests {
         let key_b = key.clone();
         let thread_b = std::thread::spawn(move || {
             barrier_b.wait();
-            manager_b
-                .open_connection(&key_b, &params_b)
+            run_async(manager_b.open_connection(&key_b, &params_b))
                 .unwrap()
                 .unwrap();
         });
@@ -922,12 +948,13 @@ mod tests {
             }
         }
 
+        #[async_trait]
         impl PluginConnection for FailingConnection {
             fn create(&self, _key: &ConnectionKey) -> Box<dyn PluginConnection> {
                 Box::new(Self)
             }
 
-            fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
                 Err("boom".to_string())
             }
 
@@ -942,7 +969,7 @@ mod tests {
 
         let mut adapter = PluginConnectionAdapter::new(Box::new(FailingConnection));
         assert!(!adapter.is_alive());
-        let err = adapter.open(&default_params()).unwrap_err();
+        let err = run_async(adapter.open(&default_params())).unwrap_err();
         assert_eq!(err, "boom");
         assert!(!adapter.is_alive());
     }
