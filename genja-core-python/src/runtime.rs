@@ -1829,7 +1829,7 @@ fn load_inventory_from_settings(
         if let Some(plugin) = plugin_manager.get_inventory_plugin(plugin_name) {
             return plugin
                 .load(settings, plugin_manager)
-                .map_err(|err| GenjaError::InventoryLoad(err.to_string()));
+                .map_err(GenjaError::from);
         }
 
         if plugin_manager.get_plugin(plugin_name).is_some() {
@@ -1843,7 +1843,7 @@ fn load_inventory_from_settings(
     if let Some(plugin) = plugin_manager.get_inventory_plugin(default_name) {
         return plugin
             .load(settings, plugin_manager)
-            .map_err(|err| GenjaError::InventoryLoad(err.to_string()));
+            .map_err(GenjaError::from);
     }
 
     if plugin_manager.get_plugin(default_name).is_some() {

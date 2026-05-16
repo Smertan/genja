@@ -53,9 +53,7 @@ impl PluginInventory for DefaultInventoryPlugin {
     ) -> Result<Inventory, InventoryLoadError> {
         let inventory_cfg = settings.inventory();
 
-        let (hosts, groups, defaults) = inventory_cfg
-            .load_inventory_files()
-            .map_err(InventoryLoadError::from)?;
+        let (hosts, groups, defaults) = inventory_cfg.load_inventory_files()?;
 
         let mut builder = Inventory::builder().hosts(hosts);
 
@@ -67,19 +65,20 @@ impl PluginInventory for DefaultInventoryPlugin {
         }
 
         if let Some(name) = inventory_cfg.transform_function() {
-            let plugin = plugins.get_plugin(name).ok_or_else(|| {
-                InventoryLoadError::from(format!("Transform plugin '{}' not found", name))
-            })?;
+            let plugin = plugins
+                .get_plugin(name)
+                .ok_or_else(|| InventoryLoadError::TransformPluginNotFound {
+                    name: name.to_string(),
+                })?;
 
             match plugin {
                 Plugins::TransformFunction(transform) => {
                     builder = builder.transform_function(transform.transform_function());
                 }
                 _ => {
-                    return Err(InventoryLoadError::from(format!(
-                        "Plugin '{}' is not a transform function plugin",
-                        name
-                    )));
+                    return Err(InventoryLoadError::NotTransformPlugin {
+                        name: name.to_string(),
+                    });
                 }
             }
 

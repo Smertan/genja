@@ -274,14 +274,15 @@
 //! use genja_core::task::{TaskDefinition, TaskResults, Tasks};
 //!
 //! #[derive(Debug)]
-//! struct SequentialRunner;
+//! struct ExampleSequentialRunner;
 //!
-//! impl Plugin for SequentialRunner {
-//!     fn name(&self) -> String { "sequential".to_string() }
+//! impl Plugin for ExampleSequentialRunner {
+//!     // This is a custom plugin example. The built-in Genja runner name is `serial`.
+//!     fn name(&self) -> String { "example_sequential".to_string() }
 //! }
 //!
 //! #[async_trait]
-//! impl PluginRunner for SequentialRunner {
+//! impl PluginRunner for ExampleSequentialRunner {
 //!     async fn run(
 //!         &self,
 //!         task: &TaskDefinition,
@@ -292,7 +293,7 @@
 //!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Execute task on each host sequentially
 //!         let _ = (task, hosts, connection_resolver, runner_config, max_depth);
-//!         Ok(TaskResults::new("sequential"))
+//!         Ok(TaskResults::new("example_sequential"))
 //!     }
 //!
 //!     async fn run_tasks(

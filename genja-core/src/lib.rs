@@ -65,7 +65,9 @@ pub mod state;
 pub mod task;
 pub mod types;
 
-pub use errors::{GenjaError, InventoryLoadError};
+pub use errors::{
+    ConfigLoadError, GenjaError, InventoryFileKind, InventoryLoadError, SshConfigError,
+};
 pub use settings::Settings;
 pub use state::{
     ConnectionAttemptState, ConnectionFailureKind, ConnectionStatus, HostStatus, State,
