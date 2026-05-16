@@ -556,12 +556,6 @@ impl State {
         }
     }
 
-    // TODO: Remove this method and use the accessors instead i.e., failed_hosts() and in_scope_hosts()
-    // /// Return the raw host scope state map.
-    // pub fn host_statuses(&self) -> &DashMap<NatString, HostStatus> {
-    //     &self.host_status
-    // }
-
     /// Sets the connection attempt state for a specific host and plugin combination.
     ///
     /// This method records the current state of a connection attempt, including the
@@ -743,12 +737,6 @@ impl State {
             .get(key)
             .map(|entry| entry.value().clone())
     }
-
-    // TODO: Remove direct access and create an iterator, i.e., failed_connections(), open_connections(), etc.
-    // /// Return the raw connection state map.
-    // pub fn connection_states(&self) -> &DashMap<ConnectionKey, ConnectionAttemptState> {
-    //     &self.connection_state
-    // }
 
     /// Records the start of a connection attempt and increments the attempt counter.
     ///
@@ -1328,11 +1316,6 @@ impl State {
         self.task_state.get(key).map(|entry| entry.value().clone())
     }
 
-    // TODO: Remove direct access and use the accessors instead.
-    // /// Return the raw task state map.
-    // pub fn task_states(&self) -> &DashMap<TaskExecutionKey, TaskAttemptState> {
-    //     &self.task_state
-    // }
 }
 
 /// Represents the operational status of a host within the Genja runtime.
