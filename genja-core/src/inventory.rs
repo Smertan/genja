@@ -352,6 +352,12 @@ impl ConnectionOptionsBuilder {
     }
 }
 
+impl Default for ConnectionOptionsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Fully resolved connection parameters for establishing a connection to a host.
 ///
 /// This struct represents the final, merged connection configuration after applying
@@ -770,12 +776,8 @@ impl DefaultsBuilder {
     where
         S: Into<String>,
     {
-        if self.connection_options.is_none() {
-            self.connection_options = Some(CustomTreeMap::new());
-        }
         self.connection_options
-            .as_mut()
-            .unwrap()
+            .get_or_insert_with(CustomTreeMap::new)
             .insert(name.into(), options);
         self
     }
@@ -790,6 +792,12 @@ impl DefaultsBuilder {
             data: self.data,
             connection_options: self.connection_options,
         }
+    }
+}
+
+impl Default for DefaultsBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1092,6 +1100,12 @@ impl Host {
     }
 }
 
+impl Default for Host {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BaseMethods for Host {}
 
 /// Builder for constructing `Host` instances.
@@ -1170,6 +1184,12 @@ impl HostBuilder {
     }
 }
 
+impl Default for HostBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BaseBuilderHost for HostBuilder {
     type Output = Host;
 
@@ -1224,12 +1244,8 @@ impl BaseBuilderHost for HostBuilder {
     where
         S: Into<String>,
     {
-        if self.connection_options.is_none() {
-            self.connection_options = Some(CustomTreeMap::new());
-        }
         self.connection_options
-            .as_mut()
-            .unwrap()
+            .get_or_insert_with(CustomTreeMap::new)
             .insert(name.into(), options);
         self
     }
@@ -1511,12 +1527,8 @@ impl BaseBuilderHost for GroupBuilder {
     where
         S: Into<String>,
     {
-        if self.connection_options.is_none() {
-            self.connection_options = Some(CustomTreeMap::new());
-        }
         self.connection_options
-            .as_mut()
-            .unwrap()
+            .get_or_insert_with(CustomTreeMap::new)
             .insert(name.into(), options);
         self
     }
@@ -1547,6 +1559,12 @@ impl GroupBuilder {
             data: None,
             connection_options: None,
         }
+    }
+}
+
+impl Default for GroupBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
