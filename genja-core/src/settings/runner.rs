@@ -4,54 +4,11 @@ use super::env_defaults::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Configuration for the task runner plugin system.
+/// Task runner configuration.
 ///
-/// This struct defines how tasks should be executed in Genja, specifying which
-/// runner plugin to use and its configuration options. The runner plugin controls
-/// the execution strategy (e.g., serial or threaded) and behavior for running
-/// tasks across hosts.
-///
-/// # Fields
-///
-/// * `plugin` - The name of the runner plugin to use for task execution.
-///   Defaults to the value from the `GENJA_RUNNER_PLUGIN` environment variable,
-///   or "threaded" if not set. Common values include "threaded" for concurrent
-///   execution or "serial" for one-at-a-time execution.
-/// * `options` - A JSON object containing plugin-specific configuration options.
-///   The structure and available options depend on the selected plugin. Defaults
-///   to an empty object.
-/// * `worker_count` - Optional worker count for runner implementations that support
-///   a fixed concurrency setting. For the built-in `"threaded"` runner, this is the
-///   canonical way to control the maximum number of concurrent host executions.
-/// * `max_task_depth` - Maximum recursion depth for task/sub-task execution.
-///   Defaults to `10`.
-/// * `max_connection_attempts` - Maximum number of connection attempts before retries
-///   should stop and the connection should be treated as failed. Defaults to `3`.
-///
-/// # Deserialization
-///
-/// - Missing fields use their default values (see `Default` impl)
-/// - The `plugin` field defaults to `GENJA_RUNNER_PLUGIN` env var or "threaded"
-/// - The `options` field defaults to `{}`
-/// - The `worker_count` field defaults to `None`
-/// - Invalid field values cause deserialization to fail
-///
-/// # Examples
-///
-/// ```
-/// use genja_core::settings::RunnerConfig;
-///
-/// // Create with default values
-/// let config = RunnerConfig::default();
-///
-/// // Create with custom configuration
-/// let config = RunnerConfig::builder()
-///     .plugin("threaded")
-///     .worker_count(5)
-///     .build();
-///
-/// println!("Using runner plugin: {}", config.plugin());
-/// ```
+/// The plugin name defaults from `GENJA_RUNNER_PLUGIN`. `worker_count`,
+/// `max_task_depth`, and `max_connection_attempts` control built-in runner
+/// behavior; `options` carries plugin-specific JSON for custom runners.
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct RunnerConfig {
@@ -100,43 +57,7 @@ impl RunnerConfig {
     }
 }
 
-/// Builder for constructing `RunnerConfig` instances with custom settings.
-///
-/// This builder provides a fluent interface for creating `RunnerConfig` objects,
-/// allowing selective configuration of task runner settings. Fields that are not
-/// explicitly set will use their default values when `build()` is called.
-///
-/// # Fields
-///
-/// * `plugin` - Optional name of the runner plugin to use for task execution. When set to
-///   `Some(name)`, the specified plugin will be used. If `None`, the default value from
-///   the `GENJA_RUNNER_PLUGIN` environment variable or "threaded" will be used.
-/// * `options` - Optional JSON object containing plugin-specific configuration options.
-///   When set to `Some(value)`, the specified options will be used. If `None`, the default
-///   value of `{}` will be used. The structure and available options depend on the
-///   selected plugin.
-/// * `worker_count` - Optional worker count for runner implementations that support a
-///   fixed concurrency setting. If `None`, the runner decides an appropriate default.
-/// * `max_task_depth` - Optional maximum recursion depth for task/sub-task execution. When set to
-///   `Some(value)`, the specified depth will be used. If `None`, defaults to `10`.
-/// * `max_connection_attempts` - Optional maximum number of connection attempts before retries
-///   should stop. When set to `Some(value)`, the specified limit will be used. If `None`,
-///   defaults to `3`.
-///
-/// # Examples
-///
-/// ```
-/// use genja_core::settings::RunnerConfig;
-///
-/// // Build with custom plugin and options
-/// let config = RunnerConfig::builder()
-///     .plugin("threaded")
-///     .worker_count(5)
-///     .build();
-///
-/// // Build with defaults
-/// let config = RunnerConfig::builder().build();
-/// ```
+/// Builder for `RunnerConfig`.
 pub struct RunnerConfigBuilder {
     plugin: Option<String>,
     options: Option<serde_json::Value>,
