@@ -83,7 +83,9 @@ impl Default for OptionsConfigBuilder {
 /// Inventory loader configuration.
 ///
 /// The plugin name defaults from `GENJA_INVENTORY_PLUGIN`. When present,
-/// `transform_function` is applied after the raw inventory files are loaded.
+/// `transform_function` is attached to the built `Inventory` after the raw
+/// inventory files are loaded. The transform itself is then applied lazily
+/// when inventory data is accessed or resolved.
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct InventoryConfig {
     #[serde(default = "get_inventory_plugin_config")]

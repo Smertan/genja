@@ -101,10 +101,14 @@ impl Inventory {
     /// The view provides read-only access to the hosts and caches transformed results
     /// for improved performance on subsequent accesses.
     ///
+    /// Only hosts that are currently in scope are visible through this view. Hosts marked
+    /// out of scope in the runtime [`State`] are filtered out of `len()`, `keys()`, `get()`,
+    /// and `iter()`.
+    ///
     /// # Returns
     ///
-    /// Returns a `HostsView` containing a view of the hosts collection. The view allows
-    /// iteration over hosts and lookup by name, with transforms applied lazily on access.
+    /// Returns a `HostsView` containing a view of the in-scope hosts collection. The view
+    /// allows iteration over hosts and lookup by name, with transforms applied lazily on access.
     ///
     /// # Examples
     ///

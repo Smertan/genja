@@ -42,7 +42,10 @@ use std::sync::Arc;
 /// - When calling `Inventory::defaults()`
 /// - During host resolution via `Inventory::resolve_host()`
 ///
-/// Results are cached to improve performance on subsequent accesses.
+/// Results are cached for hosts and groups to improve performance on subsequent
+/// accesses. Resolved hosts and connection parameters are also cached by
+/// `Inventory`. Defaults are transformed lazily on each `Inventory::defaults()`
+/// call and are not stored in a dedicated cache.
 ///
 /// # Transform Options
 ///
@@ -284,7 +287,10 @@ pub trait Transform: Send + Sync {
 /// - `Inventory::defaults()` - Returns transformed defaults
 /// - `Inventory::resolve_host()` - Applies transforms to the resolved host
 ///
-/// Results are cached to improve performance on subsequent accesses.
+/// Host and group transform results are cached to improve performance on
+/// subsequent accesses. Resolved hosts and connection parameters are also
+/// cached by `Inventory`. Defaults are transformed lazily on each
+/// `Inventory::defaults()` call and are not stored in a dedicated cache.
 ///
 /// # Thread Safety
 ///
