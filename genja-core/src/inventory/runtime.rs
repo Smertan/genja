@@ -633,47 +633,143 @@ fn empty_group() -> Group {
     }
 }
 
+trait OverlayFields {
+    fn hostname(&self) -> &Option<String>;
+    fn port(&self) -> &Option<u16>;
+    fn username(&self) -> &Option<String>;
+    fn password(&self) -> &Option<String>;
+    fn platform(&self) -> &Option<String>;
+    fn data(&self) -> &Option<Data>;
+    fn connection_options(&self) -> &Option<CustomTreeMap<ConnectionOptions>>;
+}
+
+impl OverlayFields for Defaults {
+    fn hostname(&self) -> &Option<String> {
+        &self.hostname
+    }
+
+    fn port(&self) -> &Option<u16> {
+        &self.port
+    }
+
+    fn username(&self) -> &Option<String> {
+        &self.username
+    }
+
+    fn password(&self) -> &Option<String> {
+        &self.password
+    }
+
+    fn platform(&self) -> &Option<String> {
+        &self.platform
+    }
+
+    fn data(&self) -> &Option<Data> {
+        &self.data
+    }
+
+    fn connection_options(&self) -> &Option<CustomTreeMap<ConnectionOptions>> {
+        &self.connection_options
+    }
+}
+
+impl OverlayFields for Group {
+    fn hostname(&self) -> &Option<String> {
+        &self.hostname
+    }
+
+    fn port(&self) -> &Option<u16> {
+        &self.port
+    }
+
+    fn username(&self) -> &Option<String> {
+        &self.username
+    }
+
+    fn password(&self) -> &Option<String> {
+        &self.password
+    }
+
+    fn platform(&self) -> &Option<String> {
+        &self.platform
+    }
+
+    fn data(&self) -> &Option<Data> {
+        &self.data
+    }
+
+    fn connection_options(&self) -> &Option<CustomTreeMap<ConnectionOptions>> {
+        &self.connection_options
+    }
+}
+
+impl OverlayFields for Host {
+    fn hostname(&self) -> &Option<String> {
+        &self.hostname
+    }
+
+    fn port(&self) -> &Option<u16> {
+        &self.port
+    }
+
+    fn username(&self) -> &Option<String> {
+        &self.username
+    }
+
+    fn password(&self) -> &Option<String> {
+        &self.password
+    }
+
+    fn platform(&self) -> &Option<String> {
+        &self.platform
+    }
+
+    fn data(&self) -> &Option<Data> {
+        &self.data
+    }
+
+    fn connection_options(&self) -> &Option<CustomTreeMap<ConnectionOptions>> {
+        &self.connection_options
+    }
+}
+
+fn merge_overlay_into_host<T: OverlayFields>(target: &mut Host, source: &T) {
+    merge_option(&mut target.hostname, source.hostname());
+    merge_option(&mut target.port, source.port());
+    merge_option(&mut target.username, source.username());
+    merge_option(&mut target.password, source.password());
+    merge_option(&mut target.platform, source.platform());
+    merge_data(&mut target.data, source.data());
+    merge_connection_options(&mut target.connection_options, source.connection_options());
+}
+
+fn merge_overlay_into_group<T: OverlayFields>(target: &mut Group, source: &T) {
+    merge_option(&mut target.hostname, source.hostname());
+    merge_option(&mut target.port, source.port());
+    merge_option(&mut target.username, source.username());
+    merge_option(&mut target.password, source.password());
+    merge_option(&mut target.platform, source.platform());
+    merge_data(&mut target.data, source.data());
+    merge_connection_options(&mut target.connection_options, source.connection_options());
+}
+
 fn merge_defaults_into_host(target: &mut Host, defaults: &Defaults) {
-    merge_option(&mut target.hostname, &defaults.hostname);
-    merge_option(&mut target.port, &defaults.port);
-    merge_option(&mut target.username, &defaults.username);
-    merge_option(&mut target.password, &defaults.password);
-    merge_option(&mut target.platform, &defaults.platform);
-    merge_data(&mut target.data, &defaults.data);
-    merge_connection_options(&mut target.connection_options, &defaults.connection_options);
+    merge_overlay_into_host(target, defaults);
 }
 
 fn merge_group_into_host(target: &mut Host, group: &Group) {
-    merge_option(&mut target.hostname, &group.hostname);
-    merge_option(&mut target.port, &group.port);
-    merge_option(&mut target.username, &group.username);
-    merge_option(&mut target.password, &group.password);
-    merge_option(&mut target.platform, &group.platform);
-    merge_data(&mut target.data, &group.data);
-    merge_connection_options(&mut target.connection_options, &group.connection_options);
+    merge_overlay_into_host(target, group);
 }
 
 fn merge_host_into_host(target: &mut Host, host: &Host) {
-    merge_option(&mut target.hostname, &host.hostname);
-    merge_option(&mut target.port, &host.port);
-    merge_option(&mut target.username, &host.username);
-    merge_option(&mut target.password, &host.password);
-    merge_option(&mut target.platform, &host.platform);
-    merge_data(&mut target.data, &host.data);
-    merge_connection_options(&mut target.connection_options, &host.connection_options);
+    merge_overlay_into_host(target, host);
     if host.groups.is_some() {
         target.groups = host.groups.clone();
     }
 }
 
 fn merge_group_into_group(target: &mut Group, group: &Group) {
-    merge_option(&mut target.hostname, &group.hostname);
-    merge_option(&mut target.port, &group.port);
-    merge_option(&mut target.username, &group.username);
-    merge_option(&mut target.password, &group.password);
-    merge_option(&mut target.platform, &group.platform);
-    merge_data(&mut target.data, &group.data);
-    merge_connection_options(&mut target.connection_options, &group.connection_options);
+    merge_overlay_into_group(target, group);
     if group.groups.is_some() {
         target.groups = group.groups.clone();
     }
