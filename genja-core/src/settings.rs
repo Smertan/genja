@@ -54,15 +54,15 @@
 //! use genja_core::Settings;
 //!
 //! let settings = Settings::from_file("config.yaml")?;
-//! # Ok::<(), config::ConfigError>(())
+//! # Ok::<(), genja_core::ConfigLoadError>(())
 //! ```
 //!
 //! ## SSH Validation
 //! SSH config is validated automatically when calling `Settings::from_file`.
 //! For manual validation, use `SSHConfig::validate`.
 use crate::inventory::{Defaults, Groups, Hosts, TransformFunctionOptions};
-use crate::{InventoryFileKind, InventoryLoadError};
-use config::{Config as ConfigBuilder, ConfigError, File, FileFormat};
+use crate::{ConfigLoadError, InventoryFileKind, InventoryLoadError, SshConfigError};
+use config::{Config as ConfigBuilder, File, FileFormat};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use ssh2_config::{ParseRule, SshConfig};
@@ -900,41 +900,30 @@ impl SSHConfig {
     ///     Err(e) => eprintln!("Invalid SSH config: {}", e),
     /// }
     /// ```
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), SshConfigError> {
         if let Some(ref path) = self.config_file {
             let path = Path::new(path);
 
-            // TODO: Improve the error handling in case there is an error due to permissions or other issues.
-            match self.ensure_exists(path) {
-                Ok(()) => (),
-                Err(e) => return Err(format!("{e}")),
-            }
-            // path.try_exists()
-            //     .expect(format!("SSH config file not found: {:?}", path).as_str());
+            self.ensure_exists(path)?;
 
             let file = match StdFile::open(path) {
                 Ok(file) => file,
                 Err(e) => {
-                    return Err(format!(
-                        "Failed to open SSH config file {}: {}",
-                        path.display(),
-                        e
-                    ))
+                    return Err(SshConfigError::OpenFailed {
+                        path: path.display().to_string(),
+                        message: e.to_string(),
+                    })
                 }
             };
             let mut reader = BufReader::new(file);
-            // .expect("Could not open configuration file");
 
             match SshConfig::default().parse(&mut reader, ParseRule::STRICT) {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    return Err(format!(
-                        "Failed to parse SSH config file {}: {}",
-                        path.display(),
-                        e
-                    ))
-                }
-            };
+                Ok(_) => Ok(()),
+                Err(e) => Err(SshConfigError::ParseFailed {
+                    path: path.display().to_string(),
+                    message: e.to_string(),
+                }),
+            }
         } else {
             Ok(()) // No config file specified, nothing to validate
         }
@@ -984,33 +973,27 @@ impl SSHConfig {
     ///     }
     /// }
     /// ```
-    pub fn parse(&self) -> Result<Option<SshConfig>, String> {
+    pub fn parse(&self) -> Result<Option<SshConfig>, SshConfigError> {
         if let Some(ref path) = self.config_file {
             let path = Path::new(path);
 
-            if !path.exists() {
-                return Err(format!("SSH config file not found: {:?}", path));
-            }
+            self.ensure_exists(path)?;
 
             let file = match StdFile::open(path) {
                 Ok(file) => file,
-                Err(e) => {
-                    return Err(format!(
-                        "Failed to open SSH config file {:?}: {}",
-                        path.display(),
-                        e
-                    ))
-                }
+                Err(e) => Err(SshConfigError::OpenFailed {
+                    path: path.display().to_string(),
+                    message: e.to_string(),
+                })?,
             };
             let mut reader = BufReader::new(file);
 
             match SshConfig::default().parse(&mut reader, ParseRule::STRICT) {
                 Ok(config) => Ok(Some(config)),
-                Err(e) => Err(format!(
-                    "Failed to parse SSH config file {}: {}",
-                    path.display(),
-                    e
-                )),
+                Err(e) => Err(SshConfigError::ParseFailed {
+                    path: path.display().to_string(),
+                    message: e.to_string(),
+                }),
             }
         } else {
             Ok(None)
@@ -1047,26 +1030,24 @@ impl SSHConfig {
     ///   indicating the file was not found
     /// * `"Failed to check SSH config file {path}: {error}"` - Any other filesystem error
     ///   occurred during the check
-    fn ensure_exists(&self, path: &Path) -> Result<(), String> {
+    fn ensure_exists(&self, path: &Path) -> Result<(), SshConfigError> {
         match path.try_exists() {
             Ok(true) => Ok(()),
-            Ok(false) => Err(format!("SSH config file not found: {}", path.display())),
+            Ok(false) => Err(SshConfigError::NotFound {
+                path: path.display().to_string(),
+            }),
             Err(e) => match e.kind() {
-                ErrorKind::PermissionDenied => Err(format!(
-                    "SSH config file exists but permission denied: {}: {}",
-                    path.display(),
-                    e
-                )),
-                ErrorKind::NotFound => Err(format!(
-                    "SSH config file not found (I/O error): {}: {}",
-                    path.display(),
-                    e
-                )),
-                _ => Err(format!(
-                    "Failed to check SSH config file {}: {}",
-                    path.display(),
-                    e
-                )),
+                ErrorKind::PermissionDenied => Err(SshConfigError::PermissionDenied {
+                    path: path.display().to_string(),
+                    message: e.to_string(),
+                }),
+                ErrorKind::NotFound => Err(SshConfigError::NotFound {
+                    path: path.display().to_string(),
+                }),
+                _ => Err(SshConfigError::CheckFailed {
+                    path: path.display().to_string(),
+                    message: e.to_string(),
+                }),
             },
         }
     }
@@ -1622,11 +1603,11 @@ impl Settings {
     /// * `Ok(Settings)` - If the file was successfully loaded, parsed, and validated.
     ///   The returned `Settings` instance contains all configuration sections with values
     ///   from the file merged with defaults for any missing fields.
-    /// * `Err(ConfigError)` - If an error occurred during loading, parsing, or validation.
+    /// * `Err(ConfigLoadError)` - If an error occurred during loading, parsing, or validation.
     ///
     /// # Errors
     ///
-    /// Returns a `ConfigError` if:
+    /// Returns [`ConfigLoadError`] if:
     /// * The file has an unsupported extension (not `.json`, `.yaml`, or `.yml`)
     /// * The file cannot be read (e.g., doesn't exist, permission denied)
     /// * The file contents cannot be parsed as valid JSON or YAML
@@ -1650,25 +1631,36 @@ impl Settings {
     ///     Err(e) => eprintln!("Failed to load settings: {}", e),
     /// }
     /// ```
-    pub fn from_file(file_path: &str) -> Result<Self, ConfigError> {
+    pub fn from_file(file_path: &str) -> Result<Self, ConfigLoadError> {
         let format = if file_path.ends_with(".json") {
             FileFormat::Json
         } else if file_path.ends_with(".yaml") || file_path.ends_with(".yml") {
             FileFormat::Yaml
         } else {
-            return Err(ConfigError::Message(
-                "Unsupported file format. Use .json, .yaml, or .yml".to_string(),
-            ));
+            return Err(ConfigLoadError::UnsupportedFormat {
+                path: file_path.to_string(),
+            });
         };
         let config = ConfigBuilder::builder()
             .add_source(File::new(file_path, format).required(true))
-            .build()?;
-        let parsed_config: Settings = config.try_deserialize()?;
+            .build()
+            .map_err(|err| ConfigLoadError::Read {
+                path: file_path.to_string(),
+                message: err.to_string(),
+            })?;
+        let parsed_config: Settings =
+            config
+                .try_deserialize()
+                .map_err(|err| ConfigLoadError::Deserialize {
+                    path: file_path.to_string(),
+                    message: err.to_string(),
+                })?;
 
         // Validate SSH config syntax if provided
-        if let Err(e) = parsed_config.ssh.validate() {
-            return Err(ConfigError::Message(e));
-        }
+        parsed_config
+            .ssh
+            .validate()
+            .map_err(ConfigLoadError::SshConfig)?;
         Ok(parsed_config)
     }
 
@@ -1920,7 +1912,10 @@ mod tests {
             config_file: Some(context.filename.to_string_lossy().to_string()),
         };
         let result = ssh_config.validate();
-        assert!(matches!(result, Err(_)));
+        assert!(matches!(
+            result,
+            Err(crate::SshConfigError::ParseFailed { .. })
+        ));
         let pattern =
             Regex::new(r"Failed to parse SSH config file \S+: unknown field: Contents").unwrap();
         assert!(pattern.is_match(&result.unwrap_err().to_string()));
@@ -1958,7 +1953,10 @@ mod tests {
     fn ensure_exists_returns_err_when_missing() {
         let ssh_config = SSHConfig { config_file: None };
         let result = ssh_config.ensure_exists(&Path::new("nonexistent_file.txt"));
-        assert!(matches!(result, Err(_)));
+        assert!(matches!(
+            result,
+            Err(crate::SshConfigError::NotFound { .. })
+        ));
         assert_eq!(
             result.unwrap_err().to_string(),
             "SSH config file not found: nonexistent_file.txt"
@@ -2179,7 +2177,10 @@ mod tests {
         let file_path = tempdir.path().join("config.txt");
         std::fs::write(&file_path, "{}").unwrap();
         let err = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap_err();
-        assert!(err.to_string().contains("Unsupported file format"));
+        assert!(matches!(
+            err,
+            crate::ConfigLoadError::UnsupportedFormat { .. }
+        ));
     }
 
     #[test]
@@ -2339,7 +2340,10 @@ ssh:
         std::fs::write(&file_path, yaml).unwrap();
 
         let err = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap_err();
-        assert!(err.to_string().contains("Failed to parse SSH config file"));
+        assert!(matches!(
+            err,
+            crate::ConfigLoadError::SshConfig(crate::SshConfigError::ParseFailed { .. })
+        ));
     }
 
     #[test]

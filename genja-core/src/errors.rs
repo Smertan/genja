@@ -1,6 +1,6 @@
 //! Core error types for Genja.
 //!
-//! This module currently defines `InventoryLoadError` and `GenjaError`, used by
+//! This module currently defines configuration, inventory, and runtime error types used by
 //! core APIs to report failures in a consistent way.
 
 use std::fmt;
@@ -124,6 +124,81 @@ impl From<&str> for InventoryLoadError {
     }
 }
 
+/// Error returned when SSH configuration validation or parsing fails.
+#[derive(Debug, Clone)]
+pub enum SshConfigError {
+    /// The SSH config file path does not exist.
+    NotFound { path: String },
+    /// The SSH config file exists but access was denied.
+    PermissionDenied { path: String, message: String },
+    /// Checking whether the SSH config file exists failed.
+    CheckFailed { path: String, message: String },
+    /// Opening the SSH config file failed.
+    OpenFailed { path: String, message: String },
+    /// Parsing the SSH config file failed.
+    ParseFailed { path: String, message: String },
+}
+
+impl fmt::Display for SshConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SshConfigError::NotFound { path } => write!(f, "SSH config file not found: {path}"),
+            SshConfigError::PermissionDenied { path, message } => {
+                write!(
+                    f,
+                    "SSH config file exists but permission denied: {path}: {message}"
+                )
+            }
+            SshConfigError::CheckFailed { path, message } => {
+                write!(f, "Failed to check SSH config file {path}: {message}")
+            }
+            SshConfigError::OpenFailed { path, message } => {
+                write!(f, "Failed to open SSH config file {path}: {message}")
+            }
+            SshConfigError::ParseFailed { path, message } => {
+                write!(f, "Failed to parse SSH config file {path}: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SshConfigError {}
+
+/// Error returned when loading the top-level settings file fails.
+#[derive(Debug, Clone)]
+pub enum ConfigLoadError {
+    /// The settings file extension is not supported.
+    UnsupportedFormat { path: String },
+    /// Building the config source from disk failed.
+    Read { path: String, message: String },
+    /// Deserializing settings from the config source failed.
+    Deserialize { path: String, message: String },
+    /// SSH configuration referenced by settings failed validation.
+    SshConfig(SshConfigError),
+}
+
+impl fmt::Display for ConfigLoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConfigLoadError::UnsupportedFormat { path } => {
+                write!(
+                    f,
+                    "unsupported settings file format for {path}. Use .json, .yaml, or .yml"
+                )
+            }
+            ConfigLoadError::Read { path, message } => {
+                write!(f, "failed to read settings from {path}: {message}")
+            }
+            ConfigLoadError::Deserialize { path, message } => {
+                write!(f, "failed to deserialize settings from {path}: {message}")
+            }
+            ConfigLoadError::SshConfig(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigLoadError {}
+
 /// Generic error type for core Genja operations.
 #[derive(Debug, Clone)]
 pub enum GenjaError {
@@ -139,8 +214,8 @@ pub enum GenjaError {
     NotRunnerPlugin(String),
     /// A plugin failed to load.
     PluginLoad(String),
-    /// The configuration file could not be read or parsed.
-    ConfigLoad(String),
+    /// The configuration file could not be read, parsed, or validated.
+    ConfigLoad(ConfigLoadError),
     /// Inventory loading failed.
     InventoryLoad(InventoryLoadError),
     /// A human-readable error message.
@@ -187,5 +262,11 @@ impl From<&str> for GenjaError {
 impl From<InventoryLoadError> for GenjaError {
     fn from(value: InventoryLoadError) -> Self {
         GenjaError::InventoryLoad(value)
+    }
+}
+
+impl From<ConfigLoadError> for GenjaError {
+    fn from(value: ConfigLoadError) -> Self {
+        GenjaError::ConfigLoad(value)
     }
 }
