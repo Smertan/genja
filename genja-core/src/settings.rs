@@ -874,7 +874,7 @@ impl SSHConfig {
     /// * No config file is specified (nothing to validate)
     /// * The config file exists, can be opened, and contains valid SSH configuration syntax
     ///
-    /// Returns `Err(String)` with a descriptive error message if:
+    /// Returns `Err(SshConfigError)` if:
     /// * The specified file does not exist or cannot be accessed
     /// * The file cannot be opened due to permission issues or other I/O errors
     /// * The file contents cannot be parsed as valid SSH configuration syntax
@@ -883,8 +883,8 @@ impl SSHConfig {
     ///
     /// This method returns an error in the following cases:
     /// * File existence check fails (see `ensure_exists` for details)
-    /// * `"Failed to open SSH config file {path}: {error}"` - The file exists but cannot be opened
-    /// * `"Failed to parse SSH config file {path}: {error}"` - The file contains invalid SSH config syntax
+    /// * `SshConfigError::OpenFailed` - The file exists but cannot be opened
+    /// * `SshConfigError::ParseFailed` - The file contains invalid SSH config syntax
     ///
     /// # Examples
     ///
@@ -942,11 +942,11 @@ impl SSHConfig {
     /// * `Ok(Some(SshConfig))` - If a config file is specified and successfully parsed,
     ///   containing the parsed SSH configuration with all host entries and settings.
     /// * `Ok(None)` - If no config file is specified (the `config_file` field is `None`).
-    /// * `Err(String)` - If an error occurs during parsing, with a descriptive error message.
+    /// * `Err(SshConfigError)` - If an error occurs during parsing.
     ///
     /// # Errors
     ///
-    /// Returns an error string if:
+    /// Returns [`SshConfigError`] if:
     /// * The specified SSH config file does not exist at the given path
     /// * The file cannot be opened due to permission issues or other I/O errors
     /// * The file contents cannot be parsed as valid SSH configuration syntax
@@ -1013,7 +1013,7 @@ impl SSHConfig {
     ///
     /// # Returns
     ///
-    /// Returns `Ok(())` if the file exists and is accessible. Returns `Err(String)` with
+    /// Returns `Ok(())` if the file exists and is accessible. Returns `Err(SshConfigError)` if
     /// a descriptive error message if:
     /// * The file does not exist
     /// * Permission is denied when attempting to access the file
@@ -1023,13 +1023,10 @@ impl SSHConfig {
     /// # Errors
     ///
     /// This method returns an error in the following cases:
-    /// * `"SSH config file not found: {path}"` - The file does not exist at the specified path
-    /// * `"SSH config file exists but permission denied: {path}: {error}"` - The file exists
-    ///   but cannot be accessed due to insufficient permissions
-    /// * `"SSH config file not found (I/O error): {path}: {error}"` - An I/O error occurred
-    ///   indicating the file was not found
-    /// * `"Failed to check SSH config file {path}: {error}"` - Any other filesystem error
-    ///   occurred during the check
+    /// * `SshConfigError::NotFound` - The file does not exist at the specified path
+    /// * `SshConfigError::PermissionDenied` - The file exists but cannot be accessed due to
+    ///   insufficient permissions
+    /// * `SshConfigError::CheckFailed` - Any other filesystem error occurred during the check
     fn ensure_exists(&self, path: &Path) -> Result<(), SshConfigError> {
         match path.try_exists() {
             Ok(true) => Ok(()),
