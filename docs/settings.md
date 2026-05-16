@@ -107,7 +107,7 @@ Defaults supports the same fields as a group, minus `groups` and `defaults`.
 - `plugin` (string)
   - Default: `threaded`
   - Env fallback: `GENJA_RUNNER_PLUGIN`
-  - Common values: `threaded`, `sequential`
+  - Common values: `threaded`, `serial`
 - `options` (object)
   - Plugin-specific settings.
   - Default: `{}`
@@ -115,6 +115,12 @@ Defaults supports the same fields as a group, minus `groups` and `defaults`.
   - Optional explicit worker count for runners that support fixed concurrency.
   - For `threaded`, this is the preferred way to control the number of worker threads.
   - Default: `null`
+- `max_task_depth` (integer)
+  - Maximum recursion depth for task and sub-task execution.
+  - Default: `10`
+- `max_connection_attempts` (integer)
+  - Maximum number of connection attempts before retries stop.
+  - Default: `3`
 
 ## Logging
 

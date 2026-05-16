@@ -249,8 +249,7 @@ impl Genja {
     /// assert!(genja.is_ok());
     /// ```
     pub fn from_settings_file(settings_file_path: &str) -> Result<Self, GenjaError> {
-        let settings = Settings::from_file(settings_file_path)
-            .map_err(|err| GenjaError::ConfigLoad(err.to_string()))?;
+        let settings = Settings::from_file(settings_file_path).map_err(GenjaError::from)?;
 
         let mut genja = Self::new();
         genja.set_settings(settings);
@@ -279,7 +278,7 @@ impl Genja {
             if let Some(plugin) = self.plugins.get_inventory_plugin(plugin_name) {
                 let inventory = plugin
                     .load(&self.settings, &self.plugins)
-                    .map_err(|err| GenjaError::InventoryLoad(err.to_string()))?;
+                    .map_err(GenjaError::from)?;
                 self.load_inventory(inventory);
                 return Ok(());
             }
@@ -295,7 +294,7 @@ impl Genja {
         if let Some(plugin) = self.plugins.get_inventory_plugin(default_name) {
             let inventory = plugin
                 .load(&self.settings, &self.plugins)
-                .map_err(|err| GenjaError::InventoryLoad(err.to_string()))?;
+                .map_err(GenjaError::from)?;
             self.load_inventory(inventory);
             return Ok(());
         }
