@@ -1,4 +1,10 @@
 use super::{OptionsConfig, RunnerConfig, SSHConfig};
+use super::env_defaults::{
+    deserialize_bool_loose, get_default_log_file, get_inventory_plugin_config,
+    get_log_level_default, get_log_to_console_default, get_runner_plugin_default,
+    parse_bool_loose, raise_on_error, ENV_INVENTORY_PLUGIN, ENV_LOG_FILE, ENV_LOG_LEVEL,
+    ENV_LOG_TO_CONSOLE, ENV_RAISE_ON_ERROR, ENV_RUNNER_PLUGIN,
+};
 use regex::Regex;
 use serde_json::json;
 use std::env;
@@ -182,21 +188,21 @@ fn options_config_deserializes_with_values() {
 #[test]
 fn runner_config_default_values() {
     let runner = RunnerConfig::default();
-    assert_eq!(runner.plugin, "threaded");
-    assert_eq!(runner.options, json!({}));
-    assert_eq!(runner.worker_count, None);
-    assert_eq!(runner.max_task_depth, 10);
-    assert_eq!(runner.max_connection_attempts, 3);
+    assert_eq!(runner.plugin(), "threaded");
+    assert_eq!(runner.options(), &json!({}));
+    assert_eq!(runner.worker_count(), None);
+    assert_eq!(runner.max_task_depth(), 10);
+    assert_eq!(runner.max_connection_attempts(), 3);
 }
 
 #[test]
 fn runner_config_deserializes_empty_object_to_defaults() {
     let runner: RunnerConfig = serde_json::from_str("{}").unwrap();
-    assert_eq!(runner.plugin, "threaded");
-    assert_eq!(runner.options, json!({}));
-    assert_eq!(runner.worker_count, None);
-    assert_eq!(runner.max_task_depth, 10);
-    assert_eq!(runner.max_connection_attempts, 3);
+    assert_eq!(runner.plugin(), "threaded");
+    assert_eq!(runner.options(), &json!({}));
+    assert_eq!(runner.worker_count(), None);
+    assert_eq!(runner.max_task_depth(), 10);
+    assert_eq!(runner.max_connection_attempts(), 3);
 }
 
 #[test]
@@ -209,14 +215,14 @@ fn runner_config_deserializes_with_values() {
         "max_connection_attempts": 7
     }"#;
     let runner: RunnerConfig = serde_json::from_str(json).unwrap();
-    assert_eq!(runner.plugin, "custom");
+    assert_eq!(runner.plugin(), "custom");
     assert_eq!(
-        runner.options,
-        json!({"queue": "fast", "strategy": "burst"})
+        runner.options(),
+        &json!({"queue": "fast", "strategy": "burst"})
     );
-    assert_eq!(runner.worker_count, Some(6));
-    assert_eq!(runner.max_task_depth, 5);
-    assert_eq!(runner.max_connection_attempts, 7);
+    assert_eq!(runner.worker_count(), Some(6));
+    assert_eq!(runner.max_task_depth(), 5);
+    assert_eq!(runner.max_connection_attempts(), 7);
 }
 
 #[test]
@@ -235,23 +241,23 @@ fn runner_config_builder_sets_worker_count() {
 
 #[test]
 fn parse_bool_loose_accepts_common_values() {
-    assert_eq!(super::parse_bool_loose("true"), Some(true));
-    assert_eq!(super::parse_bool_loose("TrUe"), Some(true));
-    assert_eq!(super::parse_bool_loose("1"), Some(true));
-    assert_eq!(super::parse_bool_loose("yes"), Some(true));
-    assert_eq!(super::parse_bool_loose("on"), Some(true));
-    assert_eq!(super::parse_bool_loose("false"), Some(false));
-    assert_eq!(super::parse_bool_loose("0"), Some(false));
-    assert_eq!(super::parse_bool_loose("no"), Some(false));
-    assert_eq!(super::parse_bool_loose("off"), Some(false));
-    assert_eq!(super::parse_bool_loose("maybe"), None);
+    assert_eq!(parse_bool_loose("true"), Some(true));
+    assert_eq!(parse_bool_loose("TrUe"), Some(true));
+    assert_eq!(parse_bool_loose("1"), Some(true));
+    assert_eq!(parse_bool_loose("yes"), Some(true));
+    assert_eq!(parse_bool_loose("on"), Some(true));
+    assert_eq!(parse_bool_loose("false"), Some(false));
+    assert_eq!(parse_bool_loose("0"), Some(false));
+    assert_eq!(parse_bool_loose("no"), Some(false));
+    assert_eq!(parse_bool_loose("off"), Some(false));
+    assert_eq!(parse_bool_loose("maybe"), None);
 }
 
 #[test]
 fn deserialize_bool_loose_from_string_and_bool() {
     #[derive(serde::Deserialize)]
     struct T {
-        #[serde(deserialize_with = "super::deserialize_bool_loose")]
+        #[serde(deserialize_with = "deserialize_bool_loose")]
         v: bool,
     }
 
@@ -265,7 +271,7 @@ fn deserialize_bool_loose_from_string_and_bool() {
 fn deserialize_bool_loose_rejects_invalid_string() {
     #[derive(serde::Deserialize, Debug)]
     struct T {
-        #[serde(deserialize_with = "super::deserialize_bool_loose")]
+        #[serde(deserialize_with = "deserialize_bool_loose")]
         _v: bool,
     }
 
@@ -275,63 +281,63 @@ fn deserialize_bool_loose_rejects_invalid_string() {
 
 #[test]
 fn raise_on_error_uses_env_and_fallbacks() {
-    with_env_var(super::ENV_RAISE_ON_ERROR, Some("true"), || {
-        assert!(super::raise_on_error());
+    with_env_var(ENV_RAISE_ON_ERROR, Some("true"), || {
+        assert!(raise_on_error());
     });
-    with_env_var(super::ENV_RAISE_ON_ERROR, Some("not_a_bool"), || {
-        assert!(!super::raise_on_error());
+    with_env_var(ENV_RAISE_ON_ERROR, Some("not_a_bool"), || {
+        assert!(!raise_on_error());
     });
-    with_env_var(super::ENV_RAISE_ON_ERROR, None, || {
-        assert!(!super::raise_on_error());
+    with_env_var(ENV_RAISE_ON_ERROR, None, || {
+        assert!(!raise_on_error());
     });
 }
 
 #[test]
 fn get_log_to_console_default_parses_env() {
-    with_env_var(super::ENV_LOG_TO_CONSOLE, Some("yes"), || {
-        assert!(super::get_log_to_console_default());
+    with_env_var(ENV_LOG_TO_CONSOLE, Some("yes"), || {
+        assert!(get_log_to_console_default());
     });
-    with_env_var(super::ENV_LOG_TO_CONSOLE, Some("no"), || {
-        assert!(!super::get_log_to_console_default());
+    with_env_var(ENV_LOG_TO_CONSOLE, Some("no"), || {
+        assert!(!get_log_to_console_default());
     });
 }
 
 #[test]
 fn env_string_defaults_respect_env_and_fallbacks() {
-    with_env_var(super::ENV_INVENTORY_PLUGIN, Some("CustomInv"), || {
-        assert_eq!(super::get_inventory_plugin_config(), "CustomInv");
+    with_env_var(ENV_INVENTORY_PLUGIN, Some("CustomInv"), || {
+        assert_eq!(get_inventory_plugin_config(), "CustomInv");
     });
-    with_env_var(super::ENV_INVENTORY_PLUGIN, None, || {
-        assert_eq!(super::get_inventory_plugin_config(), "FileInventoryPlugin");
-    });
-
-    with_env_var(super::ENV_RUNNER_PLUGIN, Some("CustomRunner"), || {
-        assert_eq!(super::get_runner_plugin_default(), "CustomRunner");
-    });
-    with_env_var(super::ENV_RUNNER_PLUGIN, None, || {
-        assert_eq!(super::get_runner_plugin_default(), "threaded");
+    with_env_var(ENV_INVENTORY_PLUGIN, None, || {
+        assert_eq!(get_inventory_plugin_config(), "FileInventoryPlugin");
     });
 
-    with_env_var(super::ENV_LOG_LEVEL, Some("debug"), || {
-        assert_eq!(super::get_log_level_default(), "debug");
+    with_env_var(ENV_RUNNER_PLUGIN, Some("CustomRunner"), || {
+        assert_eq!(get_runner_plugin_default(), "CustomRunner");
     });
-    with_env_var(super::ENV_LOG_LEVEL, None, || {
-        assert_eq!(super::get_log_level_default(), "info");
+    with_env_var(ENV_RUNNER_PLUGIN, None, || {
+        assert_eq!(get_runner_plugin_default(), "threaded");
+    });
+
+    with_env_var(ENV_LOG_LEVEL, Some("debug"), || {
+        assert_eq!(get_log_level_default(), "debug");
+    });
+    with_env_var(ENV_LOG_LEVEL, None, || {
+        assert_eq!(get_log_level_default(), "info");
     });
 }
 
 #[test]
 fn get_default_log_file_prefers_env() {
-    with_env_var(super::ENV_LOG_FILE, Some("/tmp/genja-test.log"), || {
-        assert_eq!(super::get_default_log_file(), "/tmp/genja-test.log");
+    with_env_var(ENV_LOG_FILE, Some("/tmp/genja-test.log"), || {
+        assert_eq!(get_default_log_file(), "/tmp/genja-test.log");
     });
 }
 
 #[test]
 fn get_default_log_file_uses_cwd_when_env_missing() {
     let _guard = env_lock().lock().unwrap();
-    let prev = env::var(super::ENV_LOG_FILE).ok();
-    env::remove_var(super::ENV_LOG_FILE);
+    let prev = env::var(ENV_LOG_FILE).ok();
+    env::remove_var(ENV_LOG_FILE);
 
     let tempdir = tempfile::tempdir().unwrap();
     let prev_dir = env::current_dir().unwrap();
@@ -339,16 +345,16 @@ fn get_default_log_file_uses_cwd_when_env_missing() {
 
     let expected = tempdir.path().join("genja.log");
     assert_eq!(
-        super::get_default_log_file(),
+        get_default_log_file(),
         expected.to_string_lossy().to_string()
     );
 
     env::set_current_dir(prev_dir).unwrap();
     match prev {
-        Some(v) => env::set_var(super::ENV_LOG_FILE, v),
-        None => env::remove_var(super::ENV_LOG_FILE),
+            Some(v) => env::set_var(ENV_LOG_FILE, v),
+            None => env::remove_var(ENV_LOG_FILE),
+        }
     }
-}
 
 #[test]
 fn settings_from_file_errors_when_missing() {
@@ -383,12 +389,12 @@ fn settings_from_file_errors_on_invalid_json() {
 fn settings_from_file_uses_defaults_for_empty_file() {
     let _guard = env_lock().lock().unwrap();
     let keys = [
-        super::ENV_RAISE_ON_ERROR,
-        super::ENV_INVENTORY_PLUGIN,
-        super::ENV_RUNNER_PLUGIN,
-        super::ENV_LOG_LEVEL,
-        super::ENV_LOG_FILE,
-        super::ENV_LOG_TO_CONSOLE,
+        ENV_RAISE_ON_ERROR,
+        ENV_INVENTORY_PLUGIN,
+        ENV_RUNNER_PLUGIN,
+        ENV_LOG_LEVEL,
+        ENV_LOG_FILE,
+        ENV_LOG_TO_CONSOLE,
     ];
 
     let prev: Vec<(String, Option<String>)> = keys
