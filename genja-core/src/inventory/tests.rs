@@ -382,6 +382,39 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
+    #[test]
+    fn hosts_view_respects_scope_without_touching_out_of_scope_cache() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = Arc::clone(&calls);
+        let transform = TransformFunction::new(move |host, _| {
+            calls_clone.fetch_add(1, Ordering::SeqCst);
+            host.to_builder().port(host.port().unwrap_or(0) + 1).build()
+        });
+
+        let mut hosts = Hosts::new();
+        hosts.add_host("h1", Host::builder().port(10).build());
+        hosts.add_host("h2", Host::builder().port(20).build());
+
+        let inventory = Inventory::builder()
+            .hosts(hosts)
+            .transform_function(transform)
+            .build();
+        inventory.state().mark_failed("h2");
+
+        let view = inventory.hosts();
+        assert_eq!(view.len(), 1);
+        assert_eq!(view.keys().count(), 1);
+        assert!(view.get("h2").is_none());
+
+        let only_host = view.get("h1").expect("in-scope host exists");
+        assert_eq!(only_host.port(), Some(11));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let iterated = view.iter().collect::<Vec<_>>();
+        assert_eq!(iterated.len(), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
     /// Tests the `merge_data` function's behavior when merging JSON objects and replacing non-objects.
     ///
     /// This test verifies two critical behaviors of the `merge_data` function:

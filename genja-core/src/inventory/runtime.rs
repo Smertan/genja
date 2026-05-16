@@ -568,55 +568,67 @@ impl Inventory {
         Some(resolved)
     }
 
-    fn transform_host_value(&self, host: &Host) -> Host {
-        let transformed = match &self.transform_function {
-            Some(transform) => {
-                transform.transform_host(host, self.transform_function_options.as_ref())
-            }
-            None => host.clone(),
-        };
+    fn transform_value<T: Clone>(
+        &self,
+        value: &T,
+        apply: impl FnOnce(&TransformFunction, &T, Option<&TransformFunctionOptions>) -> T,
+    ) -> T {
+        match &self.transform_function {
+            Some(transform) => apply(transform, value, self.transform_function_options.as_ref()),
+            None => value.clone(),
+        }
+    }
 
-        transformed
+    fn transform_host_value(&self, host: &Host) -> Host {
+        self.transform_value(host, |transform, host, options| {
+            transform.transform_host(host, options)
+        })
     }
 
     fn transform_group_value(&self, group: &Group) -> Group {
-        let transformed = match &self.transform_function {
-            Some(transform) => {
-                transform.transform_group(group, self.transform_function_options.as_ref())
-            }
-            None => group.clone(),
-        };
+        self.transform_value(group, |transform, group, options| {
+            transform.transform_group(group, options)
+        })
+    }
 
+    fn transform_defaults_value(&self, defaults: &Defaults) -> Defaults {
+        self.transform_value(defaults, |transform, defaults, options| {
+            transform.transform_defaults(defaults, options)
+        })
+    }
+
+    fn cached_value<T: Clone>(
+        &self,
+        key: &NatString,
+        cache: &DashMap<NatString, T>,
+        raw: &T,
+        transform: impl FnOnce(&T) -> T,
+    ) -> T {
+        if let Some(entry) = cache.get(key) {
+            return entry.value().clone();
+        }
+
+        let transformed = transform(raw);
+        cache.insert(key.clone(), transformed.clone());
         transformed
     }
 
     fn cached_host_value(&self, key: &NatString, host: &Host) -> Host {
-        if let Some(entry) = self.host_cache.get(key) {
-            return entry.value().clone();
-        }
-
-        let transformed = self.transform_host_value(host);
-        self.host_cache.insert(key.clone(), transformed.clone());
-        transformed
+        self.cached_value(key, &self.host_cache, host, |host| self.transform_host_value(host))
     }
 
     fn cached_group_value(&self, key: &NatString, group: &Group) -> Group {
-        if let Some(entry) = self.group_cache.get(key) {
-            return entry.value().clone();
-        }
-
-        let transformed = self.transform_group_value(group);
-        self.group_cache.insert(key.clone(), transformed.clone());
-        transformed
+        self.cached_value(key, &self.group_cache, group, |group| {
+            self.transform_group_value(group)
+        })
     }
 
-    fn transform_defaults_value(&self, defaults: &Defaults) -> Defaults {
-        match &self.transform_function {
-            Some(transform) => {
-                transform.transform_defaults(defaults, self.transform_function_options.as_ref())
-            }
-            None => defaults.clone(),
-        }
+    fn host_in_scope(&self, name: &str) -> bool {
+        self.state.is_in_scope(name)
+    }
+
+    fn host_key_in_scope(&self, key: &NatString) -> bool {
+        self.state.is_in_scope_key(key)
     }
 }
 
@@ -923,7 +935,7 @@ impl<'a> HostsView<'a> {
         self.inventory
             .hosts
             .keys()
-            .filter(|key| self.inventory.state.is_in_scope_key(key))
+            .filter(|key| self.inventory.host_key_in_scope(key))
             .count()
     }
 
@@ -935,18 +947,14 @@ impl<'a> HostsView<'a> {
         self.inventory
             .hosts
             .keys()
-            .filter(|key| self.inventory.state.is_in_scope_key(key))
+            .filter(|key| self.inventory.host_key_in_scope(key))
     }
 
     pub fn get(&self, name: &str) -> Option<Host> {
-        if !self.inventory.state.is_in_scope(name) {
+        if !self.inventory.host_in_scope(name) {
             return None;
         }
         let key = NatString::new(name.to_string());
-        if let Some(entry) = self.inventory.host_cache.get(&key) {
-            return Some(entry.value().clone());
-        }
-
         self.inventory
             .hosts
             .get(name)
@@ -955,7 +963,7 @@ impl<'a> HostsView<'a> {
 
     pub fn iter(&self) -> impl Iterator<Item = (&'a NatString, Host)> {
         self.inventory.hosts.iter().filter_map(|(id, host)| {
-            if self.inventory.state.is_in_scope_key(id) {
+            if self.inventory.host_key_in_scope(id) {
                 Some((id, self.inventory.cached_host_value(id, host)))
             } else {
                 None
@@ -1019,10 +1027,6 @@ impl<'a> GroupsView<'a> {
 
     pub fn get(&self, name: &str) -> Option<Group> {
         let key = NatString::new(name.to_string());
-        if let Some(entry) = self.inventory.group_cache.get(&key) {
-            return Some(entry.value().clone());
-        }
-
         self.groups
             .get(name)
             .map(|group| self.inventory.cached_group_value(&key, group))
