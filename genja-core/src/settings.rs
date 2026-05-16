@@ -61,6 +61,7 @@
 //! SSH config is validated automatically when calling `Settings::from_file`.
 //! For manual validation, use `SSHConfig::validate`.
 use crate::inventory::{Defaults, Groups, Hosts, TransformFunctionOptions};
+use crate::{InventoryFileKind, InventoryLoadError};
 use config::{Config as ConfigBuilder, ConfigError, File, FileFormat};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -604,7 +605,7 @@ impl InventoryConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error string if:
+    /// Returns [`InventoryLoadError`] if:
     /// * Any specified file cannot be read
     /// * Any file contains invalid JSON or YAML syntax
     /// * A file has an unsupported format (not .json, .yaml, or .yml)
@@ -622,23 +623,23 @@ impl InventoryConfig {
     ///     Err(e) => eprintln!("Failed to load inventory: {}", e),
     /// }
     /// ```
-    // FIXME: Fix the error handling for the inventory loading process.
-
     pub fn load_inventory_files(
         &self,
-    ) -> Result<(Hosts, Option<Groups>, Option<Defaults>), String> {
+    ) -> Result<(Hosts, Option<Groups>, Option<Defaults>), InventoryLoadError> {
         let hosts = match self.options.hosts_file.as_deref() {
-            Some(path) => Self::load_from_file::<Hosts>(path)?,
+            Some(path) => Self::load_from_file::<Hosts>(InventoryFileKind::Hosts, path)?,
             None => Hosts::new(),
         };
 
         let groups = match self.options.groups_file.as_deref() {
-            Some(path) => Some(Self::load_from_file::<Groups>(path)?),
+            Some(path) => Some(Self::load_from_file::<Groups>(InventoryFileKind::Groups, path)?),
             None => None,
         };
 
         let defaults = match self.options.defaults_file.as_deref() {
-            Some(path) => Some(Self::load_from_file::<Defaults>(path)?),
+            Some(path) => {
+                Some(Self::load_from_file::<Defaults>(InventoryFileKind::Defaults, path)?)
+            }
             None => None,
         };
 
@@ -665,28 +666,37 @@ impl InventoryConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error string if:
+    /// Returns [`InventoryLoadError`] if:
     /// * The file cannot be read (e.g., doesn't exist, permission denied)
     /// * The file contents cannot be parsed as valid JSON or YAML
     /// * The file has an unsupported extension (not .json, .yaml, or .yml)
-    fn load_from_file<T>(path: &str) -> Result<T, String>
+    fn load_from_file<T>(kind: InventoryFileKind, path: &str) -> Result<T, InventoryLoadError>
     where
         T: DeserializeOwned,
     {
-        let contents = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read file {}: {}", path, e))?;
+        let contents = std::fs::read_to_string(path).map_err(|e| InventoryLoadError::Read {
+            kind,
+            path: path.to_string(),
+            message: e.to_string(),
+        })?;
 
         if path.ends_with(".json") {
-            serde_json::from_str(&contents)
-                .map_err(|e| format!("Failed to parse JSON file {}: {}", path, e))
+            serde_json::from_str(&contents).map_err(|e| InventoryLoadError::ParseJson {
+                kind,
+                path: path.to_string(),
+                message: e.to_string(),
+            })
         } else if path.ends_with(".yaml") || path.ends_with(".yml") {
-            serde_yaml::from_str(&contents)
-                .map_err(|e| format!("Failed to parse YAML file {}: {}", path, e))
+            serde_yaml::from_str(&contents).map_err(|e| InventoryLoadError::ParseYaml {
+                kind,
+                path: path.to_string(),
+                message: e.to_string(),
+            })
         } else {
-            Err(format!(
-                "Unsupported file format for {}. Use .json, .yaml, or .yml",
-                path
-            ))
+            Err(InventoryLoadError::UnsupportedFormat {
+                kind,
+                path: path.to_string(),
+            })
         }
     }
 }
@@ -2369,7 +2379,13 @@ ssh:
             .build();
         let config = super::InventoryConfig::builder().options(options).build();
         let err = config.load_inventory_files().unwrap_err();
-        assert!(err.contains("Failed to read file"));
+        assert!(matches!(
+            err,
+            crate::InventoryLoadError::Read {
+                kind: crate::InventoryFileKind::Hosts,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -2382,6 +2398,12 @@ ssh:
             .build();
         let config = super::InventoryConfig::builder().options(options).build();
         let err = config.load_inventory_files().unwrap_err();
-        assert!(err.contains("Unsupported file format"));
+        assert!(matches!(
+            err,
+            crate::InventoryLoadError::UnsupportedFormat {
+                kind: crate::InventoryFileKind::Hosts,
+                ..
+            }
+        ));
     }
 }

@@ -279,7 +279,7 @@ impl Genja {
             if let Some(plugin) = self.plugins.get_inventory_plugin(plugin_name) {
                 let inventory = plugin
                     .load(&self.settings, &self.plugins)
-                    .map_err(|err| GenjaError::InventoryLoad(err.to_string()))?;
+                    .map_err(GenjaError::from)?;
                 self.load_inventory(inventory);
                 return Ok(());
             }
@@ -295,7 +295,7 @@ impl Genja {
         if let Some(plugin) = self.plugins.get_inventory_plugin(default_name) {
             let inventory = plugin
                 .load(&self.settings, &self.plugins)
-                .map_err(|err| GenjaError::InventoryLoad(err.to_string()))?;
+                .map_err(GenjaError::from)?;
             self.load_inventory(inventory);
             return Ok(());
         }

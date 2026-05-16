@@ -5,16 +5,106 @@
 
 use std::fmt;
 
+/// Logical inventory section associated with an inventory load error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InventoryFileKind {
+    /// The hosts inventory file.
+    Hosts,
+    /// The groups inventory file.
+    Groups,
+    /// The defaults inventory file.
+    Defaults,
+}
+
+impl fmt::Display for InventoryFileKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InventoryFileKind::Hosts => write!(f, "hosts"),
+            InventoryFileKind::Groups => write!(f, "groups"),
+            InventoryFileKind::Defaults => write!(f, "defaults"),
+        }
+    }
+}
+
 /// Error returned when inventory loading fails.
 #[derive(Debug, Clone)]
 pub enum InventoryLoadError {
-    /// A human-readable error message.
+    /// Reading an inventory file failed.
+    Read {
+        /// Which logical inventory file failed.
+        kind: InventoryFileKind,
+        /// Filesystem path that was being read.
+        path: String,
+        /// Underlying read failure rendered as text.
+        message: String,
+    },
+    /// Parsing a JSON inventory file failed.
+    ParseJson {
+        /// Which logical inventory file failed.
+        kind: InventoryFileKind,
+        /// Filesystem path that was being parsed.
+        path: String,
+        /// Underlying parse failure rendered as text.
+        message: String,
+    },
+    /// Parsing a YAML inventory file failed.
+    ParseYaml {
+        /// Which logical inventory file failed.
+        kind: InventoryFileKind,
+        /// Filesystem path that was being parsed.
+        path: String,
+        /// Underlying parse failure rendered as text.
+        message: String,
+    },
+    /// The inventory file extension is not supported.
+    UnsupportedFormat {
+        /// Which logical inventory file failed.
+        kind: InventoryFileKind,
+        /// Filesystem path with the unsupported extension.
+        path: String,
+    },
+    /// A configured transform plugin was not found.
+    TransformPluginNotFound {
+        /// Missing plugin name.
+        name: String,
+    },
+    /// A configured plugin exists but is not a transform-function plugin.
+    NotTransformPlugin {
+        /// Plugin name with the wrong type.
+        name: String,
+    },
+    /// A human-readable fallback error message.
     Message(String),
 }
 
 impl fmt::Display for InventoryLoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            InventoryLoadError::Read {
+                kind,
+                path,
+                message,
+            } => write!(f, "failed to read {kind} inventory file {path}: {message}"),
+            InventoryLoadError::ParseJson {
+                kind,
+                path,
+                message,
+            } => write!(f, "failed to parse {kind} inventory JSON file {path}: {message}"),
+            InventoryLoadError::ParseYaml {
+                kind,
+                path,
+                message,
+            } => write!(f, "failed to parse {kind} inventory YAML file {path}: {message}"),
+            InventoryLoadError::UnsupportedFormat { kind, path } => write!(
+                f,
+                "unsupported {kind} inventory file format for {path}. Use .json, .yaml, or .yml"
+            ),
+            InventoryLoadError::TransformPluginNotFound { name } => {
+                write!(f, "transform plugin '{name}' not found")
+            }
+            InventoryLoadError::NotTransformPlugin { name } => {
+                write!(f, "plugin '{name}' is not a transform function plugin")
+            }
             InventoryLoadError::Message(msg) => write!(f, "{msg}"),
         }
     }
@@ -52,7 +142,7 @@ pub enum GenjaError {
     /// The configuration file could not be read or parsed.
     ConfigLoad(String),
     /// Inventory loading failed.
-    InventoryLoad(String),
+    InventoryLoad(InventoryLoadError),
     /// A human-readable error message.
     Message(String),
     /// Functionality is not implemented yet.
@@ -91,5 +181,11 @@ impl From<String> for GenjaError {
 impl From<&str> for GenjaError {
     fn from(value: &str) -> Self {
         GenjaError::Message(value.to_string())
+    }
+}
+
+impl From<InventoryLoadError> for GenjaError {
+    fn from(value: InventoryLoadError) -> Self {
+        GenjaError::InventoryLoad(value)
     }
 }
