@@ -197,29 +197,42 @@ impl<V> CustomTreeMap<V> {
     /// Keys are converted into [`NatString`] values and stored in natural order.
     pub fn insert<K>(&mut self, key: K, value: V)
     where
-        K: ToString,
+        K: Into<NatString>,
     {
-        self.0.insert(NatString::new(key.to_string()), value);
+        self.0.insert(key.into(), value);
     }
 
     /// Returns a reference to the value for the given key, if present.
-    pub fn get(&self, key: &str) -> Option<&V> {
-        self.0.get(&NatString::new(key.to_string()))
+    pub fn get<K>(&self, key: K) -> Option<&V>
+    where
+        K: AsRef<str>,
+    {
+        self.0.get(&NatString::new(key.as_ref().to_string()))
     }
 
     /// Returns a mutable reference to the value for the given key, if present.
-    pub fn get_mut(&mut self, key: &str) -> Option<&mut V> {
-        self.0.get_mut(&NatString::new(key.to_string()))
+    pub fn get_mut<K>(&mut self, key: K) -> Option<&mut V>
+    where
+        K: AsRef<str>,
+    {
+        self.0.get_mut(&NatString::new(key.as_ref().to_string()))
     }
 
     /// Removes the entry for the given key and returns its value, if present.
-    pub fn remove(&mut self, key: &str) -> Option<V> {
-        self.0.remove(&NatString::new(key.to_string()))
+    pub fn remove<K>(&mut self, key: K) -> Option<V>
+    where
+        K: AsRef<str>,
+    {
+        self.0.remove(&NatString::new(key.as_ref().to_string()))
     }
 
     /// Returns `true` if the map contains a value for the given key.
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.0.contains_key(&NatString::new(key.to_string()))
+    pub fn contains_key<K>(&self, key: K) -> bool
+    where
+        K: AsRef<str>,
+    {
+        self.0
+            .contains_key(&NatString::new(key.as_ref().to_string()))
     }
 
     /// Returns an iterator over the key-value pairs in natural key order.
@@ -344,6 +357,22 @@ mod tests {
 
         let values: Vec<&str> = tree.values().copied().collect();
         assert_eq!(values, vec!["one", "two", "ten"]);
+    }
+
+    #[test]
+    fn test_custom_tree_map_accepts_supported_key_forms() {
+        let mut tree = CustomTreeMap::new();
+        let string_key = "host1".to_string();
+        let nat_key = NatString::from("host2");
+
+        tree.insert(string_key.clone(), "string");
+        tree.insert(&nat_key, "nat");
+
+        assert_eq!(tree.get(&string_key), Some(&"string"));
+        assert!(tree.contains_key(nat_key.clone()));
+
+        *tree.get_mut(&nat_key).expect("nat key exists") = "updated";
+        assert_eq!(tree.remove(nat_key), Some("updated"));
     }
 
     #[test]
