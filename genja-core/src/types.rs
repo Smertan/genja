@@ -25,6 +25,10 @@ pub trait DerefTarget {
 /// For example, "item2" will be ordered before "item10" (natural order) instead of
 /// after it (lexicographic order).
 ///
+/// If the natural comparator considers two distinct strings equal, `NatString`
+/// falls back to standard string ordering. This keeps ordering consistent with
+/// equality, which is required for safe use as a `BTreeMap` key.
+///
 /// This type is typically used as a key in ordered collections like `BTreeMap`
 /// when natural sorting of string keys is desired.
 ///
@@ -35,7 +39,11 @@ pub trait DerefTarget {
 /// let s1 = NatString::new("file2".to_string());
 /// let s2 = NatString::new("file10".to_string());
 /// assert!(s1 < s2);
-/// // s1 < s2 in natural order (2 < 10)
+///
+/// let compact = NatString::from("host1");
+/// let spaced = NatString::from("host 1");
+/// assert_ne!(compact, spaced);
+/// assert_ne!(compact.cmp(&spaced), std::cmp::Ordering::Equal);
 /// ```
 #[derive(PartialEq, Eq, Clone, Hash, JsonSchema, Serialize, Deserialize)]
 pub struct NatString(String);
@@ -124,7 +132,10 @@ impl fmt::Display for NatString {
 }
 impl Ord for NatString {
     fn cmp(&self, other: &Self) -> Ordering {
-        compare(&self.0, &other.0)
+        match compare(&self.0, &other.0) {
+            Ordering::Equal => self.0.cmp(&other.0),
+            ordering => ordering,
+        }
     }
 }
 
@@ -150,8 +161,11 @@ impl PartialOrd for NatString {
 /// # use genja_core::CustomTreeMap;
 /// let mut tree = CustomTreeMap::new();
 /// tree.insert("host1", "value1".to_string());
+/// tree.insert("host2", "value2".to_string());
 /// tree.insert("host10", "value10".to_string());
-/// // Keys will be ordered naturally: host1, host10
+///
+/// let keys: Vec<&str> = tree.keys().map(|key| key.as_str()).collect();
+/// assert_eq!(keys, vec!["host1", "host2", "host10"]);
 /// ```
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)] // JsonSchema
 pub struct CustomTreeMap<V>(BTreeMap<NatString, V>);
@@ -270,6 +284,15 @@ mod tests {
     }
 
     #[test]
+    fn test_nat_string_ordering_distinguishes_whitespace() {
+        let compact = NatString::from("host1");
+        let spaced = NatString::from("host 1");
+
+        assert_ne!(compact, spaced);
+        assert_ne!(compact.cmp(&spaced), Ordering::Equal);
+    }
+
+    #[test]
     fn test_custom_tree_map_ordering() {
         let mut tree = CustomTreeMap::new();
         tree.insert("host1", "one".to_string());
@@ -279,5 +302,22 @@ mod tests {
         tree.insert("host100", "100".to_string());
         assert_eq!(tree.get("host1").unwrap(), "one");
         assert_eq!(tree.get("host10").unwrap(), "three10");
+
+        let keys: Vec<&str> = tree.keys().map(NatString::as_str).collect();
+        assert_eq!(keys, vec!["host1", "host2", "host4", "host10", "host100"]);
+    }
+
+    #[test]
+    fn test_custom_tree_map_preserves_distinct_whitespace_keys() {
+        let mut tree = CustomTreeMap::new();
+        tree.insert("host1", "compact");
+        tree.insert("host 1", "spaced");
+
+        assert_eq!(tree.len(), 2);
+        assert_eq!(tree.get("host1"), Some(&"compact"));
+        assert_eq!(tree.get("host 1"), Some(&"spaced"));
+
+        assert_eq!(tree.remove("host1"), Some("compact"));
+        assert_eq!(tree.get("host 1"), Some(&"spaced"));
     }
 }
