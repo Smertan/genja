@@ -5,18 +5,13 @@
 
 use natord::compare;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
-// use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::collections::btree_map::{IntoIter, Iter, Keys, Values};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
-// pub mod inventory
-
-pub trait DerefTarget {
-    type Target;
-}
 
 /// A wrapper type for strings that implements natural (alphanumeric) ordering.
 ///
@@ -151,9 +146,9 @@ impl PartialOrd for NatString {
 /// using natural (alphanumeric) ordering instead of lexicographic ordering.
 /// For example, "host2" will come before "host10" in the natural order.
 ///
-/// ## Fields
-///
-/// * `0` - The underlying `BTreeMap` with `NatString` keys and generic `V` values.
+/// The underlying storage is intentionally private. Use the explicit methods on
+/// this type to insert, retrieve, remove, and iterate entries without depending
+/// on its internal representation.
 ///
 /// ## Examples
 ///
@@ -170,23 +165,6 @@ impl PartialOrd for NatString {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)] // JsonSchema
 pub struct CustomTreeMap<V>(BTreeMap<NatString, V>);
 
-impl<V> Deref for CustomTreeMap<V> {
-    // Specify the Target type, which is a reference to T
-    type Target = BTreeMap<NatString, V>;
-
-    // Implement the deref method, returning an immutable reference
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<V> DerefMut for CustomTreeMap<V> {
-    // Implement the deref_mut method, returning a mutable reference
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl<V: fmt::Debug> fmt::Debug for CustomTreeMap<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
@@ -201,7 +179,7 @@ impl<V: fmt::Debug> fmt::Debug for CustomTreeMap<V> {
     }
 }
 
-impl<V: fmt::Display + fmt::Debug> fmt::Display for CustomTreeMap<V> {
+impl<V: fmt::Debug> fmt::Display for CustomTreeMap<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Use write! to format the fields directly without the struct wrapper
         write!(f, "{:?}", self.0)
@@ -216,10 +194,7 @@ impl<V> CustomTreeMap<V> {
 
     /// Inserts a key-value pair into the map.
     ///
-    /// The where statement allows for string-like types
-    /// (&str, String, `Cow<str>`, etc.) including `numbers` that
-    /// can be turned into strings using the `ToString` trait. It
-    /// makes the insertion process more flexible and easier to use.
+    /// Keys are converted into [`NatString`] values and stored in natural order.
     pub fn insert<K>(&mut self, key: K, value: V)
     where
         K: ToString,
@@ -242,6 +217,26 @@ impl<V> CustomTreeMap<V> {
         self.0.remove(&NatString::new(key.to_string()))
     }
 
+    /// Returns `true` if the map contains a value for the given key.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.0.contains_key(&NatString::new(key.to_string()))
+    }
+
+    /// Returns an iterator over the key-value pairs in natural key order.
+    pub fn iter(&self) -> Iter<'_, NatString, V> {
+        self.0.iter()
+    }
+
+    /// Returns an iterator over the keys in natural order.
+    pub fn keys(&self) -> Keys<'_, NatString, V> {
+        self.0.keys()
+    }
+
+    /// Returns an iterator over the values in natural key order.
+    pub fn values(&self) -> Values<'_, NatString, V> {
+        self.0.values()
+    }
+
     /// Returns the number of entries in the map.
     pub fn len(&self) -> usize {
         self.0.len()
@@ -256,6 +251,16 @@ impl<V> CustomTreeMap<V> {
 impl<V> Default for CustomTreeMap<V> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<V> IntoIterator for CustomTreeMap<V> {
+    type Item = (NatString, V);
+    type IntoIter = IntoIter<NatString, V>;
+
+    /// Consumes the map and returns entries in natural key order.
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 
@@ -319,5 +324,47 @@ mod tests {
 
         assert_eq!(tree.remove("host1"), Some("compact"));
         assert_eq!(tree.get("host 1"), Some(&"spaced"));
+    }
+
+    #[test]
+    fn test_custom_tree_map_explicit_read_api() {
+        let mut tree = CustomTreeMap::new();
+        tree.insert("host10", "ten");
+        tree.insert("host2", "two");
+        tree.insert("host1", "one");
+
+        assert!(tree.contains_key("host2"));
+        assert!(!tree.contains_key("host3"));
+
+        let entries: Vec<(&str, &str)> = tree
+            .iter()
+            .map(|(key, value)| (key.as_str(), *value))
+            .collect();
+        assert_eq!(entries, vec![("host1", "one"), ("host2", "two"), ("host10", "ten")]);
+
+        let values: Vec<&str> = tree.values().copied().collect();
+        assert_eq!(values, vec!["one", "two", "ten"]);
+    }
+
+    #[test]
+    fn test_custom_tree_map_into_iter_preserves_natural_order() {
+        let mut tree = CustomTreeMap::new();
+        tree.insert("host10", "ten");
+        tree.insert("host2", "two");
+        tree.insert("host1", "one");
+
+        let entries: Vec<(String, &str)> = tree
+            .into_iter()
+            .map(|(key, value)| (key.into(), value))
+            .collect();
+
+        assert_eq!(
+            entries,
+            vec![
+                ("host1".to_string(), "one"),
+                ("host2".to_string(), "two"),
+                ("host10".to_string(), "ten"),
+            ]
+        );
     }
 }
