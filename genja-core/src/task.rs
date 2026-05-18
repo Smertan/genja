@@ -3531,6 +3531,7 @@ impl TaskDefinition {
     /// [`TaskFailureKind::Internal`]. This helper only returns an error if a future
     /// implementation path introduces one explicitly.
     #[async_recursion]
+    #[allow(clippy::too_many_arguments)]
     async fn start_with_depth(
         task: &dyn Task,
         hostname: &str,

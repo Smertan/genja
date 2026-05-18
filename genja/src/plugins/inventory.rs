@@ -65,11 +65,11 @@ impl PluginInventory for DefaultInventoryPlugin {
         }
 
         if let Some(name) = inventory_cfg.transform_function() {
-            let plugin = plugins
-                .get_plugin(name)
-                .ok_or_else(|| InventoryLoadError::TransformPluginNotFound {
+            let plugin = plugins.get_plugin(name).ok_or_else(|| {
+                InventoryLoadError::TransformPluginNotFound {
                     name: name.to_string(),
-                })?;
+                }
+            })?;
 
             match plugin {
                 Plugins::TransformFunction(transform) => {

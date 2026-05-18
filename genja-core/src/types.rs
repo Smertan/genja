@@ -355,7 +355,10 @@ mod tests {
             .iter()
             .map(|(key, value)| (key.as_str(), *value))
             .collect();
-        assert_eq!(entries, vec![("host1", "one"), ("host2", "two"), ("host10", "ten")]);
+        assert_eq!(
+            entries,
+            vec![("host1", "one"), ("host2", "two"), ("host10", "ten")]
+        );
 
         let values: Vec<&str> = tree.values().copied().collect();
         assert_eq!(values, vec!["one", "two", "ten"]);
@@ -431,7 +434,10 @@ mod tests {
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect();
-        assert_eq!(entries, vec![("host1", "one"), ("host2", "two"), ("host10", "ten")]);
+        assert_eq!(
+            entries,
+            vec![("host1", "one"), ("host2", "two"), ("host10", "ten")]
+        );
     }
 
     #[test]

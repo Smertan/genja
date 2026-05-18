@@ -1,6 +1,6 @@
 use super::{
-    BaseMethods, ConnectionManager, ConnectionOptions, Data, Defaults, Group, Groups, Host,
-    Hosts, ResolvedConnectionParams, TransformFunction, TransformFunctionOptions,
+    BaseMethods, ConnectionManager, ConnectionOptions, Data, Defaults, Group, Groups, Host, Hosts,
+    ResolvedConnectionParams, TransformFunction, TransformFunctionOptions,
 };
 use crate::{CustomTreeMap, NatString, State};
 use dashmap::DashMap;
@@ -618,7 +618,9 @@ impl Inventory {
     }
 
     fn cached_host_value(&self, key: &NatString, host: &Host) -> Host {
-        self.cached_value(key, &self.host_cache, host, |host| self.transform_host_value(host))
+        self.cached_value(key, &self.host_cache, host, |host| {
+            self.transform_host_value(host)
+        })
     }
 
     fn cached_group_value(&self, key: &NatString, group: &Group) -> Group {

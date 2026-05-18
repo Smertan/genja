@@ -2370,12 +2370,7 @@ fn build_python_resolved_connection_params<'py>(
         }
         None => payload.set_item("extras", py.None())?,
     }
-    build_python_model(
-        py,
-        "genja.connection",
-        "ResolvedConnectionParams",
-        payload,
-    )
+    build_python_model(py, "genja.connection", "ResolvedConnectionParams", payload)
 }
 
 /// Converts a Python object into a Rust `ConnectionKey` by deserializing through JSON.

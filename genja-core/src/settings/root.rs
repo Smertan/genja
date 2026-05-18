@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Top-level Genja configuration.
 ///
 /// Missing sections deserialize to their defaults.
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct Settings {
     core: CoreConfig,
@@ -74,18 +74,6 @@ impl Settings {
     }
 }
 
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            core: CoreConfig::default(),
-            inventory: InventoryConfig::default(),
-            ssh: SSHConfig::default(),
-            runner: RunnerConfig::default(),
-            logging: LoggingConfig::default(),
-        }
-    }
-}
-
 impl Settings {
     pub fn builder() -> SettingsBuilder {
         SettingsBuilder::default()
@@ -93,6 +81,7 @@ impl Settings {
 }
 
 /// Builder for `Settings`.
+#[derive(Default)]
 pub struct SettingsBuilder {
     core: Option<CoreConfig>,
     inventory: Option<InventoryConfig>,
@@ -134,18 +123,6 @@ impl SettingsBuilder {
             ssh: self.ssh.unwrap_or_default(),
             runner: self.runner.unwrap_or_default(),
             logging: self.logging.unwrap_or_default(),
-        }
-    }
-}
-
-impl Default for SettingsBuilder {
-    fn default() -> Self {
-        Self {
-            core: None,
-            inventory: None,
-            ssh: None,
-            runner: None,
-            logging: None,
         }
     }
 }

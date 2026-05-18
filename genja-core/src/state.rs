@@ -1315,7 +1315,6 @@ impl State {
     pub fn task_state_key(&self, key: &TaskExecutionKey) -> Option<TaskAttemptState> {
         self.task_state.get(key).map(|entry| entry.value().clone())
     }
-
 }
 
 /// Represents the operational status of a host within the Genja runtime.
@@ -1349,16 +1348,11 @@ impl State {
 /// state.mark_in_scope("router1");
 /// assert_eq!(state.host_status("router1"), Some(HostStatus::InScope));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostStatus {
+    #[default]
     InScope,
     Failed,
-}
-
-impl Default for HostStatus {
-    fn default() -> Self {
-        HostStatus::InScope
-    }
 }
 
 /// Tracks the state of connection attempts for a specific host and plugin combination.

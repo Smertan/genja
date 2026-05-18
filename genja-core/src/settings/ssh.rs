@@ -4,16 +4,10 @@ use serde::{Deserialize, Serialize};
 ///
 /// When `config_file` is set, `Settings::from_file` validates that the referenced
 /// OpenSSH-style config can be opened and parsed.
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 #[serde(default)]
 pub struct SSHConfig {
     pub(super) config_file: Option<String>,
-}
-
-impl Default for SSHConfig {
-    fn default() -> Self {
-        SSHConfig { config_file: None }
-    }
 }
 
 impl SSHConfig {
@@ -27,6 +21,7 @@ impl SSHConfig {
 }
 
 /// Builder for `SSHConfig`.
+#[derive(Default)]
 pub struct SSHConfigBuilder {
     config_file: Option<String>,
 }
@@ -41,11 +36,5 @@ impl SSHConfigBuilder {
         SSHConfig {
             config_file: self.config_file,
         }
-    }
-}
-
-impl Default for SSHConfigBuilder {
-    fn default() -> Self {
-        Self { config_file: None }
     }
 }
