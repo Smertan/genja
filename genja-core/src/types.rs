@@ -293,6 +293,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use schemars::schema_for;
+    use serde_json::json;
 
     #[test]
     fn test_nat_string_ordering() {
@@ -395,5 +397,69 @@ mod tests {
                 ("host10".to_string(), "ten"),
             ]
         );
+    }
+
+    #[test]
+    fn test_nat_string_json_and_yaml_round_trip_as_string() {
+        let key = NatString::from("host10");
+
+        let json = serde_json::to_string(&key).expect("NatString should serialize to JSON");
+        assert_eq!(json, "\"host10\"");
+        let from_json: NatString =
+            serde_json::from_str(&json).expect("NatString should deserialize from JSON");
+        assert_eq!(from_json, key);
+
+        let yaml = serde_yaml::to_string(&key).expect("NatString should serialize to YAML");
+        let from_yaml: NatString =
+            serde_yaml::from_str(&yaml).expect("NatString should deserialize from YAML");
+        assert_eq!(from_yaml, key);
+    }
+
+    #[test]
+    fn test_custom_tree_map_json_round_trip_uses_string_keyed_object() {
+        let mut tree = CustomTreeMap::new();
+        tree.insert("host10", "ten");
+        tree.insert("host2", "two");
+        tree.insert("host1", "one");
+
+        let json = serde_json::to_string(&tree).expect("CustomTreeMap should serialize to JSON");
+        assert_eq!(json, r#"{"host1":"one","host2":"two","host10":"ten"}"#);
+
+        let round_trip: CustomTreeMap<String> =
+            serde_json::from_str(&json).expect("CustomTreeMap should deserialize from JSON");
+        let entries: Vec<(&str, &str)> = round_trip
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        assert_eq!(entries, vec![("host1", "one"), ("host2", "two"), ("host10", "ten")]);
+    }
+
+    #[test]
+    fn test_custom_tree_map_yaml_round_trip_preserves_keys_and_ordering() {
+        let yaml = r#"
+host10: ten
+host2: two
+host1: one
+"#;
+
+        let tree: CustomTreeMap<String> =
+            serde_yaml::from_str(yaml).expect("CustomTreeMap should deserialize from YAML");
+        let keys: Vec<&str> = tree.keys().map(NatString::as_str).collect();
+        assert_eq!(keys, vec!["host1", "host2", "host10"]);
+
+        let serialized = serde_yaml::to_string(&tree).expect("CustomTreeMap should serialize YAML");
+        let round_trip: CustomTreeMap<String> =
+            serde_yaml::from_str(&serialized).expect("serialized YAML should round trip");
+        assert_eq!(round_trip, tree);
+    }
+
+    #[test]
+    fn test_custom_tree_map_json_schema_matches_string_keyed_map_shape() {
+        let schema = schema_for!(CustomTreeMap<String>);
+        let schema_json =
+            serde_json::to_value(&schema).expect("CustomTreeMap schema should serialize");
+
+        assert_eq!(schema_json["type"], json!("object"));
+        assert_eq!(schema_json["additionalProperties"]["type"], json!("string"));
     }
 }
