@@ -26,8 +26,8 @@ mod tests {
             let host = Host::builder()
                 .hostname(&name)
                 .port(2200 + i as u16)
-                .username(&format!("user{}", i))
-                .password(&format!("password{}", i))
+                .username(format!("user{}", i))
+                .password(format!("password{}", i))
                 .platform(if i % 2 == 0 { "linux" } else { "windows" })
                 .data(Data(serde_json::json!(vec![format!(
                     "data for host {}",
@@ -65,8 +65,8 @@ mod tests {
             let host = Host::builder()
                 .hostname(&name)
                 .port(2200 + i as u16)
-                .username(&format!("user{}", i))
-                .password(&format!("password{}", i))
+                .username(format!("user{}", i))
+                .password(format!("password{}", i))
                 .platform(if i % 2 == 0 { "linux" } else { "windows" })
                 .data(Data(serde_json::json!(vec![format!(
                     "data for host {}",
@@ -120,7 +120,10 @@ mod tests {
         let serialized = serde_json::to_string(&groups).unwrap();
         assert_eq!(serialized, "[\"cisco\",\"Juniper\",\"arista\"]");
         let mut deserialized: ParentGroups = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.sort(), ParentGroups(groups).sort());
+        let mut expected = ParentGroups(groups);
+        deserialized.sort();
+        expected.sort();
+        assert_eq!(deserialized, expected);
     }
 
     #[test]

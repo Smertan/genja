@@ -1,10 +1,10 @@
-use super::{OptionsConfig, RunnerConfig, SSHConfig};
 use super::env_defaults::{
     deserialize_bool_loose, get_default_log_file, get_inventory_plugin_config,
-    get_log_level_default, get_log_to_console_default, get_runner_plugin_default,
-    parse_bool_loose, raise_on_error, ENV_INVENTORY_PLUGIN, ENV_LOG_FILE, ENV_LOG_LEVEL,
-    ENV_LOG_TO_CONSOLE, ENV_RAISE_ON_ERROR, ENV_RUNNER_PLUGIN,
+    get_log_level_default, get_log_to_console_default, get_runner_plugin_default, parse_bool_loose,
+    raise_on_error, ENV_INVENTORY_PLUGIN, ENV_LOG_FILE, ENV_LOG_LEVEL, ENV_LOG_TO_CONSOLE,
+    ENV_RAISE_ON_ERROR, ENV_RUNNER_PLUGIN,
 };
+use super::{OptionsConfig, RunnerConfig, SSHConfig};
 use regex::Regex;
 use serde_json::json;
 use std::env;
@@ -89,7 +89,6 @@ fn validate_ok_with_valid_config() {
 
     let result = ssh_config.validate();
     assert!(result.is_ok());
-    assert!(matches!(result, Ok(_)));
 }
 
 #[test]
@@ -145,7 +144,7 @@ fn ensure_exists_returns_ok_when_present() {
 #[test]
 fn ensure_exists_returns_err_when_missing() {
     let ssh_config = SSHConfig { config_file: None };
-    let result = ssh_config.ensure_exists(&Path::new("nonexistent_file.txt"));
+    let result = ssh_config.ensure_exists(Path::new("nonexistent_file.txt"));
     assert!(matches!(
         result,
         Err(crate::SshConfigError::NotFound { .. })
@@ -351,10 +350,10 @@ fn get_default_log_file_uses_cwd_when_env_missing() {
 
     env::set_current_dir(prev_dir).unwrap();
     match prev {
-            Some(v) => env::set_var(ENV_LOG_FILE, v),
-            None => env::remove_var(ENV_LOG_FILE),
-        }
+        Some(v) => env::set_var(ENV_LOG_FILE, v),
+        None => env::remove_var(ENV_LOG_FILE),
     }
+}
 
 #[test]
 fn settings_from_file_errors_when_missing() {

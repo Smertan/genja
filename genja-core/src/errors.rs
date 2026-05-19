@@ -89,12 +89,18 @@ impl fmt::Display for InventoryLoadError {
                 kind,
                 path,
                 message,
-            } => write!(f, "failed to parse {kind} inventory JSON file {path}: {message}"),
+            } => write!(
+                f,
+                "failed to parse {kind} inventory JSON file {path}: {message}"
+            ),
             InventoryLoadError::ParseYaml {
                 kind,
                 path,
                 message,
-            } => write!(f, "failed to parse {kind} inventory YAML file {path}: {message}"),
+            } => write!(
+                f,
+                "failed to parse {kind} inventory YAML file {path}: {message}"
+            ),
             InventoryLoadError::UnsupportedFormat { kind, path } => write!(
                 f,
                 "unsupported {kind} inventory file format for {path}. Use .json, .yaml, or .yml"

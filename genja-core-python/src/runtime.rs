@@ -1486,10 +1486,7 @@ fn inventory_to_py_dict(py: Python<'_>, inventory: &Inventory) -> PyResult<Py<Py
     }
 
     match inventory.defaults() {
-        Some(defaults) => payload.set_item(
-            "defaults",
-            defaults_to_py(py, &defaults)?,
-        )?,
+        Some(defaults) => payload.set_item("defaults", defaults_to_py(py, &defaults)?)?,
         None => payload.set_item("defaults", py.None())?,
     }
 
@@ -1519,7 +1516,10 @@ fn inventory_to_py_dict(py: Python<'_>, inventory: &Inventory) -> PyResult<Py<Py
 /// dictionaries.
 fn raw_inventory_to_py_dict(py: Python<'_>, inventory: &Inventory) -> PyResult<Py<PyAny>> {
     let payload = PyDict::new(py);
-    payload.set_item("hosts", inventory_hosts_to_py_dict(py, inventory.hosts_raw())?)?;
+    payload.set_item(
+        "hosts",
+        inventory_hosts_to_py_dict(py, inventory.hosts_raw())?,
+    )?;
     match inventory.groups_raw() {
         Some(groups) => payload.set_item("groups", groups_to_py_dict(py, groups)?)?,
         None => payload.set_item("groups", py.None())?,
@@ -1603,9 +1603,8 @@ pub(crate) fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inven
 pub(crate) fn python_inventory_to_rust_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
     let normalized = normalize_python_mapping_payload(obj)?;
     if let Ok(dict) = normalized.clone().downcast::<PyDict>() {
-        let has_inventory_keys = dict.contains("hosts")?
-            || dict.contains("groups")?
-            || dict.contains("defaults")?;
+        let has_inventory_keys =
+            dict.contains("hosts")? || dict.contains("groups")? || dict.contains("defaults")?;
         if has_inventory_keys {
             return python_json_to_rust(normalized, "invalid inventory payload");
         }
@@ -1648,7 +1647,9 @@ where
     let normalized = normalize_python_mapping_payload(obj)?;
 
     let json_module = PyModule::import(normalized.py(), "json")?;
-    let dumped: String = json_module.call_method1("dumps", (normalized,))?.extract()?;
+    let dumped: String = json_module
+        .call_method1("dumps", (normalized,))?
+        .extract()?;
     serde_json::from_str(&dumped)
         .map_err(|err| PyValueError::new_err(format!("{error_context}: {err}")))
 }
@@ -1683,11 +1684,7 @@ fn normalize_python_mapping_payload(obj: Bound<'_, PyAny>) -> PyResult<Bound<'_,
         let kwargs = PyDict::new(obj.py());
         kwargs.set_item("mode", "json")?;
         kwargs.set_item("exclude_none", true)?;
-        obj.call_method(
-            "model_dump",
-            (),
-            Some(&kwargs),
-        )
+        obj.call_method("model_dump", (), Some(&kwargs))
     } else if obj.hasattr("to_dict")? {
         obj.call_method0("to_dict")
     } else {
@@ -1971,9 +1968,7 @@ mod tests {
             let hosts = PyDict::new(py);
             let router = PyDict::new(py);
             router.set_item("hostname", "10.0.0.1").unwrap();
-            router
-                .set_item("groups", vec!["core", "site-a"])
-                .unwrap();
+            router.set_item("groups", vec!["core", "site-a"]).unwrap();
             hosts.set_item("router1", router).unwrap();
 
             let groups = PyDict::new(py);
@@ -1981,8 +1976,11 @@ mod tests {
             core.set_item("platform", "ios").unwrap();
             groups.set_item("core", core).unwrap();
             let site = PyDict::new(py);
-            site.set_item("data", task::json_value_to_py(py, &serde_json::json!({"site": "a"})).unwrap())
-                .unwrap();
+            site.set_item(
+                "data",
+                task::json_value_to_py(py, &serde_json::json!({"site": "a"})).unwrap(),
+            )
+            .unwrap();
             groups.set_item("site-a", site).unwrap();
 
             let defaults = PyDict::new(py);
@@ -2112,7 +2110,9 @@ mod tests {
                 "ios"
             );
 
-            let raw_inventory = runtime.inventory_raw(py).expect("inventory_raw should work");
+            let raw_inventory = runtime
+                .inventory_raw(py)
+                .expect("inventory_raw should work");
             let raw_inventory: Bound<'_, PyDict> =
                 raw_inventory.bind(py).clone().downcast_into().unwrap();
             assert_eq!(

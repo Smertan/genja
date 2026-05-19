@@ -10,7 +10,7 @@ use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -1246,18 +1246,16 @@ mod tests {
             result
                 .set_item(
                     "messages",
-                    vec![
-                        json_value_to_py(
-                            py,
-                            &json!({
-                                "level": "info",
-                                "text": "backup complete",
-                                "code": "BACKUP_DONE",
-                                "timestamp": "2026-04-29T12:00:00Z",
-                            }),
-                        )
-                        .unwrap(),
-                    ],
+                    vec![json_value_to_py(
+                        py,
+                        &json!({
+                            "level": "info",
+                            "text": "backup complete",
+                            "code": "BACKUP_DONE",
+                            "timestamp": "2026-04-29T12:00:00Z",
+                        }),
+                    )
+                    .unwrap()],
                 )
                 .unwrap();
             result
@@ -1290,10 +1288,9 @@ mod tests {
 
             let err = python_result_to_host_task_result(result.into_any())
                 .expect_err("unknown status should fail");
-            assert!(
-                err.to_string()
-                    .contains("unsupported python task result status 'unknown'")
-            );
+            assert!(err
+                .to_string()
+                .contains("unsupported python task result status 'unknown'"));
         });
     }
 
@@ -1390,11 +1387,9 @@ mod tests {
             let err = extract_python_task_spec(task)
                 .err()
                 .expect("empty plugin should fail");
-            assert!(
-                err.to_string().contains(
-                    "python task metadata field 'connection_plugin_name' must not be empty"
-                )
-            );
+            assert!(err
+                .to_string()
+                .contains("python task metadata field 'connection_plugin_name' must not be empty"));
         });
     }
 

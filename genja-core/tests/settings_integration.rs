@@ -1,5 +1,7 @@
 use genja_core::settings::{InventoryConfig, OptionsConfig};
-use genja_core::{ConfigLoadError, InventoryFileKind, InventoryLoadError, Settings, SshConfigError};
+use genja_core::{
+    ConfigLoadError, InventoryFileKind, InventoryLoadError, Settings, SshConfigError,
+};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -69,7 +71,10 @@ logging:
         settings.inventory().options().hosts_file(),
         Some("./inventory/hosts.yaml")
     );
-    assert_eq!(settings.ssh().config_file(), Some(ssh_context.filename.to_string_lossy().as_ref()));
+    assert_eq!(
+        settings.ssh().config_file(),
+        Some(ssh_context.filename.to_string_lossy().as_ref())
+    );
     assert_eq!(settings.runner().plugin(), "serial");
     assert_eq!(settings.runner().worker_count(), Some(4));
     assert_eq!(settings.runner().max_task_depth(), 6);
@@ -171,7 +176,11 @@ fn inventory_config_load_inventory_files_surfaces_typed_errors_publicly() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let missing = tempdir.path().join("missing.json");
     let config = InventoryConfig::builder()
-        .options(OptionsConfig::builder().hosts_file(path_str(&missing)).build())
+        .options(
+            OptionsConfig::builder()
+                .hosts_file(path_str(&missing))
+                .build(),
+        )
         .build();
 
     let err = config
