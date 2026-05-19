@@ -59,6 +59,9 @@ pub fn derive_deref(input: TokenStream) -> TokenStream {
     if let Err(error) = reject_generics(&input, "DerefMacro") {
         return error.to_compile_error().into();
     }
+    if let Err(error) = require_tuple_wrapper(&input, "DerefMacro") {
+        return error.to_compile_error().into();
+    }
 
     let expanded = quote! {
         impl std::ops::Deref for #name {
@@ -96,6 +99,9 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     if let Err(error) = reject_generics(&input, "DerefMutMacro") {
+        return error.to_compile_error().into();
+    }
+    if let Err(error) = require_tuple_wrapper(&input, "DerefMutMacro") {
         return error.to_compile_error().into();
     }
 
@@ -492,6 +498,22 @@ fn reject_generics(input: &DeriveInput, macro_name: &str) -> syn::Result<()> {
         &input.generics,
         format!("`{macro_name}` does not support generic parameters or where clauses"),
     ))
+}
+
+fn require_tuple_wrapper(input: &DeriveInput, macro_name: &str) -> syn::Result<()> {
+    match &input.data {
+        syn::Data::Struct(data) => match &data.fields {
+            syn::Fields::Unnamed(fields) if !fields.unnamed.is_empty() => Ok(()),
+            _ => Err(syn::Error::new_spanned(
+                &input.ident,
+                format!("`{macro_name}` requires a tuple struct with the wrapped value in field 0"),
+            )),
+        },
+        _ => Err(syn::Error::new_spanned(
+            &input.ident,
+            format!("`{macro_name}` can only be derived for tuple structs"),
+        )),
+    }
 }
 
 fn is_string_type(ty: &Type) -> bool {
