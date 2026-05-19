@@ -134,7 +134,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// # Parameters
 ///
 /// * `input` - A `TokenStream` representing the input tokens of the derive macro, containing
-///             the struct definition for which `TaskInfo` and `SubTasks` should be generated.
+///   the struct definition for which `TaskInfo` and `SubTasks` should be generated.
 ///
 /// # Returns
 ///
@@ -264,26 +264,27 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     }
 
     let connection_plugin_name_ty = connection_plugin_name_field.clone();
-    if let Some(ty) = &connection_plugin_name_ty {
-        if !is_string_or_static_str(ty) && !is_option_of(ty, is_string_or_static_str) {
-            return syn::Error::new_spanned(
-                ty,
-                "`connection_plugin_name` must be `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`",
-            )
-            .to_compile_error()
-            .into();
-        }
+    if let Some(ty) = &connection_plugin_name_ty
+        && !is_string_or_static_str(ty)
+        && !is_option_of(ty, is_string_or_static_str)
+    {
+        return syn::Error::new_spanned(
+            ty,
+            "`connection_plugin_name` must be `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`",
+        )
+        .to_compile_error()
+        .into();
     }
 
-    if let Some(options_ty) = &options_field {
-        if !is_option_of(options_ty, is_value_type) {
-            return syn::Error::new_spanned(
-                options_ty,
-                "`options` must be `Option<serde_json::Value>`",
-            )
-            .to_compile_error()
-            .into();
-        }
+    if let Some(options_ty) = &options_field
+        && !is_option_of(options_ty, is_value_type)
+    {
+        return syn::Error::new_spanned(
+            options_ty,
+            "`options` must be `Option<serde_json::Value>`",
+        )
+        .to_compile_error()
+        .into();
     }
 
     if let Some((_, processor_names_ty)) = &processor_names_field {
@@ -531,11 +532,10 @@ fn is_value_type(ty: &Type) -> bool {
             let last = segments.next_back().map(|seg| seg.ident.to_string());
             let second_last = segments.next_back().map(|seg| seg.ident.to_string());
 
-            match (second_last.as_deref(), last.as_deref()) {
-                (Some("serde_json"), Some("Value")) => true,
-                (None, Some("Value")) => true,
-                _ => false,
-            }
+            matches!(
+                (second_last.as_deref(), last.as_deref()),
+                (Some("serde_json"), Some("Value")) | (None, Some("Value"))
+            )
         }
         _ => false,
     }

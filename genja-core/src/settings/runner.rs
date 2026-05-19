@@ -58,6 +58,7 @@ impl RunnerConfig {
 }
 
 /// Builder for `RunnerConfig`.
+#[derive(Default)]
 pub struct RunnerConfigBuilder {
     plugin: Option<String>,
     options: Option<serde_json::Value>,
@@ -103,18 +104,6 @@ impl RunnerConfigBuilder {
             max_connection_attempts: self
                 .max_connection_attempts
                 .unwrap_or_else(get_runner_max_connection_attempts_default),
-        }
-    }
-}
-
-impl Default for RunnerConfigBuilder {
-    fn default() -> Self {
-        Self {
-            plugin: None,
-            options: None,
-            worker_count: None,
-            max_task_depth: None,
-            max_connection_attempts: None,
         }
     }
 }

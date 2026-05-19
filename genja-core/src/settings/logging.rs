@@ -1,6 +1,5 @@
 use super::env_defaults::{
-    deserialize_bool_loose, get_default_log_file, get_log_level_default,
-    get_log_to_console_default,
+    deserialize_bool_loose, get_default_log_file, get_log_level_default, get_log_to_console_default,
 };
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +65,7 @@ impl LoggingConfig {
 }
 
 /// Builder for `LoggingConfig`.
+#[derive(Default)]
 pub struct LoggingConfigBuilder {
     enabled: Option<bool>,
     level: Option<String>,
@@ -114,19 +114,6 @@ impl LoggingConfigBuilder {
             to_console: self.to_console.unwrap_or_else(get_log_to_console_default),
             file_size: self.file_size.unwrap_or(1024 * 1024 * 10),
             max_file_count: self.max_file_count.unwrap_or(10),
-        }
-    }
-}
-
-impl Default for LoggingConfigBuilder {
-    fn default() -> Self {
-        Self {
-            enabled: None,
-            level: None,
-            log_file: None,
-            to_console: None,
-            file_size: None,
-            max_file_count: None,
         }
     }
 }

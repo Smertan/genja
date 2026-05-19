@@ -1167,11 +1167,11 @@ impl TaskResults {
             self.summary = other.summary;
         }
 
-        for (hostname, result) in std::mem::take(&mut *other.hosts).into_iter() {
+        for (hostname, result) in std::mem::take(&mut other.hosts).into_iter() {
             self.insert_host_result(hostname, result);
         }
 
-        for (task_name, sub_results) in std::mem::take(&mut *other.sub_tasks).into_iter() {
+        for (task_name, sub_results) in std::mem::take(&mut other.sub_tasks).into_iter() {
             if let Some(existing) = self.sub_task_mut(task_name.as_str()) {
                 existing.merge(sub_results);
             } else {
@@ -3531,6 +3531,7 @@ impl TaskDefinition {
     /// [`TaskFailureKind::Internal`]. This helper only returns an error if a future
     /// implementation path introduces one explicitly.
     #[async_recursion]
+    #[allow(clippy::too_many_arguments)]
     async fn start_with_depth(
         task: &dyn Task,
         hostname: &str,

@@ -49,14 +49,18 @@ impl InventoryConfig {
         };
 
         let groups = match self.options.groups_file.as_deref() {
-            Some(path) => Some(Self::load_from_file::<Groups>(InventoryFileKind::Groups, path)?),
+            Some(path) => Some(Self::load_from_file::<Groups>(
+                InventoryFileKind::Groups,
+                path,
+            )?),
             None => None,
         };
 
         let defaults = match self.options.defaults_file.as_deref() {
-            Some(path) => {
-                Some(Self::load_from_file::<Defaults>(InventoryFileKind::Defaults, path)?)
-            }
+            Some(path) => Some(Self::load_from_file::<Defaults>(
+                InventoryFileKind::Defaults,
+                path,
+            )?),
             None => None,
         };
 

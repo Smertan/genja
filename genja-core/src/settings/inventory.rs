@@ -3,21 +3,11 @@ use crate::inventory::TransformFunctionOptions;
 use serde::{Deserialize, Serialize};
 
 /// Optional file paths for hosts, groups, and defaults inventory sources.
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct OptionsConfig {
     pub(super) hosts_file: Option<String>,
     pub(super) groups_file: Option<String>,
     pub(super) defaults_file: Option<String>,
-}
-
-impl Default for OptionsConfig {
-    fn default() -> Self {
-        OptionsConfig {
-            hosts_file: None,
-            groups_file: None,
-            defaults_file: None,
-        }
-    }
 }
 
 impl OptionsConfig {
@@ -39,6 +29,7 @@ impl OptionsConfig {
 }
 
 /// Builder for `OptionsConfig`.
+#[derive(Default)]
 pub struct OptionsConfigBuilder {
     hosts_file: Option<String>,
     groups_file: Option<String>,
@@ -66,16 +57,6 @@ impl OptionsConfigBuilder {
             hosts_file: self.hosts_file,
             groups_file: self.groups_file,
             defaults_file: self.defaults_file,
-        }
-    }
-}
-
-impl Default for OptionsConfigBuilder {
-    fn default() -> Self {
-        Self {
-            hosts_file: None,
-            groups_file: None,
-            defaults_file: None,
         }
     }
 }
@@ -129,6 +110,7 @@ impl InventoryConfig {
 }
 
 /// Builder for `InventoryConfig`.
+#[derive(Default)]
 pub struct InventoryConfigBuilder {
     plugin: Option<String>,
     options: Option<OptionsConfig>,
@@ -163,17 +145,6 @@ impl InventoryConfigBuilder {
             options: self.options.unwrap_or_default(),
             transform_function: self.transform_function,
             transform_function_options: self.transform_function_options,
-        }
-    }
-}
-
-impl Default for InventoryConfigBuilder {
-    fn default() -> Self {
-        Self {
-            plugin: None,
-            options: None,
-            transform_function: None,
-            transform_function_options: None,
         }
     }
 }

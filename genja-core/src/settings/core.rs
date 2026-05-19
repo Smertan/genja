@@ -33,6 +33,7 @@ impl CoreConfig {
 }
 
 /// Builder for `CoreConfig`.
+#[derive(Default)]
 pub struct CoreConfigBuilder {
     raise_on_error: Option<bool>,
 }
@@ -46,14 +47,6 @@ impl CoreConfigBuilder {
     pub fn build(self) -> CoreConfig {
         CoreConfig {
             raise_on_error: self.raise_on_error.unwrap_or_else(raise_on_error),
-        }
-    }
-}
-
-impl Default for CoreConfigBuilder {
-    fn default() -> Self {
-        Self {
-            raise_on_error: None,
         }
     }
 }
