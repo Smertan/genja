@@ -80,9 +80,9 @@ impl Task for LeafTask {
 struct ParentTask {
     name: &'static str,
     #[task(subtask)]
-    first: Arc<dyn Task>,
+    validate_config: Arc<dyn Task>,
     #[task(subtask)]
-    second: Arc<dyn Task>,
+    verify_health: Arc<dyn Task>,
 }
 
 trait DerefTarget {
@@ -222,21 +222,25 @@ fn processor_names_support_absent_dynamic_and_static_configuration() {
 
 #[test]
 fn sub_tasks_returns_cloned_arcs_in_declaration_order() {
-    let first: Arc<dyn Task> = Arc::new(LeafTask { name: "first" });
-    let second: Arc<dyn Task> = Arc::new(LeafTask { name: "second" });
+    let validate_config: Arc<dyn Task> = Arc::new(LeafTask {
+        name: "validate_config",
+    });
+    let verify_health: Arc<dyn Task> = Arc::new(LeafTask {
+        name: "verify_health",
+    });
     let parent = ParentTask {
         name: "parent",
-        first: Arc::clone(&first),
-        second: Arc::clone(&second),
+        validate_config: Arc::clone(&validate_config),
+        verify_health: Arc::clone(&verify_health),
     };
 
     let sub_tasks = parent.sub_tasks();
 
     assert_eq!(sub_tasks.len(), 2);
-    assert_eq!(sub_tasks[0].name(), "first");
-    assert_eq!(sub_tasks[1].name(), "second");
-    assert!(Arc::ptr_eq(&sub_tasks[0], &first));
-    assert!(Arc::ptr_eq(&sub_tasks[1], &second));
+    assert_eq!(sub_tasks[0].name(), "validate_config");
+    assert_eq!(sub_tasks[1].name(), "verify_health");
+    assert!(Arc::ptr_eq(&sub_tasks[0], &validate_config));
+    assert!(Arc::ptr_eq(&sub_tasks[1], &verify_health));
 }
 
 #[test]
