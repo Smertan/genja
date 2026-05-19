@@ -255,7 +255,7 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
                 None => {
                     return syn::Error::new_spanned(
                         &field.ty,
-                        "subtask fields must be `Arc<dyn Task>`",
+                        "subtask fields must be `Arc<dyn Task>`, `std::sync::Arc<dyn Task>`, or `Arc<dyn Task + Send + Sync>`",
                     )
                     .to_compile_error()
                     .into();
