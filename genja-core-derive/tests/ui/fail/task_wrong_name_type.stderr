@@ -1,0 +1,5 @@
+error: `name` must be `String` or `&'static str`
+ --> tests/ui/fail/task_wrong_name_type.rs:5:11
+  |
+5 |     name: usize,
+  |           ^^^^^

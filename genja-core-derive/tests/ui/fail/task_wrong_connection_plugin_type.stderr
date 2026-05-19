@@ -1,0 +1,5 @@
+error: `connection_plugin_name` must be `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`
+ --> tests/ui/fail/task_wrong_connection_plugin_type.rs:6:29
+  |
+6 |     connection_plugin_name: usize,
+  |                             ^^^^^

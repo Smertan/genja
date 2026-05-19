@@ -1,0 +1,5 @@
+error: subtask fields must be `Arc<dyn Task>`
+ --> tests/ui/fail/task_wrong_subtask_type.rs:7:12
+  |
+7 |     child: String,
+  |            ^^^^^^
