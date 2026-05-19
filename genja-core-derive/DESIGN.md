@@ -84,6 +84,11 @@ For supported inputs, `Task` generates:
 - Inherent `with_processor` and `with_processors` builder helpers only when a
   `processor_names: Vec<String>` field is present.
 
+Multiple subtask fields are supported. Field names should be short,
+action-oriented snake_case names that describe each subtask's role in the parent
+workflow. The field name is only used for collection; task result names come
+from each subtask's own `TaskInfo::name()` implementation.
+
 ## Rejected Task Inputs
 
 The macro should reject these cases with compile errors:

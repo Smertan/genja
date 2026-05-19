@@ -129,7 +129,14 @@ task.
 
 Subtasks are `Arc<dyn Task>` fields marked with `#[task(subtask)]`. Fully
 qualified `std::sync::Arc<dyn Task>` and `Arc<dyn Task + Send + Sync>` are also
-supported. Subtasks are returned in declaration order.
+supported.
+
+A task can have multiple subtasks by declaring multiple fields. Subtasks are
+returned in declaration order. Field names should be short, action-oriented
+snake_case names that describe the subtask's role in the parent workflow, such
+as `validate_config`, `upload_artifact`, `restart_service`, or `verify_health`.
+Avoid generic field names like `child`, `subtask1`, or `task_a` in application
+code.
 
 ```rust
 use std::sync::Arc;
@@ -141,9 +148,14 @@ use genja_core_derive::Task as TaskDerive;
 struct ParentTask {
     name: &'static str,
     #[task(subtask)]
-    child: Arc<dyn Task>,
+    validate_config: Arc<dyn Task>,
+    #[task(subtask)]
+    verify_health: Arc<dyn Task>,
 }
 ```
+
+The field name does not become the task result name. The result name comes from
+the subtask's own `TaskInfo::name()` implementation.
 
 ## Deref Wrappers
 
