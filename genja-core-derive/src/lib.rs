@@ -56,6 +56,9 @@ use syn::{
 pub fn derive_deref(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
+    if let Err(error) = reject_generics(&input, "DerefMacro") {
+        return error.to_compile_error().into();
+    }
 
     let expanded = quote! {
         impl std::ops::Deref for #name {
@@ -92,6 +95,9 @@ pub fn derive_deref(input: TokenStream) -> TokenStream {
 pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
+    if let Err(error) = reject_generics(&input, "DerefMutMacro") {
+        return error.to_compile_error().into();
+    }
 
     let expanded = quote! {
         impl std::ops::DerefMut for #name {
@@ -199,6 +205,10 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 pub fn derive_task(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
+    if let Err(error) = reject_generics(&input, "Task") {
+        return error.to_compile_error().into();
+    }
+
     let attr_processor_names = match task_processor_attrs(&input.attrs) {
         Ok(processor_names) => processor_names,
         Err(error) => return error.to_compile_error().into(),
@@ -471,6 +481,17 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+fn reject_generics(input: &DeriveInput, macro_name: &str) -> syn::Result<()> {
+    if input.generics.params.is_empty() && input.generics.where_clause.is_none() {
+        return Ok(());
+    }
+
+    Err(syn::Error::new_spanned(
+        &input.generics,
+        format!("`{macro_name}` does not support generic parameters or where clauses"),
+    ))
 }
 
 fn is_string_type(ty: &Type) -> bool {

@@ -1,0 +1,5 @@
+error: `Task` does not support generic parameters or where clauses
+ --> tests/ui/fail/task_lifetime.rs:4:20
+  |
+4 | struct LifetimeTask<'a> {
+  |                    ^^^^
