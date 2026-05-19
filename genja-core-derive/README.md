@@ -1,0 +1,179 @@
+# genja-core-derive
+
+`genja-core-derive` provides procedural macros used by `genja-core`.
+
+## Macros
+
+- `#[derive(Task)]` generates `genja_core::task::TaskInfo` and
+  `genja_core::task::SubTasks`.
+- `#[derive(DerefMacro)]` generates `std::ops::Deref` for tuple wrappers.
+- `#[derive(DerefMutMacro)]` generates `std::ops::DerefMut` for tuple wrappers.
+
+`#[derive(Task)]` does not implement `genja_core::task::Task`. Implement the
+async `start` method yourself.
+
+## Minimal Task
+
+```rust
+use async_trait::async_trait;
+use genja_core::inventory::Host;
+use genja_core::task::{
+    HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess,
+};
+use genja_core_derive::Task as TaskDerive;
+
+#[derive(TaskDerive)]
+struct CheckTask {
+    name: String,
+}
+
+#[async_trait]
+impl Task for CheckTask {
+    async fn start(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
+    }
+}
+```
+
+## Task Fields
+
+Supported fields:
+
+- `name: String`
+- `name: &'static str`
+- `connection_plugin_name: String`
+- `connection_plugin_name: &'static str`
+- `connection_plugin_name: Option<String>`
+- `connection_plugin_name: Option<&'static str>`
+- `options: Option<serde_json::Value>`
+- `processor_names: Vec<String>`
+- `#[task(subtask)] child: Arc<dyn Task>`
+
+Empty and whitespace-only connection plugin names are treated as absent.
+
+## Connection Plugins And Options
+
+```rust
+use genja_core::task::TaskInfo;
+use genja_core_derive::Task as TaskDerive;
+use serde_json::json;
+
+#[derive(TaskDerive)]
+struct DeployTask {
+    name: &'static str,
+    connection_plugin_name: Option<String>,
+    options: Option<serde_json::Value>,
+}
+
+let task = DeployTask {
+    name: "deploy",
+    connection_plugin_name: Some("ssh".to_string()),
+    options: Some(json!({"dry_run": true})),
+};
+
+assert_eq!(task.connection_plugin_name(), Some("ssh"));
+assert_eq!(task.options(), Some(&json!({"dry_run": true})));
+```
+
+## Processor Names
+
+Use `processor_names` when the set is configured at runtime:
+
+```rust
+use genja_core::task::TaskInfo;
+use genja_core_derive::Task as TaskDerive;
+
+#[derive(TaskDerive)]
+struct DeployTask {
+    name: &'static str,
+    processor_names: Vec<String>,
+}
+
+let task = DeployTask {
+    name: "deploy",
+    processor_names: Vec::new(),
+}
+.with_processor("audit")
+.with_processors(["metrics", "trace"]);
+
+assert_eq!(task.processor_names(), vec!["audit", "metrics", "trace"]);
+```
+
+Use `#[task(processors = [...])]` when the set is fixed at compile time:
+
+```rust
+use genja_core::task::TaskInfo;
+use genja_core_derive::Task as TaskDerive;
+
+#[derive(TaskDerive)]
+#[task(processors = ["audit", "metrics"])]
+struct DeployTask {
+    name: &'static str,
+}
+
+let task = DeployTask { name: "deploy" };
+
+assert_eq!(task.processor_names(), vec!["audit", "metrics"]);
+```
+
+Do not use both `processor_names` and `#[task(processors = [...])]` on the same
+task.
+
+## Subtasks
+
+Subtasks are `Arc<dyn Task>` fields marked with `#[task(subtask)]`. They are
+returned in declaration order.
+
+```rust
+use std::sync::Arc;
+
+use genja_core::task::{SubTasks, Task};
+use genja_core_derive::Task as TaskDerive;
+
+#[derive(TaskDerive)]
+struct ParentTask {
+    name: &'static str,
+    #[task(subtask)]
+    child: Arc<dyn Task>,
+}
+```
+
+## Deref Wrappers
+
+`DerefMacro` and `DerefMutMacro` expect a tuple wrapper with the wrapped value
+in field `0` and a `DerefTarget` trait in scope.
+
+```rust
+use genja_core_derive::{DerefMacro, DerefMutMacro};
+
+trait DerefTarget {
+    type Target;
+}
+
+#[derive(DerefMacro, DerefMutMacro)]
+struct Values(Vec<String>);
+
+impl DerefTarget for Values {
+    type Target = Vec<String>;
+}
+
+let mut values = Values(Vec::new());
+values.push("one".to_string());
+
+assert_eq!(values.as_slice(), ["one".to_string()]);
+```
+
+## Limitations
+
+The current supported contract does not include:
+
+- generic task structs
+- non-static borrowed task names such as `name: &'a str`
+- subtasks stored as `Option<Arc<dyn Task>>` or `Vec<Arc<dyn Task>>`
+- subtask fields spelled with a fully qualified `std::sync::Arc` path
+- `DerefMacro` or `DerefMutMacro` on non-tuple-wrapper types
+- `DerefMacro` without an in-scope `DerefTarget` trait

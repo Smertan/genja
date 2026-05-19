@@ -1,11 +1,13 @@
-//! This crate provides three procedural macros: `DerefMacro`, `DerefMutMacro`,
-//! and `Task`.
+//! Procedural macros used by `genja-core`.
 //!
 //! `DerefMacro` and `DerefMutMacro` generate `Deref` and `DerefMut`
 //! implementations for tuple-wrapper types. `Task` generates `TaskInfo` and
 //! `SubTasks` implementations for task structs used by `genja-core`.
 //!
-//! # Example
+//! `Task` does not implement the core `genja_core::task::Task` trait. Callers
+//! still implement the async `start` method themselves.
+//!
+//! # Deref Example
 //! ```
 //! use genja_core_derive::{DerefMacro, DerefMutMacro};
 //!
@@ -13,14 +15,13 @@
 //!     type Target;
 //! }
 //!
-//! pub type DefaultListTarget = Vec<String>;;
+//! pub type DefaultListTarget = Vec<String>;
 //!
 //! impl DerefTarget for DefaultsList {
 //!     type Target = DefaultListTarget;
 //! }
 //!
 //! #[derive(DerefMacro, DerefMutMacro, PartialEq)]
-//! // #[serde(deny_unknown_fields)]
 //! pub struct DefaultsList(DefaultListTarget);
 //!
 //! let mut defaults_list = DefaultsList(DefaultListTarget::new());
@@ -28,7 +29,7 @@
 //! defaults_list.push("default1".to_string());
 //!
 //! assert_eq!(defaults_list.as_ref(), vec!["default1".to_string()]);
-//!```
+//! ```
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -147,23 +148,22 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use async_trait::async_trait;
 /// use std::sync::Arc;
 /// use genja_core::inventory::Host;
-/// use genja_core::task::{HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess};
+/// use genja_core::task::{
+///     HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+/// };
+/// use genja_core_derive::Task as TaskDerive;
 ///
-/// #[derive(Task)]
-/// struct MyTask {
-///     name: String,
-///     connection_plugin_name: Option<String>,
-///     options: Option<serde_json::Value>,
-///     #[task(subtask)]
-///     child_task: Arc<dyn Task>,
+/// #[derive(TaskDerive)]
+/// struct ChildTask {
+///     name: &'static str,
 /// }
 ///
 /// #[async_trait]
-/// impl Task for MyTask {
+/// impl Task for ChildTask {
 ///     async fn start(
 ///         &self,
 ///         _host: &Host,
@@ -172,6 +172,28 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///         Ok(HostTaskResult::passed(TaskSuccess::new()))
 ///     }
 /// }
+///
+/// #[derive(TaskDerive)]
+/// #[task(processors = ["audit"])]
+/// struct MyTask {
+///     name: String,
+///     connection_plugin_name: Option<String>,
+///     options: Option<serde_json::Value>,
+///     #[task(subtask)]
+///     child_task: Arc<dyn Task>,
+/// }
+///
+/// let task = MyTask {
+///     name: "deploy".to_string(),
+///     connection_plugin_name: Some("ssh".to_string()),
+///     options: Some(serde_json::json!({"dry_run": true})),
+///     child_task: Arc::new(ChildTask { name: "validate" }),
+/// };
+///
+/// assert_eq!(task.name(), "deploy");
+/// assert_eq!(task.connection_plugin_name(), Some("ssh"));
+/// assert_eq!(task.processor_names(), vec!["audit"]);
+/// assert_eq!(task.sub_tasks()[0].name(), "validate");
 /// ```
 #[proc_macro_derive(Task, attributes(task))]
 pub fn derive_task(input: TokenStream) -> TokenStream {
