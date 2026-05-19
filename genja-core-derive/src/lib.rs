@@ -34,7 +34,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    DeriveInput, GenericArgument, LitStr, Meta, PathArguments, Token, Type, TypePath, bracketed,
+    DeriveInput, GenericArgument, LitStr, PathArguments, Token, Type, TypePath, bracketed,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
@@ -234,7 +234,12 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
             None => continue,
         };
 
-        if has_subtask_attr(&field.attrs) {
+        let has_subtask = match has_subtask_attr(&field.attrs) {
+            Ok(has_subtask) => has_subtask,
+            Err(error) => return error.to_compile_error().into(),
+        };
+
+        if has_subtask {
             match subtask_kind(&field.ty) {
                 Some(kind) => subtask_fields.push((ident.clone(), kind)),
                 None => {
@@ -612,16 +617,24 @@ enum SubtaskKind {
     SingleArc,
 }
 
-fn has_subtask_attr(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
+fn has_subtask_attr(attrs: &[syn::Attribute]) -> syn::Result<bool> {
+    let mut has_subtask = false;
+
+    for attr in attrs {
         if !attr.path().is_ident("task") {
-            return false;
+            continue;
         }
-        match attr.meta {
-            Meta::List(ref list) => list.tokens.to_string().contains("subtask"),
-            _ => false,
-        }
-    })
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("subtask") {
+                has_subtask = true;
+            }
+
+            Ok(())
+        })?;
+    }
+
+    Ok(has_subtask)
 }
 
 fn subtask_kind(ty: &Type) -> Option<SubtaskKind> {
