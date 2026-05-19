@@ -51,6 +51,8 @@ Supported `Task` fields:
 - `options: Option<Value>` when `Value` resolves to `serde_json::Value`
 - `processor_names: Vec<String>`
 - `#[task(subtask)] child: Arc<dyn Task>`
+- `#[task(subtask)] child: std::sync::Arc<dyn Task>`
+- `#[task(subtask)] child: Arc<dyn Task + Send + Sync>`
 
 Supported struct-level processor configuration:
 
@@ -96,7 +98,7 @@ The macro should reject these cases with compile errors:
 - `processor_names` with any type other than `Vec<String>`.
 - A field named `processors`; callers must use `processor_names`.
 - Both `processor_names` and `#[task(processors = [...])]`.
-- `#[task(subtask)]` on a field that is not `Arc<dyn Task>`.
+- `#[task(subtask)]` on a field that is not a supported `Arc<dyn Task>` form.
 
 ## Current Limitations
 
@@ -105,7 +107,6 @@ These cases are not part of the current supported contract:
 - Generic task structs such as `struct MyTask<T>`.
 - Task structs with non-static borrowed names such as `name: &'a str`.
 - Subtasks stored as `Option<Arc<dyn Task>>` or `Vec<Arc<dyn Task>>`.
-- Subtask fields spelled with a fully qualified `std::sync::Arc` path.
 - `DerefMacro` or `DerefMutMacro` on anything other than a tuple wrapper with
   the target value in field `0`.
 - `DerefMacro` without an in-scope `DerefTarget` trait.

@@ -52,6 +52,8 @@ Supported fields:
 - `options: Option<serde_json::Value>`
 - `processor_names: Vec<String>`
 - `#[task(subtask)] child: Arc<dyn Task>`
+- `#[task(subtask)] child: std::sync::Arc<dyn Task>`
+- `#[task(subtask)] child: Arc<dyn Task + Send + Sync>`
 
 Empty and whitespace-only connection plugin names are treated as absent.
 
@@ -125,8 +127,9 @@ task.
 
 ## Subtasks
 
-Subtasks are `Arc<dyn Task>` fields marked with `#[task(subtask)]`. They are
-returned in declaration order.
+Subtasks are `Arc<dyn Task>` fields marked with `#[task(subtask)]`. Fully
+qualified `std::sync::Arc<dyn Task>` and `Arc<dyn Task + Send + Sync>` are also
+supported. Subtasks are returned in declaration order.
 
 ```rust
 use std::sync::Arc;
@@ -174,6 +177,5 @@ The current supported contract does not include:
 - generic task structs
 - non-static borrowed task names such as `name: &'a str`
 - subtasks stored as `Option<Arc<dyn Task>>` or `Vec<Arc<dyn Task>>`
-- subtask fields spelled with a fully qualified `std::sync::Arc` path
 - `DerefMacro` or `DerefMutMacro` on non-tuple-wrapper types
 - `DerefMacro` without an in-scope `DerefTarget` trait
