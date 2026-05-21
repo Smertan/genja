@@ -53,6 +53,7 @@ Supported `Task` fields:
 - `#[task(subtask)] child: Arc<dyn Task>`
 - `#[task(subtask)] child: std::sync::Arc<dyn Task>`
 - `#[task(subtask)] child: Arc<dyn Task + Send + Sync>`
+- `#[task(subtask)] child: std::sync::Arc<dyn Task + Send + Sync>`
 
 Supported struct-level processor configuration:
 
@@ -65,7 +66,7 @@ struct MyTask {
 ```
 
 `processor_names: Vec<String>` and `#[task(processors = [...])]` are mutually
-exclusive.
+exclusive. Unknown struct-level `#[task(...)]` attributes are rejected.
 
 ## Generated Task Behavior
 
@@ -87,7 +88,8 @@ For supported inputs, `Task` generates:
 Multiple subtask fields are supported. Field names should be short,
 action-oriented snake_case names that describe each subtask's role in the parent
 workflow. The field name is only used for collection; task result names come
-from each subtask's own `TaskInfo::name()` implementation.
+from each subtask's own `TaskInfo::name()` implementation. Unknown field-level
+`#[task(...)]` attributes are rejected.
 
 ## Rejected Task Inputs
 
@@ -104,6 +106,7 @@ The macro should reject these cases with compile errors:
 - A field named `processors`; callers must use `processor_names`.
 - Both `processor_names` and `#[task(processors = [...])]`.
 - `#[task(subtask)]` on a field that is not a supported `Arc<dyn Task>` form.
+- Unknown struct-level or field-level `#[task(...)]` helper attributes.
 
 ## Current Limitations
 
@@ -112,6 +115,7 @@ These cases are not part of the current supported contract:
 - Generic task structs such as `struct MyTask<T>`.
 - Task structs with non-static borrowed names such as `name: &'a str`.
 - Subtasks stored as `Option<Arc<dyn Task>>` or `Vec<Arc<dyn Task>>`.
+- Task trait aliases such as `Arc<dyn CoreTask>`.
 - `DerefMacro` or `DerefMutMacro` on anything other than a tuple wrapper with
   the target value in field `0`.
 - `DerefMacro` without an in-scope `DerefTarget` trait.

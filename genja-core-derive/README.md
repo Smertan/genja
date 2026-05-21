@@ -54,6 +54,7 @@ Supported fields:
 - `#[task(subtask)] child: Arc<dyn Task>`
 - `#[task(subtask)] child: std::sync::Arc<dyn Task>`
 - `#[task(subtask)] child: Arc<dyn Task + Send + Sync>`
+- `#[task(subtask)] child: std::sync::Arc<dyn Task + Send + Sync>`
 
 Empty and whitespace-only connection plugin names are treated as absent.
 
@@ -123,13 +124,14 @@ assert_eq!(task.processor_names(), vec!["audit", "metrics"]);
 ```
 
 Do not use both `processor_names` and `#[task(processors = [...])]` on the same
-task.
+task. Unknown struct-level `#[task(...)]` attributes are rejected.
 
 ## Subtasks
 
 Subtasks are `Arc<dyn Task>` fields marked with `#[task(subtask)]`. Fully
-qualified `std::sync::Arc<dyn Task>` and `Arc<dyn Task + Send + Sync>` are also
-supported.
+qualified `std::sync::Arc<dyn Task>`, `Arc<dyn Task + Send + Sync>`, and
+`std::sync::Arc<dyn Task + Send + Sync>` are also supported. Unknown
+field-level `#[task(...)]` attributes are rejected.
 
 A task can have multiple subtasks by declaring multiple fields. Subtasks are
 returned in declaration order. Field names should be short, action-oriented
@@ -189,5 +191,6 @@ The current supported contract does not include:
 - generic task structs
 - non-static borrowed task names such as `name: &'a str`
 - subtasks stored as `Option<Arc<dyn Task>>` or `Vec<Arc<dyn Task>>`
+- unknown `#[task(...)]` helper attributes
 - `DerefMacro` or `DerefMutMacro` on non-tuple-wrapper types
 - `DerefMacro` without an in-scope `DerefTarget` trait

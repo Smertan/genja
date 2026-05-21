@@ -133,7 +133,9 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// - An optional `options` field of type `Option<serde_json::Value>`
 /// - An optional `processor_names` field of type `Vec<String>`
 /// - Or a struct-level `#[task(processors = ["processor_name"])]` attribute
-/// - Zero or more fields marked with `#[task(subtask)]` attribute of type `Arc<dyn Task>`
+/// - Zero or more fields marked with `#[task(subtask)]` using a supported `Arc<dyn Task>` form:
+///   `Arc<dyn Task>`, `std::sync::Arc<dyn Task>`, `Arc<dyn Task + Send + Sync>`,
+///   or `std::sync::Arc<dyn Task + Send + Sync>`
 ///
 /// After deriving, the generated behavior is:
 /// - `name()` reads from the struct's `name` field
@@ -155,8 +157,10 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// Returns a compile error if:
 /// - The macro is applied to a non-struct type
 /// - The struct doesn't have named fields
+/// - The struct has generic parameters, lifetimes, or a where clause
 /// - Required fields are missing or have incorrect types
-/// - Subtask fields are not of type `Arc<dyn Task>`
+/// - Unknown `#[task(...)]` helper attributes are used
+/// - Subtask fields are not one of the supported `Arc<dyn Task>` forms
 ///
 /// # Examples
 ///

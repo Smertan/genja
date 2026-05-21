@@ -245,6 +245,7 @@
 //! processor plugins by returning names from [`TaskInfo::processor_names`]. The
 //! derive macro supports either a `processor_names: Vec<String>` field or
 //! a compile-time attribute such as `#[task(processors = ["audit"])]`.
+//! Unknown `#[task(...)]` helper attributes are rejected.
 //!
 //! ## Task Processors
 //!
@@ -318,7 +319,14 @@
 //! execute after the parent task completes. Sub-tasks receive their own runtime
 //! context and execution depth when they run.
 //! With the derive macro, any field marked with `#[task(subtask)]` is included in
-//! [`SubTasks::sub_tasks()`] in declaration order.
+//! [`SubTasks::sub_tasks()`] in declaration order. Supported subtask field forms
+//! are `Arc<dyn Task>`, `std::sync::Arc<dyn Task>`,
+//! `Arc<dyn Task + Send + Sync>`, and
+//! `std::sync::Arc<dyn Task + Send + Sync>`. Container forms such as
+//! `Option<Arc<dyn Task>>` and `Vec<Arc<dyn Task>>` are not supported.
+//! Prefer action-oriented snake_case field names such as `validate_config` or
+//! `verify_health`; result names still come from each sub-task's
+//! [`TaskInfo::name`] implementation.
 //!
 //! # Behavioral Rules
 //!
