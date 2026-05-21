@@ -639,7 +639,9 @@ fn task_processor_attrs(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::LitStr
 
         attr.parse_nested_meta(|meta| {
             if !meta.path.is_ident("processors") {
-                return Ok(());
+                return Err(meta.error(
+                    "unsupported struct-level `task` attribute; expected `processors = [...]`",
+                ));
             }
 
             let value = meta.value()?;
@@ -671,9 +673,10 @@ fn has_subtask_attr(attrs: &[syn::Attribute]) -> syn::Result<bool> {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("subtask") {
                 has_subtask = true;
+                return Ok(());
             }
 
-            Ok(())
+            Err(meta.error("unsupported field-level `task` attribute; expected `subtask`"))
         })?;
     }
 
