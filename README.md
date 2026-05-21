@@ -251,7 +251,9 @@ Fully qualified `std::sync::Arc<dyn Task>`, `Arc<dyn Task + Send + Sync>`, and
 `std::sync::Arc<dyn Task + Send + Sync>` are also supported. They execute after
 the parent task and their results are stored under `TaskResults::sub_task(...)`.
 Multiple sub-task fields run in declaration order; prefer action-oriented
-snake_case field names such as `validate_config` or `verify_health`.
+snake_case field names such as `validate_config` or `verify_health`. Task trait
+aliases such as `Arc<dyn CoreTask>` are not supported; spell the trait as
+`Task`.
 
 ```rust
 use std::sync::Arc;

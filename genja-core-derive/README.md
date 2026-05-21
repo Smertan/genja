@@ -159,6 +159,9 @@ struct ParentTask {
 The field name does not become the task result name. The result name comes from
 the subtask's own `TaskInfo::name()` implementation.
 
+Task trait aliases such as `Arc<dyn CoreTask>` are not supported. Spell the
+trait as `Task` in the subtask field type.
+
 ## Deref Wrappers
 
 `DerefMacro` and `DerefMutMacro` expect a tuple wrapper with the wrapped value
@@ -191,6 +194,7 @@ The current supported contract does not include:
 - generic task structs
 - non-static borrowed task names such as `name: &'a str`
 - subtasks stored as `Option<Arc<dyn Task>>` or `Vec<Arc<dyn Task>>`
+- task trait aliases such as `Arc<dyn CoreTask>`
 - unknown `#[task(...)]` helper attributes
 - `DerefMacro` or `DerefMutMacro` on non-tuple-wrapper types
 - `DerefMacro` without an in-scope `DerefTarget` trait

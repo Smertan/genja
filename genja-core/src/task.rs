@@ -326,7 +326,8 @@
 //! `Option<Arc<dyn Task>>` and `Vec<Arc<dyn Task>>` are not supported.
 //! Prefer action-oriented snake_case field names such as `validate_config` or
 //! `verify_health`; result names still come from each sub-task's
-//! [`TaskInfo::name`] implementation.
+//! [`TaskInfo::name`] implementation. Task trait aliases such as
+//! `Arc<dyn CoreTask>` are not supported; spell the trait as `Task`.
 //!
 //! # Behavioral Rules
 //!
