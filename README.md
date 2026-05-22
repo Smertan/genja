@@ -80,8 +80,9 @@ assert_eq!(data_center.host_ids()[0].as_str(), "router1");
 
 ## Running Tasks
 
-Tasks are defined in `genja_core::task` and executed through `Genja::run`.
-The recommended pattern is:
+Tasks are defined in `genja_core::task`. A single root task tree is executed
+through `Genja::run`; an ordered list of root task trees is executed through
+`Genja::run_tasks`. The recommended pattern for a single task is:
 
 1. Define a struct for the task.
 2. Derive `Task` to generate `TaskInfo` and `SubTasks`.
@@ -235,7 +236,8 @@ pub fn create_plugins() -> Vec<Plugins> {
 
 ### Task Execution Rules
 
-- `Genja::run` executes the full task tree once per selected host.
+- `Genja::run` executes one full task tree once per selected host.
+- `Genja::run_tasks` executes an ordered `Tasks` list. Each root task may have its own sub-task tree, and the returned `Vec<TaskResults>` preserves root task order.
 - The parent task runs before any of its sub-tasks.
 - The parent host result is recorded before sub-task execution starts.
 - Sub-tasks run in the order returned by `sub_tasks()`. With `#[derive(TaskDerive)]`, that is the declaration order of `#[task(subtask)]` fields.

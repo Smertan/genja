@@ -561,8 +561,9 @@
 //!
 //! ## [`Tasks`]
 //!
-//! A collection type for managing multiple task definitions. It provides a
-//! convenient way to build and execute task lists.
+//! A collection type for managing an ordered list of root task definitions.
+//! Each root task may have its own nested sub-task tree. Runtime runners execute
+//! the list as a forest of task trees and return results in the same root order.
 //!
 //! ```rust
 //! use genja_core::task::Tasks;

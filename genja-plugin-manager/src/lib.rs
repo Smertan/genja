@@ -48,7 +48,7 @@
 //! use async_trait::async_trait;
 //! use genja_core::inventory::Hosts;
 //! use genja_core::settings::RunnerConfig;
-//! use genja_core::task::{TaskDefinition, TaskResults, Tasks};
+//! use genja_core::task::{TaskDefinition, TaskResults};
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
 //!
 //! #[derive(Debug)]
@@ -74,17 +74,8 @@
 //!         Ok(TaskResults::new("my_plugin"))
 //!     }
 //!
-//!     async fn run_tasks(
-//!         &self,
-//!         _tasks: &Tasks,
-//!         _hosts: &Hosts,
-//!         _connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
-//!         _runner_config: &RunnerConfig,
-//!         _max_depth: usize,
-//!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
-//!         // Batch task execution logic
-//!         Ok(Vec::new())
-//!     }
+//!     // `run_tasks(...)` defaults to executing root task trees in order by
+//!     // delegating to `run(...)`. Override it only for custom batch behavior.
 //! }
 //!
 //! // Export plugin factory function
@@ -271,7 +262,7 @@
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 //! use genja_core::inventory::Hosts;
 //! use genja_core::settings::RunnerConfig;
-//! use genja_core::task::{TaskDefinition, TaskResults, Tasks};
+//! use genja_core::task::{TaskDefinition, TaskResults};
 //!
 //! #[derive(Debug)]
 //! struct ExampleSequentialRunner;
@@ -296,18 +287,8 @@
 //!         Ok(TaskResults::new("example_sequential"))
 //!     }
 //!
-//!     async fn run_tasks(
-//!         &self,
-//!         tasks: &Tasks,
-//!         hosts: &Hosts,
-//!         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
-//!         runner_config: &RunnerConfig,
-//!         max_depth: usize,
-//!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
-//!         // Execute all tasks sequentially
-//!         let _ = (tasks, hosts, connection_resolver, runner_config, max_depth);
-//!         Ok(Vec::new())
-//!     }
+//!     // `run_tasks(...)` defaults to executing root task trees in order by
+//!     // delegating to `run(...)`. Override it only for custom batch behavior.
 //! }
 //! ```
 //!

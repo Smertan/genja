@@ -161,12 +161,14 @@
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let runner = ThreadedRunnerPlugin;
-//! // let tasks = Tasks::new(vec![task1, task2, task3]);
-//! # let tasks = Tasks::new();
+//! let mut tasks = Tasks::new();
+//! // tasks.add_task(task1);
+//! // tasks.add_task(task2);
+//! // tasks.add_task(task3);
 //! # let hosts = Hosts::new();
 //! # let config = RunnerConfig::default();
 //!
-//! // Execute all tasks sequentially, each with parallel host execution
+//! // Execute root tasks in order, each with parallel host execution
 //! let runtime = Builder::new_current_thread().enable_all().build().unwrap();
 //! let all_results = runtime.block_on(runner.run_tasks(&tasks, &hosts, None, &config, 10))?;
 //! # Ok(())
