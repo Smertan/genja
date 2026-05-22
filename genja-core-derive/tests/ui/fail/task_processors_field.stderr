@@ -1,0 +1,5 @@
+error: use `processor_names: Vec<String>` to select processor plugins by name
+ --> tests/ui/fail/task_processors_field.rs:6:5
+  |
+6 |     processors: Vec<String>,
+  |     ^^^^^^^^^^

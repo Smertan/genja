@@ -1,0 +1,5 @@
+error: `DerefMacro` requires a tuple struct with the wrapped value in field 0
+ --> tests/ui/fail/deref_unit_struct.rs:4:8
+  |
+4 | struct Values;
+  |        ^^^^^^

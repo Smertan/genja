@@ -1,0 +1,5 @@
+error: Task can only be derived for structs
+ --> tests/ui/fail/task_enum.rs:4:6
+  |
+4 | enum NotStruct {
+  |      ^^^^^^^^^

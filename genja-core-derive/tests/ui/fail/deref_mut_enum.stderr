@@ -1,0 +1,5 @@
+error: `DerefMutMacro` can only be derived for tuple structs
+ --> tests/ui/fail/deref_mut_enum.rs:4:6
+  |
+4 | enum Values {
+  |      ^^^^^^

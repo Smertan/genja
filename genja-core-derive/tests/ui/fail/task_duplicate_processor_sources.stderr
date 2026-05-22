@@ -1,0 +1,5 @@
+error: use either `processor_names: Vec<String>` or `#[task(processors = [...])]`, not both
+ --> tests/ui/fail/task_duplicate_processor_sources.rs:7:22
+  |
+7 |     processor_names: Vec<String>,
+  |                      ^^^^^^^^^^^

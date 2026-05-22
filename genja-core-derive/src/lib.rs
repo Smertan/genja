@@ -1,11 +1,13 @@
-//! This crate provides three procedural macros: `DerefMacro`, `DerefMutMacro`,
-//! and `Task`.
+//! Procedural macros used by `genja-core`.
 //!
 //! `DerefMacro` and `DerefMutMacro` generate `Deref` and `DerefMut`
 //! implementations for tuple-wrapper types. `Task` generates `TaskInfo` and
 //! `SubTasks` implementations for task structs used by `genja-core`.
 //!
-//! # Example
+//! `Task` does not implement the core `genja_core::task::Task` trait. Callers
+//! still implement the async `start` method themselves.
+//!
+//! # Deref Example
 //! ```
 //! use genja_core_derive::{DerefMacro, DerefMutMacro};
 //!
@@ -13,14 +15,13 @@
 //!     type Target;
 //! }
 //!
-//! pub type DefaultListTarget = Vec<String>;;
+//! pub type DefaultListTarget = Vec<String>;
 //!
 //! impl DerefTarget for DefaultsList {
 //!     type Target = DefaultListTarget;
 //! }
 //!
 //! #[derive(DerefMacro, DerefMutMacro, PartialEq)]
-//! // #[serde(deny_unknown_fields)]
 //! pub struct DefaultsList(DefaultListTarget);
 //!
 //! let mut defaults_list = DefaultsList(DefaultListTarget::new());
@@ -28,12 +29,12 @@
 //! defaults_list.push("default1".to_string());
 //!
 //! assert_eq!(defaults_list.as_ref(), vec!["default1".to_string()]);
-//!```
+//! ```
 
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    DeriveInput, GenericArgument, LitStr, Meta, PathArguments, Token, Type, TypePath, bracketed,
+    DeriveInput, GenericArgument, LitStr, PathArguments, Token, Type, TypePath, bracketed,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
@@ -55,6 +56,12 @@ use syn::{
 pub fn derive_deref(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
+    if let Err(error) = reject_generics(&input, "DerefMacro") {
+        return error.to_compile_error().into();
+    }
+    if let Err(error) = require_tuple_wrapper(&input, "DerefMacro") {
+        return error.to_compile_error().into();
+    }
 
     let expanded = quote! {
         impl std::ops::Deref for #name {
@@ -91,6 +98,12 @@ pub fn derive_deref(input: TokenStream) -> TokenStream {
 pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
+    if let Err(error) = reject_generics(&input, "DerefMutMacro") {
+        return error.to_compile_error().into();
+    }
+    if let Err(error) = require_tuple_wrapper(&input, "DerefMutMacro") {
+        return error.to_compile_error().into();
+    }
 
     let expanded = quote! {
         impl std::ops::DerefMut for #name {
@@ -120,7 +133,9 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// - An optional `options` field of type `Option<serde_json::Value>`
 /// - An optional `processor_names` field of type `Vec<String>`
 /// - Or a struct-level `#[task(processors = ["processor_name"])]` attribute
-/// - Zero or more fields marked with `#[task(subtask)]` attribute of type `Arc<dyn Task>`
+/// - Zero or more fields marked with `#[task(subtask)]` using a supported `Arc<dyn Task>` form:
+///   `Arc<dyn Task>`, `std::sync::Arc<dyn Task>`, `Arc<dyn Task + Send + Sync>`,
+///   or `std::sync::Arc<dyn Task + Send + Sync>`
 ///
 /// After deriving, the generated behavior is:
 /// - `name()` reads from the struct's `name` field
@@ -142,28 +157,29 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// Returns a compile error if:
 /// - The macro is applied to a non-struct type
 /// - The struct doesn't have named fields
+/// - The struct has generic parameters, lifetimes, or a where clause
 /// - Required fields are missing or have incorrect types
-/// - Subtask fields are not of type `Arc<dyn Task>`
+/// - Unknown `#[task(...)]` helper attributes are used
+/// - Subtask fields are not one of the supported `Arc<dyn Task>` forms
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use async_trait::async_trait;
 /// use std::sync::Arc;
 /// use genja_core::inventory::Host;
-/// use genja_core::task::{HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess};
+/// use genja_core::task::{
+///     HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+/// };
+/// use genja_core_derive::Task as TaskDerive;
 ///
-/// #[derive(Task)]
-/// struct MyTask {
-///     name: String,
-///     connection_plugin_name: Option<String>,
-///     options: Option<serde_json::Value>,
-///     #[task(subtask)]
-///     child_task: Arc<dyn Task>,
+/// #[derive(TaskDerive)]
+/// struct ChildTask {
+///     name: &'static str,
 /// }
 ///
 /// #[async_trait]
-/// impl Task for MyTask {
+/// impl Task for ChildTask {
 ///     async fn start(
 ///         &self,
 ///         _host: &Host,
@@ -172,11 +188,37 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///         Ok(HostTaskResult::passed(TaskSuccess::new()))
 ///     }
 /// }
+///
+/// #[derive(TaskDerive)]
+/// #[task(processors = ["audit"])]
+/// struct MyTask {
+///     name: String,
+///     connection_plugin_name: Option<String>,
+///     options: Option<serde_json::Value>,
+///     #[task(subtask)]
+///     child_task: Arc<dyn Task>,
+/// }
+///
+/// let task = MyTask {
+///     name: "deploy".to_string(),
+///     connection_plugin_name: Some("ssh".to_string()),
+///     options: Some(serde_json::json!({"dry_run": true})),
+///     child_task: Arc::new(ChildTask { name: "validate" }),
+/// };
+///
+/// assert_eq!(task.name(), "deploy");
+/// assert_eq!(task.connection_plugin_name(), Some("ssh"));
+/// assert_eq!(task.processor_names(), vec!["audit"]);
+/// assert_eq!(task.sub_tasks()[0].name(), "validate");
 /// ```
 #[proc_macro_derive(Task, attributes(task))]
 pub fn derive_task(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
+    if let Err(error) = reject_generics(&input, "Task") {
+        return error.to_compile_error().into();
+    }
+
     let attr_processor_names = match task_processor_attrs(&input.attrs) {
         Ok(processor_names) => processor_names,
         Err(error) => return error.to_compile_error().into(),
@@ -212,13 +254,18 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
             None => continue,
         };
 
-        if has_subtask_attr(&field.attrs) {
+        let has_subtask = match has_subtask_attr(&field.attrs) {
+            Ok(has_subtask) => has_subtask,
+            Err(error) => return error.to_compile_error().into(),
+        };
+
+        if has_subtask {
             match subtask_kind(&field.ty) {
                 Some(kind) => subtask_fields.push((ident.clone(), kind)),
                 None => {
                     return syn::Error::new_spanned(
                         &field.ty,
-                        "subtask fields must be `Arc<dyn Task>`",
+                        "subtask fields must be `Arc<dyn Task>`, `std::sync::Arc<dyn Task>`, or `Arc<dyn Task + Send + Sync>`",
                     )
                     .to_compile_error()
                     .into();
@@ -446,6 +493,33 @@ pub fn derive_task(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+fn reject_generics(input: &DeriveInput, macro_name: &str) -> syn::Result<()> {
+    if input.generics.params.is_empty() && input.generics.where_clause.is_none() {
+        return Ok(());
+    }
+
+    Err(syn::Error::new_spanned(
+        &input.generics,
+        format!("`{macro_name}` does not support generic parameters or where clauses"),
+    ))
+}
+
+fn require_tuple_wrapper(input: &DeriveInput, macro_name: &str) -> syn::Result<()> {
+    match &input.data {
+        syn::Data::Struct(data) => match &data.fields {
+            syn::Fields::Unnamed(fields) if !fields.unnamed.is_empty() => Ok(()),
+            _ => Err(syn::Error::new_spanned(
+                &input.ident,
+                format!("`{macro_name}` requires a tuple struct with the wrapped value in field 0"),
+            )),
+        },
+        _ => Err(syn::Error::new_spanned(
+            &input.ident,
+            format!("`{macro_name}` can only be derived for tuple structs"),
+        )),
+    }
+}
+
 fn is_string_type(ty: &Type) -> bool {
     match ty {
         Type::Path(TypePath { path, .. }) => path
@@ -569,7 +643,9 @@ fn task_processor_attrs(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::LitStr
 
         attr.parse_nested_meta(|meta| {
             if !meta.path.is_ident("processors") {
-                return Ok(());
+                return Err(meta.error(
+                    "unsupported struct-level `task` attribute; expected `processors = [...]`",
+                ));
             }
 
             let value = meta.value()?;
@@ -590,16 +666,25 @@ enum SubtaskKind {
     SingleArc,
 }
 
-fn has_subtask_attr(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
+fn has_subtask_attr(attrs: &[syn::Attribute]) -> syn::Result<bool> {
+    let mut has_subtask = false;
+
+    for attr in attrs {
         if !attr.path().is_ident("task") {
-            return false;
+            continue;
         }
-        match attr.meta {
-            Meta::List(ref list) => list.tokens.to_string().contains("subtask"),
-            _ => false,
-        }
-    })
+
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("subtask") {
+                has_subtask = true;
+                return Ok(());
+            }
+
+            Err(meta.error("unsupported field-level `task` attribute; expected `subtask`"))
+        })?;
+    }
+
+    Ok(has_subtask)
 }
 
 fn subtask_kind(ty: &Type) -> Option<SubtaskKind> {
