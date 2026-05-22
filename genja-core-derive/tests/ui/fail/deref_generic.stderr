@@ -1,0 +1,5 @@
+error: `DerefMacro` does not support generic parameters or where clauses
+ --> tests/ui/fail/deref_generic.rs:4:21
+  |
+4 | struct GenericValues<T>(Vec<T>);
+  |                     ^^^

@@ -1,0 +1,5 @@
+error: `Task` does not support generic parameters or where clauses
+ --> tests/ui/fail/task_generic.rs:4:19
+  |
+4 | struct GenericTask<T> {
+  |                   ^^^

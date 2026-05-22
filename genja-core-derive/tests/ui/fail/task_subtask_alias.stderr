@@ -1,0 +1,5 @@
+error: subtask fields must be `Arc<dyn Task>`, `std::sync::Arc<dyn Task>`, or `Arc<dyn Task + Send + Sync>`
+  --> tests/ui/fail/task_subtask_alias.rs:10:12
+   |
+10 |     child: Arc<dyn CoreTask>,
+   |            ^^^^^^^^^^^^^^^^^

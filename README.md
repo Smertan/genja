@@ -101,6 +101,7 @@ The derive macro maps fields like this:
 - `processor_names` is optional and becomes `TaskInfo::processor_names()`.
 - `#[task(processors = ["audit"])]` can be used when processor names are fixed at compile time.
 - Fields marked with `#[task(subtask)]` are collected into `SubTasks::sub_tasks()` in declaration order.
+- Unknown `#[task(...)]` helper attributes are rejected.
 
 That means the usual pattern is:
 
@@ -246,7 +247,13 @@ pub fn create_plugins() -> Vec<Plugins> {
 ### Sub-Tasks
 
 Sub-tasks are declared as `Arc<dyn Task>` fields marked with `#[task(subtask)]`.
-They execute after the parent task and their results are stored under `TaskResults::sub_task(...)`.
+Fully qualified `std::sync::Arc<dyn Task>`, `Arc<dyn Task + Send + Sync>`, and
+`std::sync::Arc<dyn Task + Send + Sync>` are also supported. They execute after
+the parent task and their results are stored under `TaskResults::sub_task(...)`.
+Multiple sub-task fields run in declaration order; prefer action-oriented
+snake_case field names such as `validate_config` or `verify_health`. Task trait
+aliases such as `Arc<dyn CoreTask>` are not supported; spell the trait as
+`Task`.
 
 ```rust
 use std::sync::Arc;

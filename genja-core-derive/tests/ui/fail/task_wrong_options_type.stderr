@@ -1,0 +1,5 @@
+error: `options` must be `Option<serde_json::Value>`
+ --> tests/ui/fail/task_wrong_options_type.rs:6:14
+  |
+6 |     options: serde_json::Value,
+  |              ^^^^^^^^^^^^^^^^^

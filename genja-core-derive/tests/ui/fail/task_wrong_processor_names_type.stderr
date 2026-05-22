@@ -1,0 +1,5 @@
+error: `processor_names` must be `Vec<String>`
+ --> tests/ui/fail/task_wrong_processor_names_type.rs:6:22
+  |
+6 |     processor_names: Vec<&'static str>,
+  |                      ^^^^^^^^^^^^^^^^^
