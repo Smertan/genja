@@ -31,7 +31,7 @@ from .connection import (
 from .inventory import InventoryPluginProtocol
 from .plugin_manager import PluginManager
 from .processor import TaskProcessorContext, TaskProcessorProtocol
-from .runner import RunnerPluginProtocol
+from .runner import BatchRunnerPluginProtocol, RunnerPluginProtocol
 from .settings import Settings
 from .task import (
     GenjaTaskProtocol,
@@ -69,6 +69,7 @@ __all__ = [
     "TaskProcessorContext",
     "TaskProcessorProtocol",
     "RunnerPluginProtocol",
+    "BatchRunnerPluginProtocol",
     "TransformFunctionPluginProtocol",
     "Settings",
     "CoreConfig",

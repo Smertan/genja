@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 from .task import GenjaTaskProtocol
 
@@ -166,6 +166,11 @@ class Genja:
         task_class: type[GenjaTaskProtocol],
         max_depth: int | None = None,
     ) -> TaskResults: ...
+    def run_tasks(
+        self,
+        task_classes: Sequence[type[GenjaTaskProtocol]],
+        max_depth: int | None = None,
+    ) -> list[TaskResults]: ...
 
 class GenjaBuilder:
     def with_plugin(self, plugin: Any) -> GenjaBuilder: ...

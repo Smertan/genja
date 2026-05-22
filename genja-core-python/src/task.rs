@@ -3,14 +3,14 @@ use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
     HostTaskResult, MessageLevel, SubTasks, Task, TaskConnectionResolver, TaskDefinition,
     TaskError, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
-    TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess,
+    TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
 };
 use async_trait::async_trait;
 use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -449,6 +449,33 @@ pub fn run_task(
             PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
         })?;
     Ok(PyTaskResults { inner })
+}
+
+pub fn run_tasks(
+    py: Python<'_>,
+    runtime: &RuntimeGenja,
+    task_classes: Bound<'_, PyAny>,
+    max_depth: Option<usize>,
+) -> PyResult<Vec<PyTaskResults>> {
+    let mut tasks = Tasks::new();
+    let iter = task_classes
+        .try_iter()
+        .map_err(|err| PyValueError::new_err(format!("task_classes must be iterable: {err}")))?;
+    for task_class in iter {
+        let spec = extract_python_task_spec(task_class?)?;
+        tasks.push(task_definition_from_spec(&spec));
+    }
+
+    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+    let results = py
+        .allow_threads(|| runtime.run_tasks(tasks, max_depth))
+        .map_err(|err| {
+            PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
+        })?;
+    Ok(results
+        .into_iter()
+        .map(|inner| PyTaskResults { inner })
+        .collect())
 }
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1246,16 +1273,18 @@ mod tests {
             result
                 .set_item(
                     "messages",
-                    vec![json_value_to_py(
-                        py,
-                        &json!({
-                            "level": "info",
-                            "text": "backup complete",
-                            "code": "BACKUP_DONE",
-                            "timestamp": "2026-04-29T12:00:00Z",
-                        }),
-                    )
-                    .unwrap()],
+                    vec![
+                        json_value_to_py(
+                            py,
+                            &json!({
+                                "level": "info",
+                                "text": "backup complete",
+                                "code": "BACKUP_DONE",
+                                "timestamp": "2026-04-29T12:00:00Z",
+                            }),
+                        )
+                        .unwrap(),
+                    ],
                 )
                 .unwrap();
             result
@@ -1288,9 +1317,10 @@ mod tests {
 
             let err = python_result_to_host_task_result(result.into_any())
                 .expect_err("unknown status should fail");
-            assert!(err
-                .to_string()
-                .contains("unsupported python task result status 'unknown'"));
+            assert!(
+                err.to_string()
+                    .contains("unsupported python task result status 'unknown'")
+            );
         });
     }
 
@@ -1387,9 +1417,11 @@ mod tests {
             let err = extract_python_task_spec(task)
                 .err()
                 .expect("empty plugin should fail");
-            assert!(err
-                .to_string()
-                .contains("python task metadata field 'connection_plugin_name' must not be empty"));
+            assert!(
+                err.to_string().contains(
+                    "python task metadata field 'connection_plugin_name' must not be empty"
+                )
+            );
         });
     }
 

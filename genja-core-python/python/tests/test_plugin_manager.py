@@ -99,6 +99,15 @@ def test_runner_plugin_run_tasks_executes_from_python_side():
     assert first.passed_hosts == ["router1", "router2"]
     assert second.passed_hosts == ["router1", "router2"]
 
+    batch = runtime.run_tasks([PluginManagerRunnerTask, PluginManagerRunnerTaskTwo])
+
+    assert [result.task_name for result in batch] == [
+        "plugin_manager_runner_task",
+        "plugin_manager_runner_task_two",
+    ]
+    assert batch[0].passed_hosts == ["router1", "router2"]
+    assert batch[1].passed_hosts == ["router1", "router2"]
+
 
 def test_transform_plugin_with_host_only_method_still_builds_runtime():
     manager = genja.PluginManager()

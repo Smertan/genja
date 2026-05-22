@@ -140,6 +140,9 @@
 //!
 //! # Run with custom depth limit for sub-tasks
 //! results = runtime.run_task(BackupTask, max_depth=5)
+//!
+//! # Run an ordered list of root task classes
+//! all_results = runtime.run_tasks([BackupTask], max_depth=5)
 //! ```
 //!
 //! # Plugin Integration
@@ -369,7 +372,7 @@ use pyo3::types::{PyDict, PyModule};
 use serde::de::DeserializeOwned;
 use std::sync::Mutex;
 
-use crate::plugin_manager::{register_python_plugin_on_manager, PyPluginManager};
+use crate::plugin_manager::{PyPluginManager, register_python_plugin_on_manager};
 use crate::settings::PySettings;
 use crate::task::{self, PyTaskResults};
 
@@ -1022,6 +1025,21 @@ impl PyGenja {
         max_depth: Option<usize>,
     ) -> PyResult<PyTaskResults> {
         task::run_task(py, &self.inner, task_class, max_depth)
+    }
+
+    /// Executes an ordered list of task classes across all selected hosts.
+    ///
+    /// Each task class is converted to a root task definition and may declare its
+    /// own nested sub-task tree. The returned list preserves input order, so
+    /// `results[n]` corresponds to `task_classes[n]`.
+    #[pyo3(signature = (task_classes, max_depth=None))]
+    fn run_tasks(
+        &self,
+        py: Python<'_>,
+        task_classes: Bound<'_, PyAny>,
+        max_depth: Option<usize>,
+    ) -> PyResult<Vec<PyTaskResults>> {
+        task::run_tasks(py, &self.inner, task_classes, max_depth)
     }
 
     /// Returns a string representation of the Genja runtime instance.
@@ -1928,9 +1946,10 @@ mod tests {
             let err = python_hosts_to_inventory(not_a_dict.into_any())
                 .err()
                 .expect("non-dict input should fail");
-            assert!(err
-                .to_string()
-                .contains("hosts must be a dict mapping host id to host payload"));
+            assert!(
+                err.to_string()
+                    .contains("hosts must be a dict mapping host id to host payload")
+            );
         });
     }
 
@@ -2255,9 +2274,10 @@ mod tests {
                 .build()
                 .err()
                 .expect("consumed builder should not build twice");
-            assert!(err
-                .to_string()
-                .contains("genja builder has already been consumed"));
+            assert!(
+                err.to_string()
+                    .contains("genja builder has already been consumed")
+            );
             assert!(next_builder.build().is_ok());
         });
     }
@@ -2444,9 +2464,10 @@ mod tests {
             let err = PyGenja::from_settings_file("/nonexistent/path/settings.yaml", None)
                 .err()
                 .expect("invalid path should fail");
-            assert!(err
-                .to_string()
-                .contains("failed to build Genja runtime from settings file"));
+            assert!(
+                err.to_string()
+                    .contains("failed to build Genja runtime from settings file")
+            );
         });
     }
 
@@ -2462,9 +2483,10 @@ mod tests {
             let err = PyGenja::from_settings_file(settings_path.to_str().unwrap(), None)
                 .err()
                 .expect("malformed settings should fail");
-            assert!(err
-                .to_string()
-                .contains("failed to build Genja runtime from settings file"));
+            assert!(
+                err.to_string()
+                    .contains("failed to build Genja runtime from settings file")
+            );
             fs::remove_dir_all(&temp_dir).unwrap_or(());
         });
     }
