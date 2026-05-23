@@ -141,7 +141,7 @@
 //! # Run with custom depth limit for sub-tasks
 //! results = runtime.run_task(BackupTask, max_depth=5)
 //!
-//! # Run an ordered list of root task classes
+//! # Run an ordered Tasks collection
 //! tasks = genja.Tasks()
 //! tasks.add_task(BackupTask)
 //! all_results = runtime.run_tasks(tasks, max_depth=5)
