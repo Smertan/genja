@@ -132,7 +132,7 @@
 //! let config = RunnerConfig::default();
 //!
 //! // let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-//! // let results = runtime.block_on(runner.run(&task, &hosts, None, &config, 10))?;
+//! // let results = runtime.block_on(runner.run_task(&task, &hosts, None, &config, 10))?;
 //! # Ok(())
 //! # }
 //! ```
@@ -279,7 +279,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
     /// This method will return an error if:
     /// - A spawned Tokio task fails during execution
     /// - A host execution returns an error
-    async fn run(
+    async fn run_task(
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
@@ -375,7 +375,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
             results.push(
-                self.run(
+                self.run_task(
                     task,
                     hosts,
                     connection_resolver.clone(),

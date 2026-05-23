@@ -61,7 +61,7 @@
 //! (sequential, parallel, etc.).
 //!
 //! **Key Methods:**
-//! - `run()` - Execute a single task
+//! - `run_task()` - Execute a single task
 //! - `run_tasks()` - Execute an ordered list of root task trees
 //!
 //! ### [`PluginTransformFunction`]
@@ -241,7 +241,7 @@
 //!
 //! #[async_trait]
 //! impl PluginRunner for ExampleSequentialRunner {
-//!     async fn run(
+//!     async fn run_task(
 //!         &self,
 //!         task: &TaskDefinition,
 //!         hosts: &Hosts,
@@ -255,7 +255,7 @@
 //!     }
 //!
 //!     // `run_tasks(...)` has a default implementation that preserves task order
-//!     // and delegates each root task tree to `run(...)`. Override it only when
+//!     // and delegates each root task tree to `run_task(...)`. Override it only when
 //!     // the runner needs custom batching behavior.
 //! }
 //! ```
@@ -494,7 +494,7 @@ impl Debug for dyn PluginConnection {
 #[async_trait]
 pub trait PluginRunner: Plugin {
     /// Run a single task against the provided hosts.
-    async fn run(
+    async fn run_task(
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
@@ -506,7 +506,7 @@ pub trait PluginRunner: Plugin {
     /// Run all tasks in the provided task list against the provided hosts.
     ///
     /// The default implementation preserves the order of `tasks`, executing each
-    /// root task tree by delegating to [`Self::run`]. Runners can override this
+    /// root task tree by delegating to [`Self::run_task`]. Runners can override this
     /// when they need custom batching behavior.
     async fn run_tasks(
         &self,
@@ -519,7 +519,7 @@ pub trait PluginRunner: Plugin {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
             results.push(
-                self.run(
+                self.run_task(
                     task,
                     hosts,
                     connection_resolver.clone(),
@@ -741,7 +741,7 @@ mod tests {
 
     #[async_trait]
     impl PluginRunner for DummyRunner {
-        async fn run(
+        async fn run_task(
             &self,
             task: &TaskDefinition,
             _hosts: &Hosts,
@@ -932,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn runner_default_run_tasks_delegates_to_run_in_task_order() {
+    fn runner_default_run_tasks_delegates_to_run_task_in_task_order() {
         let runner = DummyRunner::new("run");
         let mut tasks = Tasks::new();
         tasks.add_task(DummyTask { name: "first" });

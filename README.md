@@ -81,13 +81,13 @@ assert_eq!(data_center.host_ids()[0].as_str(), "router1");
 ## Running Tasks
 
 Tasks are defined in `genja_core::task`. A single root task tree is executed
-through `Genja::run`; an ordered list of root task trees is executed through
+through `Genja::run_task`; an ordered list of root task trees is executed through
 `Genja::run_tasks`. The recommended pattern for a single task is:
 
 1. Define a struct for the task.
 2. Derive `Task` to generate `TaskInfo` and `SubTasks`.
 3. Implement `genja_core::task::Task` and return a `HostTaskResult` from `start()`.
-4. Run the task with `Genja::run(task, max_depth)`.
+4. Run the task with `Genja::run_task(task, max_depth)`.
 
 ### Derive Macro
 
@@ -143,7 +143,7 @@ let inventory = Inventory::builder().hosts(hosts).build();
 
 let genja = Genja::builder(inventory).build()?;
 
-let results = genja.run(
+let results = genja.run_task(
     CheckConfigTask {
         name: "check_config".to_string(),
         connection_plugin_name: Some("ssh".to_string()),
@@ -236,7 +236,7 @@ pub fn create_plugins() -> Vec<Plugins> {
 
 ### Task Execution Rules
 
-- `Genja::run` executes one full task tree once per selected host.
+- `Genja::run_task` executes one full task tree once per selected host.
 - `Genja::run_tasks` executes an ordered `Tasks` list. Each root task may have its own sub-task tree, and the returned `Vec<TaskResults>` preserves root task order.
 - The parent task runs before any of its sub-tasks.
 - The parent host result is recorded before sub-task execution starts.
@@ -319,7 +319,7 @@ let task = DeployTask {
     }),
 };
 
-let results = genja.run(task, 2)?;
+let results = genja.run_task(task, 2)?;
 
 assert!(results.host_result("router1").unwrap().is_passed());
 assert!(results.sub_task("validate").is_some());

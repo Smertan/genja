@@ -648,7 +648,7 @@ mod tests {
 
     #[async_trait]
     impl PluginRunner for DummyRunner {
-        async fn run(
+        async fn run_task(
             &self,
             _task: &genja_core::task::TaskDefinition,
             _hosts: &genja_core::inventory::Hosts,

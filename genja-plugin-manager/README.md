@@ -66,7 +66,7 @@ impl Plugin for MyPlugin {
 
 #[async_trait]
 impl PluginRunner for MyPlugin {
-    async fn run(
+    async fn run_task(
         &self,
         _task: &TaskDefinition,
         _hosts: &Hosts,
@@ -78,7 +78,7 @@ impl PluginRunner for MyPlugin {
     }
 
     // `run_tasks(...)` has a default implementation that preserves root task
-    // order and delegates each task tree to `run(...)`.
+    // order and delegates each task tree to `run_task(...)`.
 }
 
 #[unsafe(no_mangle)]

@@ -338,7 +338,7 @@
 //!   sub-task execution begins.
 //! - Sub-tasks run in the order returned by [`SubTasks::sub_tasks()`]. For the
 //!   derive macro, that means declaration order of fields marked with `#[task(subtask)]`.
-//! - Each host is executed independently. When running through `Genja::run`, the
+//! - Each host is executed independently. When running through `Genja::run_task`, the
 //!   full task tree is executed once per selected host.
 //! - Sub-task results are grouped by sub-task name. The `TaskResults` node for a
 //!   given sub-task contains per-host results accumulated across all hosts.
@@ -587,7 +587,7 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 use serde::Serialize;
 use serde_json::Value;
-use std::any::{type_name, Any};
+use std::any::{Any, type_name};
 use std::error::Error;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
@@ -4448,9 +4448,11 @@ mod tests {
         assert_eq!(failure.details(), Some(&json!({"port": 22})));
         assert_eq!(failure.warnings(), ["intermittent reachability"]);
         assert_eq!(failure.messages()[0].text(), "ssh session failed");
-        assert!(failure
-            .error_type()
-            .ends_with("task::tests::TestTaskFailureError"));
+        assert!(
+            failure
+                .error_type()
+                .ends_with("task::tests::TestTaskFailureError")
+        );
         assert!(failure.downcast_ref::<TestTaskFailureError>().is_some());
     }
 
@@ -4460,13 +4462,17 @@ mod tests {
             .with_kind(TaskFailureKind::Internal);
 
         assert_eq!(failure.message(), "external failure code 42");
-        assert!(failure
-            .error()
-            .to_string()
-            .contains("external failure code 42"));
-        assert!(failure
-            .error_type()
-            .ends_with("task::tests::ExternalFailurePayload"));
+        assert!(
+            failure
+                .error()
+                .to_string()
+                .contains("external failure code 42")
+        );
+        assert!(
+            failure
+                .error_type()
+                .ends_with("task::tests::ExternalFailurePayload")
+        );
         let payload = failure
             .downcast_ref::<ExternalFailurePayload>()
             .expect("captured payload should be downcastable");
@@ -4532,9 +4538,11 @@ mod tests {
             .expect("task error should be recorded as failure");
         assert_eq!(failure.message(), "external task error");
         assert!(matches!(failure.kind(), TaskFailureKind::External));
-        assert!(failure
-            .error_type()
-            .ends_with("task::tests::ExternalTaskError"));
+        assert!(
+            failure
+                .error_type()
+                .ends_with("task::tests::ExternalTaskError")
+        );
     }
 
     #[test]
@@ -4915,10 +4923,12 @@ mod tests {
                 .map(|warnings| warnings.len()),
             Some(1)
         );
-        assert!(validate
-            .host_result("router2")
-            .expect("router2 validate result should exist")
-            .is_skipped());
+        assert!(
+            validate
+                .host_result("router2")
+                .expect("router2 validate result should exist")
+                .is_skipped()
+        );
         assert_eq!(
             validate
                 .host_result("router2")

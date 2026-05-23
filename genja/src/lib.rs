@@ -829,11 +829,11 @@ impl Genja {
     /// let inventory = Inventory::builder().hosts(hosts).build();
     /// let genja = Genja::from_inventory(inventory);
     ///
-    /// let results = genja.run(MyTask, 0)?;
+    /// let results = genja.run_task(MyTask, 0)?;
     /// assert_eq!(results.passed_hosts().len(), 1);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn run<T: Task + 'static>(
+    pub fn run_task<T: Task + 'static>(
         &self,
         task: T,
         max_depth: usize,
@@ -876,7 +876,7 @@ impl Genja {
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
         let results = runtime.block_on(async {
             runner
-                .run(
+                .run_task(
                     &task_definition,
                     &hosts,
                     Some(connection_resolver),
@@ -1518,7 +1518,7 @@ mod tests {
         let genja = Genja::from_inventory(test_inventory());
 
         let results = genja
-            .run(
+            .run_task(
                 TestTask {
                     name: "test-task".to_string(),
                 },
@@ -1559,7 +1559,7 @@ mod tests {
             .expect("host filtering should succeed");
 
         let results = filtered
-            .run(
+            .run_task(
                 TestTask {
                     name: "filtered-task".to_string(),
                 },
@@ -1746,7 +1746,7 @@ mod tests {
             .expect("genja should build with threaded runner settings");
 
         let results = genja
-            .run(
+            .run_task(
                 TestTask {
                     name: "threaded-task".to_string(),
                 },
@@ -1805,7 +1805,7 @@ mod tests {
     fn run_preserves_failed_host_outcomes_and_timing() {
         let genja = Genja::from_inventory(test_inventory());
 
-        let results = genja.run(FailedTask, 0).expect("run should succeed");
+        let results = genja.run_task(FailedTask, 0).expect("run should succeed");
 
         assert_eq!(results.failed_hosts().len(), 2);
         let failure = results
@@ -1821,7 +1821,7 @@ mod tests {
     fn run_preserves_skipped_host_outcomes_in_summary() {
         let genja = Genja::from_inventory(test_inventory());
 
-        let results = genja.run(SkippedTask, 0).expect("run should succeed");
+        let results = genja.run_task(SkippedTask, 0).expect("run should succeed");
 
         assert_eq!(results.skipped_hosts().len(), 2);
         let summary = results.task_summary();
@@ -1848,7 +1848,7 @@ mod tests {
             .expect("genja should build with connection plugin");
 
         let results = genja
-            .run(
+            .run_task(
                 ConnectionAwareTask {
                     saw_connection: Arc::clone(&saw_connection),
                 },
@@ -1870,7 +1870,7 @@ mod tests {
     fn run_builds_recursive_sub_task_summary_with_duration() {
         let genja = Genja::from_inventory(test_inventory());
 
-        let results = genja.run(ParentTask, 1).expect("run should succeed");
+        let results = genja.run_task(ParentTask, 1).expect("run should succeed");
 
         let summary = results.task_summary();
         assert!(summary.duration_ms().is_some());

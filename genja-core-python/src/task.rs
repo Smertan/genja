@@ -518,7 +518,7 @@ pub fn run_task(
     let task = task_from_spec(&spec);
     let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
     let inner = py
-        .allow_threads(|| runtime.run(task, max_depth))
+        .allow_threads(|| runtime.run_task(task, max_depth))
         .map_err(|err| {
             PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
         })?;

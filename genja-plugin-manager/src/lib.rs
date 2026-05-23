@@ -62,7 +62,7 @@
 //!
 //! #[async_trait]
 //! impl PluginRunner for MyPlugin {
-//!     async fn run(
+//!     async fn run_task(
 //!         &self,
 //!         _task: &TaskDefinition,
 //!         _hosts: &Hosts,
@@ -75,7 +75,7 @@
 //!     }
 //!
 //!     // `run_tasks(...)` defaults to executing root task trees in order by
-//!     // delegating to `run(...)`. Override it only for custom batch behavior.
+//!     // delegating to `run_task(...)`. Override it only for custom batch behavior.
 //! }
 //!
 //! // Export plugin factory function
@@ -274,7 +274,7 @@
 //!
 //! #[async_trait]
 //! impl PluginRunner for ExampleSequentialRunner {
-//!     async fn run(
+//!     async fn run_task(
 //!         &self,
 //!         task: &TaskDefinition,
 //!         hosts: &Hosts,
@@ -288,7 +288,7 @@
 //!     }
 //!
 //!     // `run_tasks(...)` defaults to executing root task trees in order by
-//!     // delegating to `run(...)`. Override it only for custom batch behavior.
+//!     // delegating to `run_task(...)`. Override it only for custom batch behavior.
 //! }
 //! ```
 //!
@@ -1430,7 +1430,7 @@ inventory_a = "../this/path/does/not/exist.so"
 
     #[async_trait]
     impl PluginRunner for DummyRunner {
-        async fn run(
+        async fn run_task(
             &self,
             _task: &genja_core::task::TaskDefinition,
             _hosts: &genja_core::inventory::Hosts,
