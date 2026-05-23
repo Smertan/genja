@@ -142,7 +142,9 @@
 //! results = runtime.run_task(BackupTask, max_depth=5)
 //!
 //! # Run an ordered list of root task classes
-//! all_results = runtime.run_tasks([BackupTask], max_depth=5)
+//! tasks = genja.Tasks()
+//! tasks.add_task(BackupTask)
+//! all_results = runtime.run_tasks(tasks, max_depth=5)
 //! ```
 //!
 //! # Plugin Integration
@@ -1027,19 +1029,19 @@ impl PyGenja {
         task::run_task(py, &self.inner, task_class, max_depth)
     }
 
-    /// Executes an ordered list of task classes across all selected hosts.
+    /// Executes an ordered task list across all selected hosts.
     ///
-    /// Each task class is converted to a root task definition and may declare its
-    /// own nested sub-task tree. The returned list preserves input order, so
-    /// `results[n]` corresponds to `task_classes[n]`.
-    #[pyo3(signature = (task_classes, max_depth=None))]
+    /// Each entry in `tasks` is a root task definition and may declare its own
+    /// nested sub-task tree. The returned list preserves input order, so
+    /// `results[n]` corresponds to `tasks[n]`.
+    #[pyo3(signature = (tasks, max_depth=None))]
     fn run_tasks(
         &self,
         py: Python<'_>,
-        task_classes: Bound<'_, PyAny>,
+        tasks: Bound<'_, PyAny>,
         max_depth: Option<usize>,
     ) -> PyResult<Vec<PyTaskResults>> {
-        task::run_tasks(py, &self.inner, task_classes, max_depth)
+        task::run_tasks(py, &self.inner, tasks, max_depth)
     }
 
     /// Returns a string representation of the Genja runtime instance.

@@ -99,7 +99,11 @@ def test_runner_plugin_run_tasks_executes_from_python_side():
     assert first.passed_hosts == ["router1", "router2"]
     assert second.passed_hosts == ["router1", "router2"]
 
-    batch = runtime.run_tasks([PluginManagerRunnerTask, PluginManagerRunnerTaskTwo])
+    tasks = genja.Tasks()
+    tasks.add_task(PluginManagerRunnerTask)
+    tasks.add_task(PluginManagerRunnerTaskTwo)
+
+    batch = runtime.run_tasks(tasks)
 
     assert [result.task_name for result in batch] == [
         "plugin_manager_runner_task",

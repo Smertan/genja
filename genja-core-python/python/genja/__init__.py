@@ -21,6 +21,7 @@ from .genja import (
     TaskConnectionResolver,
     TaskDefinition,
     TaskResults,
+    Tasks,
 )
 from .connection import (
     ConnectionKey,
@@ -56,6 +57,7 @@ __all__ = [
     "HostTaskResult",
     "TaskConnectionResolver",
     "TaskDefinition",
+    "Tasks",
     "TaskResults",
     "Genja",
     "GenjaBuilder",

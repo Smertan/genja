@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any
 
 from .connection import (
     ConnectionKey,
@@ -69,6 +69,14 @@ class TaskDefinition:
         max_depth: int = 0,
     ) -> TaskResults: ...
 
+class Tasks:
+    def __init__(self) -> None: ...
+    def add_task(self, task_class: type[GenjaTaskProtocol]) -> None: ...
+    def task_definitions(self) -> list[TaskDefinition]: ...
+    def to_list(self) -> list[TaskDefinition]: ...
+    def __len__(self) -> int: ...
+    def __getitem__(self, index: int) -> TaskDefinition: ...
+
 class TaskResults:
     @property
     def task_name(self) -> str: ...
@@ -123,7 +131,7 @@ class Genja:
     ) -> TaskResults: ...
     def run_tasks(
         self,
-        task_classes: Sequence[type[GenjaTaskProtocol]],
+        tasks: Tasks,
         max_depth: int | None = None,
     ) -> list[TaskResults]: ...
 
@@ -137,6 +145,7 @@ __all__ = [
     "HostTaskResult",
     "TaskConnectionResolver",
     "TaskDefinition",
+    "Tasks",
     "TaskResults",
     "Genja",
     "GenjaBuilder",
