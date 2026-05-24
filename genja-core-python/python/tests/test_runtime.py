@@ -104,6 +104,55 @@ def test_genja_runtime_runs_python_task_definition():
     assert data["hosts"]["router2"]["metadata"]["platform"] == "ios"
 
 
+def test_genja_runtime_runs_ordered_task_list_with_nested_subtasks():
+    runtime = genja.Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+        "router2": Host(hostname="10.0.0.2", platform="ios"),
+    }).with_runner("serial")
+    tasks = genja.Tasks()
+    tasks.add_task(RuntimeBackupTask)
+    tasks.add_task(RuntimeParentTask)
+
+    assert len(tasks) == 2
+    assert tasks[0].name == "runtime_backup"
+    assert tasks[-1].name == "runtime_parent"
+    assert [task.name for task in tasks.to_list()] == [
+        "runtime_backup",
+        "runtime_parent",
+    ]
+
+    results = runtime.run_tasks(tasks, max_depth=1)
+
+    assert [result.task_name for result in results] == [
+        "runtime_backup",
+        "runtime_parent",
+    ]
+    assert results[0].passed_hosts == ["router1", "router2"]
+    assert results[1].passed_hosts == ["router1", "router2"]
+
+    parent_data = results[1].to_dict(raw=True)
+    assert "runtime_child" in parent_data["sub_tasks"]
+    assert parent_data["sub_tasks"]["runtime_child"]["hosts"]["router1"]["Passed"][
+        "metadata"
+    ] == {
+        "current_depth": 1,
+        "max_depth": 1,
+    }
+
+
+def test_genja_runtime_run_tasks_rejects_plain_task_iterable():
+    runtime = genja.Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
+
+    try:
+        runtime.run_tasks([RuntimeBackupTask, RuntimeParentTask], max_depth=1)
+    except ValueError as err:
+        assert "tasks must be a genja.Tasks instance" in str(err)
+    else:
+        raise AssertionError("plain task iterables should be rejected")
+
+
 def test_task_results_to_dict_normalizes_non_raw_and_preserves_raw_shape():
     runtime = genja.Genja.from_hosts({
         "router1": Host(hostname="10.0.0.1", platform="ios"),

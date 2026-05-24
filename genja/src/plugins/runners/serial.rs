@@ -65,7 +65,7 @@
 //! let config = RunnerConfig::default();
 //!
 //! let runtime = Builder::new_current_thread().enable_all().build().unwrap();
-//! let results = runtime.block_on(runner.run(&task, &hosts, None, &config, 10))?;
+//! let results = runtime.block_on(runner.run_task(&task, &hosts, None, &config, 10))?;
 //! # Ok::<(), genja_core::GenjaError>(())
 //! ```
 //!
@@ -121,7 +121,7 @@ impl PluginRunner for SerialRunnerPlugin {
     ///
     /// Returns `Ok(TaskResults)` containing the results of the task execution across all hosts,
     /// or `Err(GenjaError)` if the task execution fails.
-    async fn run(
+    async fn run_task(
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
@@ -137,14 +137,14 @@ impl PluginRunner for SerialRunnerPlugin {
     /// Executes all task definitions sequentially.
     ///
     /// This method runs each task in `tasks` one after another. For each task, host
-    /// execution is also serial because it delegates to [`Self::run`].
+    /// execution is also serial because it delegates to [`Self::run_task`].
     ///
     /// # Parameters
     ///
     /// * `tasks` - The ordered list of task definitions to execute.
     /// * `hosts` - The inventory of hosts on which to execute each task.
     /// * `connection_resolver` - Optional shared resolver used for per-host connection selection.
-    /// * `runner_config` - The runner configuration forwarded to [`Self::run`].
+    /// * `runner_config` - The runner configuration forwarded to [`Self::run_task`].
     /// * `max_depth` - The maximum depth for nested task execution.
     ///
     /// # Returns
@@ -162,7 +162,7 @@ impl PluginRunner for SerialRunnerPlugin {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
             results.push(
-                self.run(
+                self.run_task(
                     task,
                     hosts,
                     connection_resolver.clone(),

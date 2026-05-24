@@ -61,7 +61,7 @@ use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
     Task, TaskConnectionResolver, TaskDefinition, TaskInfo, TaskProcessorResolver, TaskResults,
-    TaskResultsSummary,
+    TaskResultsSummary, Tasks,
 };
 use genja_core::{NatString, Settings};
 use genja_plugin_manager::PluginManager;
@@ -829,13 +829,21 @@ impl Genja {
     /// let inventory = Inventory::builder().hosts(hosts).build();
     /// let genja = Genja::from_inventory(inventory);
     ///
-    /// let results = genja.run(MyTask, 0)?;
+    /// let results = genja.run_task(MyTask, 0)?;
     /// assert_eq!(results.passed_hosts().len(), 1);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn run<T: Task + 'static>(
+    pub fn run_task<T: Task + 'static>(
         &self,
         task: T,
+        max_depth: usize,
+    ) -> Result<TaskResults, GenjaError> {
+        self.run_task_definition(TaskDefinition::new(task), max_depth)
+    }
+
+    fn run_task_definition(
+        &self,
+        task_definition: TaskDefinition,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
         let hosts = self.selected_hosts()?;
@@ -847,7 +855,7 @@ impl Genja {
         let processor_resolver: Arc<dyn TaskProcessorResolver> = self.plugins.clone();
         let connection_resolver: Arc<dyn TaskConnectionResolver> =
             Arc::new(RuntimeTaskConnectionResolver::new(Arc::clone(inventory)));
-        let task_definition = TaskDefinition::new(task).with_processor_resolver(processor_resolver);
+        let task_definition = task_definition.with_processor_resolver(processor_resolver);
         let runner_name = self.settings.runner().plugin();
         info!(
             "executing task '{}' with runner='{}' selected_hosts={} max_depth={}",
@@ -868,7 +876,7 @@ impl Genja {
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
         let results = runtime.block_on(async {
             runner
-                .run(
+                .run_task(
                     &task_definition,
                     &hosts,
                     Some(connection_resolver),
@@ -879,6 +887,68 @@ impl Genja {
         })?;
         let summary = results.task_summary();
         log_task_summary(&summary, host_count, 0);
+        Ok(results)
+    }
+
+    /// Executes an ordered list of root task trees using the configured runner plugin.
+    ///
+    /// Each root task in `tasks` may have its own nested sub-tasks. The returned vector
+    /// preserves the order of the root task list, so `results[n]` corresponds to
+    /// `tasks[n]`.
+    pub fn run_tasks(
+        &self,
+        mut tasks: Tasks,
+        max_depth: usize,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        let hosts = self.selected_hosts()?;
+        let host_count = hosts.len();
+        let inventory = self
+            .inventory
+            .as_ref()
+            .ok_or(GenjaError::InventoryNotLoaded)?;
+        let processor_resolver: Arc<dyn TaskProcessorResolver> = self.plugins.clone();
+        let connection_resolver: Arc<dyn TaskConnectionResolver> =
+            Arc::new(RuntimeTaskConnectionResolver::new(Arc::clone(inventory)));
+        for task_definition in tasks.iter_mut() {
+            *task_definition = task_definition
+                .clone()
+                .with_processor_resolver(processor_resolver.clone());
+        }
+
+        let runner_name = self.settings.runner().plugin();
+        let task_names = tasks
+            .iter()
+            .map(|task| task.name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        info!(
+            "executing {} task(s) with runner='{}' selected_hosts={} max_depth={} tasks=[{}]",
+            tasks.len(),
+            runner_name,
+            host_count,
+            max_depth,
+            task_names
+        );
+        let runner = self.get_runner_plugin(runner_name)?;
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
+        let results = runtime.block_on(async {
+            runner
+                .run_tasks(
+                    &tasks,
+                    &hosts,
+                    Some(connection_resolver),
+                    self.settings.runner(),
+                    max_depth,
+                )
+                .await
+        })?;
+        for result in &results {
+            let summary = result.task_summary();
+            log_task_summary(&summary, host_count, 0);
+        }
         Ok(results)
     }
 }
@@ -957,12 +1027,12 @@ mod tests {
     };
     use genja_core::settings::RunnerConfig;
     use genja_core::task::{
-        HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+        HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
     };
     use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, Plugins};
     use serde_json::{Value, json};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
 
     struct TestTask {
         name: String,
@@ -1102,6 +1172,12 @@ mod tests {
 
     struct ParentTask;
 
+    struct RecordingTask {
+        name: &'static str,
+        sub_tasks: Vec<Arc<dyn Task>>,
+        order: Arc<Mutex<Vec<&'static str>>>,
+    }
+
     #[derive(Debug)]
     struct TestConnectionPlugin;
 
@@ -1154,6 +1230,63 @@ mod tests {
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    impl RecordingTask {
+        fn leaf(name: &'static str, order: Arc<Mutex<Vec<&'static str>>>) -> Self {
+            Self {
+                name,
+                sub_tasks: Vec::new(),
+                order,
+            }
+        }
+
+        fn parent(
+            name: &'static str,
+            sub_tasks: Vec<Arc<dyn Task>>,
+            order: Arc<Mutex<Vec<&'static str>>>,
+        ) -> Self {
+            Self {
+                name,
+                sub_tasks,
+                order,
+            }
+        }
+    }
+
+    impl TaskInfo for RecordingTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            None
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for RecordingTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            self.sub_tasks.clone()
+        }
+    }
+
+    #[async_trait]
+    impl Task for RecordingTask {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.order
+                .lock()
+                .expect("order mutex should not be poisoned")
+                .push(self.name);
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
     }
@@ -1306,6 +1439,13 @@ mod tests {
         Inventory::builder().hosts(hosts).build()
     }
 
+    fn single_host_inventory() -> Inventory {
+        let mut hosts = Hosts::new();
+        hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+
+        Inventory::builder().hosts(hosts).build()
+    }
+
     fn test_inventory_with_data() -> Inventory {
         let mut hosts = Hosts::new();
         hosts.add_host(
@@ -1378,7 +1518,7 @@ mod tests {
         let genja = Genja::from_inventory(test_inventory());
 
         let results = genja
-            .run(
+            .run_task(
                 TestTask {
                     name: "test-task".to_string(),
                 },
@@ -1419,7 +1559,7 @@ mod tests {
             .expect("host filtering should succeed");
 
         let results = filtered
-            .run(
+            .run_task(
                 TestTask {
                     name: "filtered-task".to_string(),
                 },
@@ -1606,7 +1746,7 @@ mod tests {
             .expect("genja should build with threaded runner settings");
 
         let results = genja
-            .run(
+            .run_task(
                 TestTask {
                     name: "threaded-task".to_string(),
                 },
@@ -1622,10 +1762,50 @@ mod tests {
     }
 
     #[test]
+    fn run_tasks_accepts_ordered_task_list_with_nested_subtasks() {
+        let genja = Genja::from_inventory(single_host_inventory());
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let validate_config = Arc::new(RecordingTask::leaf("validate_config", order.clone()));
+        let upload_artifact = Arc::new(RecordingTask::leaf("upload_artifact", order.clone()));
+
+        let mut tasks = Tasks::new();
+        tasks.add_task(RecordingTask::leaf("collect_facts", order.clone()));
+        tasks.add_task(RecordingTask::parent(
+            "deploy_changes",
+            vec![validate_config, upload_artifact],
+            order.clone(),
+        ));
+        tasks.add_task(RecordingTask::leaf("collect_logs", order.clone()));
+
+        let results = genja
+            .run_tasks(tasks, 10)
+            .expect("task list should execute");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].task_name(), "collect_facts");
+        assert_eq!(results[1].task_name(), "deploy_changes");
+        assert!(results[1].sub_task("validate_config").is_some());
+        assert!(results[1].sub_task("upload_artifact").is_some());
+        assert_eq!(results[2].task_name(), "collect_logs");
+
+        let order = order.lock().expect("order mutex should not be poisoned");
+        assert_eq!(
+            order.as_slice(),
+            [
+                "collect_facts",
+                "deploy_changes",
+                "validate_config",
+                "upload_artifact",
+                "collect_logs"
+            ]
+        );
+    }
+
+    #[test]
     fn run_preserves_failed_host_outcomes_and_timing() {
         let genja = Genja::from_inventory(test_inventory());
 
-        let results = genja.run(FailedTask, 0).expect("run should succeed");
+        let results = genja.run_task(FailedTask, 0).expect("run should succeed");
 
         assert_eq!(results.failed_hosts().len(), 2);
         let failure = results
@@ -1641,7 +1821,7 @@ mod tests {
     fn run_preserves_skipped_host_outcomes_in_summary() {
         let genja = Genja::from_inventory(test_inventory());
 
-        let results = genja.run(SkippedTask, 0).expect("run should succeed");
+        let results = genja.run_task(SkippedTask, 0).expect("run should succeed");
 
         assert_eq!(results.skipped_hosts().len(), 2);
         let summary = results.task_summary();
@@ -1668,7 +1848,7 @@ mod tests {
             .expect("genja should build with connection plugin");
 
         let results = genja
-            .run(
+            .run_task(
                 ConnectionAwareTask {
                     saw_connection: Arc::clone(&saw_connection),
                 },
@@ -1690,7 +1870,7 @@ mod tests {
     fn run_builds_recursive_sub_task_summary_with_duration() {
         let genja = Genja::from_inventory(test_inventory());
 
-        let results = genja.run(ParentTask, 1).expect("run should succeed");
+        let results = genja.run_task(ParentTask, 1).expect("run should succeed");
 
         let summary = results.task_summary();
         assert!(summary.duration_ms().is_some());

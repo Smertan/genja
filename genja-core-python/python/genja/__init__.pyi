@@ -11,7 +11,7 @@ from .connection import (
 from .inventory import InventoryPluginProtocol
 from .plugin_manager import PluginManager
 from .processor import TaskProcessorContext, TaskProcessorProtocol
-from .runner import RunnerPluginProtocol
+from .runner import BatchRunnerPluginProtocol, RunnerPluginProtocol
 from .settings import (
     CoreConfig,
     InventoryConfig,
@@ -69,6 +69,14 @@ class TaskDefinition:
         max_depth: int = 0,
     ) -> TaskResults: ...
 
+class Tasks:
+    def __init__(self) -> None: ...
+    def add_task(self, task_class: type[GenjaTaskProtocol]) -> None: ...
+    def task_definitions(self) -> list[TaskDefinition]: ...
+    def to_list(self) -> list[TaskDefinition]: ...
+    def __len__(self) -> int: ...
+    def __getitem__(self, index: int) -> TaskDefinition: ...
+
 class TaskResults:
     @property
     def task_name(self) -> str: ...
@@ -121,6 +129,11 @@ class Genja:
         task_class: type[GenjaTaskProtocol],
         max_depth: int | None = None,
     ) -> TaskResults: ...
+    def run_tasks(
+        self,
+        tasks: Tasks,
+        max_depth: int | None = None,
+    ) -> list[TaskResults]: ...
 
 class GenjaBuilder:
     def with_plugin(self, plugin: Any) -> GenjaBuilder: ...
@@ -132,6 +145,7 @@ __all__ = [
     "HostTaskResult",
     "TaskConnectionResolver",
     "TaskDefinition",
+    "Tasks",
     "TaskResults",
     "Genja",
     "GenjaBuilder",
@@ -145,6 +159,7 @@ __all__ = [
     "TaskProcessorContext",
     "TaskProcessorProtocol",
     "RunnerPluginProtocol",
+    "BatchRunnerPluginProtocol",
     "TransformFunctionPluginProtocol",
     "Settings",
     "CoreConfig",

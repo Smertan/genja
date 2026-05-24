@@ -11,6 +11,9 @@
 //!
 //! - **Task Definition**: Tasks implement the [`Task`] trait, which combines metadata
 //!   ([`TaskInfo`]) with execution logic and optional sub-tasks ([`SubTasks`]).
+//! - **Task Collections**: [`Tasks`] stores an ordered list of root
+//!   [`TaskDefinition`] values. Each root task may own its own sub-task tree, so a
+//!   `Tasks` value represents a forest of task trees.
 //! - **Task Execution**: Tasks execute against hosts and return [`HostTaskResult`]
 //!   indicating success, failure, or skip status.
 //! - **Result Tracking**: The [`TaskResults`] structure maintains a hierarchical tree
@@ -338,8 +341,12 @@
 //!   sub-task execution begins.
 //! - Sub-tasks run in the order returned by [`SubTasks::sub_tasks()`]. For the
 //!   derive macro, that means declaration order of fields marked with `#[task(subtask)]`.
-//! - Each host is executed independently. When running through `Genja::run`, the
-//!   full task tree is executed once per selected host.
+//! - Each host is executed independently. When running a single task, the full task
+//!   tree is executed once per selected host.
+//! - [`Tasks`] preserves insertion order for root tasks. Runners execute each root
+//!   task definition in that order unless a runner explicitly documents a different
+//!   scheduling policy, and each returned [`TaskResults`] entry corresponds to the
+//!   root task at the same position.
 //! - Sub-task results are grouped by sub-task name. The `TaskResults` node for a
 //!   given sub-task contains per-host results accumulated across all hosts.
 //! - The framework does not automatically skip sub-tasks when a parent fails or is
@@ -561,16 +568,52 @@
 //!
 //! ## [`Tasks`]
 //!
-//! A collection type for managing multiple task definitions. It provides a
-//! convenient way to build and execute task lists.
+//! A collection type for managing an ordered list of root task definitions.
+//! Each root task may have its own nested sub-task tree. Runtime runners execute
+//! the list as a forest of task trees and return results in the same root order.
 //!
 //! ```rust
-//! use genja_core::task::Tasks;
+//! use async_trait::async_trait;
+//! use genja_core::inventory::Host;
+//! use genja_core::task::{
+//!     HostTaskResult, SubTasks, Task, TaskInfo, TaskRuntimeContext, TaskSuccess,
+//!     Tasks,
+//! };
+//! use std::sync::Arc;
+//!
+//! struct WorkflowTask {
+//!     name: &'static str,
+//! }
+//!
+//! impl TaskInfo for WorkflowTask {
+//!     fn name(&self) -> &str {
+//!         self.name
+//!     }
+//! }
+//!
+//! impl SubTasks for WorkflowTask {
+//!     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+//!         Vec::new()
+//!     }
+//! }
+//!
+//! #[async_trait]
+//! impl Task for WorkflowTask {
+//!     async fn start(
+//!         &self,
+//!         _host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!         Ok(HostTaskResult::passed(TaskSuccess::new()))
+//!     }
+//! }
 //!
 //! let mut tasks = Tasks::new();
-//! // tasks.add_task(deploy_task);
-//! // tasks.add_task(validate_task);
-//! // tasks.add_task(cleanup_task);
+//! tasks.add_task(WorkflowTask { name: "collect_facts" });
+//! tasks.add_task(WorkflowTask { name: "deploy_changes" });
+//! tasks.add_task(WorkflowTask { name: "verify_health" });
+//!
+//! assert_eq!(tasks.len(), 3);
 //! ```
 //!
 //! # Advanced Usage
@@ -586,7 +629,7 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 use serde::Serialize;
 use serde_json::Value;
-use std::any::{type_name, Any};
+use std::any::{Any, type_name};
 use std::error::Error;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
@@ -3852,6 +3895,57 @@ impl SubTasks for TaskDefinition {
     }
 }
 
+/// A collection of task definitions that can be executed together.
+///
+/// `Tasks` is a wrapper around a vector of [`TaskDefinition`] instances, providing
+/// a convenient way to manage and organize multiple tasks. It implements `Deref` and
+/// `DerefMut` to allow direct access to the underlying vector's methods.
+///
+/// This type is particularly useful when building a sequence of tasks to be executed
+/// as part of a larger workflow or playbook. Tasks can be added individually using
+/// the [`add_task`](Tasks::add_task) method.
+///
+/// # Example
+///
+/// ```rust
+/// use genja_core::task::Tasks;
+/// use async_trait::async_trait;
+/// use genja_core::task::{Task, TaskInfo, TaskRuntimeContext, HostTaskResult, TaskSuccess, SubTasks};
+/// use genja_core::inventory::Host;
+/// use std::sync::Arc;
+///
+/// struct MyTask {
+///     name: String,
+/// }
+///
+/// impl TaskInfo for MyTask {
+///     fn name(&self) -> &str {
+///         &self.name
+///     }
+/// }
+///
+/// impl SubTasks for MyTask {
+///     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+///         Vec::new()
+///     }
+/// }
+///
+/// #[async_trait]
+/// impl Task for MyTask {
+///     async fn start(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(TaskSuccess::new()))
+///     }
+/// }
+///
+/// let mut tasks = Tasks::new();
+/// tasks.add_task(MyTask { name: "deploy".to_string() });
+/// tasks.add_task(MyTask { name: "validate".to_string() });
+/// assert_eq!(tasks.len(), 2);
+/// ```
 #[derive(Default)]
 pub struct Tasks(Vec<TaskDefinition>);
 
@@ -4447,9 +4541,11 @@ mod tests {
         assert_eq!(failure.details(), Some(&json!({"port": 22})));
         assert_eq!(failure.warnings(), ["intermittent reachability"]);
         assert_eq!(failure.messages()[0].text(), "ssh session failed");
-        assert!(failure
-            .error_type()
-            .ends_with("task::tests::TestTaskFailureError"));
+        assert!(
+            failure
+                .error_type()
+                .ends_with("task::tests::TestTaskFailureError")
+        );
         assert!(failure.downcast_ref::<TestTaskFailureError>().is_some());
     }
 
@@ -4459,13 +4555,17 @@ mod tests {
             .with_kind(TaskFailureKind::Internal);
 
         assert_eq!(failure.message(), "external failure code 42");
-        assert!(failure
-            .error()
-            .to_string()
-            .contains("external failure code 42"));
-        assert!(failure
-            .error_type()
-            .ends_with("task::tests::ExternalFailurePayload"));
+        assert!(
+            failure
+                .error()
+                .to_string()
+                .contains("external failure code 42")
+        );
+        assert!(
+            failure
+                .error_type()
+                .ends_with("task::tests::ExternalFailurePayload")
+        );
         let payload = failure
             .downcast_ref::<ExternalFailurePayload>()
             .expect("captured payload should be downcastable");
@@ -4531,9 +4631,11 @@ mod tests {
             .expect("task error should be recorded as failure");
         assert_eq!(failure.message(), "external task error");
         assert!(matches!(failure.kind(), TaskFailureKind::External));
-        assert!(failure
-            .error_type()
-            .ends_with("task::tests::ExternalTaskError"));
+        assert!(
+            failure
+                .error_type()
+                .ends_with("task::tests::ExternalTaskError")
+        );
     }
 
     #[test]
@@ -4914,10 +5016,12 @@ mod tests {
                 .map(|warnings| warnings.len()),
             Some(1)
         );
-        assert!(validate
-            .host_result("router2")
-            .expect("router2 validate result should exist")
-            .is_skipped());
+        assert!(
+            validate
+                .host_result("router2")
+                .expect("router2 validate result should exist")
+                .is_skipped()
+        );
         assert_eq!(
             validate
                 .host_result("router2")
