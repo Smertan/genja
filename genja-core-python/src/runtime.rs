@@ -125,7 +125,8 @@
 //!
 //! # Task Execution
 //!
-//! Execute decorated Python task classes across hosts:
+//! Execute a single decorated Python task class or an ordered `Tasks`
+//! collection across hosts:
 //!
 //! ```python
 //! from genja.task import Host, TaskSuccessResult, task
