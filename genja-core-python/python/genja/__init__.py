@@ -21,6 +21,7 @@ from .genja import (
     TaskConnectionResolver,
     TaskDefinition,
     TaskResults,
+    Tasks,
 )
 from .connection import (
     ConnectionKey,
@@ -31,7 +32,7 @@ from .connection import (
 from .inventory import InventoryPluginProtocol
 from .plugin_manager import PluginManager
 from .processor import TaskProcessorContext, TaskProcessorProtocol
-from .runner import RunnerPluginProtocol
+from .runner import BatchRunnerPluginProtocol, RunnerPluginProtocol
 from .settings import Settings
 from .task import (
     GenjaTaskProtocol,
@@ -56,6 +57,7 @@ __all__ = [
     "HostTaskResult",
     "TaskConnectionResolver",
     "TaskDefinition",
+    "Tasks",
     "TaskResults",
     "Genja",
     "GenjaBuilder",
@@ -69,6 +71,7 @@ __all__ = [
     "TaskProcessorContext",
     "TaskProcessorProtocol",
     "RunnerPluginProtocol",
+    "BatchRunnerPluginProtocol",
     "TransformFunctionPluginProtocol",
     "Settings",
     "CoreConfig",

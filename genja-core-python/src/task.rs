@@ -3,14 +3,14 @@ use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
     HostTaskResult, MessageLevel, SubTasks, Task, TaskConnectionResolver, TaskDefinition,
     TaskError, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
-    TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess,
+    TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
 };
 use async_trait::async_trait;
 use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -188,6 +188,12 @@ pub struct PyTaskDefinition {
     inner: TaskDefinition,
 }
 
+#[pyclass(name = "Tasks")]
+#[derive(Clone, Default)]
+pub struct PyTasks {
+    specs: Vec<PythonTaskSpec>,
+}
+
 #[pyclass(name = "TaskConnectionResolver")]
 #[derive(Clone)]
 pub struct PyTaskConnectionResolver {
@@ -299,6 +305,74 @@ impl PyTaskDefinition {
 impl PyTaskDefinition {
     pub(crate) fn from_runtime_definition(inner: TaskDefinition) -> Self {
         Self { spec: None, inner }
+    }
+}
+
+#[pymethods]
+impl PyTasks {
+    #[new]
+    fn new() -> Self {
+        Self::default()
+    }
+
+    #[pyo3(signature = (task_class))]
+    fn add_task(&mut self, task_class: Bound<'_, PyAny>) -> PyResult<()> {
+        self.specs.push(extract_python_task_spec(task_class)?);
+        Ok(())
+    }
+
+    fn task_definitions(&self) -> Vec<PyTaskDefinition> {
+        self.specs
+            .iter()
+            .cloned()
+            .map(|spec| PyTaskDefinition {
+                inner: task_definition_from_spec(&spec),
+                spec: Some(spec),
+            })
+            .collect()
+    }
+
+    fn to_list(&self) -> Vec<PyTaskDefinition> {
+        self.task_definitions()
+    }
+
+    fn __len__(&self) -> usize {
+        self.specs.len()
+    }
+
+    fn __getitem__(&self, index: isize) -> PyResult<PyTaskDefinition> {
+        let len = self.specs.len() as isize;
+        let index = if index < 0 { len + index } else { index };
+        if index < 0 || index >= len {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                "task index out of range",
+            ));
+        }
+        let spec = self.specs[index as usize].clone();
+        Ok(PyTaskDefinition {
+            inner: task_definition_from_spec(&spec),
+            spec: Some(spec),
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        let names = self
+            .specs
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("Tasks([{names}])")
+    }
+}
+
+impl PyTasks {
+    fn to_runtime_tasks(&self) -> Tasks {
+        let mut tasks = Tasks::new();
+        for spec in &self.specs {
+            tasks.push(task_definition_from_spec(spec));
+        }
+        tasks
     }
 }
 
@@ -444,16 +518,40 @@ pub fn run_task(
     let task = task_from_spec(&spec);
     let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
     let inner = py
-        .allow_threads(|| runtime.run(task, max_depth))
+        .allow_threads(|| runtime.run_task(task, max_depth))
         .map_err(|err| {
             PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
         })?;
     Ok(PyTaskResults { inner })
 }
 
+pub fn run_tasks(
+    py: Python<'_>,
+    runtime: &RuntimeGenja,
+    task_input: Bound<'_, PyAny>,
+    max_depth: Option<usize>,
+) -> PyResult<Vec<PyTaskResults>> {
+    let tasks = task_input
+        .extract::<PyRef<'_, PyTasks>>()
+        .map_err(|_| PyValueError::new_err("tasks must be a genja.Tasks instance"))?
+        .to_runtime_tasks();
+
+    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+    let results = py
+        .allow_threads(|| runtime.run_tasks(tasks, max_depth))
+        .map_err(|err| {
+            PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
+        })?;
+    Ok(results
+        .into_iter()
+        .map(|inner| PyTaskResults { inner })
+        .collect())
+}
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyHostTaskResult>()?;
     module.add_class::<PyTaskDefinition>()?;
+    module.add_class::<PyTasks>()?;
     module.add_class::<PyTaskConnectionResolver>()?;
     module.add_class::<PyTaskResults>()?;
     Ok(())
@@ -1246,16 +1344,18 @@ mod tests {
             result
                 .set_item(
                     "messages",
-                    vec![json_value_to_py(
-                        py,
-                        &json!({
-                            "level": "info",
-                            "text": "backup complete",
-                            "code": "BACKUP_DONE",
-                            "timestamp": "2026-04-29T12:00:00Z",
-                        }),
-                    )
-                    .unwrap()],
+                    vec![
+                        json_value_to_py(
+                            py,
+                            &json!({
+                                "level": "info",
+                                "text": "backup complete",
+                                "code": "BACKUP_DONE",
+                                "timestamp": "2026-04-29T12:00:00Z",
+                            }),
+                        )
+                        .unwrap(),
+                    ],
                 )
                 .unwrap();
             result
@@ -1288,9 +1388,10 @@ mod tests {
 
             let err = python_result_to_host_task_result(result.into_any())
                 .expect_err("unknown status should fail");
-            assert!(err
-                .to_string()
-                .contains("unsupported python task result status 'unknown'"));
+            assert!(
+                err.to_string()
+                    .contains("unsupported python task result status 'unknown'")
+            );
         });
     }
 
@@ -1387,9 +1488,11 @@ mod tests {
             let err = extract_python_task_spec(task)
                 .err()
                 .expect("empty plugin should fail");
-            assert!(err
-                .to_string()
-                .contains("python task metadata field 'connection_plugin_name' must not be empty"));
+            assert!(
+                err.to_string().contains(
+                    "python task metadata field 'connection_plugin_name' must not be empty"
+                )
+            );
         });
     }
 

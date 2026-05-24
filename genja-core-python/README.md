@@ -48,6 +48,12 @@ genja = genja.Genja.from_hosts(
 
 results = genja.run_task(BackupTask)
 print(results.to_dict())
+
+tasks = genja.Tasks()
+tasks.add_task(BackupTask)
+
+all_results = genja.run_tasks(tasks)
+print([result.task_name for result in all_results])
 ```
 
 ## Full Inventory

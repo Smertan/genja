@@ -132,7 +132,7 @@
 //! let config = RunnerConfig::default();
 //!
 //! // let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-//! // let results = runtime.block_on(runner.run(&task, &hosts, None, &config, 10))?;
+//! // let results = runtime.block_on(runner.run_task(&task, &hosts, None, &config, 10))?;
 //! # Ok(())
 //! # }
 //! ```
@@ -161,12 +161,14 @@
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let runner = ThreadedRunnerPlugin;
-//! // let tasks = Tasks::new(vec![task1, task2, task3]);
-//! # let tasks = Tasks::new();
+//! let mut tasks = Tasks::new();
+//! // tasks.add_task(task1);
+//! // tasks.add_task(task2);
+//! // tasks.add_task(task3);
 //! # let hosts = Hosts::new();
 //! # let config = RunnerConfig::default();
 //!
-//! // Execute all tasks sequentially, each with parallel host execution
+//! // Execute root tasks in order, each with parallel host execution
 //! let runtime = Builder::new_current_thread().enable_all().build().unwrap();
 //! let all_results = runtime.block_on(runner.run_tasks(&tasks, &hosts, None, &config, 10))?;
 //! # Ok(())
@@ -277,7 +279,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
     /// This method will return an error if:
     /// - A spawned Tokio task fails during execution
     /// - A host execution returns an error
-    async fn run(
+    async fn run_task(
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
@@ -373,7 +375,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
             results.push(
-                self.run(
+                self.run_task(
                     task,
                     hosts,
                     connection_resolver.clone(),

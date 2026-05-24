@@ -61,8 +61,8 @@
 //! (sequential, parallel, etc.).
 //!
 //! **Key Methods:**
-//! - `run()` - Execute a single task
-//! - `run_tasks()` - Execute multiple tasks in sequence
+//! - `run_task()` - Execute a single task
+//! - `run_tasks()` - Execute an ordered list of root task trees
 //!
 //! ### [`PluginTransformFunction`]
 //! Provides inventory transformation functions for normalizing or modifying
@@ -227,7 +227,7 @@
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 //! use genja_core::inventory::Hosts;
 //! use genja_core::settings::RunnerConfig;
-//! use genja_core::task::{TaskDefinition, TaskResults, Tasks};
+//! use genja_core::task::{TaskDefinition, TaskResults};
 //!
 //! #[derive(Debug)]
 //! struct ExampleSequentialRunner;
@@ -241,7 +241,7 @@
 //!
 //! #[async_trait]
 //! impl PluginRunner for ExampleSequentialRunner {
-//!     async fn run(
+//!     async fn run_task(
 //!         &self,
 //!         task: &TaskDefinition,
 //!         hosts: &Hosts,
@@ -254,18 +254,9 @@
 //!         Ok(TaskResults::new("example_sequential"))
 //!     }
 //!
-//!     async fn run_tasks(
-//!         &self,
-//!         tasks: &Tasks,
-//!         hosts: &Hosts,
-//!         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
-//!         runner_config: &RunnerConfig,
-//!         max_depth: usize,
-//!     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
-//!         // Execute all tasks sequentially
-//!         let _ = (tasks, hosts, connection_resolver, runner_config, max_depth);
-//!         Ok(Vec::new())
-//!     }
+//!     // `run_tasks(...)` has a default implementation that preserves task order
+//!     // and delegates each root task tree to `run_task(...)`. Override it only when
+//!     // the runner needs custom batching behavior.
 //! }
 //! ```
 //!
@@ -503,7 +494,7 @@ impl Debug for dyn PluginConnection {
 #[async_trait]
 pub trait PluginRunner: Plugin {
     /// Run a single task against the provided hosts.
-    async fn run(
+    async fn run_task(
         &self,
         task: &TaskDefinition,
         hosts: &Hosts,
@@ -513,6 +504,10 @@ pub trait PluginRunner: Plugin {
     ) -> Result<TaskResults, genja_core::GenjaError>;
 
     /// Run all tasks in the provided task list against the provided hosts.
+    ///
+    /// The default implementation preserves the order of `tasks`, executing each
+    /// root task tree by delegating to [`Self::run_task`]. Runners can override this
+    /// when they need custom batching behavior.
     async fn run_tasks(
         &self,
         tasks: &Tasks,
@@ -520,7 +515,22 @@ pub trait PluginRunner: Plugin {
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
         max_depth: usize,
-    ) -> Result<Vec<TaskResults>, genja_core::GenjaError>;
+    ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
+        let mut results = Vec::with_capacity(tasks.len());
+        for task in tasks.iter() {
+            results.push(
+                self.run_task(
+                    task,
+                    hosts,
+                    connection_resolver.clone(),
+                    runner_config,
+                    max_depth,
+                )
+                .await?,
+            );
+        }
+        Ok(results)
+    }
 
     /// Returns the group name
     fn group(&self) -> String {
@@ -659,10 +669,14 @@ impl Plugins {
 mod tests {
     use super::*;
     use genja_core::inventory::{
-        ConnectionKey, Hosts, ResolvedConnectionParams, TransformFunction,
+        ConnectionKey, Host, Hosts, ResolvedConnectionParams, TransformFunction,
     };
-    use genja_core::task::{TaskDefinition, TaskResults, Tasks};
-    use serde_json::json;
+    use genja_core::task::{
+        HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    };
+    use serde_json::{Value, json};
+    use std::future::Future;
+    use tokio::runtime::Builder;
 
     #[derive(Debug)]
     struct DummyPlugin {
@@ -727,27 +741,59 @@ mod tests {
 
     #[async_trait]
     impl PluginRunner for DummyRunner {
-        async fn run(
+        async fn run_task(
             &self,
-            _task: &TaskDefinition,
+            task: &TaskDefinition,
             _hosts: &Hosts,
             _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
             _runner_config: &RunnerConfig,
             _max_depth: usize,
         ) -> Result<TaskResults, genja_core::GenjaError> {
-            Ok(TaskResults::new(self.name))
+            Ok(TaskResults::new(task.name()))
+        }
+    }
+
+    struct DummyTask {
+        name: &'static str,
+    }
+
+    impl TaskInfo for DummyTask {
+        fn name(&self) -> &str {
+            self.name
         }
 
-        async fn run_tasks(
-            &self,
-            _tasks: &Tasks,
-            _hosts: &Hosts,
-            _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
-            _runner_config: &RunnerConfig,
-            _max_depth: usize,
-        ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
-            Ok(Vec::new())
+        fn connection_plugin_name(&self) -> Option<&str> {
+            None
         }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl SubTasks for DummyTask {
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            Vec::new()
+        }
+    }
+
+    #[async_trait]
+    impl Task for DummyTask {
+        async fn start(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    fn run_async<F: Future>(future: F) -> F::Output {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(future)
     }
 
     #[derive(Debug)]
@@ -883,6 +929,22 @@ mod tests {
         assert_eq!(runner_dbg, "RunnerPlugin { name: run }");
         assert_eq!(transform_dbg, "TransformFunctionPlugin { name: tf }");
         assert_eq!(connection_dbg, "ConnectionPlugin { name: conn }");
+    }
+
+    #[test]
+    fn runner_default_run_tasks_delegates_to_run_task_in_task_order() {
+        let runner = DummyRunner::new("run");
+        let mut tasks = Tasks::new();
+        tasks.add_task(DummyTask { name: "first" });
+        tasks.add_task(DummyTask { name: "second" });
+
+        let results =
+            run_async(runner.run_tasks(&tasks, &Hosts::new(), None, &RunnerConfig::default(), 0))
+                .expect("default run_tasks should execute");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].task_name(), "first");
+        assert_eq!(results[1].task_name(), "second");
     }
 
     #[test]

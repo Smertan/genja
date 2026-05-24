@@ -43,6 +43,7 @@
 
 use async_trait::async_trait;
 use genja::plugins::built_in_plugin_manager;
+use genja_core::InventoryLoadError;
 use genja_core::inventory::{
     Connection, ConnectionKey, Defaults, Group, Host, Inventory, ResolvedConnectionParams,
     Transform, TransformFunction, TransformFunctionOptions,
@@ -52,17 +53,16 @@ use genja_core::task::{
     HostTaskResult, TaskConnectionResolver, TaskDefinition, TaskProcessor, TaskProcessorContext,
     TaskResults, Tasks,
 };
-use genja_core::InventoryLoadError;
+use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::PluginConnectionAdapter;
 use genja_plugin_manager::plugin_types::{
     Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
     PluginTransformFunction, Plugins,
 };
-use genja_plugin_manager::PluginManager;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -70,8 +70,8 @@ use std::sync::{Arc, Mutex};
 use crate::runtime::python_inventory_to_rust_inventory;
 use crate::settings::{PyRunnerConfig, PySettings};
 use crate::task::{
-    hosts_to_py_dict, python_result_to_host_task_result, python_result_to_task_results,
-    PyHostTaskResult, PyTaskConnectionResolver, PyTaskDefinition, PyTaskResults,
+    PyHostTaskResult, PyTaskConnectionResolver, PyTaskDefinition, PyTaskResults, hosts_to_py_dict,
+    python_result_to_host_task_result, python_result_to_task_results,
 };
 
 /// A Python-exposed wrapper around the Rust `PluginManager`.
@@ -991,7 +991,7 @@ impl Plugin for PyRunnerPlugin {
 
 #[async_trait]
 impl PluginRunner for PyRunnerPlugin {
-    async fn run(
+    async fn run_task(
         &self,
         task: &TaskDefinition,
         hosts: &genja_core::inventory::Hosts,
@@ -1058,7 +1058,7 @@ impl PluginRunner for PyRunnerPlugin {
             let mut results = Vec::with_capacity(tasks.len());
             for task in tasks.iter() {
                 results.push(
-                    self.run(
+                    self.run_task(
                         task,
                         hosts,
                         connection_resolver.clone(),
@@ -2566,7 +2566,7 @@ mod tests {
         SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
     };
     use genja_plugin_manager::connection_factory::build_connection_factory;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::env;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -2755,9 +2755,11 @@ mod tests {
             let groups = manager
                 .plugin_names_and_groups()
                 .expect("plugin groups should be available");
-            assert!(groups
-                .iter()
-                .any(|(name, group)| name == "audit" && group == "Processor"));
+            assert!(
+                groups
+                    .iter()
+                    .any(|(name, group)| name == "audit" && group == "Processor")
+            );
         });
     }
 
@@ -2785,9 +2787,11 @@ mod tests {
             let groups = manager
                 .plugin_names_and_groups()
                 .expect("plugin groups should be available");
-            assert!(groups
-                .iter()
-                .any(|(name, group)| name == "python_inventory" && group == "Inventory"));
+            assert!(
+                groups
+                    .iter()
+                    .any(|(name, group)| name == "python_inventory" && group == "Inventory")
+            );
         });
     }
 
@@ -2815,9 +2819,11 @@ mod tests {
             let groups = manager
                 .plugin_names_and_groups()
                 .expect("plugin groups should be available");
-            assert!(groups
-                .iter()
-                .any(|(name, group)| name == "python_runner" && group == "Runner"));
+            assert!(
+                groups
+                    .iter()
+                    .any(|(name, group)| name == "python_runner" && group == "Runner")
+            );
         });
     }
 
@@ -2871,11 +2877,13 @@ mod tests {
                 .deregister_plugin("python_inventory")
                 .expect("deregister should succeed");
             assert_eq!(deregistered, Some("python_inventory".to_string()));
-            assert!(!manager
-                .plugin_names()
-                .expect("plugin names should be available")
-                .iter()
-                .any(|name| name == "python_inventory"));
+            assert!(
+                !manager
+                    .plugin_names()
+                    .expect("plugin names should be available")
+                    .iter()
+                    .any(|name| name == "python_inventory")
+            );
             assert_eq!(
                 manager
                     .deregister_plugin("python_inventory")
@@ -2901,9 +2909,10 @@ mod tests {
             let err = manager
                 .register_plugin(plugin)
                 .expect_err("plugin without name/group should fail");
-            assert!(err
-                .to_string()
-                .contains("plugin must define a callable 'name()' method"));
+            assert!(
+                err.to_string()
+                    .contains("plugin must define a callable 'name()' method")
+            );
         });
     }
 
@@ -2923,9 +2932,10 @@ mod tests {
             let err = manager
                 .register_plugin(plugin)
                 .expect_err("unsupported plugin group should fail");
-            assert!(err
-                .to_string()
-                .contains("unsupported python plugin group 'UnknownPlugin'"));
+            assert!(
+                err.to_string()
+                    .contains("unsupported python plugin group 'UnknownPlugin'")
+            );
         });
     }
 
@@ -2959,12 +2969,16 @@ audit = "tests.fixtures.processor_plugins:MinimalAuditProcessor"
             assert!(manager.plugin_names_and_groups().is_err());
             assert!(manager.deregister_plugin("audit").is_err());
             assert!(manager.register_plugin(plugin).is_err());
-            assert!(manager
-                .load_python_plugins_from_pyproject(Some(pyproject_path.to_str().unwrap()))
-                .is_err());
-            assert!(manager
-                .load_rust_plugins_from_directory("/definitely/missing")
-                .is_err());
+            assert!(
+                manager
+                    .load_python_plugins_from_pyproject(Some(pyproject_path.to_str().unwrap()))
+                    .is_err()
+            );
+            assert!(
+                manager
+                    .load_rust_plugins_from_directory("/definitely/missing")
+                    .is_err()
+            );
             fs::remove_dir_all(&temp_dir).unwrap_or(());
         });
     }
