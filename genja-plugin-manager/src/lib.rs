@@ -1,3 +1,5 @@
+#![allow(clippy::needless_doctest_main)]
+
 //! # Genja Plugin Manager
 //!
 //! A flexible and easy-to-use plugin management system for Rust applications.

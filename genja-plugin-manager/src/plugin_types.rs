@@ -22,7 +22,7 @@
 //! ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
 //! │PluginConnection│  │PluginInventory │  │ PluginRunner   │  │PluginTransform │  │PluginProcessor │
 //! │                │  │                │  │                │  │  Function      │  │                │
-//! │ - create()     │  │ - load()       │  │ - run()        │  │ - transform_   │  │ - processor()  │
+//! │ - create()     │  │ - load()       │  │ - run_task()   │  │ - transform_   │  │ - processor()  │
 //! │ - open()       │  │                │  │ - run_tasks()  │  │   function()   │  │                │
 //! │ - close()      │  │                │  │                │  │                │  │                │
 //! │ - is_alive()   │  │                │  │                │  │                │  │                │
