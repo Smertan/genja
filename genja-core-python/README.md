@@ -1,4 +1,4 @@
-# genja
+# genja-py
 
 Python bindings for the Genja runtime.
 
@@ -15,7 +15,7 @@ lets Python code:
 For end users, install the package with `pip`:
 
 ```bash
-pip install genja
+pip install genja-py
 ```
 
 The package currently exposes the `genja` Python module:
