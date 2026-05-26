@@ -164,7 +164,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use async_trait::async_trait;
 /// use std::sync::Arc;
 /// use genja_core::inventory::Host;

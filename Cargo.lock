@@ -399,16 +399,14 @@ dependencies = [
  "tracing",
  "tracing-rolling-file",
  "tracing-subscriber",
+ "trybuild",
 ]
 
 [[package]]
 name = "genja-core-derive"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "genja-core",
  "quote",
- "serde_json",
  "syn",
  "trybuild",
 ]
