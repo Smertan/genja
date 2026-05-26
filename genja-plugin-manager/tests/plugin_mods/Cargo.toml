@@ -17,6 +17,7 @@ crate-type = [
 edition = "2024"
 name = "plugin-mods"
 version = "0.1.0"
+publish = false
 
 [package.metadata.plugins]
 plugin_a_b = "../target/debug/libplugin_mods.so"

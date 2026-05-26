@@ -18,3 +18,4 @@ name = "plugin_tasks"
 edition = "2024"
 name = "plugin_tasks"
 version = "0.1.0"
+publish = false
