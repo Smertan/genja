@@ -15,7 +15,7 @@ syn = "2.0.106"
 
 [dev-dependencies]
 async-trait = "0.1.89"
-genja-core = { version = "0.1.0", path = "../genja-core" }
+genja-core = { path = "../genja-core" }
 serde_json = "1.0.142"
 trybuild = "1.0.113"
 
