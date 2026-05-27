@@ -55,8 +55,10 @@
 //!
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
-use async_trait::async_trait;
+pub use ::async_trait::async_trait;
+pub use genja_core;
 pub use genja_core::GenjaError;
+pub use genja_core_derive::Task as TaskDerive;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
