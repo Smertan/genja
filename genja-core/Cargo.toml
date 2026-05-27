@@ -2,7 +2,7 @@
 name = "genja-core"
 version = "0.1.0"
 edition = "2021"
-description = "Core runtime, inventory, settings, and task abstractions for Genja"
+description = "Core Genja primitives for task execution, inventory modeling, settings loading, connection state, and structured task results"
 license = "AGPL-3.0-only"
 repository = "https://github.com/Smertan/genja"
 keywords = ["automation", "inventory", "tasks"]

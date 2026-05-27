@@ -2,7 +2,7 @@
 name = "genja"
 version = "0.1.0"
 edition = "2024"
-description = "Runtime library for building and running Genja automation tasks"
+description = "A plugin-based Rust framework for executing tasks across multiple hosts with inventory filtering, hierarchical task execution, dynamic plugin loading, and result tracking"
 license = "AGPL-3.0-only"
 repository = "https://github.com/Smertan/genja"
 keywords = ["automation", "tasks", "inventory"]

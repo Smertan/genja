@@ -17,7 +17,7 @@ categories = [
     "development-tools",
     "rust-patterns",
 ]
-description = "A flexible and easy-to-use plugin management system for Rust applications"
+description = "Dynamic plugin loading and build support for Genja-compatible Rust applications and shared-library plugins"
 edition = "2024"
 keywords = [
     "plugin",
