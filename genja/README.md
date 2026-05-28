@@ -117,7 +117,16 @@ The GitHub repository includes examples and sample configuration for the current
 development version:
 
 - Repository: <https://github.com/Smertan/genja>
-- Examples directory: `examples/`
+- Runnable crate examples: `genja/examples/`
+- Shared example inventory: `genja/examples/inventory/hosts.yaml`
+- Shared example settings: `genja/examples/settings.yaml`
+- Sample configuration: `examples/`
+
+Run a crate example with:
+
+```bash
+cargo run -p genja --example run_task
+```
 
 ## License
 
