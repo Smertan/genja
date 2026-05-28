@@ -3,6 +3,11 @@ site_name = "Genja"
 site_url = "https://smertan.github.io/genja/"
 docs_dir = "docs"
 site_dir = "site"
+nav = [
+  {"Home" = "index.md"},
+  {"Installation" = "installation.md"},
+  {"Settings" = "settings.md"},
+]
 
 [project.theme]
 features = ["content.tabs.link"]
