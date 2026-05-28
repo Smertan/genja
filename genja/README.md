@@ -113,18 +113,25 @@ assert!(results.host_result("router1").unwrap().is_passed());
 
 ## Examples
 
-The GitHub repository includes examples and sample configuration for the current
-development version:
+Examples are included with the crate source and repository. Adding `genja` to an
+application with `cargo add genja` does not copy these examples into that
+application; clone the repository to run them.
 
 - Repository: <https://github.com/Smertan/genja>
 - Runnable crate examples: `genja/examples/`
-- Shared example inventory: `genja/examples/inventory/hosts.yaml`
+- Shared example inventory: `genja/examples/inventory/hosts.json`
 - Shared example settings: `genja/examples/settings.yaml`
+- YAML inventory variant: `genja/examples/inventory/hosts.yaml`
 - Sample configuration: `examples/`
 
-Run a crate example with:
+Run a crate example from a repository checkout:
+
+The command below uses the repository default branch. For release-specific
+examples, check out the matching version tag, such as `v0.1.0`.
 
 ```bash
+git clone https://github.com/Smertan/genja.git
+cd genja
 cargo run -p genja --example run_task
 ```
 

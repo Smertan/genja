@@ -7,6 +7,37 @@ Example file:
 - `examples/config.example.yaml`
 - `examples/config.example.json`
 
+## Loading Settings
+
+Use the same JSON or YAML settings files from Rust and Python. The API names are
+similar, but Rust exposes accessor methods and Python exposes properties.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::genja_core::Settings;
+
+    fn main() -> Result<(), Box<dyn std::error::Error>> {
+        let settings = Settings::from_file("settings.yaml")?;
+
+        println!("Runner plugin: {}", settings.runner().plugin());
+        println!("Log level: {}", settings.logging().level());
+
+        Ok(())
+    }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja
+
+    settings = genja.Settings.from_file("settings.yaml")
+
+    print(f"Runner plugin: {settings.runner.plugin}")
+    print(f"Log level: {settings.logging.level}")
+    ```
+
 ## Precedence
 
 Configuration is loaded in this order:
@@ -141,11 +172,11 @@ Defaults supports the same fields as a group, minus `groups` and `defaults`.
   - Default: `10`
 
 Genja parses the `logging` section but does not initialize global logging
-automatically. Applications own logger setup because Rust logging is
-process-wide. A typical application startup flow is:
+automatically. Applications own logger setup because logging is process-wide in
+Rust and application-specific in Python. A typical application startup flow is:
 
 1. Load settings with `Settings::from_file(...)`.
-2. Read `settings.logging()`.
+2. Read the `logging` section.
 3. Initialize the application's logger.
 4. Build and run `Genja`.
 
@@ -161,21 +192,37 @@ For troubleshooting settings loading, initialize a temporary logger before
 calling `Settings::from_file(...)`. Use a fixed level such as `debug` because
 the configured logging level is not available until after settings load.
 
-```rust
-use genja_core::Settings;
-use tracing_subscriber::EnvFilter;
+=== ":fontawesome-brands-rust: Rust"
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("debug"))
-        .init();
+    ```rust
+    use genja::genja_core::Settings;
+    use tracing_subscriber::EnvFilter;
 
-    let settings = Settings::from_file("settings.yaml")?;
+    fn main() -> Result<(), Box<dyn std::error::Error>> {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new("debug"))
+            .init();
 
-    println!("Configured log level: {}", settings.logging().level());
-    Ok(())
-}
-```
+        let settings = Settings::from_file("settings.yaml")?;
+
+        println!("Configured log level: {}", settings.logging().level());
+        Ok(())
+    }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import logging
+
+    import genja
+
+    logging.basicConfig(level=logging.DEBUG)
+
+    settings = genja.Settings.from_file("settings.yaml")
+
+    print(f"Configured log level: {settings.logging.level}")
+    ```
 
 ## References
 
