@@ -140,6 +140,43 @@ Defaults supports the same fields as a group, minus `groups` and `defaults`.
 - `max_file_count` (integer)
   - Default: `10`
 
+Genja parses the `logging` section but does not initialize global logging
+automatically. Applications own logger setup because Rust logging is
+process-wide. A typical application startup flow is:
+
+1. Load settings with `Settings::from_file(...)`.
+2. Read `settings.logging()`.
+3. Initialize the application's logger.
+4. Build and run `Genja`.
+
+Because settings must be loaded before `settings.logging()` is available, logs
+emitted during settings loading may occur before a logger is initialized. Genja
+keeps normal default fallbacks silent for this reason. Invalid config file values
+fail settings loading. Invalid environment variable values may fall back to
+defaults and emit a warning only if a logger has already been initialized.
+
+## Troubleshooting Settings Logging
+
+For troubleshooting settings loading, initialize a temporary logger before
+calling `Settings::from_file(...)`. Use a fixed level such as `debug` because
+the configured logging level is not available until after settings load.
+
+```rust
+use genja_core::Settings;
+use tracing_subscriber::EnvFilter;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("debug"))
+        .init();
+
+    let settings = Settings::from_file("settings.yaml")?;
+
+    println!("Configured log level: {}", settings.logging().level());
+    Ok(())
+}
+```
+
 ## References
 
 The source of truth for defaults and deserialization behavior is:

@@ -723,7 +723,6 @@ impl PluginManager {
         let name = plugin.name();
         log::info!("Registering plugin: {:?}", name);
 
-        println!("Registering plugin: {}", name);
         if let hash_map::Entry::Vacant(entry) = self.plugins.entry(name.clone()) {
             entry.insert(plugin);
         } else {
