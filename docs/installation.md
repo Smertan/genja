@@ -77,6 +77,4 @@ cd genja
 
 === ":fontawesome-brands-python: Python"
 
-    Python examples are published from the repository documentation and example
-    directories as they are added.
-
+    Python examples are available under `genja/examples/python`.
