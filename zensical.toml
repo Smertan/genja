@@ -9,6 +9,7 @@ nav = [
   {"Quickstart" = "quickstart.md"},
   {"Concepts" = "concepts.md"},
   {"Inventory" = "inventory.md"},
+  {"Tasks" = "tasks.md"},
   {"Settings" = "settings.md"},
 ]
 

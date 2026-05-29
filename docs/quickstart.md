@@ -140,12 +140,17 @@ router2:
 
     ```python
     import genja as genja_lib
-    from genja.task import TaskSuccessResult, task
+    from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
 
 
     @task(name="collect_facts")
     class CollectFacts:
-        def run(self, task, host, context):
+        def run(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskSuccessResult:
             return TaskSuccessResult(
                 summary=f"collected facts from {host.hostname}",
                 metadata={
