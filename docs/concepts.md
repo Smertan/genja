@@ -20,9 +20,9 @@ loaded plugins, loaded inventory, selected hosts, and runner configuration.
 === ":fontawesome-brands-python: Python"
 
     ```python
-    import genja
+    import genja as genja_lib
 
-    runtime = genja.Genja.from_settings_file("settings.yaml")
+    genja = genja_lib.Genja.from_settings_file("settings.yaml")
     ```
 
 ## Hosts
@@ -77,7 +77,7 @@ active host selection used by task execution.
 === ":fontawesome-brands-python: Python"
 
     ```python
-    core_site = runtime.filter_by_key_value("data.site.name", "^core$")
+    core_site = genja.filter_by_key_value("data.site.name", "^core$")
     ```
 
 ## Tasks
@@ -137,4 +137,3 @@ the language APIs differ slightly. Rust uses accessor methods; Python uses
 properties.
 
 See [Settings](settings.md) for the full schema.
-

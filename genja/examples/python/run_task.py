@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 
-import genja
+import genja as genja_lib
 from genja.task import TaskSuccessResult, task
 
 
@@ -25,8 +25,7 @@ class CollectFacts:
 with HOSTS_FILE.open() as hosts_file:
     hosts = json.load(hosts_file)
 
-runtime = genja.Genja.from_hosts(hosts).with_runner("serial")
-results = runtime.run_task(CollectFacts, max_depth=1)
+genja = genja_lib.Genja.from_hosts(hosts).with_runner("serial")
+results = genja.run_task(CollectFacts, max_depth=1)
 
 print(results.to_json(pretty=True))
-

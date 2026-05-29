@@ -81,11 +81,11 @@ router2:
 === ":fontawesome-brands-python: Python"
 
     ```python
-    import genja
+    import genja as genja_lib
 
-    runtime = genja.Genja.from_settings_file("settings.yaml")
+    genja = genja_lib.Genja.from_settings_file("settings.yaml")
 
-    for host_id in runtime.host_ids():
+    for host_id in genja.host_ids():
         print(host_id)
     ```
 
@@ -139,7 +139,7 @@ router2:
 === ":fontawesome-brands-python: Python"
 
     ```python
-    import genja
+    import genja as genja_lib
     from genja.task import TaskSuccessResult, task
 
 
@@ -156,8 +156,8 @@ router2:
             )
 
 
-    runtime = genja.Genja.from_settings_file("settings.yaml")
-    results = runtime.run_task(CollectFacts)
+    genja = genja_lib.Genja.from_settings_file("settings.yaml")
+    results = genja.run_task(CollectFacts)
 
     print(results.to_json(pretty=True))
     ```

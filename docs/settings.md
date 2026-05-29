@@ -30,9 +30,9 @@ similar, but Rust exposes accessor methods and Python exposes properties.
 === ":fontawesome-brands-python: Python"
 
     ```python
-    import genja
+    import genja as genja_lib
 
-    settings = genja.Settings.from_file("settings.yaml")
+    settings = genja_lib.Settings.from_file("settings.yaml")
 
     print(f"Runner plugin: {settings.runner.plugin}")
     print(f"Log level: {settings.logging.level}")
@@ -215,11 +215,11 @@ the configured logging level is not available until after settings load.
     ```python
     import logging
 
-    import genja
+    import genja as genja_lib
 
     logging.basicConfig(level=logging.DEBUG)
 
-    settings = genja.Settings.from_file("settings.yaml")
+    settings = genja_lib.Settings.from_file("settings.yaml")
 
     print(f"Configured log level: {settings.logging.level}")
     ```
