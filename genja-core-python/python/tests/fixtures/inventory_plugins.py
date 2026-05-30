@@ -1,9 +1,7 @@
 class StaticInventoryPlugin:
-    def name(self) -> str:
-        return "python_inventory"
+    name = "python_inventory"
 
-    def group(self) -> str:
-        return "InventoryPlugin"
+    group = "InventoryPlugin"
 
     def load(self, settings, plugins):
         assert settings.inventory.plugin == "python_inventory"

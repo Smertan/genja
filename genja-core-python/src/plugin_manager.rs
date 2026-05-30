@@ -154,8 +154,8 @@ impl PyPluginManager {
     ///
     /// This method serves as a public interface for registering Python plugins,
     /// accepting a bound Python object and delegating to the internal registration
-    /// logic. The plugin must implement the required plugin interface methods
-    /// (`name()` and `group()`) and belong to a supported plugin group
+    /// logic. The plugin must expose the required plugin identity attributes
+    /// (`name` and `group`) and belong to a supported plugin group
     /// (currently "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin",
     /// "RunnerPlugin",
     /// or "TransformFunctionPlugin").
@@ -164,17 +164,16 @@ impl PyPluginManager {
     ///
     /// * `plugin` - A bound reference to a Python object implementing the plugin
     ///   interface. The object will be unbound and stored internally for later use.
-    ///   The plugin must define callable `name()` and `group()` methods that return
-    ///   non-empty strings identifying the plugin.
+    ///   The plugin must expose non-empty string `name` and `group` attributes.
     ///
     /// # Returns
     ///
     /// Returns `Ok(())` if the plugin was successfully registered, or a `PyErr` if:
     /// - The plugin manager has already been consumed
     /// - The plugin manager lock is poisoned
-    /// - The plugin is missing required `name()` or `group()` methods
-    /// - The plugin's `name()` or `group()` methods are not callable
-    /// - The plugin's `name()` or `group()` returns an empty string
+    /// - The plugin is missing required `name` or `group` attributes
+    /// - The plugin's `name` or `group` attributes are callable
+    /// - The plugin's `name` or `group` is an empty string
     /// - The plugin's group is not a supported type ("ProcessorPlugin",
     ///   "ConnectionPlugin", "InventoryPlugin", "RunnerPlugin", or
     ///   "TransformFunctionPlugin")
@@ -195,7 +194,7 @@ impl PyPluginManager {
     /// "transform" plugin
     /// types. Each plugin entry
     /// must specify an import path in the format `module:attribute`, and the plugin's
-    /// declared name (from its `name()` method) must match the key used in the manifest.
+    /// declared name (from its `name` property) must match the key used in the manifest.
     ///
     /// The expected structure in `pyproject.toml` is:
     /// ```toml
@@ -229,7 +228,7 @@ impl PyPluginManager {
     /// - The plugin manager lock is poisoned
     /// - The `pyproject.toml` file cannot be read or parsed
     /// - Any plugin import path is invalid or the plugin cannot be imported
-    /// - A plugin's declared `name()` does not match its manifest key
+    /// - A plugin's declared `name` does not match its manifest key
     /// - Any plugin registration fails (e.g., missing required methods, unsupported group)
     ///
     /// # Errors
@@ -290,7 +289,7 @@ impl PyPluginManager {
                 })?;
                 if declared_name != *name {
                     return Err(PyValueError::new_err(format!(
-                        "{section_name} plugin name mismatch in {}: manifest key '{name}' does not match plugin.name() value '{declared_name}'",
+                        "{section_name} plugin name mismatch in {}: manifest key '{name}' does not match plugin.name value '{declared_name}'",
                         manifest_path.display()
                     )));
                 }
@@ -312,8 +311,7 @@ impl PyPluginManager {
     /// # Parameters
     ///
     /// * `name` - A string slice representing the unique name of the plugin to
-    ///   deregister. This should match the name returned by the plugin's `name()`
-    ///   method when it was registered.
+    ///   deregister. This should match the plugin's `name` property.
     ///
     /// # Returns
     ///
@@ -341,7 +339,7 @@ impl PyPluginManager {
     /// registered with the plugin manager, including both built-in plugins and
     /// any plugins that have been registered via `register_plugin`,
     /// `load_rust_plugins_from_directory`, or `load_python_plugins_from_pyproject`.
-    /// The names correspond to the values returned by each plugin's `name()` method.
+    /// The names correspond to each plugin's `name` property.
     ///
     /// # Returns
     ///
@@ -373,7 +371,7 @@ impl PyPluginManager {
     /// The information includes both built-in plugins and any plugins that have
     /// been registered via `register_plugin`, `load_rust_plugins_from_directory`,
     /// or `load_python_plugins_from_pyproject`. Each tuple contains the plugin's
-    /// name (from its `name()` method) and its group (from its `group()` method).
+    /// name (from its `name` property) and its group (from its `group` property).
     ///
     /// # Returns
     ///
@@ -474,14 +472,14 @@ impl PyPluginManager {
     /// This internal method handles the registration of Python plugins by acquiring
     /// the plugin manager lock, verifying the manager has not been consumed, and
     /// delegating to the registration logic. The plugin must implement the required
-    /// plugin interface methods (`name()` and `group()`) and belong to a supported
+    /// plugin identity attributes (`name` and `group`) and belong to a supported
     /// plugin group.
     ///
     /// # Parameters
     ///
     /// * `plugin` - A Python object implementing the plugin interface. The object
-    ///   must define callable `name()` and `group()` methods that return non-empty
-    ///   strings identifying the plugin. The plugin's group must be one of
+    ///   must expose non-empty string `name` and `group` attributes. The plugin's
+    ///   group must be one of
     ///   "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin",
     ///   "RunnerPlugin", or "TransformFunctionPlugin".
     ///
@@ -490,9 +488,9 @@ impl PyPluginManager {
     /// Returns `Ok(())` if the plugin was successfully registered, or a `PyErr` if:
     /// - The plugin manager has already been consumed
     /// - The plugin manager lock is poisoned
-    /// - The plugin is missing required `name()` or `group()` methods
-    /// - The plugin's `name()` or `group()` methods are not callable
-    /// - The plugin's `name()` or `group()` returns an empty string
+    /// - The plugin is missing required `name` or `group` attributes
+    /// - The plugin's `name` or `group` attributes are callable
+    /// - The plugin's `name` or `group` is an empty string
     /// - The plugin's group is not a supported type
     ///
     /// # Errors
@@ -510,8 +508,8 @@ impl PyPluginManager {
 
 /// Registers a Python plugin directly with a mutable `PluginManager` reference.
 ///
-/// This function extracts the plugin's identity (name and group) by calling its
-/// `name()` and `group()` methods, then wraps the plugin in the appropriate Rust
+/// This function extracts the plugin's identity (name and group) from its
+/// `name` and `group` properties, then wraps the plugin in the appropriate Rust
 /// adapter type based on its group. The wrapped plugin is then registered with
 /// the provided plugin manager. This function is used internally by the
 /// `PyPluginManager` wrapper and can also be used directly when a mutable
@@ -523,8 +521,8 @@ impl PyPluginManager {
 ///   will be registered. The manager maintains the registry of all plugins and
 ///   handles plugin lifecycle operations.
 /// * `plugin` - A Python object implementing the plugin interface. The object
-///   must define callable `name()` and `group()` methods that return non-empty
-///   strings. The plugin's group must be one of "ProcessorPlugin",
+///   must expose non-empty string `name` and `group` attributes. The plugin's
+///   group must be one of "ProcessorPlugin",
 ///   "ConnectionPlugin", "InventoryPlugin", "RunnerPlugin", or
 ///   "TransformFunctionPlugin". The plugin is wrapped in an `Arc` for shared
 ///   ownership across the plugin system.
@@ -532,9 +530,9 @@ impl PyPluginManager {
 /// # Returns
 ///
 /// Returns `Ok(())` if the plugin was successfully registered, or a `PyErr` if:
-/// - The plugin is missing required `name()` or `group()` methods
-/// - The plugin's `name()` or `group()` methods are not callable
-/// - The plugin's `name()` or `group()` returns an empty string
+/// - The plugin is missing required `name` or `group` attributes
+/// - The plugin's `name` or `group` attributes are callable
+/// - The plugin's `name` or `group` is an empty string
 /// - The plugin's group is not "ProcessorPlugin", "ConnectionPlugin",
 ///   "InventoryPlugin", "RunnerPlugin", or "TransformFunctionPlugin"
 /// - Any Python error occurs during identity extraction
@@ -623,10 +621,10 @@ pub(crate) fn register_python_plugin_on_manager(
 ///
 /// # Fields
 ///
-/// * `name` - The unique identifier for this connection plugin, matching the value
-///   returned by the Python plugin's `name()` method.
-/// * `group` - The group identifier for this plugin, matching the value returned by
-///   the Python plugin's `group()` method. For connection plugins, this is typically
+/// * `name` - The unique identifier for this connection plugin, matching the Python
+///   plugin's `name` property.
+/// * `group` - The group identifier for this plugin, matching the Python plugin's
+///   `group` property. For connection plugins, this is typically
 ///   "ConnectionPlugin".
 /// * `plugin` - An `Arc`-wrapped Python object implementing the connection plugin
 ///   interface. The `Arc` allows the plugin to be shared across multiple connection
@@ -702,7 +700,7 @@ struct PyConnectionPlugin {
 /// # Fields
 ///
 /// * `names` - A vector containing the unique names of all registered plugins.
-///   Each name corresponds to the value returned by a plugin's `name()` method.
+///   Each name corresponds to a plugin's `name` property.
 /// * `names_and_groups` - A vector of tuples containing both the name and group
 ///   identifier for each registered plugin. The group identifies the plugin type
 ///   (e.g., "Processor", "Connection", "Inventory").
@@ -719,7 +717,7 @@ impl PyLoadedPluginRegistry {
     ///
     /// This method returns a cloned list of the unique names of all plugins that
     /// were registered at the time this registry snapshot was created. The names
-    /// correspond to the values returned by each plugin's `name()` method.
+    /// correspond to each plugin's `name` property.
     ///
     /// # Returns
     ///
@@ -735,7 +733,7 @@ impl PyLoadedPluginRegistry {
     /// This method returns a cloned list of tuples containing both the unique name
     /// and group identifier for each plugin that was registered at the time this
     /// registry snapshot was created. Each tuple contains the plugin's name (from
-    /// its `name()` method) and its group (from its `group()` method), which
+    /// its `name` property) and its group (from its `group` property), which
     /// identifies the plugin type (e.g., "Processor", "Connection", "Inventory").
     ///
     /// # Returns
@@ -779,10 +777,10 @@ impl PyLoadedPluginRegistry {
 ///
 /// # Fields
 ///
-/// * `name` - The unique identifier for this inventory plugin, matching the value
-///   returned by the Python plugin's `name()` method.
-/// * `group` - The group identifier for this plugin, matching the value returned by
-///   the Python plugin's `group()` method. For inventory plugins, this is typically
+/// * `name` - The unique identifier for this inventory plugin, matching the Python
+///   plugin's `name` property.
+/// * `group` - The group identifier for this plugin, matching the Python plugin's
+///   `group` property. For inventory plugins, this is typically
 ///   "InventoryPlugin".
 /// * `plugin` - An `Arc`-wrapped Python object implementing the inventory plugin
 ///   interface. The `Arc` allows the plugin to be shared safely across threads and
@@ -1655,28 +1653,20 @@ impl Plugin for PyProcessorPlugin {
     }
 }
 
-/// Extracts and validates a plugin identity value by calling a specified method.
+/// Extracts and validates a plugin identity value from an attribute.
 ///
-/// This function retrieves a string identity value (such as name or group) from a Python
-/// plugin object by calling a specified method. It performs comprehensive validation to
-/// ensure the method exists, is callable, returns a string value, and that the returned
-/// string is not empty. This is used during plugin registration to extract required
-/// identity information like plugin names and groups that are needed to register the
-/// plugin in the plugin manager.
-///
-/// The function enforces the plugin contract by validating that identity methods are
-/// present, callable, and return non-empty strings. This ensures that all registered
-/// plugins have valid, usable identity information.
+/// Python plugin base classes expose `name` as a string attribute and `group`
+/// as a locked property.
 ///
 /// # Parameters
 ///
 /// * `plugin` - A reference to the bound Python plugin object from which to extract the
-///   identity value. This object must have the specified method defined as a callable
-///   attribute that returns a string when invoked with no arguments.
-/// * `method_name` - The name of the method to call on the plugin object to retrieve the
-///   identity value. Common examples include "name" for the plugin name or "group" for
-///   the plugin group. The method must exist on the plugin object and be callable.
-/// * `empty_message` - The error message to return if the method returns an empty or
+///   identity value. This object must have the specified attribute available as
+///   a string value.
+/// * `method_name` - The name of the identity attribute to read from the plugin
+///   object. Common examples include "name" for the plugin name or "group" for
+///   the plugin group.
+/// * `empty_message` - The error message to return if the attribute contains an empty or
 ///   whitespace-only string. This allows callers to provide context-specific error
 ///   messages for different identity values (e.g., "plugin name cannot be empty").
 /// * `plugin_kind` - A descriptive string identifying the type of plugin being validated,
@@ -1687,39 +1677,37 @@ impl Plugin for PyProcessorPlugin {
 /// # Returns
 ///
 /// Returns `Ok(String)` containing the extracted identity value if all validation passes:
-/// - The method exists on the plugin object
-/// - The method is callable
-/// - The method returns a string value
+/// - The attribute exists on the plugin object
+/// - The attribute is a string value
 /// - The string is not empty or whitespace-only
 ///
 /// Returns `Err(PyErr)` if any validation fails:
-/// - `PyValueError` if the method does not exist on the plugin object
-/// - `PyValueError` if the method exists but is not callable
-/// - `PyErr` if calling the method raises a Python exception
-/// - `PyErr` if the method's return value cannot be extracted as a string
+/// - `PyValueError` if the attribute does not exist on the plugin object
+/// - `PyValueError` if the attribute is callable
+/// - `PyErr` if the identity value cannot be extracted as a string
 /// - `PyValueError` if the extracted string is empty or contains only whitespace
 ///
 /// # Errors
 ///
 /// This function will return an error if the plugin does not conform to the expected
-/// interface, if the method call fails, or if the returned value is invalid.
+/// interface or if the value is invalid.
 fn extract_plugin_identity_value(
     plugin: &Bound<'_, PyAny>,
     method_name: &str,
     empty_message: &str,
     plugin_kind: &str,
 ) -> PyResult<String> {
-    let method = plugin.getattr(method_name).map_err(|_| {
+    let attribute = plugin.getattr(method_name).map_err(|_| {
         PyValueError::new_err(format!(
-            "{plugin_kind} must define a callable '{method_name}()' method"
+            "{plugin_kind} must define a '{method_name}' string property"
         ))
     })?;
-    if !method.is_callable() {
+    if attribute.is_callable() {
         return Err(PyValueError::new_err(format!(
-            "{plugin_kind} attribute '{method_name}' must be callable"
+            "{plugin_kind} attribute '{method_name}' must be a string property"
         )));
     }
-    let value: String = method.call0()?.extract()?;
+    let value: String = attribute.extract()?;
     if value.trim().is_empty() {
         return Err(PyValueError::new_err(empty_message.to_string()));
     }
@@ -2911,7 +2899,7 @@ mod tests {
                 .expect_err("plugin without name/group should fail");
             assert!(
                 err.to_string()
-                    .contains("plugin must define a callable 'name()' method")
+                    .contains("plugin must define a 'name' string property")
             );
         });
     }

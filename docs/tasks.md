@@ -225,14 +225,38 @@ implement one, multiple, or all of these hooks:
 Missing hooks are skipped. Hooks that receive results may return a replacement
 result object or `None` to leave the current value unchanged.
 
+Tasks select processors by plugin name. The processor must be registered before
+the runtime executes the task.
+
+Rust processor plugins implement two traits: `PluginProcessor` registers the
+plugin and returns the processor implementation, while `TaskProcessor` defines
+the lifecycle hooks.
+
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
+    use std::sync::Arc;
     use genja::genja_core::task::{
         HostTaskResult, TaskProcessor, TaskProcessorContext,
     };
+    use genja::TaskDerive;
+    use genja_plugin_manager::PluginManager;
+    use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
 
+    #[derive(Clone)]
     struct AuditProcessor;
+
+    impl Plugin for AuditProcessor {
+        fn name(&self) -> String {
+            "audit".to_string()
+        }
+    }
+
+    impl PluginProcessor for AuditProcessor {
+        fn processor(&self) -> Arc<dyn TaskProcessor> {
+            Arc::new(self.clone())
+        }
+    }
 
     impl TaskProcessor for AuditProcessor {
         fn on_instance_finish(
@@ -244,26 +268,27 @@ result object or `None` to leave the current value unchanged.
             Ok(())
         }
     }
+
+    #[derive(TaskDerive)]
+    #[task(processors = ["audit"])]
+    struct BackupConfig {
+        name: &'static str,
+    }
+
+    let mut plugins = PluginManager::new();
+    plugins.register_plugin(Plugins::Processor(Box::new(AuditProcessor)));
     ```
 
 === ":fontawesome-brands-python: Python"
 
     ```python
     import genja as genja_lib
-    from genja.processor import (
-        InstanceFinishProcessorHookProtocol,
-        TaskProcessorContext,
-        TaskProcessorProtocol,
-    )
+    from genja.processor import ProcessorPluginBase, TaskProcessorContext
     from genja.task import TaskSuccessResult, task
 
 
-    class AuditProcessor:
-        def name(self) -> str:
-            return "audit"
-
-        def group(self) -> str:
-            return "ProcessorPlugin"
+    class AuditProcessor(ProcessorPluginBase):
+        name = "audit"
 
         def on_instance_finish(
             self,
@@ -285,18 +310,8 @@ result object or `None` to leave the current value unchanged.
 
 
     plugins = genja_lib.PluginManager()
-    processor = AuditProcessor()
-
-    # Optional annotations for editor and type-checker support.
-    plugin_contract: TaskProcessorProtocol = processor
-    finish_hook: InstanceFinishProcessorHookProtocol = processor
-
-    plugins.register_plugin(plugin_contract)
+    plugins.register_plugin(AuditProcessor())
     ```
-
-Protocol annotations are optional. They help editors and type checkers validate
-processor shape; Genja registers processors structurally at runtime using
-`name()`, `group()`, and any lifecycle hooks present.
 
 ## Sub-Tasks
 

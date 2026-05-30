@@ -4,10 +4,7 @@ Import transform-facing helpers from this module instead of from ``genja``
 directly. The top-level package re-exports these names for compatibility, but
 ``genja.transform`` is the primary public surface for:
 
-- ``TransformFunctionPluginProtocol``
-- ``TransformHostHookProtocol``
-- ``TransformGroupHookProtocol``
-- ``TransformDefaultsHookProtocol``
+- ``TransformFunctionPluginBase``
 
 Transform-function plugins are registered on ``PluginManager`` and selected
 through ``Settings.inventory.transform_function``. The transform callbacks may
@@ -18,14 +15,10 @@ callbacks pass the original inventory value through unchanged.
 .. code-block:: python
 
     import genja
-    from genja.transform import TransformFunctionPluginProtocol
+    from genja.transform import TransformFunctionPluginBase
 
-    class HostnameSuffixTransform:
-        def name(self) -> str:
-            return "python_transform"
-
-        def group(self) -> str:
-            return "TransformFunctionPlugin"
+    class HostnameSuffixTransform(TransformFunctionPluginBase):
+        name = "python_transform"
 
         def transform_host(self, host, options):
             suffix = (options or {}).get("suffix", "")
@@ -40,50 +33,27 @@ callbacks pass the original inventory value through unchanged.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Protocol
+from typing import Any
+
+from .plugin import PluginBase
 
 
-class TransformFunctionPluginProtocol(Protocol):
-    """Required identity contract for Python-authored transform plugins."""
+class TransformFunctionPluginBase(PluginBase):
+    """Base class for Python-authored transform-function plugins."""
 
-    def name(self) -> str: ...
+    group_name = "TransformFunctionPlugin"
+    _locked_group_name = "TransformFunctionPlugin"
 
-    def group(self) -> str: ...
+    def transform_host(self, host: dict[str, Any], options: Any | None) -> dict[str, Any]:
+        return host
 
+    def transform_group(self, group: dict[str, Any], options: Any | None) -> dict[str, Any]:
+        return group
 
-class TransformHostHookProtocol(Protocol):
-    """Optional hook for transforming host entries."""
-
-    def transform_host(
-        self,
-        host: dict[str, Any],
-        options: Any | None,
-    ) -> dict[str, Any] | Awaitable[dict[str, Any]]: ...
-
-
-class TransformGroupHookProtocol(Protocol):
-    """Optional hook for transforming group entries."""
-
-    def transform_group(
-        self,
-        group: dict[str, Any],
-        options: Any | None,
-    ) -> dict[str, Any] | Awaitable[dict[str, Any]]: ...
-
-
-class TransformDefaultsHookProtocol(Protocol):
-    """Optional hook for transforming inventory defaults."""
-
-    def transform_defaults(
-        self,
-        defaults: dict[str, Any],
-        options: Any | None,
-    ) -> dict[str, Any] | Awaitable[dict[str, Any]]: ...
+    def transform_defaults(self, defaults: dict[str, Any], options: Any | None) -> dict[str, Any]:
+        return defaults
 
 
 __all__ = [
-    "TransformFunctionPluginProtocol",
-    "TransformHostHookProtocol",
-    "TransformGroupHookProtocol",
-    "TransformDefaultsHookProtocol",
+    "TransformFunctionPluginBase",
 ]

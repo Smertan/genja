@@ -136,21 +136,17 @@ depth limit.
 
 ## Python Runner Plugins
 
-Python can author custom runner plugins by implementing the runner protocol and
+Python can author custom runner plugins by extending `RunnerPluginBase` and
 registering the plugin with `PluginManager`.
 
 ```python
 import genja as genja_lib
-from genja.runner import RunnerPluginProtocol
+from genja.runner import RunnerPluginBase
 from genja.settings import RunnerConfig
 
 
-class FirstHostOnlyRunner:
-    def name(self) -> str:
-        return "first_host_only"
-
-    def group(self) -> str:
-        return "RunnerPlugin"
+class FirstHostOnlyRunner(RunnerPluginBase):
+    name = "first_host_only"
 
     def run_task(
         self,
@@ -164,7 +160,8 @@ class FirstHostOnlyRunner:
         return task.run_on_hosts(first_host, connection_resolver, max_depth)
 
 
-runner: RunnerPluginProtocol = FirstHostOnlyRunner()
+plugins = genja_lib.PluginManager()
+plugins.register_plugin(FirstHostOnlyRunner())
 ```
 
 Custom runners may also implement `run_tasks(...)` for custom ordered task-list

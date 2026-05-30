@@ -19,11 +19,9 @@ class TestConnection:
 
 
 class ConnectionPlugin:
-    def name(self):
-        return "ssh"
+    name = "ssh"
 
-    def group(self):
-        return "ConnectionPlugin"
+    group = "ConnectionPlugin"
 
     def create(self, key):
         return TestConnection(key)
@@ -52,11 +50,9 @@ class AsyncConnection:
 
 
 class AsyncConnectionPlugin:
-    def name(self):
-        return "async_ssh"
+    name = "async_ssh"
 
-    def group(self):
-        return "ConnectionPlugin"
+    group = "ConnectionPlugin"
 
     async def create(self, key):
         return AsyncConnection(key)

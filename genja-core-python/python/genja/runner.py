@@ -4,7 +4,7 @@ Import runner-facing helpers from this module instead of from ``genja``
 directly. The top-level package re-exports these names for compatibility, but
 ``genja.runner`` is the primary public surface for:
 
-- ``RunnerPluginProtocol``
+- ``RunnerPluginBase``
 
 Runner plugins are registered on ``PluginManager`` and selected through
 ``Genja.with_runner(...)`` or ``Settings.runner.plugin``. A runner receives a
@@ -16,21 +16,23 @@ omitted, the Rust bridge delegates each root task to ``run_task(...)`` in order.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Awaitable, Protocol
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Awaitable
 
+from .plugin import PluginBase
 from .settings import RunnerConfig
 
 if TYPE_CHECKING:
     from . import TaskConnectionResolver, TaskDefinition, TaskResults
 
 
-class RunnerPluginProtocol(Protocol):
-    """Structural typing contract for Python-authored runner plugins."""
+class RunnerPluginBase(PluginBase):
+    """Base class for Python-authored runner plugins."""
 
-    def name(self) -> str: ...
+    group_name = "RunnerPlugin"
+    _locked_group_name = "RunnerPlugin"
 
-    def group(self) -> str: ...
-
+    @abstractmethod
     def run_task(
         self,
         task: TaskDefinition,
@@ -38,12 +40,14 @@ class RunnerPluginProtocol(Protocol):
         connection_resolver: TaskConnectionResolver | None,
         runner_config: RunnerConfig,
         max_depth: int,
-    ) -> TaskResults | Awaitable[TaskResults]: ...
+    ) -> TaskResults | Awaitable[TaskResults]:
+        ...
 
 
-class BatchRunnerPluginProtocol(RunnerPluginProtocol, Protocol):
-    """Optional extension for runners with custom task-list execution."""
+class BatchRunnerPluginBase(RunnerPluginBase, ABC):
+    """Base class for runners with custom task-list execution."""
 
+    @abstractmethod
     def run_tasks(
         self,
         tasks: list[TaskDefinition],
@@ -51,7 +55,8 @@ class BatchRunnerPluginProtocol(RunnerPluginProtocol, Protocol):
         connection_resolver: TaskConnectionResolver | None,
         runner_config: RunnerConfig,
         max_depth: int,
-    ) -> list[TaskResults] | Awaitable[list[TaskResults]]: ...
+    ) -> list[TaskResults] | Awaitable[list[TaskResults]]:
+        ...
 
 
-__all__ = ["RunnerPluginProtocol", "BatchRunnerPluginProtocol"]
+__all__ = ["RunnerPluginBase", "BatchRunnerPluginBase"]

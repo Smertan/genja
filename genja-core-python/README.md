@@ -97,11 +97,8 @@ import genja
 
 
 class MyProcessorPlugin:
-    def name(self) -> str:
-        return "audit"
-
-    def group(self) -> str:
-        return "ProcessorPlugin"
+    name = "audit"
+    group = "ProcessorPlugin"
 
     def on_task_finish(self, context, results):
         return None

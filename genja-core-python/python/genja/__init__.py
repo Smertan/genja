@@ -24,22 +24,19 @@ from .genja import (
     Tasks,
 )
 from .connection import (
+    ConnectionBase,
     ConnectionKey,
-    ConnectionPluginProtocol,
-    ConnectionProtocol,
+    ConnectionPluginBase,
     ResolvedConnectionParams,
 )
-from .inventory import InventoryPluginProtocol
+from .inventory import InventoryPluginBase
 from .plugin_manager import PluginManager
+from .plugin import PluginBase
 from .processor import (
-    InstanceFinishProcessorHookProtocol,
-    InstanceStartProcessorHookProtocol,
-    TaskFinishProcessorHookProtocol,
+    ProcessorPluginBase,
     TaskProcessorContext,
-    TaskProcessorProtocol,
-    TaskStartProcessorHookProtocol,
 )
-from .runner import BatchRunnerPluginProtocol, RunnerPluginProtocol
+from .runner import BatchRunnerPluginBase, RunnerPluginBase
 from .settings import Settings
 from .task import (
     GenjaTaskProtocol,
@@ -56,10 +53,7 @@ from .task import (
     task,
 )
 from .transform import (
-    TransformDefaultsHookProtocol,
-    TransformFunctionPluginProtocol,
-    TransformGroupHookProtocol,
-    TransformHostHookProtocol,
+    TransformFunctionPluginBase,
 )
 
 assert PluginManager is _CorePluginManager
@@ -76,22 +70,16 @@ __all__ = [
     "task",
     "ConnectionKey",
     "ResolvedConnectionParams",
-    "ConnectionProtocol",
-    "ConnectionPluginProtocol",
-    "InventoryPluginProtocol",
+    "ConnectionBase",
+    "ConnectionPluginBase",
+    "InventoryPluginBase",
     "PluginManager",
+    "PluginBase",
     "TaskProcessorContext",
-    "TaskProcessorProtocol",
-    "TaskStartProcessorHookProtocol",
-    "TaskFinishProcessorHookProtocol",
-    "InstanceStartProcessorHookProtocol",
-    "InstanceFinishProcessorHookProtocol",
-    "RunnerPluginProtocol",
-    "BatchRunnerPluginProtocol",
-    "TransformFunctionPluginProtocol",
-    "TransformHostHookProtocol",
-    "TransformGroupHookProtocol",
-    "TransformDefaultsHookProtocol",
+    "ProcessorPluginBase",
+    "RunnerPluginBase",
+    "BatchRunnerPluginBase",
+    "TransformFunctionPluginBase",
     "Settings",
     "CoreConfig",
     "InventoryConfig",

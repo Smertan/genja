@@ -2,11 +2,9 @@ class AuditProcessor:
     def __init__(self):
         self.events = []
 
-    def name(self):
-        return "audit"
+    name = "audit"
 
-    def group(self):
-        return "ProcessorPlugin"
+    group = "ProcessorPlugin"
 
     def on_task_start(self, context, results):
         self.events.append(("task_start", context.task_name, context.hostname))
@@ -32,19 +30,15 @@ class AuditProcessor:
 
 
 class MinimalAuditProcessor:
-    def name(self):
-        return "audit"
+    name = "audit"
 
-    def group(self):
-        return "ProcessorPlugin"
+    group = "ProcessorPlugin"
 
 
 class UnsupportedGroupPlugin:
-    def name(self):
-        return "unsupported"
+    name = "unsupported"
 
-    def group(self):
-        return "UnknownPlugin"
+    group = "UnknownPlugin"
 
 
 class MissingIdentityPlugin:

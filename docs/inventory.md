@@ -221,19 +221,11 @@ inventory:
 
     ```python
     import genja as genja_lib
-    from genja.transform import (
-        TransformDefaultsHookProtocol,
-        TransformFunctionPluginProtocol,
-        TransformHostHookProtocol,
-    )
+    from genja.transform import TransformFunctionPluginBase
 
 
-    class NormalizeInventory:
-        def name(self) -> str:
-            return "normalize_inventory"
-
-        def group(self) -> str:
-            return "TransformFunctionPlugin"
+    class NormalizeInventory(TransformFunctionPluginBase):
+        name = "normalize_inventory"
 
         def transform_host(
             self,
@@ -260,19 +252,8 @@ inventory:
 
 
     plugins = genja_lib.PluginManager()
-    transform_plugin = NormalizeInventory()
-
-    # Optional annotations for editor and type-checker support.
-    plugin_contract: TransformFunctionPluginProtocol = transform_plugin
-    host_hook: TransformHostHookProtocol = transform_plugin
-    defaults_hook: TransformDefaultsHookProtocol = transform_plugin
-
-    plugins.register_plugin(plugin_contract)
+    plugins.register_plugin(NormalizeInventory())
     ```
-
-Protocol annotations are optional. They help editors and type checkers validate
-plugin shape; Genja registers plugins structurally at runtime using `name()`,
-`group()`, and any transform hooks present.
 
 ## Load Inventory
 
