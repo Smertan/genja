@@ -6,9 +6,14 @@ directly. The top-level package re-exports these names for compatibility, but
 
 - ``TaskProcessorContext``
 - ``TaskProcessorProtocol``
+- ``TaskStartProcessorHookProtocol``
+- ``TaskFinishProcessorHookProtocol``
+- ``InstanceStartProcessorHookProtocol``
+- ``InstanceFinishProcessorHookProtocol``
 
 Processor plugins are registered on ``PluginManager`` and selected by task
-metadata:
+metadata. A processor may implement one, multiple, or all lifecycle hooks.
+Missing hooks are skipped.
 
 .. code-block:: python
 
@@ -69,25 +74,48 @@ class TaskProcessorContext(_GenjaModel):
 
 
 class TaskProcessorProtocol(Protocol):
-    """Structural typing contract for Python-authored processor plugins."""
+    """Required identity contract for Python-authored processor plugins."""
 
     def name(self) -> str: ...
 
     def group(self) -> str: ...
 
+
+class TaskStartProcessorHookProtocol(Protocol):
+    """Optional hook called before a task starts processing hosts."""
+
     def on_task_start(
         self, context: TaskProcessorContext, results: Any
     ) -> Any | None: ...
+
+
+class TaskFinishProcessorHookProtocol(Protocol):
+    """Optional hook called after a task finishes processing hosts."""
 
     def on_task_finish(
         self, context: TaskProcessorContext, results: Any
     ) -> Any | None: ...
 
+
+class InstanceStartProcessorHookProtocol(Protocol):
+    """Optional hook called before a task runs on a host."""
+
     def on_instance_start(self, context: TaskProcessorContext) -> None: ...
+
+
+class InstanceFinishProcessorHookProtocol(Protocol):
+    """Optional hook called after a task runs on a host."""
 
     def on_instance_finish(
         self, context: TaskProcessorContext, result: Any
     ) -> Any | None: ...
 
 
-__all__ = ["TaskProcessorContext", "TaskProcessorProtocol"]
+__all__ = [
+    "TaskProcessorContext",
+    "TaskProcessorProtocol",
+    "TaskStartProcessorHookProtocol",
+    "TaskFinishProcessorHookProtocol",
+    "InstanceStartProcessorHookProtocol",
+    "InstanceFinishProcessorHookProtocol",
+]

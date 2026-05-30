@@ -212,6 +212,92 @@ Use failure kinds to make task failures easier to classify:
 The maximum depth controls nested sub-task execution. Use `0` when only the
 top-level task should run, and a higher value when sub-tasks are expected.
 
+## Processors
+
+Processors are lifecycle hooks selected by task metadata. A processor may
+implement one, multiple, or all of these hooks:
+
+- `on_task_start`
+- `on_task_finish`
+- `on_instance_start`
+- `on_instance_finish`
+
+Missing hooks are skipped. Hooks that receive results may return a replacement
+result object or `None` to leave the current value unchanged.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::genja_core::task::{
+        HostTaskResult, TaskProcessor, TaskProcessorContext,
+    };
+
+    struct AuditProcessor;
+
+    impl TaskProcessor for AuditProcessor {
+        fn on_instance_finish(
+            &self,
+            context: &TaskProcessorContext,
+            _result: &mut HostTaskResult,
+        ) -> Result<(), genja::GenjaError> {
+            println!("processed task {}", context.task_name());
+            Ok(())
+        }
+    }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja as genja_lib
+    from genja.processor import (
+        InstanceFinishProcessorHookProtocol,
+        TaskProcessorContext,
+        TaskProcessorProtocol,
+    )
+    from genja.task import TaskSuccessResult, task
+
+
+    class AuditProcessor:
+        def name(self) -> str:
+            return "audit"
+
+        def group(self) -> str:
+            return "ProcessorPlugin"
+
+        def on_instance_finish(
+            self,
+            context: TaskProcessorContext,
+            result: genja_lib.HostTaskResult,
+        ) -> dict[str, object]:
+            data = result.to_dict()
+            data["metadata"] = {
+                **(data.get("metadata") or {}),
+                "processed_by": context.task_name,
+            }
+            return data
+
+
+    @task(name="backup_config", processors=["audit"])
+    class BackupConfig:
+        def start(self, task, host, context) -> TaskSuccessResult:
+            return TaskSuccessResult(summary=f"backed up {host.hostname}")
+
+
+    plugins = genja_lib.PluginManager()
+    processor = AuditProcessor()
+
+    # Optional annotations for editor and type-checker support.
+    plugin_contract: TaskProcessorProtocol = processor
+    finish_hook: InstanceFinishProcessorHookProtocol = processor
+
+    plugins.register_plugin(plugin_contract)
+    ```
+
+Protocol annotations are optional. They help editors and type checkers validate
+processor shape; Genja registers processors structurally at runtime using
+`name()`, `group()`, and any lifecycle hooks present.
+
 ## Sub-Tasks
 
 Sub-tasks let a task define child work that runs after the parent task. Use

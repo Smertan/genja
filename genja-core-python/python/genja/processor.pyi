@@ -15,13 +15,21 @@ class TaskProcessorContext:
 class TaskProcessorProtocol(Protocol):
     def name(self) -> str: ...
     def group(self) -> str: ...
+
+class TaskStartProcessorHookProtocol(Protocol):
     def on_task_start(
         self, context: TaskProcessorContext, results: Any
     ) -> Any | None: ...
+
+class TaskFinishProcessorHookProtocol(Protocol):
     def on_task_finish(
         self, context: TaskProcessorContext, results: Any
     ) -> Any | None: ...
+
+class InstanceStartProcessorHookProtocol(Protocol):
     def on_instance_start(self, context: TaskProcessorContext) -> None: ...
+
+class InstanceFinishProcessorHookProtocol(Protocol):
     def on_instance_finish(
         self, context: TaskProcessorContext, result: Any
     ) -> Any | None: ...

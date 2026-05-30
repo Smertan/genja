@@ -31,7 +31,14 @@ from .connection import (
 )
 from .inventory import InventoryPluginProtocol
 from .plugin_manager import PluginManager
-from .processor import TaskProcessorContext, TaskProcessorProtocol
+from .processor import (
+    InstanceFinishProcessorHookProtocol,
+    InstanceStartProcessorHookProtocol,
+    TaskFinishProcessorHookProtocol,
+    TaskProcessorContext,
+    TaskProcessorProtocol,
+    TaskStartProcessorHookProtocol,
+)
 from .runner import BatchRunnerPluginProtocol, RunnerPluginProtocol
 from .settings import Settings
 from .task import (
@@ -75,6 +82,10 @@ __all__ = [
     "PluginManager",
     "TaskProcessorContext",
     "TaskProcessorProtocol",
+    "TaskStartProcessorHookProtocol",
+    "TaskFinishProcessorHookProtocol",
+    "InstanceStartProcessorHookProtocol",
+    "InstanceFinishProcessorHookProtocol",
     "RunnerPluginProtocol",
     "BatchRunnerPluginProtocol",
     "TransformFunctionPluginProtocol",
