@@ -220,9 +220,12 @@ inventory:
 === ":fontawesome-brands-python: Python"
 
     ```python
-    from typing import Any
-
     import genja as genja_lib
+    from genja.transform import (
+        TransformDefaultsHookProtocol,
+        TransformFunctionPluginProtocol,
+        TransformHostHookProtocol,
+    )
 
 
     class NormalizeInventory:
@@ -234,9 +237,9 @@ inventory:
 
         def transform_host(
             self,
-            host: dict[str, Any],
-            options: dict[str, Any] | None,
-        ) -> dict[str, Any]:
+            host: dict[str, object],
+            options: dict[str, object] | None,
+        ) -> dict[str, object]:
             suffix = (options or {}).get("hostname_suffix", "")
             hostname = host.get("hostname")
             if hostname is None:
@@ -249,16 +252,27 @@ inventory:
 
         def transform_defaults(
             self,
-            defaults: dict[str, Any],
-            options: dict[str, Any] | None,
-        ) -> dict[str, Any]:
+            defaults: dict[str, object],
+            options: dict[str, object] | None,
+        ) -> dict[str, object]:
             default_options = (options or {}).get("defaults", {})
             return {**defaults, **default_options}
 
 
     plugins = genja_lib.PluginManager()
-    plugins.register_plugin(NormalizeInventory())
+    transform_plugin = NormalizeInventory()
+
+    # Optional annotations for editor and type-checker support.
+    plugin_contract: TransformFunctionPluginProtocol = transform_plugin
+    host_hook: TransformHostHookProtocol = transform_plugin
+    defaults_hook: TransformDefaultsHookProtocol = transform_plugin
+
+    plugins.register_plugin(plugin_contract)
     ```
+
+Protocol annotations are optional. They help editors and type checkers validate
+plugin shape; Genja registers plugins structurally at runtime using `name()`,
+`group()`, and any transform hooks present.
 
 ## Load Inventory
 
