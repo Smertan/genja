@@ -16,9 +16,12 @@ omitted, the Rust bridge delegates each root task to ``run_task(...)`` in order.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Protocol
+from typing import TYPE_CHECKING, Awaitable, Protocol
 
 from .settings import RunnerConfig
+
+if TYPE_CHECKING:
+    from . import TaskConnectionResolver, TaskDefinition, TaskResults
 
 
 class RunnerPluginProtocol(Protocol):
@@ -30,12 +33,12 @@ class RunnerPluginProtocol(Protocol):
 
     def run_task(
         self,
-        task: Any,
-        hosts: dict[str, Any],
-        connection_resolver: Any | None,
+        task: TaskDefinition,
+        hosts: dict[str, object],
+        connection_resolver: TaskConnectionResolver | None,
         runner_config: RunnerConfig,
         max_depth: int,
-    ) -> Any | Awaitable[Any]: ...
+    ) -> TaskResults | Awaitable[TaskResults]: ...
 
 
 class BatchRunnerPluginProtocol(RunnerPluginProtocol, Protocol):
@@ -43,12 +46,12 @@ class BatchRunnerPluginProtocol(RunnerPluginProtocol, Protocol):
 
     def run_tasks(
         self,
-        tasks: list[Any],
-        hosts: dict[str, Any],
-        connection_resolver: Any | None,
+        tasks: list[TaskDefinition],
+        hosts: dict[str, object],
+        connection_resolver: TaskConnectionResolver | None,
         runner_config: RunnerConfig,
         max_depth: int,
-    ) -> list[Any] | Awaitable[list[Any]]: ...
+    ) -> list[TaskResults] | Awaitable[list[TaskResults]]: ...
 
 
 __all__ = ["RunnerPluginProtocol", "BatchRunnerPluginProtocol"]

@@ -140,8 +140,8 @@ Python can author custom runner plugins by implementing the runner protocol and
 registering the plugin with `PluginManager`.
 
 ```python
-from typing import Any
-
+import genja as genja_lib
+from genja.runner import RunnerPluginProtocol
 from genja.settings import RunnerConfig
 
 
@@ -154,14 +154,17 @@ class FirstHostOnlyRunner:
 
     def run_task(
         self,
-        task: Any,
-        hosts: dict[str, Any],
-        connection_resolver: Any | None,
+        task: genja_lib.TaskDefinition,
+        hosts: dict[str, object],
+        connection_resolver: genja_lib.TaskConnectionResolver | None,
         runner_config: RunnerConfig,
         max_depth: int,
-    ) -> Any:
+    ) -> genja_lib.TaskResults:
         first_host = dict(list(hosts.items())[:1])
         return task.run_on_hosts(first_host, connection_resolver, max_depth)
+
+
+runner: RunnerPluginProtocol = FirstHostOnlyRunner()
 ```
 
 Custom runners may also implement `run_tasks(...)` for custom ordered task-list
