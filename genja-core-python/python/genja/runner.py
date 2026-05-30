@@ -11,7 +11,7 @@ Runner plugins are registered on ``PluginManager`` and selected through
 task definition wrapper plus a host mapping and may orchestrate execution by
 calling ``task.run_on_host(...)`` or ``task.run_on_hosts(...)``. Runners may
 also implement ``run_tasks(...)`` for custom ordered task-list execution; when
-omitted, the Rust bridge delegates each root task to ``run(...)`` in order.
+omitted, the Rust bridge delegates each root task to ``run_task(...)`` in order.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ class RunnerPluginProtocol(Protocol):
 
     def group(self) -> str: ...
 
-    def run(
+    def run_task(
         self,
         task: Any,
         hosts: dict[str, Any],

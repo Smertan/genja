@@ -1024,7 +1024,7 @@ impl PluginRunner for PyRunnerPlugin {
             .map_err(python_processor_error)?;
             let result = plugin
                 .call_method1(
-                    "run",
+                    "run_task",
                     (
                         task_payload.bind(py),
                         hosts_payload.bind(py),
