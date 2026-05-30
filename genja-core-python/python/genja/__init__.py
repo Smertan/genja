@@ -48,7 +48,12 @@ from .task import (
     TaskSuccessResult,
     task,
 )
-from .transform import TransformFunctionPluginProtocol
+from .transform import (
+    TransformDefaultsHookProtocol,
+    TransformFunctionPluginProtocol,
+    TransformGroupHookProtocol,
+    TransformHostHookProtocol,
+)
 
 assert PluginManager is _CorePluginManager
 assert Settings is _CoreSettings
@@ -73,6 +78,9 @@ __all__ = [
     "RunnerPluginProtocol",
     "BatchRunnerPluginProtocol",
     "TransformFunctionPluginProtocol",
+    "TransformHostHookProtocol",
+    "TransformGroupHookProtocol",
+    "TransformDefaultsHookProtocol",
     "Settings",
     "CoreConfig",
     "InventoryConfig",

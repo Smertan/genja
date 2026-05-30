@@ -153,6 +153,113 @@ inventory:
 
 Defaults support the same fields as groups, except `groups` and `defaults`.
 
+## Inventory Transforms
+
+Inventory transforms can normalize or enrich inventory values when they are
+accessed. A transform may implement one, multiple, or all of these hooks:
+
+- `transform_host`
+- `transform_group`
+- `transform_defaults`
+
+Missing hooks pass the original value through unchanged. Genja passes the same
+optional `transform_function_options` value to every implemented hook, so use
+nested keys when different hooks need different settings.
+
+```yaml
+inventory:
+  plugin: FileInventoryPlugin
+  options:
+    hosts_file: ./hosts.yaml
+  transform_function: normalize_inventory
+  transform_function_options:
+    hostname_suffix: ".lab"
+    defaults:
+      platform: linux
+```
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::genja_core::inventory::{
+        BaseBuilderHost, Defaults, Host, Transform, TransformFunctionOptions,
+    };
+
+    struct NormalizeInventory;
+
+    impl Transform for NormalizeInventory {
+        fn transform_host(
+            &self,
+            host: &Host,
+            options: Option<&TransformFunctionOptions>,
+        ) -> Host {
+            let suffix = options
+                .and_then(|options| options.get("hostname_suffix"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+
+            match host.hostname() {
+                Some(hostname) => host
+                    .to_builder()
+                    .hostname(format!("{hostname}{suffix}"))
+                    .build(),
+                None => host.clone(),
+            }
+        }
+
+        fn transform_defaults(
+            &self,
+            defaults: &Defaults,
+            _options: Option<&TransformFunctionOptions>,
+        ) -> Defaults {
+            defaults.to_builder().platform("linux").build()
+        }
+    }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    from typing import Any
+
+    import genja as genja_lib
+
+
+    class NormalizeInventory:
+        def name(self) -> str:
+            return "normalize_inventory"
+
+        def group(self) -> str:
+            return "TransformFunctionPlugin"
+
+        def transform_host(
+            self,
+            host: dict[str, Any],
+            options: dict[str, Any] | None,
+        ) -> dict[str, Any]:
+            suffix = (options or {}).get("hostname_suffix", "")
+            hostname = host.get("hostname")
+            if hostname is None:
+                return host
+
+            return {
+                **host,
+                "hostname": f"{hostname}{suffix}",
+            }
+
+        def transform_defaults(
+            self,
+            defaults: dict[str, Any],
+            options: dict[str, Any] | None,
+        ) -> dict[str, Any]:
+            default_options = (options or {}).get("defaults", {})
+            return {**defaults, **default_options}
+
+
+    plugins = genja_lib.PluginManager()
+    plugins.register_plugin(NormalizeInventory())
+    ```
+
 ## Load Inventory
 
 === ":fontawesome-brands-rust: Rust"

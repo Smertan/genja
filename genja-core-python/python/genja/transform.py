@@ -5,11 +5,15 @@ directly. The top-level package re-exports these names for compatibility, but
 ``genja.transform`` is the primary public surface for:
 
 - ``TransformFunctionPluginProtocol``
+- ``TransformHostHookProtocol``
+- ``TransformGroupHookProtocol``
+- ``TransformDefaultsHookProtocol``
 
 Transform-function plugins are registered on ``PluginManager`` and selected
 through ``Settings.inventory.transform_function``. The transform callbacks may
 be implemented as either ``def`` or ``async def``; Genja will resolve either
-form.
+form. A plugin may implement one, multiple, or all transform callbacks. Missing
+callbacks pass the original inventory value through unchanged.
 
 .. code-block:: python
 
@@ -40,11 +44,15 @@ from typing import Any, Awaitable, Protocol
 
 
 class TransformFunctionPluginProtocol(Protocol):
-    """Structural typing contract for Python-authored transform plugins."""
+    """Required identity contract for Python-authored transform plugins."""
 
     def name(self) -> str: ...
 
     def group(self) -> str: ...
+
+
+class TransformHostHookProtocol(Protocol):
+    """Optional hook for transforming host entries."""
 
     def transform_host(
         self,
@@ -52,11 +60,19 @@ class TransformFunctionPluginProtocol(Protocol):
         options: Any | None,
     ) -> dict[str, Any] | Awaitable[dict[str, Any]]: ...
 
+
+class TransformGroupHookProtocol(Protocol):
+    """Optional hook for transforming group entries."""
+
     def transform_group(
         self,
         group: dict[str, Any],
         options: Any | None,
     ) -> dict[str, Any] | Awaitable[dict[str, Any]]: ...
+
+
+class TransformDefaultsHookProtocol(Protocol):
+    """Optional hook for transforming inventory defaults."""
 
     def transform_defaults(
         self,
@@ -65,4 +81,9 @@ class TransformFunctionPluginProtocol(Protocol):
     ) -> dict[str, Any] | Awaitable[dict[str, Any]]: ...
 
 
-__all__ = ["TransformFunctionPluginProtocol"]
+__all__ = [
+    "TransformFunctionPluginProtocol",
+    "TransformHostHookProtocol",
+    "TransformGroupHookProtocol",
+    "TransformDefaultsHookProtocol",
+]

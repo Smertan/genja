@@ -35,7 +35,12 @@ from .task import (
     TaskSuccessResult,
     task,
 )
-from .transform import TransformFunctionPluginProtocol
+from .transform import (
+    TransformDefaultsHookProtocol,
+    TransformFunctionPluginProtocol,
+    TransformGroupHookProtocol,
+    TransformHostHookProtocol,
+)
 
 class HostTaskResult:
     @staticmethod
@@ -161,6 +166,9 @@ __all__ = [
     "RunnerPluginProtocol",
     "BatchRunnerPluginProtocol",
     "TransformFunctionPluginProtocol",
+    "TransformHostHookProtocol",
+    "TransformGroupHookProtocol",
+    "TransformDefaultsHookProtocol",
     "Settings",
     "CoreConfig",
     "InventoryConfig",

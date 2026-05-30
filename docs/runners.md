@@ -150,7 +150,7 @@ class FirstHostOnlyRunner:
         return "first_host_only"
 
     def group(self) -> str:
-        return "Runner"
+        return "RunnerPlugin"
 
     def run_task(
         self,
