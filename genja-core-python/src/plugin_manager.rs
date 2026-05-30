@@ -1740,8 +1740,8 @@ impl PluginProcessor for PyProcessorPlugin {
 /// trait to integrate Python-based processors into the Rust task execution system. It
 /// delegates all task processing lifecycle events to the corresponding methods on the
 /// wrapped Python processor object, handling cross-language communication and error
-/// conversion. The processor supports both synchronous and asynchronous Python
-/// implementations through automatic awaitable resolution.
+/// conversion. Processor hooks are synchronous, matching the Rust `TaskProcessor`
+/// trait.
 ///
 /// The adapter checks for the presence of each lifecycle method on the Python processor
 /// before attempting to call it, allowing Python implementations to selectively implement
