@@ -35,3 +35,18 @@ class HostOnlyTransformPlugin:
             **host,
             "hostname": f"{host['hostname']}{suffix}",
         }
+
+
+class AsyncHostTransformPlugin:
+    name = "python_async_transform"
+
+    group = "TransformFunctionPlugin"
+
+    async def transform_host(self, host, options):
+        suffix = ""
+        if options:
+            suffix = options.get("suffix", "")
+        return {
+            **host,
+            "hostname": f"{host['hostname']}{suffix}",
+        }

@@ -12,6 +12,8 @@ task definition wrapper plus a host mapping and may orchestrate execution by
 calling ``task.run_on_host(...)`` or ``task.run_on_hosts(...)``. Runners may
 also implement ``run_tasks(...)`` for custom ordered task-list execution; when
 omitted, the Rust bridge delegates each root task to ``run_task(...)`` in order.
+Runner methods may be implemented as either ``def`` or ``async def``; Genja
+will resolve either form.
 """
 
 from __future__ import annotations

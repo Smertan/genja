@@ -166,6 +166,10 @@ Missing hooks pass the original value through unchanged. Genja passes the same
 optional `transform_function_options` value to every implemented hook, so use
 nested keys when different hooks need different settings.
 
+Python transform hooks may be synchronous or asynchronous. Use `async def` when
+the transform needs to read from an async API before returning the updated
+inventory value.
+
 ```yaml
 inventory:
   plugin: FileInventoryPlugin
@@ -253,6 +257,33 @@ inventory:
 
     plugins = genja_lib.PluginManager()
     plugins.register_plugin(NormalizeInventory())
+    ```
+
+    ### Async Variant
+
+    An async transform uses the same base class:
+
+    ```python
+    from genja.transform import TransformFunctionPluginBase
+
+
+    class AsyncNormalizeInventory(TransformFunctionPluginBase):
+        name = "async_normalize_inventory"
+
+        async def transform_host(
+            self,
+            host: dict[str, object],
+            options: dict[str, object] | None,
+        ) -> dict[str, object]:
+            suffix = (options or {}).get("hostname_suffix", "")
+            hostname = host.get("hostname")
+            if hostname is None:
+                return host
+
+            return {
+                **host,
+                "hostname": f"{hostname}{suffix}",
+            }
     ```
 
 ## Load Inventory

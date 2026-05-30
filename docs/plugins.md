@@ -84,6 +84,32 @@ Python plugins should inherit from the matching base class. The base class
 provides the locked `group` property and uses abstract methods for required
 plugin behavior.
 
+## Python Async Hooks
+
+Python inventory, connection, runner, task, and transform hooks may be written
+as `def` or `async def`. Genja resolves awaitable return values before handing
+them back to the Rust runtime.
+
+```python
+from genja.inventory import InventoryPluginBase
+
+
+class ApiInventory(InventoryPluginBase):
+    name = "api_inventory"
+
+    async def load(self, settings, plugins):
+        return {
+            "router1": {
+                "hostname": "10.0.0.1",
+                "platform": "ios",
+            }
+        }
+```
+
+Processor hooks are sync-only. They mirror the Rust `TaskProcessor` trait, so
+implement `on_task_start`, `on_task_finish`, `on_instance_start`, and
+`on_instance_finish` with normal `def` methods.
+
 ## Select Plugins
 
 Settings select runtime plugins by name. The selected plugin must already be

@@ -225,6 +225,10 @@ implement one, multiple, or all of these hooks:
 Missing hooks are skipped. Hooks that receive results may return a replacement
 result object or `None` to leave the current value unchanged.
 
+Python processor hooks are sync-only. Use normal `def` methods for
+`on_task_start`, `on_task_finish`, `on_instance_start`, and
+`on_instance_finish`.
+
 Tasks select processors by plugin name. The processor must be registered before
 the runtime executes the task.
 

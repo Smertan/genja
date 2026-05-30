@@ -33,7 +33,7 @@ callbacks pass the original inventory value through unchanged.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Awaitable
 
 from .plugin import PluginBase
 
@@ -44,13 +44,19 @@ class TransformFunctionPluginBase(PluginBase):
     group_name = "TransformFunctionPlugin"
     _locked_group_name = "TransformFunctionPlugin"
 
-    def transform_host(self, host: dict[str, Any], options: Any | None) -> dict[str, Any]:
+    def transform_host(
+        self, host: dict[str, Any], options: Any | None
+    ) -> dict[str, Any] | Awaitable[dict[str, Any]]:
         return host
 
-    def transform_group(self, group: dict[str, Any], options: Any | None) -> dict[str, Any]:
+    def transform_group(
+        self, group: dict[str, Any], options: Any | None
+    ) -> dict[str, Any] | Awaitable[dict[str, Any]]:
         return group
 
-    def transform_defaults(self, defaults: dict[str, Any], options: Any | None) -> dict[str, Any]:
+    def transform_defaults(
+        self, defaults: dict[str, Any], options: Any | None
+    ) -> dict[str, Any] | Awaitable[dict[str, Any]]:
         return defaults
 
 

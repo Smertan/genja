@@ -134,39 +134,130 @@ runner controls host execution for each root task.
 Sub-tasks belong to their parent task tree and are controlled by the same task
 depth limit.
 
-## Python Runner Plugins
+## Custom Runner Plugins
 
-Python can author custom runner plugins by extending `RunnerPluginBase` and
-registering the plugin with `PluginManager`.
+Custom runner plugins implement the runner interface for the language they are
+authored in and register under the `RunnerPlugin` group.
 
-```python
-import genja as genja_lib
-from genja.runner import RunnerPluginBase
-from genja.settings import RunnerConfig
+=== ":fontawesome-brands-rust: Rust"
+
+    Rust runner plugins are async-only because `PluginRunner::run_task(...)` is
+    an async trait method. When the plugin crate already depends on `genja`,
+    import the macro from `genja::async_trait` instead of adding a separate
+    `async-trait` dependency just for the example.
+
+    ```rust
+    use std::sync::Arc;
+    use genja::async_trait;
+    use genja::genja_core::inventory::Hosts;
+    use genja::genja_core::settings::RunnerConfig;
+    use genja::genja_core::task::{
+        TaskConnectionResolver, TaskDefinition, TaskResults,
+    };
+    use genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
+    use genja_plugin_manager::PluginManager;
+
+    #[derive(Debug)]
+    struct FirstHostOnlyRunner;
+
+    impl Plugin for FirstHostOnlyRunner {
+        fn name(&self) -> String {
+            "first_host_only".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl PluginRunner for FirstHostOnlyRunner {
+        async fn run_task(
+            &self,
+            task: &TaskDefinition,
+            hosts: &Hosts,
+            connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+            _runner_config: &RunnerConfig,
+            max_depth: usize,
+        ) -> Result<TaskResults, genja::GenjaError> {
+            let mut results = TaskResults::new(task.as_task().name());
+
+            if let Some((host_id, host)) = hosts.iter().next() {
+                task.start_with_connection_resolver(
+                    host_id.as_ref(),
+                    host,
+                    &mut results,
+                    connection_resolver.as_deref(),
+                    max_depth,
+                )
+                .await?;
+            }
+
+            Ok(results)
+        }
+    }
+
+    let mut plugins = PluginManager::new();
+    plugins.register_plugin(Plugins::Runner(Box::new(FirstHostOnlyRunner)));
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja as genja_lib
+    from genja.runner import RunnerPluginBase
+    from genja.settings import RunnerConfig
 
 
-class FirstHostOnlyRunner(RunnerPluginBase):
-    name = "first_host_only"
+    class FirstHostOnlyRunner(RunnerPluginBase):
+        name = "first_host_only"
 
-    def run_task(
-        self,
-        task: genja_lib.TaskDefinition,
-        hosts: dict[str, object],
-        connection_resolver: genja_lib.TaskConnectionResolver | None,
-        runner_config: RunnerConfig,
-        max_depth: int,
-    ) -> genja_lib.TaskResults:
-        first_host = dict(list(hosts.items())[:1])
-        return task.run_on_hosts(first_host, connection_resolver, max_depth)
+        def run_task(
+            self,
+            task: genja_lib.TaskDefinition,
+            hosts: dict[str, object],
+            connection_resolver: genja_lib.TaskConnectionResolver | None,
+            runner_config: RunnerConfig,
+            max_depth: int,
+        ) -> genja_lib.TaskResults:
+            first_host = dict(list(hosts.items())[:1])
+            return task.run_on_hosts(first_host, connection_resolver, max_depth)
 
 
-plugins = genja_lib.PluginManager()
-plugins.register_plugin(FirstHostOnlyRunner())
-```
+    plugins = genja_lib.PluginManager()
+    plugins.register_plugin(FirstHostOnlyRunner())
+    ```
 
 Custom runners may also implement `run_tasks(...)` for custom ordered task-list
 execution. If `run_tasks(...)` is not provided, Genja delegates each root task to
 `run_task(...)` in order.
+
+Rust runner plugins are async-only because `PluginRunner::run_task(...)` is an
+async trait method. Python runner plugins may be synchronous or asynchronous;
+Genja resolves awaitable return values from Python before continuing.
+
+### Python Async Variant
+
+Async Python runners use the same base class:
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja as genja_lib
+    from genja.runner import RunnerPluginBase
+    from genja.settings import RunnerConfig
+
+
+    class AsyncFirstHostOnlyRunner(RunnerPluginBase):
+        name = "async_first_host_only"
+
+        async def run_task(
+            self,
+            task: genja_lib.TaskDefinition,
+            hosts: dict[str, object],
+            connection_resolver: genja_lib.TaskConnectionResolver | None,
+            runner_config: RunnerConfig,
+            max_depth: int,
+        ) -> genja_lib.TaskResults:
+            first_host = dict(list(hosts.items())[:1])
+            return task.run_on_hosts(first_host, connection_resolver, max_depth)
+    ```
 
 ## Choosing A Runner
 
