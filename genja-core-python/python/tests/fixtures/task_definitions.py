@@ -7,7 +7,7 @@ class AsyncRuntimeTask:
         "sub_task": None,
     }
 
-    async def run(self, task, host, context):
+    async def start(self, task, host, context):
         return {
             "status": "passed",
             "changed": True,

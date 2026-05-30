@@ -35,7 +35,7 @@ The canonical authoring shape is:
         options={"backup_path": "/tmp/configs", "compress": True},
     )
     class BackupConfigTask:
-        def run(
+        def start(
             self,
             task: TaskInfo,
             host: Host,
@@ -64,7 +64,7 @@ The canonical authoring shape is:
             )
 
     class ValidateBackupTask:
-        def run(
+        def start(
             self,
             task: TaskInfo,
             host: Host,
@@ -78,7 +78,7 @@ The canonical authoring shape is:
 
     @task(name="async_backup", connection_plugin_name="ssh")
     class AsyncBackupTask:
-        async def run(
+        async def start(
             self,
             task: TaskInfo,
             host: Host,
@@ -88,7 +88,7 @@ The canonical authoring shape is:
                 summary=f"asynchronously backed up {host.hostname}",
             )
 
-``run(...)`` may be implemented as ``def`` or ``async def`` and must resolve to
+``start(...)`` may be implemented as ``def`` or ``async def`` and must resolve to
 one of:
 
 - ``TaskSuccessResult``
@@ -183,12 +183,12 @@ class _GenjaModel(BaseModel):
 
 
 class TaskInfo(_GenjaModel):
-    """Task metadata passed into Python task ``run(...)`` methods.
+    """Task metadata passed into Python task ``start(...)`` methods.
 
     This class encapsulates all metadata associated with a task execution,
     including the task name, connection configuration, processor plugins,
     custom options, and optional nested sub-task information. Instances of
-    this class are provided to task ``run(...)`` methods to give tasks
+    this class are provided to task ``start(...)`` methods to give tasks
     access to their configuration and execution context.
 
     Note:
@@ -246,12 +246,12 @@ class TaskInfo(_GenjaModel):
 
 
 class Host(_GenjaModel):
-    """Host payload passed into Python task ``run(...)`` methods.
+    """Host payload passed into Python task ``start(...)`` methods.
 
     This class encapsulates all host-specific information required for task
     execution, including connection credentials, platform details, and
     additional inventory data. Instances of this class are provided to task
-    ``run(...)`` methods to give tasks access to the target host's
+    ``start(...)`` methods to give tasks access to the target host's
     configuration and connection parameters.
 
     Attributes:
@@ -297,10 +297,10 @@ class Host(_GenjaModel):
 
 
 class TaskRuntimeContext(_GenjaModel):
-    """Runtime context passed into Python task ``run(...)`` methods.
+    """Runtime context passed into Python task ``start(...)`` methods.
 
     This class encapsulates runtime execution context information provided to
-    task ``run(...)`` methods during execution. It includes depth tracking for
+    task ``start(...)`` methods during execution. It includes depth tracking for
     nested task execution, depth limits, and the resolved connection object
     that the task can use to interact with the target host.
 
@@ -340,7 +340,7 @@ class GenjaTaskProtocol(Protocol):
     This protocol defines the interface that all Genja task classes must
     implement to be recognized and executed by the Genja task runtime. Task
     classes decorated with @task automatically conform to this protocol by
-    having the required __genja_task_info__ attribute and run method added
+    having the required __genja_task_info__ attribute and start method added
     or validated during decoration.
 
     Attributes:
@@ -351,7 +351,7 @@ class GenjaTaskProtocol(Protocol):
 
     __genja_task_info__: dict[str, Any]
 
-    def run(
+    def start(
         self,
         task: TaskInfo,
         host: Host,
@@ -405,7 +405,7 @@ def task(
     """Attach Genja task metadata to a Python task class.
 
     This decorator function attaches execution metadata to a Python class to
-    register it as a Genja task. The decorated class must implement a ``run``
+    register it as a Genja task. The decorated class must implement a ``start``
     method that conforms to the GenjaTaskProtocol interface. The decorator
     validates all provided metadata and stores it in the class's
     ``__genja_task_info__`` attribute for use by the Genja task runtime.
@@ -435,7 +435,7 @@ def task(
 
     Raises:
         TypeError: If the decorator is applied to a non-class object, if the
-            decorated class does not define a callable ``run`` method, if the
+            decorated class does not define a callable ``start`` method, if the
             name is not a non-empty string, if connection_plugin_name is not
             a non-empty string or None, if sub_task is not a @task-decorated
             class or None, if processors is not a list of non-empty strings
@@ -446,14 +446,14 @@ def task(
         if not isinstance(cls, type):
             raise TypeError("@task can only decorate classes")
 
-        run = getattr(cls, "run", None)
-        if run is None:
+        start = getattr(cls, "start", None)
+        if start is None:
             raise TypeError(
-                f"@task-decorated class '{cls.__name__}' must define a 'run' method"
+                f"@task-decorated class '{cls.__name__}' must define a 'start' method"
             )
-        if not callable(run):
+        if not callable(start):
             raise TypeError(
-                f"@task-decorated class '{cls.__name__}' attribute 'run' must be callable"
+                f"@task-decorated class '{cls.__name__}' attribute 'start' must be callable"
             )
         if not isinstance(name, str) or not name.strip():
             raise TypeError(
@@ -652,13 +652,13 @@ class TaskMessageLevel(str, Enum):
 
 
 class TaskSuccessResult(_GenjaModel):
-    """Successful task outcome returned from ``run(...)`` methods.
+    """Successful task outcome returned from ``start(...)`` methods.
 
     This class represents the result of a successfully completed task execution.
     It encapsulates all information about what the task accomplished, including
     the primary result payload, state change indicators, diagnostic messages,
     and additional metadata. Instances of this class are returned by task
-    ``run(...)`` methods when the task completes without errors.
+    ``start(...)`` methods when the task completes without errors.
 
     Attributes:
         status (Literal[TaskStatus.PASSED]): The task execution status, always
@@ -759,13 +759,13 @@ class TaskSuccessResult(_GenjaModel):
 
 
 class TaskFailureResult(_GenjaModel):
-    """Failed task outcome returned from ``run(...)`` methods.
+    """Failed task outcome returned from ``start(...)`` methods.
 
     This class represents the result of a task execution that encountered an
     error and could not complete successfully. It encapsulates all information
     about the failure, including the error message, failure category, retry
     eligibility, diagnostic messages, and additional failure details. Instances
-    of this class are returned by task ``run(...)`` methods when the task
+    of this class are returned by task ``start(...)`` methods when the task
     encounters an error condition.
 
     Example:
@@ -870,13 +870,13 @@ class TaskFailureResult(_GenjaModel):
 
 
 class TaskSkipResult(_GenjaModel):
-    """Skipped task outcome returned from ``run(...)`` methods.
+    """Skipped task outcome returned from ``start(...)`` methods.
 
     This class represents the result of a task execution that was intentionally
     bypassed and did not execute its main logic. It encapsulates information
     about why the task was skipped, including both machine-readable reason codes
     and human-readable explanatory messages. Instances of this class are returned
-    by task ``run(...)`` methods when the task determines it should not execute
+    by task ``start(...)`` methods when the task determines it should not execute
     based on conditional logic, prerequisites, or other criteria.
 
     Example:

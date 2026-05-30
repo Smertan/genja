@@ -145,7 +145,7 @@ router2:
 
     @task(name="collect_facts")
     class CollectFacts:
-        def run(
+        def start(
             self,
             task: TaskInfo,
             host: Host,

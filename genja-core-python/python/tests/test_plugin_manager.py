@@ -17,13 +17,13 @@ from tests.fixtures.transform_plugins import HostOnlyTransformPlugin
 
 @task(name="plugin_manager_runner_task")
 class PluginManagerRunnerTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(summary=f"ran on {host.hostname}")
 
 
 @task(name="plugin_manager_runner_task_two")
 class PluginManagerRunnerTaskTwo:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(summary=f"ran second on {host.hostname}")
 
 

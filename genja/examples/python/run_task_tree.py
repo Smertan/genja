@@ -11,7 +11,7 @@ HOSTS_FILE = EXAMPLES_DIR / "inventory" / "hosts.json"
 
 @task(name="validate_config")
 class ValidateConfig:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(
             summary=f"validated config for {host.hostname}",
             metadata={
@@ -25,7 +25,7 @@ class ValidateConfig:
 
 @task(name="deploy_config", sub_task=ValidateConfig)
 class DeployConfig:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(
             summary=f"deployed config to {host.hostname}",
             metadata={

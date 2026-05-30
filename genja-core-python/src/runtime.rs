@@ -133,7 +133,7 @@
 //!
 //! @task(name="backup_config")
 //! class BackupTask:
-//!     def run(self, task, host: Host, context):
+//!     def start(self, task, host: Host, context):
 //!         return TaskSuccessResult(summary=f"backed up {host.hostname}")
 //!
 //! # Run task with default depth limit
@@ -291,7 +291,7 @@
 //!
 //! @task(name="show_version")
 //! class ShowVersionTask:
-//!     def run(self, task, host, context):
+//!     def start(self, task, host, context):
 //!         return TaskSuccessResult(summary=f"checked {host.hostname}")
 //!
 //! def worker(runtime):
@@ -332,7 +332,7 @@
 //!
 //! @task(name="show_version")
 //! class ShowVersionTask:
-//!     def run(self, task, host, context):
+//!     def start(self, task, host, context):
 //!         return TaskSuccessResult(summary=f"checked {host.hostname}")
 //!
 //! # Create runtime
@@ -408,7 +408,7 @@ use crate::task::{self, PyTaskResults};
 ///
 /// @task(name="show_version")
 /// class ShowVersionTask:
-///     def run(self, task, host, context):
+///     def start(self, task, host, context):
 ///         return TaskSuccessResult(summary=f"checked {host.hostname}")
 ///
 /// hosts = {

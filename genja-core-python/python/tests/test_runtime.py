@@ -33,7 +33,7 @@ def test_genja_from_settings_file_rejects_malformed_content(tmp_path):
 
 @task(name="runtime_backup")
 class RuntimeBackupTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(
             changed=True,
             summary=f"runtime handled {host.hostname}",
@@ -44,7 +44,7 @@ class RuntimeBackupTask:
 
 @task(name="runtime_child")
 class RuntimeChildTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(
             summary=f"child handled {host.hostname}",
             metadata={
@@ -59,7 +59,7 @@ class RuntimeChildTask:
     sub_task=RuntimeChildTask,
 )
 class RuntimeParentTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(
             summary=f"parent handled {host.hostname}",
             metadata={
@@ -71,7 +71,7 @@ class RuntimeParentTask:
 
 @task(name="runtime_connection", connection_plugin_name="ssh")
 class RuntimeConnectionTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         assert isinstance(context.connection, TestConnection)
         return TaskSuccessResult(
             summary=f"connected to {host.hostname}",

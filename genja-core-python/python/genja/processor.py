@@ -33,7 +33,7 @@ metadata:
 
     @task(name="backup_config", connection_plugin_name="ssh", processors=["audit"])
     class BackupConfigTask:
-        def run(self, task, host, context):
+        def start(self, task, host, context):
             return TaskSuccessResult(summary=f"backed up {host.hostname}")
 
     plugins = genja.PluginManager()

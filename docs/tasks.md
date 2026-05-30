@@ -44,7 +44,7 @@ structured result for that host.
 
 === ":fontawesome-brands-python: Python"
 
-    Python tasks use the `@task(...)` decorator and implement a `run(...)`
+    Python tasks use the `@task(...)` decorator and implement a `start(...)`
     method. The method may be synchronous or asynchronous.
 
     ```python
@@ -53,7 +53,7 @@ structured result for that host.
 
     @task(name="collect_facts")
     class CollectFacts:
-        def run(
+        def start(
             self,
             task: TaskInfo,
             host: Host,
@@ -98,7 +98,7 @@ Each task receives:
     from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult
 
 
-    def run(
+    def start(
         self,
         task: TaskInfo,
         host: Host,
@@ -240,7 +240,7 @@ sub-tasks for execution trees such as deploy, validate, and collect logs.
 
     @task(name="validate_config")
     class ValidateConfig:
-        def run(
+        def start(
             self,
             task: TaskInfo,
             host: Host,
@@ -251,7 +251,7 @@ sub-tasks for execution trees such as deploy, validate, and collect logs.
 
     @task(name="deploy_config", sub_task=ValidateConfig)
     class DeployConfig:
-        def run(
+        def start(
             self,
             task: TaskInfo,
             host: Host,
@@ -320,7 +320,7 @@ Task options are JSON-serializable metadata passed into task execution.
         options={"backup_path": "/tmp/configs", "compress": True},
     )
     class BackupConfig:
-        def run(
+        def start(
             self,
             task: TaskInfo,
             host: Host,

@@ -11,7 +11,7 @@ HOSTS_FILE = EXAMPLES_DIR / "inventory" / "hosts.json"
 
 @task(name="collect_facts")
 class CollectFacts:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(
             summary=f"collected facts from {host.hostname}",
             metadata={

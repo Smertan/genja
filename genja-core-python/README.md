@@ -35,7 +35,7 @@ from genja.task import TaskSuccessResult, task
 
 @task(name="backup_config")
 class BackupTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(summary=f"backed up {host.hostname}")
 
 

@@ -172,7 +172,7 @@ impl PythonBackedTask {
             };
 
             let result = instance
-                .call_method1("run", (task_payload, host_payload, context_payload))
+                .call_method1("start", (task_payload, host_payload, context_payload))
                 .map_err(python_task_error)?;
             let result = resolve_python_maybe_awaitable(py, result).map_err(python_task_error)?;
 
