@@ -48,11 +48,16 @@ inventory:
 
 ## Rust Transform Plugins
 
-Rust transforms implement `Transform` and return updated inventory values.
+Rust transforms implement `Transform` and are exposed through a
+`PluginTransformFunction` wrapper. The plugin `name()` must match the
+`transform_function` value from settings, so `transform_function:
+normalize_inventory` selects the `normalize_inventory` plugin below.
 
 ```rust
+use genja_plugin_manager::plugin_types::{Plugin, PluginTransformFunction, Plugins};
+use genja_plugin_manager::PluginManager;
 use genja::genja_core::inventory::{
-    BaseBuilderHost, Defaults, Host, Transform, TransformFunctionOptions,
+    BaseBuilderHost, Defaults, Host, Transform, TransformFunctionOptions, TransformFunction,
 };
 
 struct NormalizeInventory;
@@ -85,6 +90,25 @@ impl Transform for NormalizeInventory {
         defaults.to_builder().platform("linux").build()
     }
 }
+
+struct NormalizeInventoryPlugin;
+
+impl Plugin for NormalizeInventoryPlugin {
+    fn name(&self) -> String {
+        "normalize_inventory".to_string()
+    }
+}
+
+impl PluginTransformFunction for NormalizeInventoryPlugin {
+    fn transform_function(&self) -> TransformFunction {
+        TransformFunction::new_full(NormalizeInventory)
+    }
+}
+
+let mut plugins = PluginManager::new();
+plugins.register_plugin(Plugins::TransformFunction(Box::new(
+    NormalizeInventoryPlugin,
+)));
 ```
 
 ## Python Transform Plugins
