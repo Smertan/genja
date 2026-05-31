@@ -52,7 +52,7 @@ The canonical authoring shape is:
                         level=TaskMessageLevel.INFO,
                         text=(
                             f"task={task.name} "
-                            f"depth={context.current_depth}/{context.max_depth}"
+                            f"has_connection={context.has_connection()}"
                         ),
                     )
                 ],
@@ -209,7 +209,7 @@ class TaskInfo(_GenjaModel):
             plugin used to establish connectivity for this task. Connection
             plugins provide the transport used to talk to target hosts, and
             the resolved connection object is exposed through
-            ``TaskRuntimeContext.connection``. If None, no specific connection
+            ``TaskRuntimeContext.connection()``. If None, no specific connection
             plugin is configured.
         processors (list[str]): List of processor plugin names that should be
             applied to this task's execution. Processors are lifecycle hooks
@@ -296,7 +296,7 @@ class Host(_GenjaModel):
     )
 
 
-class TaskRuntimeContext(_GenjaModel):
+class TaskRuntimeContext:
     """Runtime context passed into Python task ``start(...)`` methods.
 
     This class encapsulates runtime execution context information provided to
@@ -304,34 +304,34 @@ class TaskRuntimeContext(_GenjaModel):
     nested task execution, depth limits, and the resolved connection object
     that the task can use to interact with the target host.
 
-    Attributes:
-        current_depth (int): The current execution depth in the task call stack.
-            This value starts at 0 for top-level tasks and increments for each
-            level of nested sub-task execution. It allows tasks to understand
-            their position in the execution hierarchy.
-        max_depth (int | None): The maximum allowed execution depth for nested
-            tasks. If None, no depth limit is enforced. When set, the execution
-            engine will prevent tasks from executing beyond this depth to avoid
-            infinite recursion or excessive nesting.
-        connection (Any | None): The resolved connection object that the task
-            can use to communicate with the target host. The type and capabilities
-            of this object depend on the connection plugin specified in the task
-            metadata. If None, no connection was established or the task does not
-            require a connection.
+    Task code can inspect the resolved connection through ``connection()`` and
+    ``has_connection()``. Depth bookkeeping is retained internally by the
+    runtime and is not part of the public Python task API.
     """
 
-    current_depth: int = Field(
-        default=0,
-        description="Current task execution depth.",
-    )
-    max_depth: int | None = Field(
-        default=None,
-        description="Maximum allowed execution depth, if configured.",
-    )
-    connection: Any | None = Field(
-        default=None,
-        description="Resolved connection object available to the task.",
-    )
+    def __init__(
+        self,
+        *,
+        current_depth: int = 0,
+        max_depth: int | None = None,
+        connection: Any | None = None,
+    ) -> None:
+        self._current_depth = current_depth
+        self._max_depth = max_depth
+        self._connection = connection
+
+    def connection(self) -> Any | None:
+        return self._connection
+
+    def has_connection(self) -> bool:
+        return self._connection is not None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "current_depth": self._current_depth,
+            "max_depth": self._max_depth,
+            "connection": self._connection,
+        }
 
 
 class GenjaTaskProtocol(Protocol):
@@ -379,9 +379,8 @@ class GenjaTaskProtocol(Protocol):
                 will be executed, including hostname, connection credentials,
                 platform identifier, and additional inventory data.
             context (TaskRuntimeContext): Runtime execution context providing
-                the current execution depth, maximum depth limit, and the
-                resolved connection object for communicating with the target
-                host.
+                access to the resolved connection object for communicating with
+                the target host.
 
         Returns:
             TaskSuccessResult | TaskFailureResult | TaskSkipResult | Awaitable[

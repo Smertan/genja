@@ -3624,11 +3624,13 @@ impl TaskDefinition {
         let started_at = SystemTime::now();
         let parent_task = parent_task_name.unwrap_or("none");
         debug!(
-            "starting task '{}' for host '{}' parent_task='{}' depth={}",
+            "starting task '{}' for host '{}' parent_task='{}' depth={} max_depth={} has_connection={}",
             task.name(),
             hostname,
             parent_task,
-            depth
+            depth,
+            max_depth,
+            connection.is_some()
         );
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));

@@ -17,7 +17,6 @@ class ValidateConfig:
             metadata={
                 "task": task.name,
                 "host": host.hostname,
-                "depth": context.current_depth,
                 "valid": True,
             },
         )
@@ -31,7 +30,6 @@ class DeployConfig:
             metadata={
                 "task": task.name,
                 "host": host.hostname,
-                "depth": context.current_depth,
                 "deployed": True,
             },
         )

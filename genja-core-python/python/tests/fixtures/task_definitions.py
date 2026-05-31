@@ -13,8 +13,5 @@ class AsyncRuntimeTask:
             "changed": True,
             "summary": f"async handled {host.hostname}",
             "messages": [{"level": "info", "text": task.name}],
-            "metadata": {
-                "current_depth": context.current_depth,
-                "max_depth": context.max_depth,
-            },
+            "metadata": {"has_connection": context.has_connection()},
         }

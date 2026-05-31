@@ -76,8 +76,23 @@ Each task receives:
 - task metadata: task name, options, processors, connection plugin, and sub-task
   metadata
 - host data: hostname, port, username, password, platform, and inventory `data`
-- runtime context: current task depth, maximum depth, and resolved connection
-  when a connection plugin is used
+- runtime context: a `TaskRuntimeContext` value created by the runtime for the
+  current task execution
+
+## Runtime Context
+
+`TaskRuntimeContext` is passed into every task `start(...)` call by the runtime.
+It describes the current execution state for that specific host run.
+
+The public Python task-facing context surface is intentionally narrow. Use it
+when the task needs access to the resolved host connection.
+
+In Python, `TaskRuntimeContext` exposes:
+
+- `connection()`: returns the resolved connection object or `None`
+- `has_connection()`: returns `True` when a connection was resolved
+
+Depth bookkeeping stays internal to the runtime.
 
 === ":fontawesome-brands-rust: Rust"
 
@@ -85,9 +100,9 @@ Each task receives:
     async fn start(
         &self,
         host: &Host,
-        context: &TaskRuntimeContext,
+        _context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
-        println!("host={:?} depth={}", host.hostname(), context.current_depth());
+        println!("host={:?}", host.hostname());
         Ok(HostTaskResult::passed(TaskSuccess::new()))
     }
     ```
@@ -102,9 +117,9 @@ Each task receives:
         self,
         task: TaskInfo,
         host: Host,
-        context: TaskRuntimeContext,
+        _context: TaskRuntimeContext,
     ) -> TaskSuccessResult:
-        print(f"task={task.name} host={host.hostname} depth={context.current_depth}")
+        print(f"task={task.name} host={host.hostname}")
         return TaskSuccessResult()
     ```
 

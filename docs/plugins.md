@@ -195,4 +195,4 @@ Plugin-specific behavior is documented in the relevant guide:
 - Inventory plugins and transforms: [Inventory](inventory.md)
 - Task processors: [Tasks](tasks.md)
 - Runners: [Runners](runners.md)
-- Connection plugins: connection guide
+- Connection plugins: [Connections](connection.md)
