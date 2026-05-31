@@ -260,6 +260,20 @@ impl Genja {
         Ok(genja)
     }
 
+    /// Creates a `Genja` instance from a settings file path using async inventory loading.
+    ///
+    /// This follows the same flow as [`Self::from_settings_file`], but allows
+    /// async inventory plugins to participate in runtime construction.
+    pub async fn from_settings_file_async(settings_file_path: &str) -> Result<Self, GenjaError> {
+        let settings = Settings::from_file(settings_file_path).map_err(GenjaError::from)?;
+
+        let mut genja = Self::new();
+        genja.set_settings(settings);
+        genja.load_plugins()?;
+        genja.load_inventory_from_settings_async().await?;
+        Ok(genja)
+    }
+
     /// Loads inventory using the plugin specified in settings.
     ///
     /// Attempts to load inventory through the configured inventory plugin. Falls
@@ -285,6 +299,12 @@ impl Genja {
                 return Ok(());
             }
 
+            if self.plugins.get_async_inventory_plugin(plugin_name).is_some() {
+                return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
+                    plugin_name.to_string(),
+                ));
+            }
+
             if self.plugins.get_plugin(plugin_name).is_some() {
                 return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
             }
@@ -293,6 +313,67 @@ impl Genja {
         }
 
         let default_name = "FileInventoryPlugin";
+        if let Some(plugin) = self.plugins.get_inventory_plugin(default_name) {
+            let inventory = plugin
+                .load(&self.settings, &self.plugins)
+                .map_err(GenjaError::from)?;
+            self.load_inventory(inventory);
+            return Ok(());
+        }
+
+        if self.plugins.get_async_inventory_plugin(default_name).is_some() {
+            return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
+                default_name.to_string(),
+            ));
+        }
+
+        if self.plugins.get_plugin(default_name).is_some() {
+            return Err(GenjaError::NotInventoryPlugin(default_name.to_string()));
+        }
+
+        Err(GenjaError::PluginNotFound(default_name.to_string()))
+    }
+
+    async fn load_inventory_from_settings_async(&mut self) -> Result<(), GenjaError> {
+        self.ensure_plugins_loaded()?;
+        let inventory_cfg = self.settings.inventory();
+        let plugin_name = inventory_cfg.plugin();
+
+        if !plugin_name.is_empty() {
+            if let Some(plugin) = self.plugins.get_async_inventory_plugin(plugin_name) {
+                let inventory = plugin
+                    .load_async(&self.settings, &self.plugins)
+                    .await
+                    .map_err(GenjaError::from)?;
+                self.load_inventory(inventory);
+                return Ok(());
+            }
+
+            if let Some(plugin) = self.plugins.get_inventory_plugin(plugin_name) {
+                let inventory = plugin
+                    .load(&self.settings, &self.plugins)
+                    .map_err(GenjaError::from)?;
+                self.load_inventory(inventory);
+                return Ok(());
+            }
+
+            if self.plugins.get_plugin(plugin_name).is_some() {
+                return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
+            }
+
+            return Err(GenjaError::PluginNotFound(plugin_name.to_string()));
+        }
+
+        let default_name = "FileInventoryPlugin";
+        if let Some(plugin) = self.plugins.get_async_inventory_plugin(default_name) {
+            let inventory = plugin
+                .load_async(&self.settings, &self.plugins)
+                .await
+                .map_err(GenjaError::from)?;
+            self.load_inventory(inventory);
+            return Ok(());
+        }
+
         if let Some(plugin) = self.plugins.get_inventory_plugin(default_name) {
             let inventory = plugin
                 .load(&self.settings, &self.plugins)
@@ -1027,17 +1108,44 @@ mod tests {
         BaseBuilderHost, Connection, ConnectionKey, Data, Host, Hosts, Inventory,
         ResolvedConnectionParams,
     };
-    use genja_core::settings::RunnerConfig;
+    use genja_core::settings::{InventoryConfig, RunnerConfig};
     use genja_core::task::{
         HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
     };
-    use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, Plugins};
+    use genja_plugin_manager::plugin_types::{
+        AsyncPluginInventory, Plugin, PluginConnection, Plugins,
+    };
     use serde_json::{Value, json};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     struct TestTask {
         name: String,
+    }
+
+    #[derive(Debug)]
+    struct TestAsyncInventoryPlugin;
+
+    impl Plugin for TestAsyncInventoryPlugin {
+        fn name(&self) -> String {
+            "async_inventory".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl AsyncPluginInventory for TestAsyncInventoryPlugin {
+        async fn load_async(
+            &self,
+            _settings: &Settings,
+            _plugins: &genja_plugin_manager::PluginManager,
+        ) -> Result<Inventory, genja_core::InventoryLoadError> {
+            let mut hosts = Hosts::new();
+            hosts.add_host(
+                "router1",
+                Host::builder().hostname("10.0.0.1").platform("ios").build(),
+            );
+            Ok(Inventory::builder().hosts(hosts).build())
+        }
     }
 
     impl TaskInfo for TestTask {
@@ -1670,6 +1778,57 @@ mod tests {
         assert!(
             matches!(error, GenjaError::Message(message) if message.contains("invalid value regex"))
         );
+    }
+
+    #[test]
+    fn sync_inventory_loading_rejects_async_only_inventory_plugin() {
+        let mut plugin_manager = genja_plugin_manager::PluginManager::new();
+        plugin_manager.register_plugin(Plugins::AsyncInventory(Box::new(TestAsyncInventoryPlugin)));
+
+        let settings = Settings::builder()
+            .inventory(InventoryConfig::builder().plugin("async_inventory").build())
+            .build();
+
+        let mut genja = Genja::new();
+        genja.set_settings(settings);
+        genja.plugins = Arc::new(plugin_manager);
+        genja.plugins_loaded = true;
+
+        let error = genja
+            .load_inventory_from_settings()
+            .expect_err("sync settings load should reject async-only inventory plugins");
+
+        assert!(matches!(
+            error,
+            GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(name)
+                if name == "async_inventory"
+        ));
+    }
+
+    #[test]
+    fn async_inventory_loading_supports_async_inventory_plugin() {
+        let mut plugin_manager = genja_plugin_manager::PluginManager::new();
+        plugin_manager.register_plugin(Plugins::AsyncInventory(Box::new(TestAsyncInventoryPlugin)));
+
+        let settings = Settings::builder()
+            .inventory(InventoryConfig::builder().plugin("async_inventory").build())
+            .build();
+
+        let mut genja = Genja::new();
+        genja.set_settings(settings);
+        genja.plugins = Arc::new(plugin_manager);
+        genja.plugins_loaded = true;
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(genja.load_inventory_from_settings_async())
+            .expect("async settings load should support async inventory plugins");
+
+        assert!(genja.inventory_loaded());
+        assert_eq!(genja.host_ids().len(), 1);
+        assert_eq!(genja.host_ids()[0].as_str(), "router1");
     }
 
     #[test]

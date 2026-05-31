@@ -153,6 +153,120 @@ inventory:
 
 Defaults support the same fields as groups, except `groups` and `defaults`.
 
+## Custom Inventory Plugins
+
+Python inventory plugins extend `InventoryPluginBase` and implement
+`load(...)`. The loader may return either:
+
+- a host mapping in the same shape accepted by `Genja.from_hosts(...)`
+- a full `Inventory` object with `hosts`, `groups`, and `defaults`
+
+=== ":fontawesome-brands-rust: Rust"
+
+    Rust inventory plugins implement `PluginInventory`. Unlike Python, the Rust
+    `load(...)` hook is synchronous and returns a full `Inventory`.
+
+    ```rust
+    use genja::genja_core::inventory::{Host, Hosts, Inventory};
+    use genja::genja_core::{InventoryLoadError, Settings};
+    use genja_plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
+    use genja_plugin_manager::PluginManager;
+
+    #[derive(Debug)]
+    struct StaticInventoryPlugin;
+
+    impl Plugin for StaticInventoryPlugin {
+        fn name(&self) -> String {
+            "static_inventory".to_string()
+        }
+    }
+
+    impl PluginInventory for StaticInventoryPlugin {
+        fn load(
+            &self,
+            _settings: &Settings,
+            _plugins: &PluginManager,
+        ) -> Result<Inventory, InventoryLoadError> {
+            let mut hosts = Hosts::new();
+            hosts.add_host(
+                "router1",
+                Host::builder().hostname("10.0.0.1").platform("ios").build(),
+            );
+            hosts.add_host(
+                "router2",
+                Host::builder().hostname("10.0.0.2").platform("nxos").build(),
+            );
+
+            Ok(Inventory::builder().hosts(hosts).build())
+        }
+    }
+
+    let mut plugins = PluginManager::new();
+    plugins.register_plugin(Plugins::Inventory(Box::new(StaticInventoryPlugin)));
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja as genja_lib
+    from genja import Settings
+    from genja.inventory import Host, Inventory, InventoryPluginBase
+
+
+    class StaticInventoryPlugin(InventoryPluginBase):
+        name = "static_inventory"
+
+        def load(
+            self,
+            settings: Settings,
+            plugins: object,
+        ) -> Inventory:
+            return Inventory(
+                hosts={
+                    "router1": Host(hostname="10.0.0.1", platform="ios"),
+                    "router2": Host(hostname="10.0.0.2", platform="nxos"),
+                }
+            )
+
+
+    plugins = genja_lib.PluginManager()
+    plugins.register_plugin(StaticInventoryPlugin())
+    ```
+
+    ### Async Variant
+
+    Async inventory loaders use the same base class:
+
+    ```python
+    import genja as genja_lib
+    from genja import Settings
+    from genja.inventory import InventoryPluginBase
+
+
+    class ApiInventoryPlugin(InventoryPluginBase):
+        name = "api_inventory"
+
+        async def load(
+            self,
+            settings: Settings,
+            plugins: object,
+        ) -> dict[str, dict[str, object]]:
+            return {
+                "router1": {
+                    "hostname": "10.0.0.1",
+                    "platform": "ios",
+                },
+                "router2": {
+                    "hostname": "10.0.0.2",
+                    "platform": "nxos",
+                },
+            }
+
+
+    plugins = genja_lib.PluginManager()
+    plugins.register_plugin(ApiInventoryPlugin())
+    ```
+
 ## Inventory Transforms
 
 Inventory transforms can normalize or enrich inventory values when they are

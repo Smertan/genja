@@ -458,6 +458,27 @@ pub trait PluginInventory: Plugin {
     }
 }
 
+/// Loads or prepares inventory data for the system asynchronously.
+///
+/// Async inventory plugins are intended for remote inventory sources such as
+/// HTTP APIs, databases, or service-discovery systems. The runtime can prefer
+/// them from async construction paths while keeping synchronous inventory
+/// plugins available for file-based and blocking implementations.
+#[async_trait]
+pub trait AsyncPluginInventory: Plugin {
+    /// Load and return inventory data for the system.
+    async fn load_async(
+        &self,
+        settings: &Settings,
+        plugins: &PluginManager,
+    ) -> Result<Inventory, InventoryLoadError>;
+
+    /// Returns the group name
+    fn group(&self) -> String {
+        String::from("InventoryPlugin")
+    }
+}
+
 impl Debug for dyn Plugin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {{ name: {} }}", Plugin::group(self), self.name())
@@ -470,6 +491,17 @@ impl Debug for dyn PluginInventory {
             f,
             "{} {{ name: {} }}",
             PluginInventory::group(self),
+            self.name()
+        )
+    }
+}
+
+impl Debug for dyn AsyncPluginInventory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {{ name: {} }}",
+            AsyncPluginInventory::group(self),
             self.name()
         )
     }
@@ -636,6 +668,7 @@ pub trait PluginConnection: Plugin {
 pub enum Plugins {
     Connection(Box<dyn PluginConnection>),
     Inventory(Box<dyn PluginInventory>),
+    AsyncInventory(Box<dyn AsyncPluginInventory>),
     Processor(Box<dyn PluginProcessor>),
     Runner(Box<dyn PluginRunner>),
     TransformFunction(Box<dyn PluginTransformFunction>),
@@ -647,6 +680,7 @@ impl Plugins {
         match self {
             Plugins::Connection(connection) => connection.name(),
             Plugins::Inventory(inventory) => inventory.name(),
+            Plugins::AsyncInventory(inventory) => inventory.name(),
             Plugins::Processor(processor) => processor.name(),
             Plugins::Runner(runner) => runner.name(),
             Plugins::TransformFunction(transform) => transform.name(),
@@ -658,6 +692,7 @@ impl Plugins {
         match self {
             Plugins::Connection(_) => String::from("Connection"),
             Plugins::Inventory(_) => String::from("Inventory"),
+            Plugins::AsyncInventory(_) => String::from("Inventory"),
             Plugins::Processor(_) => String::from("Processor"),
             Plugins::Runner(_) => String::from("Runner"),
             Plugins::TransformFunction(_) => String::from("TransformFunction"),
@@ -714,6 +749,34 @@ mod tests {
 
     impl PluginInventory for DummyInventory {
         fn load(
+            &self,
+            _settings: &Settings,
+            _plugins: &PluginManager,
+        ) -> Result<Inventory, InventoryLoadError> {
+            Ok(Inventory::builder().build())
+        }
+    }
+
+    #[derive(Debug)]
+    struct DummyAsyncInventory {
+        name: &'static str,
+    }
+
+    impl DummyAsyncInventory {
+        fn new(name: &'static str) -> Self {
+            Self { name }
+        }
+    }
+
+    impl Plugin for DummyAsyncInventory {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    #[async_trait]
+    impl AsyncPluginInventory for DummyAsyncInventory {
+        async fn load_async(
             &self,
             _settings: &Settings,
             _plugins: &PluginManager,
@@ -894,6 +957,7 @@ mod tests {
     fn plugins_name_and_group_name_match_variants() {
         let connection = Plugins::Connection(Box::new(DummyConnection::new("conn")));
         let inventory = Plugins::Inventory(Box::new(DummyInventory::new("inv")));
+        let async_inventory = Plugins::AsyncInventory(Box::new(DummyAsyncInventory::new("ainv")));
         let runner = Plugins::Runner(Box::new(DummyRunner::new("run")));
         let transform = Plugins::TransformFunction(Box::new(DummyTransform::new("tf")));
 
@@ -902,6 +966,9 @@ mod tests {
 
         assert_eq!(inventory.name(), "inv");
         assert_eq!(inventory.group_name(), "Inventory");
+
+        assert_eq!(async_inventory.name(), "ainv");
+        assert_eq!(async_inventory.group_name(), "Inventory");
 
         assert_eq!(runner.name(), "run");
         assert_eq!(runner.group_name(), "Runner");

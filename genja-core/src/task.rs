@@ -3630,7 +3630,7 @@ impl TaskDefinition {
             parent_task,
             depth,
             max_depth,
-            connection.is_some()
+            connection_resolver.is_some()
         );
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));

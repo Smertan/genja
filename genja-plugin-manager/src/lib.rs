@@ -474,8 +474,9 @@ use async_trait::async_trait;
 use genja_core::task::{TaskProcessor, TaskProcessorResolver};
 use libloading::{Library, Symbol};
 use plugin_types::{
-    GroupOrName, PluginConnection, PluginCreatePlugins, PluginEntry, PluginInventory, PluginName,
-    PluginProcessor, PluginResultPlugins, PluginRunner, PluginTransformFunction, Plugins,
+    AsyncPluginInventory, GroupOrName, PluginConnection, PluginCreatePlugins, PluginEntry,
+    PluginInventory, PluginName, PluginProcessor, PluginResultPlugins, PluginRunner,
+    PluginTransformFunction, Plugins,
 };
 use serde::Deserialize;
 use std::collections::{HashMap, hash_map};
@@ -756,6 +757,15 @@ impl PluginManager {
     }
 
     #[allow(clippy::borrowed_box)]
+    /// Gets an async inventory plugin, returns None if the plugin is not an AsyncInventory variant
+    pub fn get_async_inventory_plugin(&self, name: &str) -> Option<&Box<dyn AsyncPluginInventory>> {
+        self.plugins.get(name).and_then(|plugin| match plugin {
+            Plugins::AsyncInventory(inventory) => Some(inventory),
+            _ => None,
+        })
+    }
+
+    #[allow(clippy::borrowed_box)]
     /// Gets a transform function plugin, returns None if the plugin is not a TransformFunction variant
     pub fn get_transform_function_plugin(
         &self,
@@ -810,6 +820,18 @@ impl PluginManager {
     #[allow(clippy::borrowed_box)]
     pub fn get_plugins_by_type_inventory(&self) -> Vec<(&String, &Box<dyn PluginInventory>)> {
         get_plugins_by_variant!(self, Plugins::Inventory, &Box<dyn PluginInventory>)
+    }
+
+    /// Gets all async inventory plugins with their trait objects
+    #[allow(clippy::borrowed_box)]
+    pub fn get_plugins_by_type_async_inventory(
+        &self,
+    ) -> Vec<(&String, &Box<dyn AsyncPluginInventory>)> {
+        get_plugins_by_variant!(
+            self,
+            Plugins::AsyncInventory,
+            &Box<dyn AsyncPluginInventory>
+        )
     }
 
     /// Gets all Processor plugins with their trait objects
@@ -919,7 +941,7 @@ mod tests {
 
     use super::*;
     use crate::plugin_types::{
-        Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
+        AsyncPluginInventory, Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
         PluginTransformFunction,
     };
     use genja_core::inventory::{
@@ -1419,6 +1441,28 @@ inventory_a = "../this/path/does/not/exist.so"
     }
 
     #[derive(Debug)]
+    struct DummyAsyncInventory {
+        name: &'static str,
+    }
+
+    impl Plugin for DummyAsyncInventory {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    #[async_trait]
+    impl AsyncPluginInventory for DummyAsyncInventory {
+        async fn load_async(
+            &self,
+            _settings: &Settings,
+            _plugins: &PluginManager,
+        ) -> Result<Inventory, InventoryLoadError> {
+            Ok(Inventory::builder().build())
+        }
+    }
+
+    #[derive(Debug)]
     struct DummyRunner {
         name: &'static str,
     }
@@ -1503,6 +1547,9 @@ inventory_a = "../this/path/does/not/exist.so"
             name: "conn",
         })));
         manager.register_plugin(Plugins::Inventory(Box::new(DummyInventory { name: "inv" })));
+        manager.register_plugin(Plugins::AsyncInventory(Box::new(DummyAsyncInventory {
+            name: "ainv",
+        })));
         manager.register_plugin(Plugins::Runner(Box::new(DummyRunner { name: "run" })));
         manager.register_plugin(Plugins::TransformFunction(Box::new(DummyTransform {
             name: "tf",
@@ -1510,28 +1557,37 @@ inventory_a = "../this/path/does/not/exist.so"
 
         assert!(manager.get_plugin("conn").is_some());
         assert!(manager.get_plugin("inv").is_some());
+        assert!(manager.get_plugin("ainv").is_some());
         assert!(manager.get_plugin("run").is_some());
         assert!(manager.get_plugin("tf").is_some());
         assert!(manager.get_plugin("missing").is_none());
 
         assert!(manager.get_connection_plugin("conn").is_some());
         assert!(manager.get_connection_plugin("inv").is_none());
+        assert!(manager.get_connection_plugin("ainv").is_none());
         assert!(manager.get_connection_plugin("run").is_none());
         assert!(manager.get_connection_plugin("tf").is_none());
 
         assert!(manager.get_inventory_plugin("inv").is_some());
         assert!(manager.get_inventory_plugin("conn").is_none());
+        assert!(manager.get_inventory_plugin("ainv").is_none());
         assert!(manager.get_inventory_plugin("run").is_none());
         assert!(manager.get_inventory_plugin("tf").is_none());
+
+        assert!(manager.get_async_inventory_plugin("ainv").is_some());
+        assert!(manager.get_async_inventory_plugin("inv").is_none());
+        assert!(manager.get_async_inventory_plugin("conn").is_none());
 
         assert!(manager.get_runner_plugin("run").is_some());
         assert!(manager.get_runner_plugin("conn").is_none());
         assert!(manager.get_runner_plugin("inv").is_none());
+        assert!(manager.get_runner_plugin("ainv").is_none());
         assert!(manager.get_runner_plugin("tf").is_none());
 
         assert!(manager.get_transform_function_plugin("tf").is_some());
         assert!(manager.get_transform_function_plugin("conn").is_none());
         assert!(manager.get_transform_function_plugin("inv").is_none());
+        assert!(manager.get_transform_function_plugin("ainv").is_none());
         assert!(manager.get_transform_function_plugin("run").is_none());
     }
 
@@ -1578,6 +1634,9 @@ inventory_a = "../this/path/does/not/exist.so"
             name: "conn",
         })));
         manager.register_plugin(Plugins::Inventory(Box::new(DummyInventory { name: "inv" })));
+        manager.register_plugin(Plugins::AsyncInventory(Box::new(DummyAsyncInventory {
+            name: "ainv",
+        })));
         manager.register_plugin(Plugins::TransformFunction(Box::new(DummyTransform {
             name: "tf",
         })));
@@ -1586,10 +1645,15 @@ inventory_a = "../this/path/does/not/exist.so"
         assert_eq!(transforms.len(), 1);
         assert_eq!(transforms[0].0.as_str(), "tf");
 
+        let async_inventory_plugins = manager.get_plugins_by_type_async_inventory();
+        assert_eq!(async_inventory_plugins.len(), 1);
+        assert_eq!(async_inventory_plugins[0].0.as_str(), "ainv");
+
         let names = manager.get_all_plugin_names();
-        assert_eq!(names.len(), 3);
+        assert_eq!(names.len(), 4);
         assert!(names.contains(&&"conn".to_string()));
         assert!(names.contains(&&"inv".to_string()));
+        assert!(names.contains(&&"ainv".to_string()));
         assert!(names.contains(&&"tf".to_string()));
     }
 }
