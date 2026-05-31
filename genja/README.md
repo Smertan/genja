@@ -58,6 +58,75 @@ assert_eq!(genja.host_ids().len(), 1);
 `Host::builder()` is provided by the `BaseBuilderHost` trait, so the trait must
 be imported anywhere you use the builder helper.
 
+## Async Inventory Loading
+
+Rust inventory plugins can be synchronous (`PluginInventory`) or asynchronous
+(`AsyncPluginInventory`).
+
+When the inventory plugin is discovered from the runtime plugin directory and
+selected by `settings.yaml`, use `Genja::from_settings_file_async(...)` for the
+async path. When you register inventory plugins in code, load the inventory
+explicitly through the plugin and then build `Genja` from the returned
+`Inventory`.
+
+```rust
+use genja::Genja;
+use genja::async_trait;
+use genja::genja_core::Settings;
+use genja::genja_core::inventory::{
+    BaseBuilderHost, // brings Host::builder() into scope
+    Host,
+    Hosts,
+    Inventory,
+};
+use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin, Plugins};
+use genja_plugin_manager::PluginManager;
+
+#[derive(Debug)]
+struct ApiInventoryPlugin;
+
+impl Plugin for ApiInventoryPlugin {
+    fn name(&self) -> String {
+        "api_inventory".to_string()
+    }
+}
+
+#[async_trait]
+impl AsyncPluginInventory for ApiInventoryPlugin {
+    async fn load_async(
+        &self,
+        _settings: &Settings,
+        _plugins: &PluginManager,
+    ) -> Result<Inventory, genja::genja_core::InventoryLoadError> {
+        let mut hosts = Hosts::new();
+        hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+        Ok(Inventory::builder().hosts(hosts).build())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let settings = Settings::from_file("settings.yaml")?;
+
+    let mut plugins = PluginManager::new();
+    plugins.register_plugin(Plugins::AsyncInventory(Box::new(ApiInventoryPlugin)));
+
+    let inventory = plugins
+        .get_async_inventory_plugin("api_inventory")
+        .ok_or("missing async inventory plugin")?
+        .load_async(&settings, &plugins)
+        .await?;
+
+    let genja = Genja::builder(inventory)
+        .with_settings(settings)
+        .with_plugin_manager(plugins)
+        .build()?;
+
+    assert_eq!(genja.host_ids().len(), 1);
+    Ok(())
+}
+```
+
 ## Running A Task
 
 Task metadata and sub-task relationships are generated with `TaskDerive`; task

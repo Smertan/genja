@@ -26,6 +26,72 @@ let genja = Genja::builder(inventory)
     .build()?;
 ```
 
+## Async Inventory Plugins
+
+Rust supports both synchronous and asynchronous inventory plugins.
+
+- Use `PluginInventory` for synchronous loaders.
+- Use `AsyncPluginInventory` for asynchronous loaders.
+
+If you are loading inventory through runtime plugin discovery from a settings
+file, use `Genja::from_settings_file_async(...)` when the selected inventory
+plugin is async-capable. If you are registering inventory plugins in code, load
+the inventory through the plugin first and then build `Genja` from the returned
+`Inventory`.
+
+```rust
+use genja::Genja;
+use genja::async_trait;
+use genja::genja_core::inventory::{BaseBuilderHost, Host, Hosts, Inventory};
+use genja::genja_core::{InventoryLoadError, Settings};
+use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin, Plugins};
+use genja_plugin_manager::PluginManager;
+
+#[derive(Debug)]
+struct ApiInventoryPlugin;
+
+impl Plugin for ApiInventoryPlugin {
+    fn name(&self) -> String {
+        "api_inventory".to_string()
+    }
+}
+
+#[async_trait]
+impl AsyncPluginInventory for ApiInventoryPlugin {
+    async fn load_async(
+        &self,
+        _settings: &Settings,
+        _plugins: &PluginManager,
+    ) -> Result<Inventory, InventoryLoadError> {
+        let mut hosts = Hosts::new();
+        hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
+        Ok(Inventory::builder().hosts(hosts).build())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let settings = Settings::from_file("config.yaml")?;
+
+    let mut plugins = PluginManager::new();
+    plugins.register_plugin(Plugins::AsyncInventory(Box::new(ApiInventoryPlugin)));
+
+    let inventory = plugins
+        .get_async_inventory_plugin("api_inventory")
+        .ok_or("missing async inventory plugin")?
+        .load_async(&settings, &plugins)
+        .await?;
+
+    let genja = Genja::builder(inventory)
+        .with_settings(settings)
+        .with_plugin_manager(plugins)
+        .build()?;
+
+    assert_eq!(genja.host_ids().len(), 1);
+    Ok(())
+}
+```
+
 ## Filtering Hosts
 
 `Genja` keeps the inventory immutable and returns a new instance with a reduced

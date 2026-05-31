@@ -87,6 +87,15 @@ pub fn create_plugins() -> Vec<Plugins> {
 }
 ```
 
+For inventory plugins there are now two Rust trait paths:
+
+- `PluginInventory` for synchronous loaders
+- `AsyncPluginInventory` for async loaders used with `Genja::from_settings_file_async(...)`
+
+The async constructor is the superset path: it prefers `AsyncPluginInventory`
+when registered for the selected plugin name and otherwise falls back to
+`PluginInventory`.
+
 Plugin crate setup:
 
 ```toml

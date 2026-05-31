@@ -161,6 +161,8 @@ Python inventory plugins extend `InventoryPluginBase` and implement
 - a host mapping in the same shape accepted by `Genja.from_hosts(...)`
 - a full `Inventory` object with `hosts`, `groups`, and `defaults`
 
+### Synchronous Loaders
+
 === ":fontawesome-brands-rust: Rust"
 
     Rust inventory plugins implement `PluginInventory`. Unlike Python, the Rust
@@ -233,9 +235,78 @@ Python inventory plugins extend `InventoryPluginBase` and implement
     plugins.register_plugin(StaticInventoryPlugin())
     ```
 
-    ### Async Variant
+### Async Loaders
 
-    Async inventory loaders use the same base class:
+Python and Rust both support async inventory loading, but the integration path
+differs today. Python can pass an in-memory plugin manager into
+`Genja.from_settings_file(...)`. Rust currently needs to register the plugin,
+load the inventory explicitly, and then build `Genja` from that inventory.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::Genja;
+    use genja::async_trait;
+    use genja::genja_core::inventory::{Host, Hosts, Inventory};
+    use genja::genja_core::{InventoryLoadError, Settings};
+    use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin, Plugins};
+    use genja_plugin_manager::PluginManager;
+
+    #[derive(Debug)]
+    struct ApiInventoryPlugin;
+
+    impl Plugin for ApiInventoryPlugin {
+        fn name(&self) -> String {
+            "api_inventory".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl AsyncPluginInventory for ApiInventoryPlugin {
+        async fn load_async(
+            &self,
+            _settings: &Settings,
+            _plugins: &PluginManager,
+        ) -> Result<Inventory, InventoryLoadError> {
+            let mut hosts = Hosts::new();
+            hosts.add_host(
+                "router1",
+                Host::builder().hostname("10.0.0.1").platform("ios").build(),
+            );
+            Ok(Inventory::builder().hosts(hosts).build())
+        }
+    }
+
+    #[tokio::main]
+    async fn main() -> Result<(), Box<dyn std::error::Error>> {
+        let settings = Settings::from_file("settings.yaml")?;
+
+        let mut plugins = PluginManager::new();
+        plugins.register_plugin(Plugins::AsyncInventory(Box::new(ApiInventoryPlugin)));
+
+        let inventory = plugins
+            .get_async_inventory_plugin("api_inventory")
+            .ok_or("missing async inventory plugin")?
+            .load_async(&settings, &plugins)
+            .await?;
+
+        let genja = Genja::builder(inventory)
+            .with_settings(settings)
+            .with_plugin_manager(plugins)
+            .build()?;
+
+        for host_id in genja.host_ids() {
+            println!("{host_id}");
+        }
+
+        Ok(())
+    }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+    Python async inventory loaders use the same base class and still use
+    `Genja.from_settings_file(...)`. Pass the plugin manager when loading
+    settings so the runtime can resolve the Python plugin by name.
 
     ```python
     import genja as genja_lib
@@ -265,6 +336,14 @@ Python inventory plugins extend `InventoryPluginBase` and implement
 
     plugins = genja_lib.PluginManager()
     plugins.register_plugin(ApiInventoryPlugin())
+
+    genja = genja_lib.Genja.from_settings_file(
+        "settings.yaml",
+        plugin_manager=plugins,
+    )
+
+    for host_id in genja.host_ids():
+        print(host_id)
     ```
 
 ## Inventory Transforms
