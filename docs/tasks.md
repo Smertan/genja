@@ -258,107 +258,33 @@ top-level task should run, and a higher value when sub-tasks are expected.
 
 ## Processors
 
-Processors are lifecycle hooks selected by task metadata. A processor may
-implement one, multiple, or all of these hooks:
+Processors are lifecycle hooks selected by task metadata. They are documented
+in detail in [Processors](processors.md).
 
-- `on_task_start`
-- `on_task_finish`
-- `on_instance_start`
-- `on_instance_finish`
-
-Missing hooks are skipped. Hooks that receive results may return a replacement
-result object or `None` to leave the current value unchanged.
-
-Python processor hooks are sync-only. Use normal `def` methods for
-`on_task_start`, `on_task_finish`, `on_instance_start`, and
-`on_instance_finish`.
-
-Tasks select processors by plugin name. The processor must be registered before
-the runtime executes the task.
-
-Rust processor plugins implement two traits: `PluginProcessor` registers the
-plugin and returns the processor implementation, while `TaskProcessor` defines
-the lifecycle hooks.
+Use processors when task results need audit metadata, lightweight tracing, or
+centralized result decoration. Tasks opt into them by plugin name:
 
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
-    use std::sync::Arc;
-    use genja::genja_core::task::{
-        HostTaskResult, TaskProcessor, TaskProcessorContext,
-    };
     use genja::TaskDerive;
-    use genja_plugin_manager::PluginManager;
-    use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
-
-    #[derive(Clone)]
-    struct AuditProcessor;
-
-    impl Plugin for AuditProcessor {
-        fn name(&self) -> String {
-            "audit".to_string()
-        }
-    }
-
-    impl PluginProcessor for AuditProcessor {
-        fn processor(&self) -> Arc<dyn TaskProcessor> {
-            Arc::new(self.clone())
-        }
-    }
-
-    impl TaskProcessor for AuditProcessor {
-        fn on_instance_finish(
-            &self,
-            context: &TaskProcessorContext,
-            _result: &mut HostTaskResult,
-        ) -> Result<(), genja::GenjaError> {
-            println!("processed task {}", context.task_name());
-            Ok(())
-        }
-    }
 
     #[derive(TaskDerive)]
     #[task(processors = ["audit"])]
     struct BackupConfig {
         name: &'static str,
     }
-
-    let mut plugins = PluginManager::new();
-    plugins.register_plugin(Plugins::Processor(Box::new(AuditProcessor)));
     ```
 
 === ":fontawesome-brands-python: Python"
 
     ```python
-    import genja as genja_lib
-    from genja.processor import ProcessorPluginBase, TaskProcessorContext
-    from genja.task import TaskSuccessResult, task
-
-
-    class AuditProcessor(ProcessorPluginBase):
-        name = "audit"
-
-        def on_instance_finish(
-            self,
-            context: TaskProcessorContext,
-            result: genja_lib.HostTaskResult,
-        ) -> dict[str, object]:
-            data = result.to_dict()
-            data["metadata"] = {
-                **(data.get("metadata") or {}),
-                "processed_by": context.task_name,
-            }
-            return data
+    from genja.task import task
 
 
     @task(name="backup_config", processors=["audit"])
     class BackupConfig:
-        def start(self, task, host, context) -> TaskSuccessResult:
-            return TaskSuccessResult(summary=f"backed up {host.hostname}")
-
-
-    plugins = genja_lib.PluginManager()
-    plugins.register_plugin(AuditProcessor())
+        ...
     ```
 
 ## Sub-Tasks

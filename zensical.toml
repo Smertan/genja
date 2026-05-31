@@ -12,6 +12,7 @@ nav = [
   {"Inventory" = "inventory.md"},
   {"Connections" = "connection.md"},
   {"Tasks" = "tasks.md"},
+  {"Processors" = "processors.md"},
   {"Runners" = "runners.md"},
   {"Settings" = "settings.md"},
 ]

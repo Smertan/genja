@@ -193,6 +193,6 @@ plugins.load_python_plugins_from_pyproject()
 Plugin-specific behavior is documented in the relevant guide:
 
 - Inventory plugins and transforms: [Inventory](inventory.md)
-- Task processors: [Tasks](tasks.md)
+- Task processors: [Processors](processors.md)
 - Runners: [Runners](runners.md)
 - Connection plugins: [Connections](connection.md)
