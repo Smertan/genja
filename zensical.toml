@@ -10,6 +10,7 @@ nav = [
   {"Concepts" = "concepts.md"},
   {"Plugins" = "plugins.md"},
   {"Inventory" = "inventory.md"},
+  {"Transforms" = "transforms.md"},
   {"Connections" = "connection.md"},
   {"Tasks" = "tasks.md"},
   {"Processors" = "processors.md"},

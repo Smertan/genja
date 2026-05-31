@@ -349,7 +349,9 @@ load the inventory explicitly, and then build `Genja` from that inventory.
 ## Inventory Transforms
 
 Inventory transforms can normalize or enrich inventory values when they are
-accessed. A transform may implement one, multiple, or all of these hooks:
+accessed. They are documented in detail in [Transforms](transforms.md).
+
+A transform may implement one, multiple, or all of these hooks:
 
 - `transform_host`
 - `transform_group`
@@ -358,10 +360,6 @@ accessed. A transform may implement one, multiple, or all of these hooks:
 Missing hooks pass the original value through unchanged. Genja passes the same
 optional `transform_function_options` value to every implemented hook, so use
 nested keys when different hooks need different settings.
-
-Python transform hooks may be synchronous or asynchronous. Use `async def` when
-the transform needs to read from an async API before returning the updated
-inventory value.
 
 ```yaml
 inventory:
@@ -374,110 +372,6 @@ inventory:
     defaults:
       platform: linux
 ```
-
-=== ":fontawesome-brands-rust: Rust"
-
-    ```rust
-    use genja::genja_core::inventory::{
-        BaseBuilderHost, Defaults, Host, Transform, TransformFunctionOptions,
-    };
-
-    struct NormalizeInventory;
-
-    impl Transform for NormalizeInventory {
-        fn transform_host(
-            &self,
-            host: &Host,
-            options: Option<&TransformFunctionOptions>,
-        ) -> Host {
-            let suffix = options
-                .and_then(|options| options.get("hostname_suffix"))
-                .and_then(|value| value.as_str())
-                .unwrap_or("");
-
-            match host.hostname() {
-                Some(hostname) => host
-                    .to_builder()
-                    .hostname(format!("{hostname}{suffix}"))
-                    .build(),
-                None => host.clone(),
-            }
-        }
-
-        fn transform_defaults(
-            &self,
-            defaults: &Defaults,
-            _options: Option<&TransformFunctionOptions>,
-        ) -> Defaults {
-            defaults.to_builder().platform("linux").build()
-        }
-    }
-    ```
-
-=== ":fontawesome-brands-python: Python"
-
-    ```python
-    import genja as genja_lib
-    from genja.transform import TransformFunctionPluginBase
-
-
-    class NormalizeInventory(TransformFunctionPluginBase):
-        name = "normalize_inventory"
-
-        def transform_host(
-            self,
-            host: dict[str, object],
-            options: dict[str, object] | None,
-        ) -> dict[str, object]:
-            suffix = (options or {}).get("hostname_suffix", "")
-            hostname = host.get("hostname")
-            if hostname is None:
-                return host
-
-            return {
-                **host,
-                "hostname": f"{hostname}{suffix}",
-            }
-
-        def transform_defaults(
-            self,
-            defaults: dict[str, object],
-            options: dict[str, object] | None,
-        ) -> dict[str, object]:
-            default_options = (options or {}).get("defaults", {})
-            return {**defaults, **default_options}
-
-
-    plugins = genja_lib.PluginManager()
-    plugins.register_plugin(NormalizeInventory())
-    ```
-
-    ### Async Variant
-
-    An async transform uses the same base class:
-
-    ```python
-    from genja.transform import TransformFunctionPluginBase
-
-
-    class AsyncNormalizeInventory(TransformFunctionPluginBase):
-        name = "async_normalize_inventory"
-
-        async def transform_host(
-            self,
-            host: dict[str, object],
-            options: dict[str, object] | None,
-        ) -> dict[str, object]:
-            suffix = (options or {}).get("hostname_suffix", "")
-            hostname = host.get("hostname")
-            if hostname is None:
-                return host
-
-            return {
-                **host,
-                "hostname": f"{hostname}{suffix}",
-            }
-    ```
 
 ## Load Inventory
 
