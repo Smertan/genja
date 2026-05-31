@@ -69,6 +69,35 @@ structured result for that host.
             )
     ```
 
+    ### Async Variant
+
+    ```python
+    from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
+
+
+    @task(name="collect_facts_async")
+    class CollectFactsAsync:
+        async def start(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskSuccessResult:
+            connection = context.connection()
+            show_version = None
+            if connection is not None:
+                show_version = await connection.execute_command("show version")
+
+            return TaskSuccessResult(
+                summary=f"collected facts from {host.hostname}",
+                metadata={
+                    "hostname": host.hostname,
+                    "platform": host.platform,
+                    "show_version": show_version,
+                },
+            )
+    ```
+
 ## Task Inputs
 
 Each task receives:

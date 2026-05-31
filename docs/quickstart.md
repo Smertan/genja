@@ -173,6 +173,43 @@ router2:
     print(results.to_json(pretty=True))
     ```
 
+    ### Async Variant
+
+    ```python
+    import genja as genja_lib
+    from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
+
+
+    @task(name="collect_facts_async")
+    class CollectFactsAsync:
+        async def start(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskSuccessResult:
+            connection = context.connection()
+            show_version = None
+            if connection is not None:
+                show_version = await connection.execute_command("show version")
+
+            return TaskSuccessResult(
+                summary=f"collected facts from {host.hostname}",
+                metadata={
+                    "hostname": host.hostname,
+                    "platform": host.platform,
+                    "facts_collected": True,
+                    "show_version": show_version,
+                },
+            )
+
+
+    genja = genja_lib.Genja.from_settings_file("settings.yaml")
+    results = genja.run_task(CollectFactsAsync)
+
+    print(results.to_json(pretty=True))
+    ```
+
     `TaskRuntimeContext` keeps execution depth internal. Python tasks access the
     resolved connection through `context.connection()` and can guard it with
     `context.has_connection()`.

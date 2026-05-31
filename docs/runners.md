@@ -228,10 +228,6 @@ Custom runners may also implement `run_tasks(...)` for custom ordered task-list
 execution. If `run_tasks(...)` is not provided, Genja delegates each root task to
 `run_task(...)` in order.
 
-Rust runner plugins are async-only because `PluginRunner::run_task(...)` is an
-async trait method. Python runner plugins may be synchronous or asynchronous;
-Genja resolves awaitable return values from Python before continuing.
-
 ### Python Async Variant
 
 Async Python runners use the same base class:
