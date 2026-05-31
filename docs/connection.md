@@ -289,25 +289,33 @@ connection-aware Python tasks.
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
+    use genja::genja_core::inventory::Host;
+    use genja::genja_core::task::{
+        HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
+    };
+
     async fn start(
         &self,
-        _host: &genja::genja_core::inventory::Host,
-        context: &genja::genja_core::task::TaskRuntimeContext,
-    ) -> Result<genja::genja_core::task::HostTaskResult, genja::genja_core::task::TaskError> {
+        _host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
         let output = context.execute_command("show version").await?;
-        Ok(genja::genja_core::task::HostTaskResult::passed(
-            genja::genja_core::task::TaskSuccess::new().with_result(output),
-        ))
+        Ok(HostTaskResult::passed(TaskSuccess::new().with_result(output)))
     }
     ```
 
 === ":fontawesome-brands-python: Python"
 
     ```python
-    from genja.task import TaskSuccessResult
+    from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult
 
 
-    def start(self, task, host, context) -> TaskSuccessResult:
+    def start(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult:
         connection = context.connection()
         output = None
         if connection is not None:

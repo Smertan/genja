@@ -151,12 +151,18 @@ router2:
             host: Host,
             context: TaskRuntimeContext,
         ) -> TaskSuccessResult:
+            connection = context.connection()
+            show_version = None
+            if connection is not None:
+                show_version = connection.execute_command("show version")
+
             return TaskSuccessResult(
                 summary=f"collected facts from {host.hostname}",
                 metadata={
                     "hostname": host.hostname,
                     "platform": host.platform,
                     "facts_collected": True,
+                    "show_version": show_version,
                 },
             )
 
@@ -166,6 +172,10 @@ router2:
 
     print(results.to_json(pretty=True))
     ```
+
+    `TaskRuntimeContext` keeps execution depth internal. Python tasks access the
+    resolved connection through `context.connection()` and can guard it with
+    `context.has_connection()`.
 
 ## Run Repository Examples
 

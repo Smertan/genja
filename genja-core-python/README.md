@@ -30,13 +30,26 @@ Create a runtime from a simple host mapping:
 
 ```python
 import genja
-from genja.task import TaskSuccessResult, task
+from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
 
 
 @task(name="backup_config")
 class BackupTask:
-    def start(self, task, host, context):
-        return TaskSuccessResult(summary=f"backed up {host.hostname}")
+    def start(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult:
+        connection = context.connection()
+        command_output = None
+        if connection is not None:
+            command_output = connection.execute_command("show running-config")
+
+        return TaskSuccessResult(
+            summary=f"backed up {host.hostname}",
+            metadata={"show_running_config": command_output},
+        )
 
 
 genja = genja.Genja.from_hosts(
@@ -55,6 +68,10 @@ tasks.add_task(BackupTask)
 all_results = genja.run_tasks(tasks)
 print([result.task_name for result in all_results])
 ```
+
+`TaskRuntimeContext` exposes the resolved connection through
+`context.connection()` and `context.has_connection()`. Execution depth remains
+internal to the runtime.
 
 ## Full Inventory
 
