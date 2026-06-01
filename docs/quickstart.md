@@ -231,6 +231,7 @@ cd genja
     cargo run -p genja --example run_task
     cargo run -p genja --example run_task_tree
     cargo run -p genja --example filter_hosts
+    cargo run -p genja --example async_inventory_plugin
     ```
 
 === ":fontawesome-brands-python: Python"

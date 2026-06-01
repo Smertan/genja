@@ -872,6 +872,24 @@ impl PluginManager {
         deregistered_plugins
     }
 
+    /// Merge another plugin manager into this one, overriding plugins with the same name.
+    ///
+    /// Plugin libraries and deferred plugin path entries are retained so any loaded
+    /// dynamic plugins remain valid after the merge. When a plugin name collision
+    /// occurs, the incoming plugin replaces the existing registration.
+    pub fn merge(&mut self, other: PluginManager) {
+        self.plugin_path.extend(other.plugin_path);
+        self.libraries.extend(other.libraries);
+
+        for (name, plugin) in other.plugins {
+            if self.plugins.insert(name.clone(), plugin).is_some() {
+                log::info!("Overriding plugin: {}", name);
+            } else {
+                log::info!("Registering merged plugin: {}", name);
+            }
+        }
+    }
+
     /// Gets all the **names** of the registered plugins.
     pub fn get_all_plugin_names(&self) -> Vec<&String> {
         self.plugins.keys().collect()
@@ -1655,5 +1673,25 @@ inventory_a = "../this/path/does/not/exist.so"
         assert!(names.contains(&&"inv".to_string()));
         assert!(names.contains(&&"ainv".to_string()));
         assert!(names.contains(&&"tf".to_string()));
+    }
+
+    #[test]
+    fn merge_overrides_existing_plugins_by_name() {
+        let mut base = PluginManager::new();
+        base.register_plugin(Plugins::Connection(Box::new(DummyConnection {
+            name: "conn",
+        })));
+
+        let mut custom = PluginManager::new();
+        custom.register_plugin(Plugins::Runner(Box::new(DummyRunner { name: "run" })));
+        custom.register_plugin(Plugins::Connection(Box::new(DummyConnection {
+            name: "conn",
+        })));
+
+        base.merge(custom);
+
+        assert!(base.get_connection_plugin("conn").is_some());
+        assert!(base.get_runner_plugin("run").is_some());
+        assert_eq!(base.get_all_plugin_names().len(), 2);
     }
 }

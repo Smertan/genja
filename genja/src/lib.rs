@@ -1112,6 +1112,7 @@ mod tests {
     use genja_core::task::{
         HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
     };
+    use genja_plugin_manager::PluginManager;
     use genja_plugin_manager::plugin_types::{
         AsyncPluginInventory, Plugin, PluginConnection, Plugins,
     };
@@ -2000,7 +2001,7 @@ mod tests {
     #[test]
     fn run_passes_open_connection_into_task_runtime_context() {
         let saw_connection = Arc::new(AtomicBool::new(false));
-        let mut plugin_manager = crate::plugins::built_in_plugin_manager();
+        let mut plugin_manager = PluginManager::new();
         plugin_manager.register_plugin(Plugins::Connection(Box::new(TestConnectionPlugin)));
 
         let genja = Genja::builder(test_inventory())
@@ -2025,6 +2026,23 @@ mod tests {
                 .expect("router1 result should exist")
                 .is_passed()
         );
+    }
+
+    #[test]
+    fn builder_with_custom_plugin_manager_still_loads_builtin_runners() {
+        let mut plugin_manager = PluginManager::new();
+        plugin_manager.register_plugin(Plugins::Connection(Box::new(TestConnectionPlugin)));
+
+        let genja = Genja::builder(test_inventory())
+            .with_plugin_manager(plugin_manager)
+            .build()
+            .expect("genja should build with merged built-in plugins");
+
+        let updated = genja
+            .with_runner("serial")
+            .expect("serial runner should still be available");
+
+        assert_eq!(updated.settings().runner().plugin(), "serial");
     }
 
     #[test]
@@ -2216,7 +2234,9 @@ impl GenjaBuilder {
         }
 
         if let Some(plugin_manager) = self.plugin_manager {
-            genja.plugins = Arc::new(plugin_manager);
+            let mut merged_plugins = crate::plugins::built_in_plugin_manager();
+            merged_plugins.merge(plugin_manager);
+            genja.plugins = Arc::new(merged_plugins);
             genja.plugins_loaded = true;
         } else {
             genja.load_plugins()?;

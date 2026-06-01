@@ -202,6 +202,7 @@ examples, check out the matching version tag, such as `v0.1.0`.
 git clone https://github.com/Smertan/genja.git
 cd genja
 cargo run -p genja --example run_task
+cargo run -p genja --example async_inventory_plugin
 ```
 
 ## License
