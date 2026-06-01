@@ -921,6 +921,7 @@ impl Genja {
         task: T,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
+        ensure_sync_execution_outside_tokio("run_task()", "run_task_async()")?;
         let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -995,6 +996,7 @@ impl Genja {
         tasks: Tasks,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
+        ensure_sync_execution_outside_tokio("run_tasks()", "run_tasks_async()")?;
         let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -1065,6 +1067,20 @@ fn current_plugin_directory() -> Result<PathBuf, std::io::Error> {
         .parent()
         .ok_or_else(|| std::io::Error::other("executable has no parent directory"))?;
     Ok(directory.join("plugins"))
+}
+
+fn ensure_sync_execution_outside_tokio(
+    sync_api: &str,
+    async_api: &str,
+) -> Result<(), GenjaError> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let message =
+            format!("{sync_api} cannot be called from an active Tokio runtime; use {async_api} instead");
+        log::error!("{message}");
+        return Err(GenjaError::Message(message));
+    }
+
+    Ok(())
 }
 
 fn log_task_summary(summary: &TaskResultsSummary, host_count: usize, depth: usize) {
@@ -1964,6 +1980,27 @@ mod tests {
         assert_eq!(results.passed_hosts().len(), 2);
     }
 
+    #[tokio::test]
+    async fn run_task_errors_inside_existing_tokio_runtime() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let error = genja
+            .run_task(
+                TestTask {
+                    name: "sync-task".to_string(),
+                },
+                0,
+            )
+            .expect_err("sync task execution should error inside Tokio");
+
+        assert!(matches!(
+            error,
+            GenjaError::Message(message)
+                if message.contains("run_task() cannot be called from an active Tokio runtime")
+                    && message.contains("run_task_async()")
+        ));
+    }
+
     #[test]
     fn run_tasks_accepts_ordered_task_list_with_nested_subtasks() {
         let genja = Genja::from_inventory(single_host_inventory());
@@ -2043,6 +2080,24 @@ mod tests {
                 "collect_logs"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn run_tasks_errors_inside_existing_tokio_runtime() {
+        let genja = Genja::from_inventory(single_host_inventory());
+        let mut tasks = Tasks::new();
+        tasks.add_task(RecordingTask::leaf("collect_facts", Arc::new(Mutex::new(Vec::new()))));
+
+        let error = genja
+            .run_tasks(tasks, 0)
+            .expect_err("sync task list execution should error inside Tokio");
+
+        assert!(matches!(
+            error,
+            GenjaError::Message(message)
+                if message.contains("run_tasks() cannot be called from an active Tokio runtime")
+                    && message.contains("run_tasks_async()")
+        ));
     }
 
     #[test]
