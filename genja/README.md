@@ -174,6 +174,27 @@ assert!(results.host_result("router1").unwrap().is_passed());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+For async Rust applications, use `run_task_async(...)` instead of `run_task(...)`:
+
+```rust
+use genja::Genja;
+
+#[tokio::main]
+async fn main() -> Result<(), genja::GenjaError> {
+    let genja = Genja::from_settings_file("settings.yaml")?;
+    let results = genja
+        .run_task_async(CheckConfig { name: "check_config" }, 1)
+        .await?;
+
+    assert!(results.host_result("router1").unwrap().is_passed());
+    Ok(())
+}
+```
+
+The sync wrappers `run_task(...)` and `run_tasks(...)` return an error when
+called from an active Tokio runtime. Use `run_task_async(...)` and
+`run_tasks_async(...)` in async contexts.
+
 ## Related Crates
 
 - `genja-core`: core inventory, settings, task, connection, and result types

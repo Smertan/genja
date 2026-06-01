@@ -147,13 +147,15 @@ assert_eq!(data_center.host_ids()[0].as_str(), "router1");
 ## Running Tasks
 
 Tasks are defined in `genja_core::task`. A single root task tree is executed
-through `Genja::run_task`; an ordered list of root task trees is executed through
-`Genja::run_tasks`. The recommended pattern for a single task is:
+through `Genja::run_task` or `Genja::run_task_async`; an ordered list of root
+task trees is executed through `Genja::run_tasks` or `Genja::run_tasks_async`.
+The recommended pattern for a single task is:
 
 1. Define a struct for the task.
 2. Derive `Task` to generate `TaskInfo` and `SubTasks`.
 3. Implement `genja_core::task::Task` and return a `HostTaskResult` from `start()`.
-4. Run the task with `Genja::run_task(task, max_depth)`.
+4. Run the task with `Genja::run_task(task, max_depth)` from sync code, or
+   `Genja::run_task_async(task, max_depth).await` from an active Tokio runtime.
 
 ### Derive Macro
 
@@ -220,6 +222,33 @@ let results = genja.run_task(
 assert!(results.host_result("router1").unwrap().is_passed());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+Async Rust applications should use the async execution APIs directly:
+
+```rust
+use genja::Genja;
+
+#[tokio::main]
+async fn main() -> Result<(), genja::GenjaError> {
+    let genja = Genja::from_settings_file("settings.yaml")?;
+    let results = genja
+        .run_task_async(
+            CheckConfigTask {
+                name: "check_config".to_string(),
+                connection_plugin_name: Some("ssh".to_string()),
+            },
+            10,
+        )
+        .await?;
+
+    assert!(results.host_result("router1").unwrap().is_passed());
+    Ok(())
+}
+```
+
+The sync wrappers `run_task(...)` and `run_tasks(...)` return an error when
+called from an active Tokio runtime. Use `run_task_async(...)` and
+`run_tasks_async(...)` in async contexts.
 
 Notes:
 

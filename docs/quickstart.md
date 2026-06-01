@@ -91,6 +91,13 @@ router2:
 
 ## Run A Task
 
+Rust callers can use either:
+
+- `run_task(...)` from synchronous code
+- `run_task_async(...)` from inside `#[tokio::main]` or another active Tokio runtime
+
+The sync wrapper returns an error if it is called from an active Tokio runtime.
+
 === ":fontawesome-brands-rust: Rust"
 
     ```rust

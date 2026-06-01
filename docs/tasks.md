@@ -108,6 +108,17 @@ Each task receives:
 - runtime context: a `TaskRuntimeContext` value created by the runtime for the
   current task execution
 
+## Sync And Async Execution
+
+Rust task execution now has both sync and async entrypoints:
+
+- `run_task(...)` / `run_tasks(...)` for synchronous callers
+- `run_task_async(...)` / `run_tasks_async(...)` for callers already inside a
+  Tokio runtime
+
+The sync wrappers return an error when called from an active Tokio runtime. In
+that case, use the async variants instead.
+
 ## Runtime Context
 
 `TaskRuntimeContext` is passed into every task `start(...)` call by the runtime.
