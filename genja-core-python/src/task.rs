@@ -9,13 +9,14 @@ use async_trait::async_trait;
 use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyDict, PyList, PyModule};
+use pyo3_async_runtimes::tokio::future_into_py;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use crate::plugin_manager::{
-    python_connection_from_runtime_connection, resolve_python_maybe_awaitable,
+    python_connection_from_runtime_connection, resolve_python_maybe_awaitable_async,
 };
 
 #[pyclass(name = "HostTaskResult")]
@@ -119,18 +120,19 @@ impl Task for PythonBackedTask {
             Some(context.max_depth()),
             python_connection,
         )
+        .await
     }
 }
 
 impl PythonBackedTask {
-    fn run_python(
+    async fn run_python(
         &self,
         host: &Host,
         current_depth: usize,
         max_depth: Option<usize>,
         connection: Option<Py<PyAny>>,
     ) -> Result<HostTaskResult, TaskError> {
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
             let instance = class.call0().map_err(python_task_error)?;
             let task_payload = build_python_task_model(
@@ -171,11 +173,15 @@ impl PythonBackedTask {
                     .map_err(python_task_error)?
             };
 
-            let result = instance
+            instance
                 .call_method1("start", (task_payload, host_payload, context_payload))
-                .map_err(python_task_error)?;
-            let result = resolve_python_maybe_awaitable(py, result).map_err(python_task_error)?;
-
+                .map(Bound::unbind)
+                .map_err(python_task_error)
+        })?;
+        let result = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(python_task_error)?;
+        Python::with_gil(|py| {
             python_result_to_host_task_result(result.bind(py).clone()).map_err(python_task_error)
         })
     }
@@ -521,8 +527,28 @@ pub fn run_task(
         .allow_threads(|| runtime.run_task(task, max_depth))
         .map_err(|err| {
             PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
-        })?;
+    })?;
     Ok(PyTaskResults { inner })
+}
+
+pub fn run_task_async(
+    py: Python<'_>,
+    runtime: &RuntimeGenja,
+    task_class: Bound<'_, PyAny>,
+    max_depth: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    let spec = extract_python_task_spec(task_class)?;
+    let runtime = runtime.clone();
+    let task = task_from_spec(&spec);
+    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+
+    future_into_py(py, async move {
+        let inner = runtime.run_task_async(task, max_depth).await.map_err(|err| {
+            PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
+        })?;
+        Ok(PyTaskResults { inner })
+    })
+    .map(Bound::unbind)
 }
 
 pub fn run_tasks(
@@ -546,6 +572,32 @@ pub fn run_tasks(
         .into_iter()
         .map(|inner| PyTaskResults { inner })
         .collect())
+}
+
+pub fn run_tasks_async(
+    py: Python<'_>,
+    runtime: &RuntimeGenja,
+    task_input: Bound<'_, PyAny>,
+    max_depth: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    let tasks = task_input
+        .extract::<PyRef<'_, PyTasks>>()
+        .map_err(|_| PyValueError::new_err("tasks must be a genja.Tasks instance"))?
+        .to_runtime_tasks();
+
+    let runtime = runtime.clone();
+    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+
+    future_into_py(py, async move {
+        let results = runtime.run_tasks_async(tasks, max_depth).await.map_err(|err| {
+            PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
+        })?;
+        Ok(results
+            .into_iter()
+            .map(|inner| PyTaskResults { inner })
+            .collect::<Vec<_>>())
+    })
+    .map(Bound::unbind)
 }
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {

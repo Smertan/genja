@@ -1030,6 +1030,18 @@ impl PyGenja {
         task::run_task(py, &self.inner, task_class, max_depth)
     }
 
+    #[pyo3(signature = (task_class, max_depth=None))]
+    fn run_task_async(
+        slf: PyRef<'_, Self>,
+        py: Python<'_>,
+        task_class: Bound<'_, PyAny>,
+        max_depth: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        let async_helpers = PyModule::import(py, "genja._async")?;
+        let helper = async_helpers.getattr("run_task_async")?;
+        helper.call1((slf.into_pyobject(py)?, task_class, max_depth))?.extract()
+    }
+
     /// Executes an ordered task list across all selected hosts.
     ///
     /// Each entry in `tasks` is a root task definition and may declare its own
@@ -1043,6 +1055,18 @@ impl PyGenja {
         max_depth: Option<usize>,
     ) -> PyResult<Vec<PyTaskResults>> {
         task::run_tasks(py, &self.inner, tasks, max_depth)
+    }
+
+    #[pyo3(signature = (tasks, max_depth=None))]
+    fn run_tasks_async(
+        slf: PyRef<'_, Self>,
+        py: Python<'_>,
+        tasks: Bound<'_, PyAny>,
+        max_depth: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        let async_helpers = PyModule::import(py, "genja._async")?;
+        let helper = async_helpers.getattr("run_tasks_async")?;
+        helper.call1((slf.into_pyobject(py)?, tasks, max_depth))?.extract()
     }
 
     /// Returns a string representation of the Genja runtime instance.

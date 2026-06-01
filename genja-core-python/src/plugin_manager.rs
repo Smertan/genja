@@ -62,6 +62,7 @@ use genja_plugin_manager::plugin_types::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
+use pyo3_async_runtimes::tokio::into_future;
 use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
 use std::path::PathBuf;
@@ -997,7 +998,7 @@ impl PluginRunner for PyRunnerPlugin {
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, genja_core::GenjaError> {
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let plugin = self.plugin.bind(py);
             let task_payload = Py::new(py, PyTaskDefinition::from_runtime_definition(task.clone()))
                 .map_err(python_processor_error)?;
@@ -1020,7 +1021,7 @@ impl PluginRunner for PyRunnerPlugin {
                 },
             )
             .map_err(python_processor_error)?;
-            let result = plugin
+            plugin
                 .call_method1(
                     "run_task",
                     (
@@ -1031,9 +1032,13 @@ impl PluginRunner for PyRunnerPlugin {
                         max_depth,
                     ),
                 )
-                .map_err(python_processor_error)?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(python_processor_error)?;
+                .map(Bound::unbind)
+                .map_err(python_processor_error)
+        })?;
+        let resolved = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(python_processor_error)?;
+        Python::with_gil(|py| {
             python_result_to_task_results(resolved.bind(py).clone()).map_err(python_processor_error)
         })
     }
@@ -1069,7 +1074,7 @@ impl PluginRunner for PyRunnerPlugin {
             return Ok(results);
         }
 
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let plugin = self.plugin.bind(py);
             let task_payloads = tasks
                 .iter()
@@ -1095,7 +1100,7 @@ impl PluginRunner for PyRunnerPlugin {
                 },
             )
             .map_err(python_processor_error)?;
-            let result = plugin
+            plugin
                 .call_method1(
                     "run_tasks",
                     (
@@ -1106,9 +1111,13 @@ impl PluginRunner for PyRunnerPlugin {
                         max_depth,
                     ),
                 )
-                .map_err(python_processor_error)?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(python_processor_error)?;
+                .map(Bound::unbind)
+                .map_err(python_processor_error)
+        })?;
+        let resolved = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(python_processor_error)?;
+        Python::with_gil(|py| {
             let sequence = resolved
                 .bind(py)
                 .try_iter()
@@ -1404,6 +1413,29 @@ pub(crate) fn resolve_python_maybe_awaitable<'py>(
     }
 }
 
+pub(crate) async fn resolve_python_maybe_awaitable_async(value: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    let is_awaitable = Python::with_gil(|py| -> PyResult<bool> {
+        let inspect = PyModule::import(py, "inspect")?;
+        inspect.call_method1("isawaitable", (value.bind(py),))?.extract()
+    })?;
+    if !is_awaitable {
+        return Ok(value);
+    }
+    let has_task_locals =
+        Python::with_gil(|py| pyo3_async_runtimes::tokio::get_current_locals(py).map(|_| ()))
+            .is_ok();
+
+    if has_task_locals {
+        let future = Python::with_gil(|py| into_future(value.bind(py).clone()))?;
+        future.await.map(PyObject::into)
+    } else {
+        Python::with_gil(|py| {
+            let asyncio = PyModule::import(py, "asyncio")?;
+            Ok(asyncio.call_method1("run", (value.bind(py),))?.unbind())
+        })
+    }
+}
+
 impl Plugin for PyConnectionInstance {
     fn name(&self) -> String {
         self.name.clone()
@@ -1485,16 +1517,19 @@ impl PluginConnection for PyConnectionInstance {
             return Err("python connection plugin instance is missing a connection".to_string());
         };
 
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let connection = connection.bind(py);
             let params_payload = build_python_resolved_connection_params(py, params)
                 .map_err(|err| err.to_string())?;
-            let result = connection
+            connection
                 .call_method1("open", (params_payload,))
-                .map_err(|err| err.to_string())?;
-            resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
-            Ok(())
-        })
+                .map(Bound::unbind)
+                .map_err(|err| err.to_string())
+        })?;
+        resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(())
     }
 
     /// Executes a command on the Python connection instance and returns its output.
@@ -1537,13 +1572,17 @@ impl PluginConnection for PyConnectionInstance {
             return Err("python connection plugin instance is missing a connection".to_string());
         };
 
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let connection = connection.bind(py);
-            let result = connection
+            connection
                 .call_method1("execute_command", (command,))
-                .map_err(|err| err.to_string())?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
+                .map(Bound::unbind)
+                .map_err(|err| err.to_string())
+        })?;
+        let resolved = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(|err| err.to_string())?;
+        Python::with_gil(|py| {
             resolved
                 .bind(py)
                 .extract::<String>()
