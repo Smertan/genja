@@ -93,7 +93,8 @@ impl Task for CollectFacts {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::from_file("genja/examples/settings.yaml")?;
 
     let mut plugins = PluginManager::new();
@@ -101,28 +102,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ControllerInventoryPlugin,
     )));
 
-    let inventory = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(async {
-            plugins
-                .get_async_inventory_plugin("controller_inventory")
-                .ok_or("missing async inventory plugin")?
-                .load_async(&settings, &plugins)
-                .await
-        })?;
+    let inventory = plugins
+        .get_async_inventory_plugin("controller_inventory")
+        .ok_or("missing async inventory plugin")?
+        .load_async(&settings, &plugins)
+        .await?;
 
     let genja = Genja::builder(inventory)
         .with_settings(settings)
         .with_plugin_manager(plugins)
         .build()?;
 
-    let results = genja.run_task(
-        CollectFacts {
-            name: "collect_facts",
-        },
-        1,
-    )?;
+    let results = genja
+        .run_task_async(
+            CollectFacts {
+                name: "collect_facts",
+            },
+            1,
+        )
+        .await?;
 
     let output = results.to_pretty_json_string()?;
     println!("{output}");

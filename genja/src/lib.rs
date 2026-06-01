@@ -921,10 +921,28 @@ impl Genja {
         task: T,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
-        self.run_task_definition(TaskDefinition::new(task), max_depth)
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
+        runtime.block_on(self.run_task_async(task, max_depth))
     }
 
-    fn run_task_definition(
+    /// Executes a task against the currently selected hosts using the configured runner plugin.
+    ///
+    /// This is the async counterpart to [`Self::run_task`]. Use it when Genja is called
+    /// from an existing Tokio runtime or when task execution should compose with other
+    /// async application work.
+    pub async fn run_task_async<T: Task + 'static>(
+        &self,
+        task: T,
+        max_depth: usize,
+    ) -> Result<TaskResults, GenjaError> {
+        self.run_task_definition_async(TaskDefinition::new(task), max_depth)
+            .await
+    }
+
+    async fn run_task_definition_async(
         &self,
         task_definition: TaskDefinition,
         max_depth: usize,
@@ -953,21 +971,15 @@ impl Genja {
             host_count
         );
         let runner = self.get_runner_plugin(runner_name)?;
-        let runtime = Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        let results = runtime.block_on(async {
-            runner
-                .run_task(
-                    &task_definition,
-                    &hosts,
-                    Some(connection_resolver),
-                    self.settings.runner(),
-                    max_depth,
-                )
-                .await
-        })?;
+        let results = runner
+            .run_task(
+                &task_definition,
+                &hosts,
+                Some(connection_resolver),
+                self.settings.runner(),
+                max_depth,
+            )
+            .await?;
         let summary = results.task_summary();
         log_task_summary(&summary, host_count, 0);
         Ok(results)
@@ -979,6 +991,23 @@ impl Genja {
     /// preserves the order of the root task list, so `results[n]` corresponds to
     /// `tasks[n]`.
     pub fn run_tasks(
+        &self,
+        tasks: Tasks,
+        max_depth: usize,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
+        runtime.block_on(self.run_tasks_async(tasks, max_depth))
+    }
+
+    /// Executes an ordered list of root task trees using the configured runner plugin.
+    ///
+    /// This is the async counterpart to [`Self::run_tasks`]. Use it when Genja is called
+    /// from an existing Tokio runtime or when task execution should compose with other
+    /// async application work.
+    pub async fn run_tasks_async(
         &self,
         mut tasks: Tasks,
         max_depth: usize,
@@ -1013,21 +1042,15 @@ impl Genja {
             task_names
         );
         let runner = self.get_runner_plugin(runner_name)?;
-        let runtime = Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        let results = runtime.block_on(async {
-            runner
-                .run_tasks(
-                    &tasks,
-                    &hosts,
-                    Some(connection_resolver),
-                    self.settings.runner(),
-                    max_depth,
-                )
-                .await
-        })?;
+        let results = runner
+            .run_tasks(
+                &tasks,
+                &hosts,
+                Some(connection_resolver),
+                self.settings.runner(),
+                max_depth,
+            )
+            .await?;
         for result in &results {
             let summary = result.task_summary();
             log_task_summary(&summary, host_count, 0);
@@ -1923,6 +1946,24 @@ mod tests {
         assert!(results.duration_ns().is_some());
     }
 
+    #[tokio::test]
+    async fn run_task_async_executes_task_inside_existing_tokio_runtime() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja
+            .run_task_async(
+                TestTask {
+                    name: "async-task".to_string(),
+                },
+                0,
+            )
+            .await
+            .expect("async task execution should succeed");
+
+        assert_eq!(results.task_name(), "async-task");
+        assert_eq!(results.passed_hosts().len(), 2);
+    }
+
     #[test]
     fn run_tasks_accepts_ordered_task_list_with_nested_subtasks() {
         let genja = Genja::from_inventory(single_host_inventory());
@@ -1942,6 +1983,47 @@ mod tests {
         let results = genja
             .run_tasks(tasks, 10)
             .expect("task list should execute");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].task_name(), "collect_facts");
+        assert_eq!(results[1].task_name(), "deploy_changes");
+        assert!(results[1].sub_task("validate_config").is_some());
+        assert!(results[1].sub_task("upload_artifact").is_some());
+        assert_eq!(results[2].task_name(), "collect_logs");
+
+        let order = order.lock().expect("order mutex should not be poisoned");
+        assert_eq!(
+            order.as_slice(),
+            [
+                "collect_facts",
+                "deploy_changes",
+                "validate_config",
+                "upload_artifact",
+                "collect_logs"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tasks_async_preserves_root_task_order() {
+        let genja = Genja::from_inventory(single_host_inventory());
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let validate_config = Arc::new(RecordingTask::leaf("validate_config", order.clone()));
+        let upload_artifact = Arc::new(RecordingTask::leaf("upload_artifact", order.clone()));
+
+        let mut tasks = Tasks::new();
+        tasks.add_task(RecordingTask::leaf("collect_facts", order.clone()));
+        tasks.add_task(RecordingTask::parent(
+            "deploy_changes",
+            vec![validate_config, upload_artifact],
+            order.clone(),
+        ));
+        tasks.add_task(RecordingTask::leaf("collect_logs", order.clone()));
+
+        let results = genja
+            .run_tasks_async(tasks, 10)
+            .await
+            .expect("async task list should execute");
 
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].task_name(), "collect_facts");

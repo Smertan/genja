@@ -242,6 +242,27 @@ Use failure kinds to make task failures easier to classify:
     }
     ```
 
+    ### Async Variant
+
+    ```rust
+    use genja::Genja;
+
+    #[tokio::main]
+    async fn main() -> Result<(), genja::GenjaError> {
+        let genja = Genja::from_settings_file("settings.yaml")?;
+        let results = genja
+            .run_task_async(CollectFacts { name: "collect_facts" }, 1)
+            .await?;
+
+        let output = results.to_pretty_json_string().map_err(|err| {
+            genja::GenjaError::Message(format!("failed to serialize task results: {err}"))
+        })?;
+        println!("{output}");
+
+        Ok(())
+    }
+    ```
+
 === ":fontawesome-brands-python: Python"
 
     ```python
