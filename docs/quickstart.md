@@ -203,7 +203,11 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
 
     ### Async Variant
 
+    Use `run_task_async(...)` when the surrounding Python application is already
+    using `asyncio`.
+
     ```python
+    import asyncio
     import genja as genja_lib
     from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
 
@@ -232,10 +236,14 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
             )
 
 
-    genja = genja_lib.Genja.from_settings_file("settings.yaml")
-    results = genja.run_task(CollectFactsAsync)
+    async def main() -> None:
+        genja = genja_lib.Genja.from_settings_file("settings.yaml")
+        results = await genja.run_task_async(CollectFactsAsync)
 
-    print(results.to_json(pretty=True))
+        print(results.to_json(pretty=True))
+
+
+    asyncio.run(main())
     ```
 
     `TaskRuntimeContext` keeps execution depth internal. Python tasks access the

@@ -1031,13 +1031,27 @@ impl PyGenja {
     }
 
     #[pyo3(signature = (task_class, max_depth=None))]
-    fn run_task_async(
+    fn _run_task_async_native(
         &self,
         py: Python<'_>,
         task_class: Bound<'_, PyAny>,
         max_depth: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
         task::run_task_async(py, &self.inner, task_class, max_depth)
+    }
+
+    #[pyo3(signature = (task_class, max_depth=None))]
+    fn run_task_async(
+        slf: PyRef<'_, Self>,
+        py: Python<'_>,
+        task_class: Bound<'_, PyAny>,
+        max_depth: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        let async_helpers = PyModule::import(py, "genja._async")?;
+        let helper = async_helpers.getattr("run_task_async")?;
+        helper
+            .call1((slf.into_pyobject(py)?, task_class, max_depth))?
+            .extract()
     }
 
     /// Executes an ordered task list across all selected hosts.
@@ -1056,13 +1070,27 @@ impl PyGenja {
     }
 
     #[pyo3(signature = (tasks, max_depth=None))]
-    fn run_tasks_async(
+    fn _run_tasks_async_native(
         &self,
         py: Python<'_>,
         tasks: Bound<'_, PyAny>,
         max_depth: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
         task::run_tasks_async(py, &self.inner, tasks, max_depth)
+    }
+
+    #[pyo3(signature = (tasks, max_depth=None))]
+    fn run_tasks_async(
+        slf: PyRef<'_, Self>,
+        py: Python<'_>,
+        tasks: Bound<'_, PyAny>,
+        max_depth: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        let async_helpers = PyModule::import(py, "genja._async")?;
+        let helper = async_helpers.getattr("run_tasks_async")?;
+        helper
+            .call1((slf.into_pyobject(py)?, tasks, max_depth))?
+            .extract()
     }
 
     /// Returns a string representation of the Genja runtime instance.

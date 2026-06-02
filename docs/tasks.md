@@ -110,14 +110,26 @@ Each task receives:
 
 ## Sync And Async Execution
 
-Rust task execution now has both sync and async entrypoints:
+=== ":fontawesome-brands-rust: Rust"
 
-- `run_task(...)` / `run_tasks(...)` for synchronous callers
-- `run_task_async(...)` / `run_tasks_async(...)` for callers already inside a
-  Tokio runtime
+    Rust task execution has both sync and async entrypoints:
 
-The sync wrappers return an error when called from an active Tokio runtime. In
-that case, use the async variants instead.
+    - `run_task(...)` / `run_tasks(...)` for synchronous callers
+    - `run_task_async(...)` / `run_tasks_async(...)` for callers already inside
+      a Tokio runtime
+
+    The sync wrappers return an error when called from an active Tokio runtime.
+    In that case, use the async variants instead.
+
+=== ":fontawesome-brands-python: Python"
+
+    Python also exposes both sync and async entrypoints:
+
+    - `run_task(...)` / `run_tasks(...)` for synchronous callers
+    - `run_task_async(...)` / `run_tasks_async(...)` for async Python callers
+
+    Use the async entrypoints when composing Genja with `asyncio.gather(...)`,
+    `asyncio.wait_for(...)`, or other coroutine-based application code.
 
 ## Runtime Context
 

@@ -73,6 +73,52 @@ print([result.task_name for result in all_results])
 `context.connection()` and `context.has_connection()`. Execution depth remains
 internal to the runtime.
 
+For async Python applications, use the async entrypoints:
+
+```python
+import asyncio
+import genja
+from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
+
+
+@task(name="backup_config_async")
+class BackupTaskAsync:
+    async def start(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult:
+        connection = context.connection()
+        command_output = None
+        if connection is not None:
+            command_output = await connection.execute_command("show running-config")
+
+        return TaskSuccessResult(
+            summary=f"backed up {host.hostname}",
+            metadata={"show_running_config": command_output},
+        )
+
+
+async def main() -> None:
+    runtime = genja.Genja.from_hosts(
+        {
+            "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+        }
+    ).with_runner("serial")
+
+    results = await runtime.run_task_async(BackupTaskAsync)
+    print(results.to_dict())
+
+
+asyncio.run(main())
+```
+
+Use `run_task_async(...)` and `run_tasks_async(...)` when composing Genja with
+`asyncio.gather(...)` or other async application code. The synchronous
+`run_task(...)` and `run_tasks(...)` entrypoints remain available for scripts
+and non-async callers.
+
 ## Full Inventory
 
 Use `genja.inventory` when you need groups and defaults:
