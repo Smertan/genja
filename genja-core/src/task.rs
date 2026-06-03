@@ -635,7 +635,9 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::runtime::Handle;
 use tokio::sync::Mutex;
+use tokio::task;
 
 /// Represents an error that occurred during task execution.
 ///
@@ -3009,9 +3011,10 @@ pub trait TaskInfo {
 }
 
 /// Sub-task provider interface.
-pub trait SubTasks {
-    /// Return any sub-tasks for this task.
-    fn sub_tasks(&self) -> Vec<Arc<dyn Task>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskExecutionMode {
+    Blocking,
+    Async,
 }
 
 /// Core task interface required for execution.
@@ -3042,13 +3045,38 @@ pub trait SubTasks {
 /// }
 /// ```
 #[async_trait]
-pub trait Task: TaskInfo + SubTasks + Send + Sync {
-    /// Start executing the task with runtime execution context.
-    async fn start(
+pub trait Task: TaskInfo + Send + Sync {
+    /// Start executing a blocking task with runtime execution context.
+    fn start(
+        &self,
+        host: &Host,
+        context: &BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "blocking start() not implemented",
+        )))
+    }
+
+    /// Start executing an async task with runtime execution context.
+    async fn start_async(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
-    ) -> Result<HostTaskResult, TaskError>;
+    ) -> Result<HostTaskResult, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "async start_async() not implemented",
+        )))
+    }
+
+    /// Return any sub-tasks for this task.
+    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+        Vec::new()
+    }
+
+    /// Declare how the runtime should execute this task.
+    fn execution_mode(&self) -> TaskExecutionMode;
 }
 
 /// Execution context passed into task implementations.
@@ -3137,6 +3165,106 @@ impl TaskRuntimeContext {
             .await
             .map(Some)
             .map_err(|err| TaskError::new(std::io::Error::other(err)))
+    }
+}
+
+#[derive(Clone)]
+pub struct BlockingTaskConnection {
+    inner: Arc<Mutex<dyn Connection>>,
+    runtime_handle: Handle,
+}
+
+impl fmt::Debug for BlockingTaskConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BlockingTaskConnection").finish()
+    }
+}
+
+impl BlockingTaskConnection {
+    pub fn new(inner: Arc<Mutex<dyn Connection>>, runtime_handle: Handle) -> Self {
+        Self {
+            inner,
+            runtime_handle,
+        }
+    }
+
+    pub fn with_connection<R>(
+        &self,
+        f: impl FnOnce(&mut dyn Connection) -> Result<R, TaskError>,
+    ) -> Result<R, TaskError> {
+        let mut guard = self.inner.blocking_lock();
+        f(&mut *guard)
+    }
+
+    pub fn execute_command(&self, command: &str) -> Result<String, TaskError> {
+        let command = command.to_string();
+        let connection = Arc::clone(&self.inner);
+        self.runtime_handle
+            .block_on(async move {
+                let mut guard = connection.lock().await;
+                guard.execute_command(&command).await
+            })
+            .map_err(|err| TaskError::new(std::io::Error::other(err)))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BlockingTaskRuntimeContext {
+    execution: TaskExecutionContext,
+    connection: Option<BlockingTaskConnection>,
+}
+
+impl BlockingTaskRuntimeContext {
+    pub fn new(
+        execution: TaskExecutionContext,
+        connection: Option<Arc<Mutex<dyn Connection>>>,
+        runtime_handle: Handle,
+    ) -> Self {
+        Self {
+            execution,
+            connection: connection.map(|connection| {
+                BlockingTaskConnection::new(connection, runtime_handle)
+            }),
+        }
+    }
+
+    pub fn execution(&self) -> &TaskExecutionContext {
+        &self.execution
+    }
+
+    pub fn current_depth(&self) -> usize {
+        self.execution.current_depth()
+    }
+
+    pub fn max_depth(&self) -> usize {
+        self.execution.max_depth()
+    }
+
+    pub fn connection(&self) -> Option<&BlockingTaskConnection> {
+        self.connection.as_ref()
+    }
+
+    pub fn has_connection(&self) -> bool {
+        self.connection.is_some()
+    }
+
+    pub fn with_connection<R>(
+        &self,
+        f: impl FnOnce(&mut dyn Connection) -> Result<R, TaskError>,
+    ) -> Result<Option<R>, TaskError> {
+        let Some(connection) = &self.connection else {
+            return Ok(None);
+        };
+
+        connection.with_connection(f).map(Some)
+    }
+
+    pub fn execute_command(&self, command: &str) -> Result<Option<String>, TaskError> {
+        let Some(connection) = &self.connection else {
+            return Ok(None);
+        };
+
+        connection.execute_command(command).map(Some)
     }
 }
 
@@ -3479,7 +3607,7 @@ impl TaskDefinition {
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
         Self::start_with_depth(
-            self.inner.as_ref(),
+            Arc::clone(&self.inner),
             hostname,
             host,
             results,
@@ -3503,7 +3631,7 @@ impl TaskDefinition {
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
         Self::start_with_depth(
-            self.inner.as_ref(),
+            Arc::clone(&self.inner),
             hostname,
             host,
             results,
@@ -3585,7 +3713,7 @@ impl TaskDefinition {
     #[async_recursion]
     #[allow(clippy::too_many_arguments)]
     async fn start_with_depth(
-        task: &dyn Task,
+        task: Arc<dyn Task>,
         hostname: &str,
         host: &Host,
         results: &mut TaskResults,
@@ -3641,7 +3769,7 @@ impl TaskDefinition {
 
         let connection = if let Some(connection_resolver) = connection_resolver {
             match connection_resolver
-                .resolve_task_connection(task, hostname)
+                .resolve_task_connection(task.as_ref(), hostname)
                 .await
             {
                 Ok(connection) => connection,
@@ -3679,8 +3807,28 @@ impl TaskDefinition {
         };
 
         let execution_context = TaskExecutionContext::new(depth, max_depth);
-        let runtime_context = TaskRuntimeContext::new(execution_context, connection);
-        let host_result = task.start(host, &runtime_context).await;
+        let host_result = match task.execution_mode() {
+            TaskExecutionMode::Async => {
+                let runtime_context =
+                    TaskRuntimeContext::new(execution_context, connection.clone());
+                task.start_async(host, &runtime_context).await
+            }
+            TaskExecutionMode::Blocking => {
+                let blocking_context = BlockingTaskRuntimeContext::new(
+                    execution_context,
+                    connection.clone(),
+                    Handle::current(),
+                );
+                let task = Arc::clone(&task);
+                let host = host.clone();
+                match task::spawn_blocking(move || task.start(&host, &blocking_context)).await {
+                    Ok(result) => result,
+                    Err(err) => Err(TaskError::new(std::io::Error::other(format!(
+                        "blocking task join error: {err}"
+                    )))),
+                }
+            }
+        };
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
             .duration_since(started_at)
@@ -3802,7 +3950,7 @@ impl TaskDefinition {
                 sub_task_started = true;
             }
             Self::start_with_depth(
-                sub.as_ref(),
+                Arc::clone(&sub),
                 hostname,
                 host,
                 sub_results,
@@ -3888,12 +4036,6 @@ impl TaskInfo for TaskDefinition {
 
     fn processor_names(&self) -> Vec<&str> {
         self.processor_names()
-    }
-}
-
-impl SubTasks for TaskDefinition {
-    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-        self.inner.sub_tasks()
     }
 }
 
@@ -4087,21 +4229,23 @@ mod tests {
         }
     }
 
-    impl SubTasks for TestTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            self.subs.clone()
-        }
-    }
-
     #[async_trait]
     impl Task for TestTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             self.counter.fetch_add(1, Ordering::SeqCst);
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            self.subs.clone()
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -4123,20 +4267,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for ProcessorTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for ProcessorTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -4197,15 +4339,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for FailingTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for FailingTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -4213,6 +4349,10 @@ mod tests {
             Ok(HostTaskResult::failed(TaskFailure::new(
                 TestTaskFailureError,
             )))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -4230,15 +4370,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for SkippingTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for SkippingTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -4246,6 +4380,10 @@ mod tests {
             Ok(HostTaskResult::Skipped(
                 TaskSkip::new().with_reason("filtered"),
             ))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -4601,20 +4739,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for ErroringTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for ErroringTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Err(TaskError::new(ExternalTaskError))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 

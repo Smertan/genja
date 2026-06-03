@@ -1,8 +1,8 @@
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
-    HostTaskResult, MessageLevel, SubTasks, Task, TaskConnectionResolver, TaskDefinition,
-    TaskError, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
+    HostTaskResult, MessageLevel, Task, TaskConnectionResolver, TaskDefinition, TaskError,
+    TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
     TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
 };
 use async_trait::async_trait;
@@ -95,15 +95,9 @@ impl TaskInfo for PythonBackedTask {
     }
 }
 
-impl SubTasks for PythonBackedTask {
-    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-        self.sub_tasks.clone()
-    }
-}
-
 #[async_trait]
 impl Task for PythonBackedTask {
-    async fn start(
+    async fn start_async(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
@@ -121,6 +115,14 @@ impl Task for PythonBackedTask {
             python_connection,
         )
         .await
+    }
+
+    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+        self.sub_tasks.clone()
+    }
+
+    fn execution_mode(&self) -> TaskExecutionMode {
+        TaskExecutionMode::Async
     }
 }
 
@@ -1193,20 +1195,22 @@ impl TaskInfo for RuntimeTaskWrapper {
     }
 }
 
-impl SubTasks for RuntimeTaskWrapper {
-    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-        self.inner.sub_tasks()
-    }
-}
-
 #[async_trait]
 impl Task for RuntimeTaskWrapper {
-    async fn start(
+    async fn start_async(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
-        self.inner.start(host, context).await
+        self.inner.start_async(host, context).await
+    }
+
+    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+        self.inner.sub_tasks()
+    }
+
+    fn execution_mode(&self) -> TaskExecutionMode {
+        self.inner.execution_mode()
     }
 }
 
@@ -1308,46 +1312,37 @@ mod tests {
     use ::genja_core::task::{TaskFailure, TaskFailureKind};
     use pyo3::types::PyModule;
     use pyo3::types::PyTuple;
-    use std::path::PathBuf;
-    use std::sync::Once;
 
     fn init_python() {
-        static INIT: Once = Once::new();
-        INIT.call_once(|| {
-            pyo3::prepare_freethreaded_python();
-            Python::with_gil(|py| {
-                let sys = PyModule::import(py, "sys").expect("sys module should import");
-                let path = sys.getattr("path").expect("sys.path should exist");
-                let python_source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
-                path.call_method1("insert", (0, python_source.display().to_string()))
-                    .expect("python source path should be inserted");
-                let modules = sys.getattr("modules").expect("sys.modules should exist");
-                let genja = PyModule::from_code(
-                    py,
-                    pyo3::ffi::c_str!("__path__ = []\n"),
-                    pyo3::ffi::c_str!("genja/__init__.py"),
-                    pyo3::ffi::c_str!("genja"),
-                )
-                .expect("genja stub should build");
-                let task = PyModule::from_code(
-                    py,
-                    pyo3::ffi::c_str!(
-                        "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    pass\n"
-                    ),
-                    pyo3::ffi::c_str!("genja/task.py"),
-                    pyo3::ffi::c_str!("genja.task"),
-                )
-                .expect("task stub should build");
-                genja
-                    .add("task", &task)
-                    .expect("task module should attach to package");
-                modules
-                    .set_item("genja", &genja)
-                    .expect("genja stub should register");
-                modules
-                    .set_item("genja.task", &task)
-                    .expect("task stub should register");
-            });
+        crate::init_embedded_python();
+        Python::with_gil(|py| {
+            let sys = PyModule::import(py, "sys").expect("sys module should import");
+            let modules = sys.getattr("modules").expect("sys.modules should exist");
+            let genja = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!("__path__ = []\n"),
+                pyo3::ffi::c_str!("genja/__init__.py"),
+                pyo3::ffi::c_str!("genja"),
+            )
+            .expect("genja stub should build");
+            let task = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    def has_connection(self):\n        return self.connection is not None\n"
+                ),
+                pyo3::ffi::c_str!("genja/task.py"),
+                pyo3::ffi::c_str!("genja.task"),
+            )
+            .expect("task stub should build");
+            genja
+                .add("task", &task)
+                .expect("task module should attach to package");
+            modules
+                .set_item("genja", &genja)
+                .expect("genja stub should register");
+            modules
+                .set_item("genja.task", &task)
+                .expect("task stub should register");
         });
     }
 
@@ -1608,8 +1603,7 @@ mod tests {
             };
             assert_eq!(success.changed(), true);
             assert_eq!(success.summary(), Some("async handled router1"));
-            assert_eq!(success.metadata().unwrap()["current_depth"], json!(0));
-            assert_eq!(success.metadata().unwrap()["max_depth"], json!(0));
+            assert_eq!(success.metadata().unwrap()["has_connection"], json!(false));
         });
     }
 

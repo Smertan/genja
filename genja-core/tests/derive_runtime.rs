@@ -1,233 +1,113 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
+use genja_core::genja_task;
 use genja_core::inventory::Host;
 use genja_core::task::{
-    HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    BlockingTaskRuntimeContext, HostTaskResult, Task, TaskExecutionMode, TaskInfo,
+    TaskRuntimeContext, TaskSuccess,
 };
-use genja_core_derive::Task as TaskDerive;
 use serde_json::{Value, json};
 
-#[derive(TaskDerive)]
-struct StringNameTask {
-    name: String,
-}
+struct LeafTask;
 
-#[derive(TaskDerive)]
-struct StaticNameTask {
-    name: &'static str,
-}
-
-#[derive(TaskDerive)]
-struct StringConnectionTask {
-    name: &'static str,
-    connection_plugin_name: String,
-}
-
-#[derive(TaskDerive)]
-struct StaticConnectionTask {
-    name: &'static str,
-    connection_plugin_name: &'static str,
-}
-
-#[derive(TaskDerive)]
-struct OptionStringConnectionTask {
-    name: &'static str,
-    connection_plugin_name: Option<String>,
-}
-
-#[derive(TaskDerive)]
-struct OptionStaticConnectionTask {
-    name: &'static str,
-    connection_plugin_name: Option<&'static str>,
-}
-
-#[derive(TaskDerive)]
-struct OptionsTask {
-    name: &'static str,
-    options: Option<Value>,
-}
-
-#[derive(TaskDerive)]
-struct DynamicProcessorsTask {
-    name: &'static str,
-    processor_names: Vec<String>,
-}
-
-#[derive(TaskDerive)]
-#[task(processors = ["audit", "metrics"])]
-struct StaticProcessorsTask {
-    name: &'static str,
-}
-
-#[derive(TaskDerive)]
-struct LeafTask {
-    name: &'static str,
-}
-
-#[async_trait]
-impl Task for LeafTask {
-    async fn start(
+#[genja_task(name = "leaf")]
+impl LeafTask {
+    async fn start_async(
         &self,
         _host: &Host,
         _context: &TaskRuntimeContext,
-    ) -> Result<HostTaskResult, TaskError> {
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
         Ok(HostTaskResult::passed(TaskSuccess::new()))
     }
 }
 
-#[derive(TaskDerive)]
-struct ParentTask {
-    name: &'static str,
-    #[task(subtask)]
-    validate_config: Arc<dyn Task>,
-    #[task(subtask)]
-    verify_health: Arc<dyn Task>,
+struct AsyncTask {
+    options: Option<Value>,
 }
 
-#[test]
-fn task_info_name_supports_string_and_static_str() {
-    let string_name = StringNameTask {
-        name: "string-name".to_string(),
-    };
-    let static_name = StaticNameTask {
-        name: "static-name",
-    };
-
-    assert_eq!(string_name.name(), "string-name");
-    assert_eq!(static_name.name(), "static-name");
-}
-
-#[test]
-fn connection_plugin_name_supports_all_declared_forms() {
-    let string_connection = StringConnectionTask {
-        name: "task",
-        connection_plugin_name: "ssh".to_string(),
-    };
-    let static_connection = StaticConnectionTask {
-        name: "task",
-        connection_plugin_name: "netconf",
-    };
-    let option_string_connection = OptionStringConnectionTask {
-        name: "task",
-        connection_plugin_name: Some("http".to_string()),
-    };
-    let option_static_connection = OptionStaticConnectionTask {
-        name: "task",
-        connection_plugin_name: Some("grpc"),
-    };
-
-    assert_eq!(string_connection.connection_plugin_name(), Some("ssh"));
-    assert_eq!(static_connection.connection_plugin_name(), Some("netconf"));
-    assert_eq!(
-        option_string_connection.connection_plugin_name(),
-        Some("http")
-    );
-    assert_eq!(
-        option_static_connection.connection_plugin_name(),
-        Some("grpc")
-    );
-}
-
-#[test]
-fn connection_plugin_name_treats_empty_values_as_absent() {
-    let string_connection = StringConnectionTask {
-        name: "task",
-        connection_plugin_name: "   ".to_string(),
-    };
-    let static_connection = StaticConnectionTask {
-        name: "task",
-        connection_plugin_name: "",
-    };
-    let option_string_connection = OptionStringConnectionTask {
-        name: "task",
-        connection_plugin_name: Some("\t".to_string()),
-    };
-    let option_static_connection = OptionStaticConnectionTask {
-        name: "task",
-        connection_plugin_name: None,
-    };
-
-    assert_eq!(string_connection.connection_plugin_name(), None);
-    assert_eq!(static_connection.connection_plugin_name(), None);
-    assert_eq!(option_string_connection.connection_plugin_name(), None);
-    assert_eq!(option_static_connection.connection_plugin_name(), None);
-}
-
-#[test]
-fn get_connection_key_reflects_connection_plugin_presence() {
-    let no_connection = StringNameTask {
-        name: "no-connection".to_string(),
-    };
-    let with_connection = OptionStringConnectionTask {
-        name: "with-connection",
-        connection_plugin_name: Some("ssh".to_string()),
-    };
-
-    assert!(no_connection.get_connection_key("router1").is_none());
-
-    let key = with_connection.get_connection_key("router1").unwrap();
-    assert_eq!(key.hostname, "router1");
-    assert_eq!(key.plugin_name, "ssh");
-}
-
-#[test]
-fn options_returns_absent_or_configured_payload() {
-    let without_options = StringNameTask {
-        name: "without-options".to_string(),
-    };
-    let with_options = OptionsTask {
-        name: "with-options",
-        options: Some(json!({"changed": false, "retries": 3})),
-    };
-
-    assert!(without_options.options().is_none());
-    assert_eq!(
-        with_options.options(),
-        Some(&json!({"changed": false, "retries": 3}))
-    );
-}
-
-#[test]
-fn processor_names_support_absent_dynamic_and_static_configuration() {
-    let absent = StringNameTask {
-        name: "absent".to_string(),
-    };
-    let dynamic = DynamicProcessorsTask {
-        name: "dynamic",
-        processor_names: Vec::new(),
+#[genja_task(
+    name = "async_task",
+    connection_plugin_name = "ssh",
+    processors = ["audit", "metrics"]
+)]
+impl AsyncTask {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
     }
-    .with_processor("audit")
-    .with_processors(["metrics", "trace"]);
-    let static_processors = StaticProcessorsTask { name: "static" };
 
-    assert!(absent.processor_names().is_empty());
-    assert_eq!(dynamic.processor_names(), vec!["audit", "metrics", "trace"]);
-    assert_eq!(
-        static_processors.processor_names(),
-        vec!["audit", "metrics"]
-    );
+    fn options(&self) -> Option<&Value> {
+        self.options.as_ref()
+    }
+
+    fn helper(&self) -> bool {
+        self.options.is_some()
+    }
+}
+
+struct ParentTask {
+    children: Vec<Arc<dyn Task>>,
+}
+
+#[genja_task(name = "parent")]
+impl ParentTask {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
+    }
+
+    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+        self.children.clone()
+    }
+}
+
+struct BlockingTask;
+
+#[genja_task(name = "blocking_task")]
+impl BlockingTask {
+    fn start(
+        &self,
+        _host: &Host,
+        _context: &BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
+    }
 }
 
 #[test]
-fn sub_tasks_returns_cloned_arcs_in_declaration_order() {
-    let validate_config: Arc<dyn Task> = Arc::new(LeafTask {
-        name: "validate_config",
-    });
-    let verify_health: Arc<dyn Task> = Arc::new(LeafTask {
-        name: "verify_health",
-    });
-    let parent = ParentTask {
-        name: "parent",
-        validate_config: Arc::clone(&validate_config),
-        verify_health: Arc::clone(&verify_health),
+fn genja_task_generates_task_info_from_metadata() {
+    let task = AsyncTask {
+        options: Some(json!({"changed": false})),
     };
 
-    let sub_tasks = parent.sub_tasks();
+    assert_eq!(task.name(), "async_task");
+    assert_eq!(task.connection_plugin_name(), Some("ssh"));
+    assert_eq!(task.processor_names(), vec!["audit", "metrics"]);
+    assert_eq!(task.options(), Some(&json!({"changed": false})));
+    assert!(task.helper());
+}
 
-    assert_eq!(sub_tasks.len(), 2);
-    assert_eq!(sub_tasks[0].name(), "validate_config");
-    assert_eq!(sub_tasks[1].name(), "verify_health");
-    assert!(Arc::ptr_eq(&sub_tasks[0], &validate_config));
-    assert!(Arc::ptr_eq(&sub_tasks[1], &verify_health));
+#[test]
+fn genja_task_generates_sub_tasks_delegate() {
+    let child: Arc<dyn Task> = Arc::new(LeafTask);
+    let task = ParentTask {
+        children: vec![Arc::clone(&child)],
+    };
+
+    let sub_tasks = task.sub_tasks();
+    assert_eq!(sub_tasks.len(), 1);
+    assert_eq!(sub_tasks[0].name(), "leaf");
+    assert!(Arc::ptr_eq(&sub_tasks[0], &child));
+}
+
+#[test]
+fn genja_task_sets_execution_mode_from_method_shape() {
+    assert_eq!(AsyncTask { options: None }.execution_mode(), TaskExecutionMode::Async);
+    assert_eq!(BlockingTask.execution_mode(), TaskExecutionMode::Blocking);
 }

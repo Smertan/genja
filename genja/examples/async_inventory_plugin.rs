@@ -3,7 +3,7 @@ use genja::genja_core::task::{
     HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess,
 };
 use genja::genja_core::{InventoryLoadError, Settings};
-use genja::{Genja, TaskDerive, async_trait};
+use genja::{Genja, genja_task};
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin, Plugins};
 use serde_json::json;
@@ -70,14 +70,11 @@ async fn fetch_controller_inventory() -> Result<Vec<ControllerDevice>, Inventory
     ])
 }
 
-#[derive(TaskDerive)]
-struct CollectFacts {
-    name: &'static str,
-}
+struct CollectFacts;
 
-#[async_trait]
-impl Task for CollectFacts {
-    async fn start(
+#[genja_task(name = "collect_facts")]
+impl CollectFacts {
+    async fn start_async(
         &self,
         host: &Host,
         _context: &TaskRuntimeContext,
@@ -114,12 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     let results = genja
-        .run_task_async(
-            CollectFacts {
-                name: "collect_facts",
-            },
-            1,
-        )
+        .run_task_async(CollectFacts, 1)
         .await?;
 
     let output = results.to_pretty_json_string()?;

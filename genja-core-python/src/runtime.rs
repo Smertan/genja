@@ -1927,12 +1927,27 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::Once;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn init_python() {
-        static INIT: Once = Once::new();
-        INIT.call_once(pyo3::prepare_freethreaded_python);
+        crate::init_embedded_python();
+        Python::with_gil(|py| {
+            let sys = PyModule::import(py, "sys").expect("sys module should import");
+            let modules = sys.getattr("modules").expect("sys.modules should exist");
+            for module_name in [
+                "tests",
+                "tests.fixtures",
+                "genja",
+                "genja.task",
+                "genja.processor",
+                "genja.connection",
+                "genja._async",
+                "tests.fixtures.task_definitions",
+                "tests.fixtures.runner_plugins",
+            ] {
+                let _ = modules.call_method1("pop", (module_name, py.None()));
+            }
+        });
     }
 
     fn temp_test_dir(name: &str) -> PathBuf {

@@ -1,0 +1,5 @@
+error: define one of `fn start(...)` or `async fn start_async(...)`
+ --> tests/ui_genja_task/fail/neither_start_mode.rs:6:6
+  |
+6 | impl BadTask {
+  |      ^^^^^^^

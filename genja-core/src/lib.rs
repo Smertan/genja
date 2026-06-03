@@ -65,9 +65,11 @@ pub mod state;
 pub mod task;
 pub mod types;
 
+pub use ::async_trait::async_trait;
 pub use errors::{
     ConfigLoadError, GenjaError, InventoryFileKind, InventoryLoadError, SshConfigError,
 };
+pub use genja_core_derive::genja_task;
 pub use settings::Settings;
 pub use state::{
     ConnectionAttemptState, ConnectionFailureKind, ConnectionStatus, HostStatus, State,

@@ -58,7 +58,7 @@
 pub use ::async_trait::async_trait;
 pub use genja_core;
 pub use genja_core::GenjaError;
-pub use genja_core_derive::Task as TaskDerive;
+pub use genja_core_derive::genja_task;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
@@ -1140,7 +1140,7 @@ impl Default for Genja {
 
 #[cfg(test)]
 mod tests {
-    use super::{Genja, GenjaError};
+    use super::{Genja, GenjaError, genja_task};
     use async_trait::async_trait;
     use genja_core::Settings;
     use genja_core::inventory::{
@@ -1149,7 +1149,8 @@ mod tests {
     };
     use genja_core::settings::{InventoryConfig, RunnerConfig};
     use genja_core::task::{
-        HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
+        BlockingTaskRuntimeContext, HostTaskResult, Task, TaskDefinition, TaskError,
+        TaskExecutionMode, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
     };
     use genja_plugin_manager::PluginManager;
     use genja_plugin_manager::plugin_types::{
@@ -1158,6 +1159,7 @@ mod tests {
     use serde_json::{Value, json};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     struct TestTask {
         name: String,
@@ -1202,20 +1204,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for TestTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for TestTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1235,15 +1235,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for FailedTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for FailedTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -1251,6 +1245,10 @@ mod tests {
             Ok(HostTaskResult::failed(genja_core::task::TaskFailure::new(
                 std::io::Error::other("boom"),
             )))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1270,20 +1268,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for SkippedTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for SkippedTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::skipped_with_reason("filtered"))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1303,20 +1299,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for ChildTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for ChildTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1341,16 +1335,27 @@ mod tests {
         saw_connection: Arc<AtomicBool>,
     }
 
-    #[derive(genja_core_derive::Task)]
-    struct DerivedProcessorTask {
-        name: &'static str,
-        processor_names: Vec<String>,
+    struct BlockingSuccessTask;
+
+    struct SlowBlockingTask {
+        started: Arc<AtomicBool>,
+        finished: Arc<AtomicBool>,
+        pause: Duration,
     }
 
-    #[derive(genja_core_derive::Task)]
-    #[task(processors = ["audit", "metrics"])]
-    struct DerivedAttributeProcessorTask {
-        name: &'static str,
+    struct DerivedProcessorTask;
+
+    struct DerivedAttributeProcessorTask;
+
+    #[genja_task(name = "attribute", processors = ["audit", "metrics"])]
+    impl DerivedAttributeProcessorTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
     }
 
     impl TaskInfo for ParentTask {
@@ -1367,20 +1372,22 @@ mod tests {
         }
     }
 
-    impl SubTasks for ParentTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            vec![Arc::new(ChildTask)]
-        }
-    }
-
     #[async_trait]
     impl Task for ParentTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            vec![Arc::new(ChildTask)]
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1420,15 +1427,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for RecordingTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            self.sub_tasks.clone()
-        }
-    }
-
     #[async_trait]
     impl Task for RecordingTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -1438,6 +1439,14 @@ mod tests {
                 .expect("order mutex should not be poisoned")
                 .push(self.name);
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            self.sub_tasks.clone()
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1533,15 +1542,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for ConnectionAwareTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for ConnectionAwareTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             context: &TaskRuntimeContext,
@@ -1557,11 +1560,15 @@ mod tests {
                 TaskSuccess::new().with_changed(alive),
             ))
         }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
     }
 
-    #[async_trait]
-    impl Task for DerivedProcessorTask {
-        async fn start(
+    #[genja_task(name = "derived")]
+    impl DerivedProcessorTask {
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -1570,14 +1577,46 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl Task for DerivedAttributeProcessorTask {
-        async fn start(
+    impl TaskInfo for BlockingSuccessTask {
+        fn name(&self) -> &str {
+            "blocking-success"
+        }
+    }
+
+    impl Task for BlockingSuccessTask {
+        fn start(
             &self,
             _host: &Host,
-            _context: &TaskRuntimeContext,
+            _context: &BlockingTaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Blocking
+        }
+    }
+
+    impl TaskInfo for SlowBlockingTask {
+        fn name(&self) -> &str {
+            "slow-blocking"
+        }
+    }
+
+    impl Task for SlowBlockingTask {
+        fn start(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.started.store(true, Ordering::SeqCst);
+            std::thread::sleep(self.pause);
+            self.finished.store(true, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Blocking
         }
     }
 
@@ -1684,19 +1723,13 @@ mod tests {
 
     #[test]
     fn derive_task_exposes_processor_names() {
-        let task = DerivedProcessorTask {
-            name: "derived",
-            processor_names: Vec::new(),
-        }
-        .with_processor("audit")
-        .with_processors(["metrics"]);
-        let no_processors = DerivedProcessorTask {
-            name: "none",
-            processor_names: Vec::new(),
-        };
-        let attribute_task = DerivedAttributeProcessorTask { name: "attribute" };
+        let task = TaskDefinition::new(DerivedProcessorTask)
+            .with_processor("audit")
+            .with_processors(["metrics"]);
+        let no_processors = DerivedProcessorTask;
+        let attribute_task = DerivedAttributeProcessorTask;
 
-        assert_eq!(task.processor_names(), ["audit", "metrics"]);
+        assert_eq!(task.processor_names(), vec!["audit", "metrics"]);
         assert_eq!(attribute_task.processor_names(), ["audit", "metrics"]);
         assert!(no_processors.processor_names().is_empty());
     }
@@ -1978,6 +2011,62 @@ mod tests {
 
         assert_eq!(results.task_name(), "async-task");
         assert_eq!(results.passed_hosts().len(), 2);
+    }
+
+    #[test]
+    fn run_task_executes_blocking_task() {
+        let genja = Genja::from_inventory(single_host_inventory());
+
+        let results = genja
+            .run_task(BlockingSuccessTask, 0)
+            .expect("blocking task execution should succeed");
+
+        assert_eq!(results.task_name(), "blocking-success");
+        assert_eq!(results.passed_hosts().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_task_async_executes_blocking_task() {
+        let genja = Genja::from_inventory(single_host_inventory());
+
+        let results = genja
+            .run_task_async(BlockingSuccessTask, 0)
+            .await
+            .expect("blocking task execution should succeed");
+
+        assert_eq!(results.task_name(), "blocking-success");
+        assert_eq!(results.passed_hosts().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_task_async_offloads_blocking_task_work() {
+        let genja = Genja::from_inventory(single_host_inventory());
+        let started = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+
+        let task = SlowBlockingTask {
+            started: Arc::clone(&started),
+            finished: Arc::clone(&finished),
+            pause: Duration::from_millis(150),
+        };
+
+        let started_for_signal = Arc::clone(&started);
+        let finished_for_signal = Arc::clone(&finished);
+        let signal_future = async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert!(started_for_signal.load(Ordering::SeqCst));
+            assert!(!finished_for_signal.load(Ordering::SeqCst));
+        };
+
+        let began_at = Instant::now();
+        let (results, _) = tokio::join!(genja.run_task_async(task, 0), signal_future);
+        let elapsed = began_at.elapsed();
+
+        let results = results.expect("blocking task execution should succeed");
+        assert_eq!(results.task_name(), "slow-blocking");
+        assert_eq!(results.passed_hosts().len(), 1);
+        assert!(elapsed >= Duration::from_millis(150));
+        assert!(elapsed < Duration::from_millis(350));
     }
 
     #[tokio::test]

@@ -4,51 +4,51 @@ use genja::genja_core::inventory::Host;
 use genja::genja_core::task::{
     HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess,
 };
-use genja::{Genja, TaskDerive, async_trait};
+use genja::{Genja, genja_task};
 use serde_json::json;
 
-#[derive(TaskDerive)]
 struct DeployConfig {
-    name: &'static str,
-    #[task(subtask)]
     validate_config: Arc<dyn Task>,
-    #[task(subtask)]
     collect_logs: Arc<dyn Task>,
 }
 
-#[async_trait]
-impl Task for DeployConfig {
-    async fn start(
+#[genja_task(name = "deploy_config")]
+impl DeployConfig {
+    async fn start_async(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         Ok(HostTaskResult::passed(TaskSuccess::new().with_result(
             json!({
-                "task": self.name,
+                "task": "deploy_config",
                 "host": host.hostname(),
                 "depth": context.current_depth(),
                 "deployed": true
             }),
         )))
     }
+
+    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+        vec![
+            Arc::clone(&self.validate_config),
+            Arc::clone(&self.collect_logs),
+        ]
+    }
 }
 
-#[derive(TaskDerive)]
-struct ValidateConfig {
-    name: &'static str,
-}
+struct ValidateConfig;
 
-#[async_trait]
-impl Task for ValidateConfig {
-    async fn start(
+#[genja_task(name = "validate_config")]
+impl ValidateConfig {
+    async fn start_async(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         Ok(HostTaskResult::passed(TaskSuccess::new().with_result(
             json!({
-                "task": self.name,
+                "task": "validate_config",
                 "host": host.hostname(),
                 "depth": context.current_depth(),
                 "valid": true
@@ -57,21 +57,18 @@ impl Task for ValidateConfig {
     }
 }
 
-#[derive(TaskDerive)]
-struct CollectLogs {
-    name: &'static str,
-}
+struct CollectLogs;
 
-#[async_trait]
-impl Task for CollectLogs {
-    async fn start(
+#[genja_task(name = "collect_logs")]
+impl CollectLogs {
+    async fn start_async(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         Ok(HostTaskResult::passed(TaskSuccess::new().with_result(
             json!({
-                "task": self.name,
+                "task": "collect_logs",
                 "host": host.hostname(),
                 "depth": context.current_depth(),
                 "logs_collected": true
@@ -84,13 +81,8 @@ fn main() -> Result<(), genja::GenjaError> {
     let genja = Genja::from_settings_file("genja/examples/settings.yaml")?;
 
     let task = DeployConfig {
-        name: "deploy_config",
-        validate_config: Arc::new(ValidateConfig {
-            name: "validate_config",
-        }),
-        collect_logs: Arc::new(CollectLogs {
-            name: "collect_logs",
-        }),
+        validate_config: Arc::new(ValidateConfig),
+        collect_logs: Arc::new(CollectLogs),
     };
 
     let results = genja.run_task(task, 1)?;
