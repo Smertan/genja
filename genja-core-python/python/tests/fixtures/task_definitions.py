@@ -4,10 +4,10 @@ class AsyncRuntimeTask:
         "connection_plugin_name": None,
         "processors": [],
         "options": None,
-        "sub_task": None,
+        "sub_tasks": [],
     }
 
-    async def start(self, task, host, context):
+    async def start_async(self, task, host, context):
         return {
             "status": "passed",
             "changed": True,

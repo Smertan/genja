@@ -78,7 +78,7 @@ The canonical authoring shape is:
 
     @task(name="async_backup", connection_plugin_name="ssh")
     class AsyncBackupTask:
-        async def start(
+        async def start_async(
             self,
             task: TaskInfo,
             host: Host,
@@ -99,7 +99,7 @@ Task metadata comes from ``@task(...)``:
 
 - ``name``: required and must be non-empty
 - ``connection_plugin_name``: optional; when provided it must be non-empty
-- ``sub_task``: optional decorated task class
+- ``sub_tasks``: optional list of decorated task classes
 - ``processors``: optional list of processor plugin names
 - ``options``: optional JSON-serializable task options payload
 """
@@ -192,8 +192,8 @@ class TaskInfo(_GenjaModel):
     access to their configuration and execution context.
 
     Note:
-        When a task has a sub-task, the parent receives a ``TaskInfo`` with
-        ``sub_task`` populated for introspection. When the sub-task executes,
+        When a task has sub-tasks, the parent receives a ``TaskInfo`` with
+        ``sub_tasks`` populated for introspection. When a sub-task executes,
         it receives its own separate ``TaskInfo`` instance with its metadata at
         the top level rather than nested under the parent.
 
@@ -219,11 +219,11 @@ class TaskInfo(_GenjaModel):
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure or None if no options are provided.
-        sub_task (TaskInfo | None): Optional nested TaskInfo instance
-            representing a sub-task that will be executed after this task.
-            This field allows parent tasks to introspect their execution graph.
-            When the sub-task runs, it receives its own TaskInfo instance
-            (not this nested one).
+        sub_tasks (list[TaskInfo]): Nested TaskInfo instances representing
+            sub-tasks that will be executed after this task. This field allows
+            parent tasks to introspect their execution graph. When a sub-task
+            runs, it receives its own TaskInfo instance (not one nested under
+            the parent).
     """
 
     name: str = Field(description="Unique task name.")
@@ -239,9 +239,9 @@ class TaskInfo(_GenjaModel):
         default=None,
         description="JSON-serializable task options payload.",
     )
-    sub_task: TaskInfo | None = Field(
-        default=None,
-        description="Nested task metadata for an optional sub-task.",
+    sub_tasks: list[TaskInfo] = Field(
+        default_factory=list,
+        description="Nested task metadata for optional sub-tasks.",
     )
 
 
@@ -346,7 +346,7 @@ class GenjaTaskProtocol(Protocol):
     Attributes:
         __genja_task_info__ (dict[str, Any]): Dictionary containing task
             metadata set by the @task decorator, including name, connection
-            plugin name, processors, options, and optional sub-task reference.
+            plugin name, processors, options, and optional sub-task references.
     """
 
     __genja_task_info__: dict[str, Any]
@@ -356,19 +356,14 @@ class GenjaTaskProtocol(Protocol):
         task: TaskInfo,
         host: Host,
         context: TaskRuntimeContext,
-    ) -> (
-        TaskSuccessResult
-        | TaskFailureResult
-        | TaskSkipResult
-        | Awaitable[TaskSuccessResult | TaskFailureResult | TaskSkipResult]
-    ):
+    ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult:
         """Execute the task logic against a target host.
 
         This method contains the core task implementation and is invoked by
         the Genja task runtime when the task is executed. It can be implemented
-        as either a synchronous function (def) or an asynchronous function
-        (async def). The method receives all necessary context about the task,
-        target host, and runtime environment to perform its operations.
+        as a synchronous function (def). The method receives all necessary
+        context about the task, target host, and runtime environment to
+        perform its operations.
 
         Args:
             task (TaskInfo): Metadata about the current task execution,
@@ -383,30 +378,63 @@ class GenjaTaskProtocol(Protocol):
                 the target host.
 
         Returns:
-            TaskSuccessResult | TaskFailureResult | TaskSkipResult | Awaitable[
-                TaskSuccessResult | TaskFailureResult | TaskSkipResult
-            ]: The outcome of the task execution. For synchronous implementations,
-                returns one of TaskSuccessResult (task completed successfully),
-                TaskFailureResult (task encountered an error), or TaskSkipResult
-                (task was skipped). For asynchronous implementations, returns an
-                awaitable that resolves to one of these result types.
+            TaskSuccessResult | TaskFailureResult | TaskSkipResult: The outcome
+                of the task execution.
         """
         ...
+
+    async def start_async(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult:
+        """Execute the task logic against a target host asynchronously.
+
+        Implement this method instead of ``start(...)`` for async Python tasks.
+        """
+        ...
+
+
+def _validate_sub_tasks(
+    cls_name: str,
+    sub_tasks: list[type[GenjaTaskProtocol]] | None,
+) -> list[type[GenjaTaskProtocol]]:
+    if sub_tasks is None:
+        return []
+    if not isinstance(sub_tasks, list):
+        raise TypeError(
+            f"@task-decorated class '{cls_name}' sub_tasks must be a list of task classes or None"
+        )
+
+    validated: list[type[GenjaTaskProtocol]] = []
+    for sub_task in sub_tasks:
+        if not isinstance(sub_task, type):
+            raise TypeError(
+                f"@task-decorated class '{cls_name}' sub_tasks must contain only task classes"
+            )
+        if not hasattr(sub_task, "__genja_task_info__"):
+            raise TypeError(
+                f"@task-decorated class '{cls_name}' sub_task '{sub_task.__name__}' must also be decorated with @task"
+            )
+        validated.append(sub_task)
+
+    return validated
 
 
 def task(
     name: str,
     connection_plugin_name: str | None = None,
-    sub_task: type[GenjaTaskProtocol] | None = None,
+    sub_tasks: list[type[GenjaTaskProtocol]] | None = None,
     processors: list[str] | None = None,
     options: Any | None = None,
 ):
     """Attach Genja task metadata to a Python task class.
 
     This decorator function attaches execution metadata to a Python class to
-    register it as a Genja task. The decorated class must implement a ``start``
-    method that conforms to the GenjaTaskProtocol interface. The decorator
-    validates all provided metadata and stores it in the class's
+    register it as a Genja task. The decorated class must implement exactly one
+    of ``start(...)`` or ``start_async(...)``. The decorator validates all
+    provided metadata and stores it in the class's
     ``__genja_task_info__`` attribute for use by the Genja task runtime.
 
     Args:
@@ -416,9 +444,9 @@ def task(
             plugin to use when executing this task. If provided, must be a
             non-empty string. If None, the task will execute without a specific
             connection plugin.
-        sub_task (type[GenjaTaskProtocol] | None): Optional nested task class
-            to execute after this task completes. If provided, must be a class
-            that has already been decorated with @task. If None, no sub-task
+        sub_tasks (list[type[GenjaTaskProtocol]] | None): Optional nested task
+            classes to execute after this task completes. If provided, each
+            entry must already be decorated with @task. If None, no sub-tasks
             will be executed.
         processors (list[str] | None): Optional list of processor plugin names
             to apply to this task's execution. If provided, must be a list of
@@ -434,40 +462,40 @@ def task(
 
     Raises:
         TypeError: If the decorator is applied to a non-class object, if the
-            decorated class does not define a callable ``start`` method, if the
-            name is not a non-empty string, if connection_plugin_name is not
-            a non-empty string or None, if sub_task is not a @task-decorated
-            class or None, if processors is not a list of non-empty strings
-            or None, or if options is not JSON-serializable.
+            decorated class does not define exactly one callable task entrypoint,
+            if the name is not a non-empty string, if connection_plugin_name is
+            not a non-empty string or None, if sub_tasks is not a list of
+            @task-decorated classes or None, if processors is not a list of
+            non-empty strings or None, or if options is not JSON-serializable.
     """
 
     def wrap(cls: _TaskClassT) -> _TaskClassT:
         if not isinstance(cls, type):
             raise TypeError("@task can only decorate classes")
 
-        start = getattr(cls, "start", None)
-        if start is None:
+        class_dict = vars(cls)
+        start = class_dict.get("start")
+        start_async = class_dict.get("start_async")
+        has_start = callable(start)
+        has_start_async = callable(start_async)
+        if has_start == has_start_async:
             raise TypeError(
-                f"@task-decorated class '{cls.__name__}' must define a 'start' method"
+                f"@task-decorated class '{cls.__name__}' must define exactly one of 'start' or 'start_async'"
             )
-        if not callable(start):
+        if start is not None and not has_start:
             raise TypeError(
                 f"@task-decorated class '{cls.__name__}' attribute 'start' must be callable"
+            )
+        if start_async is not None and not has_start_async:
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' attribute 'start_async' must be callable"
             )
         if not isinstance(name, str) or not name.strip():
             raise TypeError(
                 f"@task-decorated class '{cls.__name__}' name must be a non-empty string"
             )
 
-        if sub_task is not None:
-            if not isinstance(sub_task, type):
-                raise TypeError(
-                    f"@task-decorated class '{cls.__name__}' sub_task must be a task class or None"
-                )
-            if not hasattr(sub_task, "__genja_task_info__"):
-                raise TypeError(
-                    f"@task-decorated class '{cls.__name__}' sub_task '{sub_task.__name__}' must also be decorated with @task"
-                )
+        validated_sub_tasks = _validate_sub_tasks(cls.__name__, sub_tasks)
         if connection_plugin_name is not None:
             if (
                 not isinstance(connection_plugin_name, str)
@@ -494,7 +522,7 @@ def task(
             "connection_plugin_name": connection_plugin_name,
             "processors": list(processors or []),
             "options": options,
-            "sub_task": sub_task,
+            "sub_tasks": validated_sub_tasks,
         }
         return cls
 

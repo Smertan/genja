@@ -1,20 +1,22 @@
 import asyncio
 
 import pytest
+import genja
 from genja import Genja
 from genja.task import Host, TaskFailureResult, TaskSuccessResult, task
+from tests.fixtures.connection_plugins import ConnectionPlugin
 
 
 @task(name="async_backup")
 class AsyncBackupTask:
-    async def start(self, task, host, context):
+    async def start_async(self, task, host, context):
         await asyncio.sleep(0.01)
         return TaskSuccessResult(summary=f"async backup completed for {host.hostname}")
 
 
 @task(name="async_with_connection", connection_plugin_name="ssh")
 class AsyncConnectionTask:
-    async def start(self, task, host, context):
+    async def start_async(self, task, host, context):
         connection = context.connection()
         if connection is None:
             return TaskFailureResult(message="no connection available")
@@ -28,7 +30,7 @@ class AsyncConnectionTask:
 
 @task(name="async_failing_task")
 class AsyncFailingTask:
-    async def start(self, task, host, context):
+    async def start_async(self, task, host, context):
         await asyncio.sleep(0.01)
         return TaskFailureResult(
             message=f"async task failed on {host.hostname}",
@@ -36,9 +38,9 @@ class AsyncFailingTask:
         )
 
 
-@task(name="async_parent", sub_task=AsyncBackupTask)
+@task(name="async_parent", sub_tasks=[AsyncBackupTask])
 class AsyncParentTask:
-    async def start(self, task, host, context):
+    async def start_async(self, task, host, context):
         await asyncio.sleep(0.01)
         return TaskSuccessResult(summary=f"async parent completed for {host.hostname}")
 
@@ -51,7 +53,7 @@ class SyncBackupTask:
 
 @task(name="mixed_task")
 class MixedTask:
-    async def start(self, task, host, context):
+    async def start_async(self, task, host, context):
         result = self._sync_helper(host.hostname)
         await asyncio.sleep(0.01)
         return TaskSuccessResult(summary=result)
@@ -103,10 +105,13 @@ def test_runtime_run_task_async_handles_failures():
 
 def test_runtime_run_task_async_with_connection():
     async def run_case():
+        plugins = genja.PluginManager()
+        plugins.register_plugin(ConnectionPlugin())
         runtime = Genja.from_hosts(
             {
                 "router1": Host(hostname="10.0.0.1", platform="ios"),
-            }
+            },
+            plugin_manager=plugins,
         ).with_runner("serial")
 
         return await runtime.run_task_async(AsyncConnectionTask)
@@ -221,7 +226,7 @@ async def test_runtime_run_task_async_works_in_pytest_asyncio():
 def test_runtime_run_task_async_handles_exception_in_task():
     @task(name="async_exception_task")
     class AsyncExceptionTask:
-        async def start(self, task, host, context):
+        async def start_async(self, task, host, context):
             await asyncio.sleep(0.01)
             raise ValueError("something went wrong")
 
@@ -244,7 +249,7 @@ def test_runtime_run_task_async_handles_exception_in_task():
 def test_runtime_run_task_async_with_timeout():
     @task(name="slow_async_task")
     class SlowAsyncTask:
-        async def start(self, task, host, context):
+        async def start_async(self, task, host, context):
             await asyncio.sleep(10)
             return TaskSuccessResult(summary="completed")
 

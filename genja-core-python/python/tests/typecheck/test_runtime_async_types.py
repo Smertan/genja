@@ -8,7 +8,7 @@ from genja.task import Host, TaskSuccessResult, task
 
 @task(name="typecheck_runtime_async")
 class RuntimeAsyncTypecheckTask:
-    async def start(self, task, host: Host, context) -> TaskSuccessResult:
+    async def start_async(self, task, host: Host, context) -> TaskSuccessResult:
         return TaskSuccessResult(summary=f"handled {host.hostname}")
 
 

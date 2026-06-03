@@ -46,7 +46,7 @@ class RuntimeBackupTask:
 
 @task(name="runtime_async_backup")
 class RuntimeAsyncBackupTask:
-    async def start(self, task, host, context):
+    async def start_async(self, task, host, context):
         await asyncio.sleep(0)
         return TaskSuccessResult(
             summary=f"async runtime handled {host.hostname}",
@@ -65,7 +65,7 @@ class RuntimeChildTask:
 
 @task(
     name="runtime_parent",
-    sub_task=RuntimeChildTask,
+    sub_tasks=[RuntimeChildTask],
 )
 class RuntimeParentTask:
     def start(self, task, host, context):
