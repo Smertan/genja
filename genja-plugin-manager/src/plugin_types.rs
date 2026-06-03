@@ -349,6 +349,9 @@
 //!         Plugins::Inventory(inv) => {
 //!             println!("Inventory plugin: {}", inv.name());
 //!         }
+//!         Plugins::AsyncInventory(inv) => {
+//!             println!("Async inventory plugin: {}", inv.name());
+//!         }
 //!         Plugins::Processor(processor) => {
 //!             println!("Processor plugin: {}", processor.name());
 //!         }
@@ -707,7 +710,8 @@ mod tests {
         ConnectionKey, Host, Hosts, ResolvedConnectionParams, TransformFunction,
     };
     use genja_core::task::{
-        HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+        HostTaskResult, Task, TaskError, TaskExecutionMode, TaskInfo, TaskRuntimeContext,
+        TaskSuccess,
     };
     use serde_json::{Value, json};
     use std::future::Future;
@@ -834,20 +838,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for DummyTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for DummyTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
