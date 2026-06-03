@@ -16,17 +16,17 @@
 //! │                   - group() -> String                         │
 //! └───────────────────────────┬───────────────────────────────────┘
 //!                             │
-//!           ┌─────────────────┼─────────────────┬────────────────┬────────────────┐
-//!           │                 │                 │                │                │
-//!           ▼                 ▼                 ▼                ▼                ▼
-//! ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
-//! │PluginConnection│  │PluginInventory │  │ PluginRunner   │  │PluginTransform │  │PluginProcessor │
-//! │                │  │                │  │                │  │  Function      │  │                │
-//! │ - create()     │  │ - load()       │  │ - run_task()   │  │ - transform_   │  │ - processor()  │
-//! │ - open()       │  │                │  │ - run_tasks()  │  │   function()   │  │                │
-//! │ - close()      │  │                │  │                │  │                │  │                │
-//! │ - is_alive()   │  │                │  │                │  │                │  │                │
-//! └────────────────┘  └────────────────┘  └────────────────┘  └────────────────┘  └────────────────┘
+//!           ┌─────────────────┼─────────────────┬─────────────────┬─────────────────┬─────────────────┐
+//!           │                 │                 │                 │                 │                 │
+//!           ▼                 ▼                 ▼                 ▼                 ▼                 ▼    
+//! ┌─────────────────┐┌─────────────────┐┌─────────────────┐┌─────────────────┐┌─────────────────┐┌─────────────────┐
+//! │PluginConnection ││PluginInventory  ││AsyncPluginInv.  ││  PluginRunner   ││PluginTransform  ││PluginProcessor  │
+//! │                 ││                 ││                 ││                 ││    Function     ││                 │
+//! │ - create()      ││ - load()        ││ - load_async()  ││ - run_task()    ││ - transform_    ││ - processor()   │
+//! │ - open()        ││                 ││                 ││ - run_tasks()   ││   function()    ││                 │
+//! │ - close()       ││                 ││                 ││                 ││                 ││                 │
+//! │ - is_alive()    ││                 ││                 ││                 ││                 ││                 │
+//! └─────────────────┘└─────────────────┘└─────────────────┘└─────────────────┘└─────────────────┘└─────────────────┘
 //! ```
 //!
 //! # Plugin Types
@@ -56,6 +56,13 @@
 //! **Key Methods:**
 //! - `load()` - Load inventory from source (files, APIs, databases, etc.)
 //!
+//! ### [`AsyncPluginInventory`]
+//! Loads and prepares inventory data asynchronously for remote sources such as
+//! HTTP APIs, databases, or service-discovery systems.
+//!
+//! **Key Methods:**
+//! - `load_async()` - Load inventory from an async source
+//!
 //! ### [`PluginRunner`]
 //! Executes tasks against sets of hosts. Provides different execution strategies
 //! (sequential, parallel, etc.).
@@ -74,7 +81,7 @@
 //! ### [`PluginProcessor`]
 //! Provides task-result lifecycle hooks. Processor plugins are registered by
 //! name, and tasks opt into them by listing processor names on the task or with
-//! `#[task(processors = ["name"])]` when using the derive macro.
+//! `#[genja_task(processors = ["name"])]` when using the task authoring macro.
 //!
 //! **Key Methods:**
 //! - `processor()` - Returns the task processor implementation
@@ -101,6 +108,7 @@
 //! let plugins: Vec<Plugins> = vec![
 //!     // Plugins::Connection(Box::new(ssh_plugin)),
 //!     // Plugins::Inventory(Box::new(file_plugin)),
+//!     // Plugins::AsyncInventory(Box::new(remote_inventory_plugin)),
 //!     // Plugins::Processor(Box::new(audit_processor_plugin)),
 //!     // Plugins::Runner(Box::new(threaded_runner)),
 //! ];
@@ -216,6 +224,37 @@
 //!         // let inventory = fetch_from_database(settings)?;
 //!         // Ok(inventory)
 //!         unimplemented!()
+//!     }
+//! }
+//! ```
+//!
+//! ## Implementing an Async Inventory Plugin
+//!
+//! ```rust
+//! use async_trait::async_trait;
+//! use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
+//! use genja_plugin_manager::PluginManager;
+//! use genja_core::{InventoryLoadError, Settings};
+//! use genja_core::inventory::Inventory;
+//!
+//! #[derive(Debug)]
+//! struct RemoteInventoryPlugin;
+//!
+//! impl Plugin for RemoteInventoryPlugin {
+//!     fn name(&self) -> String {
+//!         "remote_inventory".to_string()
+//!     }
+//! }
+//!
+//! #[async_trait]
+//! impl AsyncPluginInventory for RemoteInventoryPlugin {
+//!     async fn load_async(
+//!         &self,
+//!         settings: &Settings,
+//!         plugins: &PluginManager,
+//!     ) -> Result<Inventory, InventoryLoadError> {
+//!         let _ = (settings, plugins);
+//!         Ok(Inventory::builder().build())
 //!     }
 //! }
 //! ```

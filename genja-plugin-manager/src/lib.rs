@@ -17,7 +17,8 @@
 //! - Plugin lifecycle management (registration, deregistration)
 //! - Type-safe plugin registry access
 //! - Metadata-driven plugin configuration
-//! - Support for multiple plugin types (Connection, Inventory, Runner, Processor, Transform)
+//! - Support for multiple plugin types (Connection, Inventory, AsyncInventory,
+//!   Runner, Processor, Transform)
 //!
 //! ## Architecture
 //!
@@ -36,6 +37,7 @@
 //! │                         Plugins Enum                            │
 //! │  - Connection(Box<dyn PluginConnection>)                        │
 //! │  - Inventory(Box<dyn PluginInventory>)                          │
+//! │  - AsyncInventory(Box<dyn AsyncPluginInventory>)                │
 //! │  - Processor(Box<dyn PluginProcessor>)                          │
 //! │  - Runner(Box<dyn PluginRunner>)                                │
 //! │  - TransformFunction(Box<dyn PluginTransformFunction>)          │
@@ -251,6 +253,35 @@
 //!     ) -> Result<Inventory, InventoryLoadError> {
 //!         // Load from database
 //!         unimplemented!()
+//!     }
+//! }
+//! ```
+//!
+//! Async inventory plugins are also supported for remote inventory sources:
+//!
+//! ```rust
+//! use async_trait::async_trait;
+//! use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
+//! use genja_plugin_manager::PluginManager;
+//! use genja_core::{InventoryLoadError, Settings};
+//! use genja_core::inventory::Inventory;
+//!
+//! #[derive(Debug)]
+//! struct RemoteInventoryPlugin;
+//!
+//! impl Plugin for RemoteInventoryPlugin {
+//!     fn name(&self) -> String { "remote_inventory".to_string() }
+//! }
+//!
+//! #[async_trait]
+//! impl AsyncPluginInventory for RemoteInventoryPlugin {
+//!     async fn load_async(
+//!         &self,
+//!         settings: &Settings,
+//!         plugins: &PluginManager,
+//!     ) -> Result<Inventory, InventoryLoadError> {
+//!         let _ = (settings, plugins);
+//!         Ok(Inventory::builder().build())
 //!     }
 //! }
 //! ```
