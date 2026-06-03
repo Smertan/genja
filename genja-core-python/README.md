@@ -83,7 +83,7 @@ from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, ta
 
 @task(name="backup_config_async")
 class BackupTaskAsync:
-    async def start(
+    async def start_async(
         self,
         task: TaskInfo,
         host: Host,
@@ -118,6 +118,13 @@ Use `run_task_async(...)` and `run_tasks_async(...)` when composing Genja with
 `asyncio.gather(...)` or other async application code. The synchronous
 `run_task(...)` and `run_tasks(...)` entrypoints remain available for scripts
 and non-async callers.
+
+Python task authoring rules:
+
+- Define `def start(...)` for blocking tasks.
+- Define `async def start_async(...)` for async tasks.
+- Define exactly one of those methods on a `@task(...)` class.
+- Use `sub_tasks=[ChildTask, ...]` to declare child tasks.
 
 ## Full Inventory
 
@@ -221,7 +228,7 @@ pdm run maturin develop
 Run the Rust-side binding tests:
 
 ```bash
-cargo test -p genja-core-python
+pdm run test-rust
 ```
 
 Run the Python test suite:

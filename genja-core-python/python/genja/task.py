@@ -88,8 +88,12 @@ The canonical authoring shape is:
                 summary=f"asynchronously backed up {host.hostname}",
             )
 
-``start(...)`` may be implemented as ``def`` or ``async def`` and must resolve to
-one of:
+Task classes must define exactly one execution method:
+
+- ``def start(...)`` for blocking tasks
+- ``async def start_async(...)`` for async tasks
+
+Each execution method must resolve to one of:
 
 - ``TaskSuccessResult``
 - ``TaskFailureResult``
@@ -183,12 +187,12 @@ class _GenjaModel(BaseModel):
 
 
 class TaskInfo(_GenjaModel):
-    """Task metadata passed into Python task ``start(...)`` methods.
+    """Task metadata passed into Python task entrypoint methods.
 
     This class encapsulates all metadata associated with a task execution,
     including the task name, connection configuration, processor plugins,
     custom options, and optional nested sub-task information. Instances of
-    this class are provided to task ``start(...)`` methods to give tasks
+    this class are provided to task entrypoint methods to give tasks
     access to their configuration and execution context.
 
     Note:
@@ -246,12 +250,12 @@ class TaskInfo(_GenjaModel):
 
 
 class Host(_GenjaModel):
-    """Host payload passed into Python task ``start(...)`` methods.
+    """Host payload passed into Python task entrypoint methods.
 
     This class encapsulates all host-specific information required for task
     execution, including connection credentials, platform details, and
     additional inventory data. Instances of this class are provided to task
-    ``start(...)`` methods to give tasks access to the target host's
+    entrypoint methods to give tasks access to the target host's
     configuration and connection parameters.
 
     Attributes:
@@ -297,10 +301,10 @@ class Host(_GenjaModel):
 
 
 class TaskRuntimeContext:
-    """Runtime context passed into Python task ``start(...)`` methods.
+    """Runtime context passed into Python task entrypoint methods.
 
     This class encapsulates runtime execution context information provided to
-    task ``start(...)`` methods during execution. It includes depth tracking for
+    task entrypoint methods during execution. It includes depth tracking for
     nested task execution, depth limits, and the resolved connection object
     that the task can use to interact with the target host.
 
