@@ -1,6 +1,7 @@
+use genja::genja_core::async_trait;
 use genja::genja_core::inventory::{BaseBuilderHost, Data, Host, Hosts, Inventory};
 use genja::genja_core::task::{
-    HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess,
+    HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
 };
 use genja::genja_core::{InventoryLoadError, Settings};
 use genja::{Genja, genja_task};
