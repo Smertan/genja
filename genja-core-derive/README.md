@@ -4,32 +4,31 @@
 
 ## Macros
 
-- `#[derive(Task)]` generates `genja_core::task::TaskInfo` and
-  `genja_core::task::SubTasks`.
+- `#[genja_task(...)]` is the primary task authoring API. It generates
+  `genja_core::task::TaskInfo` and `genja_core::task::Task` from an inherent
+  `impl` block.
+- `#[derive(Task)]` is a legacy helper that generates
+  `genja_core::task::TaskInfo` and field-driven `sub_tasks()` support.
 - `#[derive(DerefMacro)]` generates `std::ops::Deref` for tuple wrappers.
 - `#[derive(DerefMutMacro)]` generates `std::ops::DerefMut` for tuple wrappers.
 
-`#[derive(Task)]` does not implement `genja_core::task::Task`. Implement the
-async `start` method yourself.
+`#[derive(Task)]` does not implement `genja_core::task::Task`. For normal task
+authoring, use `#[genja_task(...)]`.
 
-## Minimal Task
+## Recommended Task Authoring
 
 ```rust
-use async_trait::async_trait;
+use genja_core::genja_task;
 use genja_core::inventory::Host;
 use genja_core::task::{
-    HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess,
+    HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
 };
-use genja_core_derive::Task as TaskDerive;
 
-#[derive(TaskDerive)]
-struct CheckTask {
-    name: String,
-}
+struct CheckTask;
 
-#[async_trait]
-impl Task for CheckTask {
-    async fn start(
+#[genja_task(name = "check", connection_plugin_name = "ssh")]
+impl CheckTask {
+    async fn start_async(
         &self,
         _host: &Host,
         _context: &TaskRuntimeContext,
@@ -39,7 +38,12 @@ impl Task for CheckTask {
 }
 ```
 
-## Task Fields
+## Legacy `#[derive(Task)]`
+
+`#[derive(Task)]` is still available as a lower-level, field-driven metadata
+helper, but it is no longer the recommended task authoring path.
+
+## Legacy Task Fields
 
 Supported fields:
 
@@ -126,7 +130,7 @@ assert_eq!(task.processor_names(), vec!["audit", "metrics"]);
 Do not use both `processor_names` and `#[task(processors = [...])]` on the same
 task. Unknown struct-level `#[task(...)]` attributes are rejected.
 
-## Subtasks
+## Legacy Subtasks
 
 Subtasks are `Arc<dyn Task>` fields marked with `#[task(subtask)]`. Fully
 qualified `std::sync::Arc<dyn Task>`, `Arc<dyn Task + Send + Sync>`, and

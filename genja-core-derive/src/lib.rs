@@ -1,11 +1,43 @@
 //! Procedural macros used by `genja-core`.
 //!
 //! `DerefMacro` and `DerefMutMacro` generate `Deref` and `DerefMut`
-//! implementations for tuple-wrapper types. `Task` generates `TaskInfo` and
-//! `SubTasks` implementations for task structs used by `genja-core`.
+//! implementations for tuple-wrapper types.
 //!
-//! `Task` does not implement the core `genja_core::task::Task` trait. Callers
-//! still implement the async `start` method themselves.
+//! `genja_task` is the primary public task-authoring macro. It generates both
+//! `TaskInfo` and `Task` implementations from an inherent `impl` block and
+//! infers execution mode from `fn start(...)` versus `async fn start_async(...)`.
+//!
+//! The older `Task` derive macro remains available for low-level or legacy
+//! metadata generation, but it is no longer the recommended task-authoring API.
+//!
+//! # Task Authoring Example
+//! ```ignore
+//! use genja_core::genja_task;
+//! use genja_core::inventory::Host;
+//! use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+//!
+//! struct CollectFacts;
+//!
+//! #[genja_task(
+//!     name = "collect_facts",
+//!     connection_plugin_name = "ssh",
+//!     processors = ["audit"],
+//! )]
+//! impl CollectFacts {
+//!     async fn start_async(
+//!         &self,
+//!         host: &Host,
+//!         _context: &TaskRuntimeContext,
+//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!         Ok(HostTaskResult::passed(
+//!             TaskSuccess::new().with_summary(format!(
+//!                 "collected facts for {:?}",
+//!                 host.hostname()
+//!             )),
+//!         ))
+//!     }
+//! }
+//! ```
 //!
 //! # Deref Example
 //! ```
@@ -117,16 +149,15 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// Derives task metadata and sub-task wiring for a struct.
+/// Derives task metadata helpers for a struct.
 ///
-/// This procedural macro generates implementations of `TaskInfo` and `SubTasks` traits
-/// for structs that represent tasks in the task execution system. It validates the struct's
-/// fields and generates appropriate getter methods and subtask collection logic.
+/// This procedural macro generates `TaskInfo` and `sub_tasks()` support for a
+/// struct by reading task metadata from fields and helper attributes.
 ///
-/// This macro does **not** generate the core `genja_core::task::Task` implementation.
-/// Users must still implement `Task` manually and provide the async `start()`
-/// method that accepts `TaskRuntimeContext` and returns
-/// `Result<HostTaskResult, TaskError>`.
+/// This macro does **not** generate the core `genja_core::task::Task`
+/// implementation. For normal task authoring, prefer
+/// [`genja_task`](macro@genja_task), which generates both `TaskInfo` and `Task`
+/// from an inherent `impl` block.
 ///
 /// The macro expects the struct to have:
 /// - A `name` field of type `String` or `&'static str` (required)
@@ -150,11 +181,13 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// # Parameters
 ///
 /// * `input` - A `TokenStream` representing the input tokens of the derive macro, containing
-///   the struct definition for which `TaskInfo` and `SubTasks` should be generated.
+///   the struct definition for which `TaskInfo` and `sub_tasks()` support
+///   should be generated.
 ///
 /// # Returns
 ///
-/// A `TokenStream` containing the generated implementations of `TaskInfo` and `SubTasks` traits.
+/// A `TokenStream` containing the generated implementations of `TaskInfo` and
+/// `sub_tasks()` support.
 /// Returns a compile error if:
 /// - The macro is applied to a non-struct type
 /// - The struct doesn't have named fields
@@ -166,28 +199,13 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// # Examples
 ///
 /// ```ignore
-/// use async_trait::async_trait;
 /// use std::sync::Arc;
-/// use genja_core::inventory::Host;
-/// use genja_core::task::{
-///     HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
-/// };
+/// use genja_core::task::{Task, TaskInfo};
 /// use genja_core_derive::Task as TaskDerive;
 ///
 /// #[derive(TaskDerive)]
 /// struct ChildTask {
 ///     name: &'static str,
-/// }
-///
-/// #[async_trait]
-/// impl Task for ChildTask {
-///     async fn start(
-///         &self,
-///         _host: &Host,
-///         _context: &TaskRuntimeContext,
-///     ) -> Result<HostTaskResult, TaskError> {
-///         Ok(HostTaskResult::passed(TaskSuccess::new()))
-///     }
 /// }
 ///
 /// #[derive(TaskDerive)]

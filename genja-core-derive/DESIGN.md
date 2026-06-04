@@ -6,12 +6,29 @@ promises before adding broader compile tests or hardening behavior.
 
 ## Public Macros
 
+`#[genja_task(...)]`
+
+- Primary public task authoring macro.
+- Applies to inherent `impl` blocks.
+- Generates `genja_core::task::TaskInfo`.
+- Generates `genja_core::task::Task`.
+- Infers execution mode from exactly one of:
+  - `fn start(...)`
+  - `async fn start_async(...)`
+- Supports metadata keys:
+  - `name = "..."`
+  - `connection_plugin_name = "..."`
+  - `processors = ["...", "..."]`
+- Supports optional helper methods:
+  - `options()`
+  - `sub_tasks()`
+
 `#[derive(Task)]`
 
 - Generates `genja_core::task::TaskInfo`.
-- Generates `genja_core::task::SubTasks`.
-- Does not generate `genja_core::task::Task`; callers must implement the
-  async `start` method themselves.
+- Generates field-driven `sub_tasks()` support.
+- Does not generate `genja_core::task::Task`.
+- This is a legacy metadata helper, not the recommended task authoring path.
 - Accepts the helper attribute `#[task(...)]`.
 
 `#[derive(DerefMacro)]`
@@ -28,7 +45,7 @@ promises before adding broader compile tests or hardening behavior.
 - Requires `Self::Target` to already be available, normally from
   `DerefMacro`.
 
-## Supported Task Inputs
+## Supported Legacy `#[derive(Task)]` Inputs
 
 `Task` supports named structs with a required `name` field.
 
@@ -68,7 +85,7 @@ struct MyTask {
 `processor_names: Vec<String>` and `#[task(processors = [...])]` are mutually
 exclusive. Unknown struct-level `#[task(...)]` attributes are rejected.
 
-## Generated Task Behavior
+## Generated Legacy `#[derive(Task)]` Behavior
 
 For supported inputs, `Task` generates:
 
@@ -80,8 +97,8 @@ For supported inputs, `Task` generates:
 - `TaskInfo::options()` from `options`, or `None` when the field is absent.
 - `TaskInfo::processor_names()` from `processor_names`,
   `#[task(processors = [...])]`, or an empty vector.
-- `SubTasks::sub_tasks()` with all fields marked `#[task(subtask)]` in
-  declaration order.
+- `sub_tasks()` with all fields marked `#[task(subtask)]` in declaration
+  order.
 - Inherent `with_processor` and `with_processors` builder helpers only when a
   `processor_names: Vec<String>` field is present.
 
@@ -91,7 +108,7 @@ workflow. The field name is only used for collection; task result names come
 from each subtask's own `TaskInfo::name()` implementation. Unknown field-level
 `#[task(...)]` attributes are rejected.
 
-## Rejected Task Inputs
+## Rejected Legacy `#[derive(Task)]` Inputs
 
 The macro should reject these cases with compile errors:
 
