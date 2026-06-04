@@ -1025,7 +1025,7 @@ mod tests {
                     "-p",
                     "plugin_inventory",
                     "-p",
-                    "plugin_tasks",
+                    "plugin_connection",
                 ])
                 .status()
                 .expect("Failed to run cargo build for test plugins");
@@ -1395,7 +1395,7 @@ inventory_a = "../this/path/does/not/exist.so"
     #[test]
     fn with_path_test() {
         let _env = set_env_var();
-        let path = make_file_path("plugin_tasks");
+        let path = make_file_path("plugin_connection");
         let plugin_manager = PluginManager::new()
             .with_path(&path, None)
             .unwrap()
@@ -1407,7 +1407,7 @@ inventory_a = "../this/path/does/not/exist.so"
     #[test]
     fn with_path_group_loads_plugins() {
         let _env = set_env_var();
-        let path = make_file_path("plugin_tasks");
+        let path = make_file_path("plugin_connection");
         let plugin_manager = PluginManager::new()
             .with_path(&path, Some("extra"))
             .unwrap()

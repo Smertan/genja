@@ -12,10 +12,10 @@ crate-type = [
     "lib",
     "cdylib",
 ]
-name = "plugin_tasks"
+name = "plugin_connection"
 
 [package]
 edition = "2024"
-name = "plugin_tasks"
+name = "plugin_connection"
 version = "0.1.0"
 publish = false

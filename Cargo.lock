@@ -1070,18 +1070,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "plugin_inventory"
+name = "plugin_connection"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "genja-core",
  "genja-plugin-manager",
 ]
 
 [[package]]
-name = "plugin_tasks"
+name = "plugin_inventory"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "genja-core",
  "genja-plugin-manager",
 ]
