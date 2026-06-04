@@ -1,5 +1,0 @@
-error: Task requires a `name` field of type `String` or `&'static str`
- --> tests/ui/fail/task_missing_name.rs:4:8
-  |
-4 | struct MissingName {
-  |        ^^^^^^^^^^^

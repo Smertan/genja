@@ -22,7 +22,7 @@ class ValidateConfig:
         )
 
 
-@task(name="deploy_config", sub_task=ValidateConfig)
+@task(name="deploy_config", sub_tasks=[ValidateConfig])
 class DeployConfig:
     def start(self, task, host, context):
         return TaskSuccessResult(

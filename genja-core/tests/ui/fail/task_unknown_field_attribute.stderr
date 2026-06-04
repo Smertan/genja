@@ -1,5 +1,0 @@
-error: unsupported field-level `task` attribute; expected `subtask`
- --> tests/ui/fail/task_unknown_field_attribute.rs:6:12
-  |
-6 |     #[task(not_subtask)]
-  |            ^^^^^^^^^^^

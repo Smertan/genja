@@ -129,29 +129,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Running A Task
 
-Task metadata and sub-task relationships are generated with `TaskDerive`; task
-behavior is implemented manually with the `Task` trait.
+Rust task metadata and execution are generated from `#[genja_task(...)]`.
 
 ```rust
 use genja::Genja;
-use genja::TaskDerive;
-use genja::async_trait;
+use genja::genja_task;
 use genja::genja_core::inventory::{
     BaseBuilderHost, // brings Host::builder() into scope
     Host,
     Hosts,
     Inventory,
 };
-use genja::genja_core::task::{HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess};
+use genja::genja_core::task::{HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess};
 
-#[derive(TaskDerive)]
-struct CheckConfig {
-    name: &'static str,
-}
+struct CheckConfig;
 
-#[async_trait]
-impl Task for CheckConfig {
-    async fn start(
+#[genja_task(name = "check_config")]
+impl CheckConfig {
+    async fn start_async(
         &self,
         _host: &Host,
         _context: &TaskRuntimeContext,
@@ -168,11 +163,32 @@ hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
 let inventory = Inventory::builder().hosts(hosts).build();
 let genja = Genja::builder(inventory).build()?;
 
-let results = genja.run_task(CheckConfig { name: "check_config" }, 1)?;
+let results = genja.run_task(CheckConfig, 1)?;
 
 assert!(results.host_result("router1").unwrap().is_passed());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+For async Rust applications, use `run_task_async(...)` instead of `run_task(...)`:
+
+```rust
+use genja::Genja;
+
+#[tokio::main]
+async fn main() -> Result<(), genja::GenjaError> {
+    let genja = Genja::from_settings_file("settings.yaml")?;
+    let results = genja
+        .run_task_async(CheckConfig, 1)
+        .await?;
+
+    assert!(results.host_result("router1").unwrap().is_passed());
+    Ok(())
+}
+```
+
+The sync wrappers `run_task(...)` and `run_tasks(...)` return an error when
+called from an active Tokio runtime. Use `run_task_async(...)` and
+`run_tasks_async(...)` in async contexts.
 
 ## Related Crates
 
@@ -202,6 +218,7 @@ examples, check out the matching version tag, such as `v0.1.0`.
 git clone https://github.com/Smertan/genja.git
 cd genja
 cargo run -p genja --example run_task
+cargo run -p genja --example async_inventory_plugin
 ```
 
 ## License

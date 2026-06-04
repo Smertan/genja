@@ -35,7 +35,7 @@ class VerifyBackupTask:
 @task(
     name="backup_config",
     connection_plugin_name="ssh",
-    sub_task=VerifyBackupTask,
+    sub_tasks=[VerifyBackupTask],
     options={"backup_path": "/tmp/configs", "compress": True},
 )
 class BackupConfigTask:
@@ -48,7 +48,7 @@ class BackupConfigTask:
             changed=True,
             summary=f"backed up {host.hostname}",
             metadata={
-                "sub_task_name": task.sub_task.name,
+                "sub_task_name": task.sub_tasks[0].name,
                 "backup_path": task.options["backup_path"],
             },
         )
@@ -74,7 +74,7 @@ class VerifyBackupPlainTask:
 @task(
     name="backup_config_plain",
     connection_plugin_name="ssh",
-    sub_task=VerifyBackupPlainTask,
+    sub_tasks=[VerifyBackupPlainTask],
     options={"backup_path": "/tmp/configs", "compress": True},
 )
 class BackupConfigPlainTask:
@@ -87,7 +87,7 @@ class BackupConfigPlainTask:
             changed=True,
             summary=f"backed up {host.hostname}",
             metadata={
-                "sub_task_name": task.sub_task.name,
+                "sub_task_name": task.sub_tasks[0].name,
                 "backup_path": task.options["backup_path"],
             },
         )
@@ -217,12 +217,24 @@ def test_task_definition_from_python_class_rejects_non_json_serializable_options
         genja.TaskDefinition.from_python_class(InvalidTask)
 
 
-def test_task_decorator_requires_callable_start_method():
-    with pytest.raises(TypeError, match="must define a 'start' method"):
+def test_task_decorator_requires_exactly_one_entrypoint():
+    with pytest.raises(TypeError, match="must define exactly one of 'start' or 'start_async'"):
 
         @task(name="backup_config", connection_plugin_name="ssh")
         class InvalidTask:
             pass
+
+
+def test_task_decorator_rejects_both_entrypoints():
+    with pytest.raises(TypeError, match="must define exactly one of 'start' or 'start_async'"):
+
+        @task(name="backup_config", connection_plugin_name="ssh")
+        class InvalidTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+            async def start_async(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
 
 
 def test_task_decorator_rejects_undecorated_sub_task():
@@ -235,7 +247,7 @@ def test_task_decorator_rejects_undecorated_sub_task():
         @task(
             name="backup_config",
             connection_plugin_name="ssh",
-            sub_task=PlainSubTask,
+            sub_tasks=[PlainSubTask],
         )
         class InvalidTask:
             def start(self, task, host, context):

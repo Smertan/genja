@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Awaitable
 
 from .connection import (
     ConnectionBase,
@@ -135,11 +135,21 @@ class Genja:
         task_class: type[GenjaTaskProtocol],
         max_depth: int | None = None,
     ) -> TaskResults: ...
+    def run_task_async(
+        self,
+        task_class: type[GenjaTaskProtocol],
+        max_depth: int | None = None,
+    ) -> Awaitable[TaskResults]: ...
     def run_tasks(
         self,
         tasks: Tasks,
         max_depth: int | None = None,
     ) -> list[TaskResults]: ...
+    def run_tasks_async(
+        self,
+        tasks: Tasks,
+        max_depth: int | None = None,
+    ) -> Awaitable[list[TaskResults]]: ...
 
 class GenjaBuilder:
     def with_plugin(self, plugin: Any) -> GenjaBuilder: ...

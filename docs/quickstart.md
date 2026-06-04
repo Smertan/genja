@@ -91,24 +91,28 @@ router2:
 
 ## Run A Task
 
+Rust callers can use either:
+
+- `run_task(...)` from synchronous code
+- `run_task_async(...)` from inside `#[tokio::main]` or another active Tokio runtime
+
+The sync wrapper returns an error if it is called from an active Tokio runtime.
+
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
     use genja::genja_core::inventory::Host;
     use genja::genja_core::task::{
-        HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess,
+        HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
     };
-    use genja::{async_trait, Genja, TaskDerive};
+    use genja::{Genja, genja_task};
     use serde_json::json;
 
-    #[derive(TaskDerive)]
-    struct CollectFacts {
-        name: &'static str,
-    }
+    struct CollectFacts;
 
-    #[async_trait]
-    impl Task for CollectFacts {
-        async fn start(
+    #[genja_task(name = "collect_facts")]
+    impl CollectFacts {
+        async fn start_async(
             &self,
             host: &Host,
             _context: &TaskRuntimeContext,
@@ -125,7 +129,28 @@ router2:
 
     fn main() -> Result<(), genja::GenjaError> {
         let genja = Genja::from_settings_file("settings.yaml")?;
-        let results = genja.run_task(CollectFacts { name: "collect_facts" }, 1)?;
+        let results = genja.run_task(CollectFacts, 1)?;
+
+        let output = results.to_pretty_json_string().map_err(|err| {
+            genja::GenjaError::Message(format!("failed to serialize task results: {err}"))
+        })?;
+        println!("{output}");
+
+        Ok(())
+    }
+    ```
+
+    ### Async Variant
+
+    ```rust
+    use genja::Genja;
+
+    #[tokio::main]
+    async fn main() -> Result<(), genja::GenjaError> {
+        let genja = Genja::from_settings_file("settings.yaml")?;
+        let results = genja
+            .run_task_async(CollectFacts, 1)
+            .await?;
 
         let output = results.to_pretty_json_string().map_err(|err| {
             genja::GenjaError::Message(format!("failed to serialize task results: {err}"))
@@ -175,14 +200,18 @@ router2:
 
     ### Async Variant
 
+    Use `run_task_async(...)` when the surrounding Python application is already
+    using `asyncio`.
+
     ```python
+    import asyncio
     import genja as genja_lib
     from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
 
 
     @task(name="collect_facts_async")
     class CollectFactsAsync:
-        async def start(
+        async def start_async(
             self,
             task: TaskInfo,
             host: Host,
@@ -204,10 +233,14 @@ router2:
             )
 
 
-    genja = genja_lib.Genja.from_settings_file("settings.yaml")
-    results = genja.run_task(CollectFactsAsync)
+    async def main() -> None:
+        genja = genja_lib.Genja.from_settings_file("settings.yaml")
+        results = await genja.run_task_async(CollectFactsAsync)
 
-    print(results.to_json(pretty=True))
+        print(results.to_json(pretty=True))
+
+
+    asyncio.run(main())
     ```
 
     `TaskRuntimeContext` keeps execution depth internal. Python tasks access the
@@ -231,6 +264,7 @@ cd genja
     cargo run -p genja --example run_task
     cargo run -p genja --example run_task_tree
     cargo run -p genja --example filter_hosts
+    cargo run -p genja --example async_inventory_plugin
     ```
 
 === ":fontawesome-brands-python: Python"

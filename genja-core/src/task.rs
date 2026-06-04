@@ -10,7 +10,7 @@
 //! The task system is built around several key concepts:
 //!
 //! - **Task Definition**: Tasks implement the [`Task`] trait, which combines metadata
-//!   ([`TaskInfo`]) with execution logic and optional sub-tasks ([`SubTasks`]).
+//!   ([`TaskInfo`]) with execution logic and optional sub-tasks.
 //! - **Task Collections**: [`Tasks`] stores an ordered list of root
 //!   [`TaskDefinition`] values. Each root task may own its own sub-task tree, so a
 //!   `Tasks` value represents a forest of task trees.
@@ -44,7 +44,7 @@
 //!                   ┌─────────────┐
 //!                   │ Task trait  │
 //!                   │ - TaskInfo  │
-//!                   │ - SubTasks  │
+//!                   │ - sub_tasks │
 //!                   │ - start()   │
 //!                   └─────────────┘
 //!
@@ -187,34 +187,30 @@
 //! ## [`Task`]
 //!
 //! The primary trait that all tasks must implement. It combines [`TaskInfo`] for
-//! metadata, [`SubTasks`] for hierarchical task structures, and an async `start()`
-//! method for execution logic.
+//! metadata with execution methods and optional hierarchical sub-task structures.
 //!
-//! In the common derive-based workflow, the derive macro from `genja-core-derive`
-//! generates [`TaskInfo`] and [`SubTasks`], while you still implement [`Task`]
-//! manually to provide `start()`. If you call generated metadata methods such as
-//! `name()` or `connection_plugin_name()` directly, import [`TaskInfo`] so those trait methods
+//! In the common workflow, the [`genja_task`](crate::genja_task) attribute macro
+//! generates both [`TaskInfo`] and [`Task`] for you from an inherent `impl` block.
+//! If you call generated metadata methods such as `name()` or
+//! `connection_plugin_name()` directly, import [`TaskInfo`] so those trait methods
 //! are in scope.
 //!
 //! ```rust
-//! use async_trait::async_trait;
 //! use genja_core::inventory::Host;
 //! use genja_core::task::{
 //!     HostTaskResult, Task, TaskInfo, TaskRuntimeContext, TaskSuccess,
 //! };
-//! use genja_core_derive::Task as TaskDerive;
+//! use genja_core::genja_task;
 //!
-//! #[derive(TaskDerive)]
+//! #[derive(Default)]
 //! struct DeployTask {
-//!     name: String,
-//!     connection_plugin_name: Option<String>,
 //!     options: Option<serde_json::Value>,
 //!     config_file: String,
 //! }
 //!
-//! #[async_trait]
-//! impl Task for DeployTask {
-//!     async fn start(
+//! #[genja_task(name = "deploy", connection_plugin_name = "ssh")]
+//! impl DeployTask {
+//!     async fn start_async(
 //!         &self,
 //!         _host: &Host,
 //!         _context: &TaskRuntimeContext,
@@ -228,10 +224,8 @@
 //! }
 //!
 //! let task = DeployTask {
-//!     name: "deploy".to_string(),
-//!     connection_plugin_name: Some("ssh".to_string()),
 //!     options: None,
-//!     config_file: "router.conf".to_string(),
+//!     config_file: "router.conf".to_string()
 //! };
 //!
 //! assert_eq!(task.name(), "deploy");
@@ -241,19 +235,16 @@
 //! ## [`TaskInfo`]
 //!
 //! Provides metadata about a task including its name, associated plugin, connection
-//! requirements, and optional configuration. This trait is typically auto-implemented
-//! when using the derive macro from `genja-core-derive`.
-//! That derive reads the task struct's `name`, optional `connection_plugin_name`, and optional
-//! `options` fields to generate the corresponding trait methods. Tasks can select
-//! processor plugins by returning names from [`TaskInfo::processor_names`]. The
-//! derive macro supports either a `processor_names: Vec<String>` field or
-//! a compile-time attribute such as `#[task(processors = ["audit"])]`.
-//! Unknown `#[task(...)]` helper attributes are rejected.
+//! requirements, and optional configuration. This trait is typically
+//! auto-implemented by the [`genja_task`](crate::genja_task) attribute macro.
+//! Static metadata comes from macro arguments such as `name`,
+//! `connection_plugin_name`, and `processors`, while dynamic metadata can be
+//! provided through helper methods such as `options()`.
 //!
 //! ## Task Processors
 //!
 //! [`TaskProcessor`] provides lifecycle hooks for processing task results without
-//! changing the task's async `start()` implementation. A task selects processors by name,
+//! changing the task's execution implementation. A task selects processors by name,
 //! and the runtime resolves those names through a [`TaskProcessorResolver`]. In the
 //! full Genja runtime, the plugin manager implements the resolver, so invalid
 //! processor names fail with `GenjaError::PluginNotFound`.
@@ -261,28 +252,23 @@
 //! Processors can be selected in three ways:
 //!
 //! ```rust
-//! use async_trait::async_trait;
 //! use genja_core::inventory::Host;
 //! use genja_core::task::{
 //!     HostTaskResult, Task, TaskDefinition, TaskRuntimeContext, TaskSuccess,
 //! };
-//! use genja_core_derive::Task as TaskDerive;
+//! use genja_core::genja_task;
 //!
-//! #[derive(TaskDerive)]
-//! #[task(processors = ["audit"])]
-//! struct AttributeTask {
-//!     name: &'static str,
-//! }
+//! #[derive(Default)]
+//! struct AttributeTask;
 //!
-//! #[derive(TaskDerive)]
+//! #[derive(Default)]
 //! struct FieldTask {
-//!     name: &'static str,
 //!     processor_names: Vec<String>,
 //! }
 //!
-//! #[async_trait]
-//! impl Task for AttributeTask {
-//!     async fn start(
+//! #[genja_task(name = "attribute", processors = ["audit"])]
+//! impl AttributeTask {
+//!     async fn start_async(
 //!         &self,
 //!         _host: &Host,
 //!         _context: &TaskRuntimeContext,
@@ -291,56 +277,48 @@
 //!     }
 //! }
 //!
-//! #[async_trait]
-//! impl Task for FieldTask {
-//!     async fn start(
+//! #[genja_task(name = "field")]
+//! impl FieldTask {
+//!     async fn start_async(
 //!         &self,
 //!         _host: &Host,
 //!         _context: &TaskRuntimeContext,
 //!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(TaskSuccess::new()))
 //!     }
+//!
+//!     fn processor_names(&self) -> Vec<&str> {
+//!         self.processor_names.iter().map(String::as_str).collect()
+//!     }
 //! }
 //!
-//! let _attribute_task = AttributeTask { name: "attribute" };
+//! let _attribute_task = AttributeTask;
 //! let _field_task = FieldTask {
-//!     name: "field",
-//!     processor_names: Vec::new(),
-//! }
-//! .with_processor("audit");
+//!     processor_names: vec!["audit".to_string()],
+//! };
 //!
-//! let _root_override = TaskDefinition::new(AttributeTask { name: "root" })
+//! let _root_override = TaskDefinition::new(AttributeTask)
 //!     .with_processor("metrics");
 //! ```
 //!
 //! Processor selection is per task. Sub-tasks do not inherit their parent's
 //! processor list unless the sub-task itself returns the same processor names.
 //!
-//! ## [`SubTasks`]
+//! ## Sub Tasks
 //!
-//! Enables hierarchical task structures by allowing tasks to define sub-tasks that
-//! execute after the parent task completes. Sub-tasks receive their own runtime
-//! context and execution depth when they run.
-//! With the derive macro, any field marked with `#[task(subtask)]` is included in
-//! [`SubTasks::sub_tasks()`] in declaration order. Supported subtask field forms
-//! are `Arc<dyn Task>`, `std::sync::Arc<dyn Task>`,
-//! `Arc<dyn Task + Send + Sync>`, and
-//! `std::sync::Arc<dyn Task + Send + Sync>`. Container forms such as
-//! `Option<Arc<dyn Task>>` and `Vec<Arc<dyn Task>>` are not supported.
-//! Prefer action-oriented snake_case field names such as `validate_config` or
-//! `verify_health`; result names still come from each sub-task's
-//! [`TaskInfo::name`] implementation. Task trait aliases such as
-//! `Arc<dyn CoreTask>` are not supported; spell the trait as `Task`.
+//! Tasks can define sub-tasks that execute after the parent task completes.
+//! Sub-tasks receive their own runtime context and execution depth when they
+//! run. Implement `fn sub_tasks(&self) -> Vec<Arc<dyn Task>>` inside a
+//! `#[genja_task(...)]` impl block when a task needs child tasks.
 //!
 //! # Behavioral Rules
 //!
 //! The execution model is intentionally simple and deterministic:
 //!
-//! - The parent task's `start()` method runs before any of its sub-tasks.
+//! - The parent task's execution method runs before any of its sub-tasks.
 //! - The parent task's [`HostTaskResult`] is inserted into [`TaskResults`] before
 //!   sub-task execution begins.
-//! - Sub-tasks run in the order returned by [`SubTasks::sub_tasks()`]. For the
-//!   derive macro, that means declaration order of fields marked with `#[task(subtask)]`.
+//! - Sub-tasks run in the order returned by [`Task::sub_tasks()`].
 //! - Each host is executed independently. When running a single task, the full task
 //!   tree is executed once per selected host.
 //! - [`Tasks`] preserves insertion order for root tasks. Runners execute each root
@@ -522,24 +500,19 @@
 //! with depth limiting to prevent infinite recursion.
 //!
 //! ```rust
-//! use async_trait::async_trait;
 //! use genja_core::inventory::{BaseBuilderHost, Host};
+//! use genja_core::genja_task;
 //! use genja_core::task::{
 //!     HostTaskResult, Task, TaskDefinition, TaskResults, TaskRuntimeContext, TaskSuccess,
 //! };
-//! use genja_core_derive::Task as TaskDerive;
 //! use tokio::runtime::Builder;
 //!
-//! #[derive(TaskDerive)]
-//! struct DeployTask {
-//!     name: String,
-//!     connection_plugin_name: Option<String>,
-//!     options: Option<serde_json::Value>,
-//! }
+//! #[derive(Default)]
+//! struct DeployTask;
 //!
-//! #[async_trait]
-//! impl Task for DeployTask {
-//!     async fn start(
+//! #[genja_task(name = "deploy", connection_plugin_name = "ssh")]
+//! impl DeployTask {
+//!     async fn start_async(
 //!         &self,
 //!         _host: &Host,
 //!         _context: &TaskRuntimeContext,
@@ -550,11 +523,7 @@
 //!     }
 //! }
 //!
-//! let task = TaskDefinition::new(DeployTask {
-//!     name: "deploy".to_string(),
-//!     connection_plugin_name: Some("ssh".to_string()),
-//!     options: None,
-//! });
+//! let task = TaskDefinition::new(DeployTask);
 //! let host = Host::builder().hostname("router1").build();
 //! let mut results = TaskResults::new("deploy");
 //!
@@ -573,38 +542,26 @@
 //! the list as a forest of task trees and return results in the same root order.
 //!
 //! ```rust
-//! use async_trait::async_trait;
 //! use genja_core::inventory::Host;
-//! use genja_core::task::{
-//!     HostTaskResult, SubTasks, Task, TaskInfo, TaskRuntimeContext, TaskSuccess,
-//!     Tasks,
-//! };
-//! use std::sync::Arc;
+//! use genja_core::genja_task;
+//! use genja_core::task::{HostTaskResult, Task, TaskRuntimeContext, TaskSuccess, Tasks};
 //!
 //! struct WorkflowTask {
 //!     name: &'static str,
 //! }
 //!
-//! impl TaskInfo for WorkflowTask {
-//!     fn name(&self) -> &str {
-//!         self.name
-//!     }
-//! }
-//!
-//! impl SubTasks for WorkflowTask {
-//!     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-//!         Vec::new()
-//!     }
-//! }
-//!
-//! #[async_trait]
-//! impl Task for WorkflowTask {
-//!     async fn start(
+//! #[genja_task(name = "workflow")]
+//! impl WorkflowTask {
+//!     async fn start_async(
 //!         &self,
 //!         _host: &Host,
 //!         _context: &TaskRuntimeContext,
 //!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
 //!         Ok(HostTaskResult::passed(TaskSuccess::new()))
+//!     }
+//!
+//!     fn options(&self) -> Option<&serde_json::Value> {
+//!         None
 //!     }
 //! }
 //!
@@ -635,7 +592,9 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::runtime::Handle;
 use tokio::sync::Mutex;
+use tokio::task;
 
 /// Represents an error that occurred during task execution.
 ///
@@ -2979,9 +2938,9 @@ pub enum TaskFailureKind {
 
 /// Task metadata required for execution.
 ///
-/// When using `#[derive(Task)]`, this trait is implemented automatically.
-/// You do not need to import `TaskInfo` unless you reference it explicitly.
-/// You still must implement `Task` manually to provide `start()`.
+/// Task authoring macros such as `#[genja_task(...)]` implement this trait
+/// automatically. You only need to implement it manually when you are building
+/// a `Task` implementation without the macro.
 pub trait TaskInfo {
     /// Return the task's name.
     fn name(&self) -> &str;
@@ -3009,28 +2968,24 @@ pub trait TaskInfo {
 }
 
 /// Sub-task provider interface.
-pub trait SubTasks {
-    /// Return any sub-tasks for this task.
-    fn sub_tasks(&self) -> Vec<Arc<dyn Task>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskExecutionMode {
+    Blocking,
+    Async,
 }
 
 /// Core task interface required for execution.
 ///
 /// # Example
 /// ```rust
-/// use async_trait::async_trait;
+/// use genja_core::genja_task;
 /// use genja_core::task::{Task, TaskRuntimeContext};
-/// use genja_core_derive::Task as TaskDerive;
 ///
-/// #[derive(TaskDerive)]
-/// struct MyTask {
-///     name: String,
-///     connection_plugin_name: Option<String>,
-/// }
+/// struct MyTask;
 ///
-/// #[async_trait]
-/// impl Task for MyTask {
-///     async fn start(
+/// #[genja_task(name = "my_task", connection_plugin_name = "ssh")]
+/// impl MyTask {
+///     async fn start_async(
 ///         &self,
 ///         _host: &genja_core::inventory::Host,
 ///         _context: &TaskRuntimeContext,
@@ -3042,13 +2997,38 @@ pub trait SubTasks {
 /// }
 /// ```
 #[async_trait]
-pub trait Task: TaskInfo + SubTasks + Send + Sync {
-    /// Start executing the task with runtime execution context.
-    async fn start(
+pub trait Task: TaskInfo + Send + Sync {
+    /// Start executing a blocking task with runtime execution context.
+    fn start(
+        &self,
+        host: &Host,
+        context: &BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "blocking start() not implemented",
+        )))
+    }
+
+    /// Start executing an async task with runtime execution context.
+    async fn start_async(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
-    ) -> Result<HostTaskResult, TaskError>;
+    ) -> Result<HostTaskResult, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "async start_async() not implemented",
+        )))
+    }
+
+    /// Return any sub-tasks for this task.
+    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+        Vec::new()
+    }
+
+    /// Declare how the runtime should execute this task.
+    fn execution_mode(&self) -> TaskExecutionMode;
 }
 
 /// Execution context passed into task implementations.
@@ -3137,6 +3117,106 @@ impl TaskRuntimeContext {
             .await
             .map(Some)
             .map_err(|err| TaskError::new(std::io::Error::other(err)))
+    }
+}
+
+#[derive(Clone)]
+pub struct BlockingTaskConnection {
+    inner: Arc<Mutex<dyn Connection>>,
+    runtime_handle: Handle,
+}
+
+impl fmt::Debug for BlockingTaskConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BlockingTaskConnection").finish()
+    }
+}
+
+impl BlockingTaskConnection {
+    pub fn new(inner: Arc<Mutex<dyn Connection>>, runtime_handle: Handle) -> Self {
+        Self {
+            inner,
+            runtime_handle,
+        }
+    }
+
+    pub fn with_connection<R>(
+        &self,
+        f: impl FnOnce(&mut dyn Connection) -> Result<R, TaskError>,
+    ) -> Result<R, TaskError> {
+        let mut guard = self.inner.blocking_lock();
+        f(&mut *guard)
+    }
+
+    pub fn execute_command(&self, command: &str) -> Result<String, TaskError> {
+        let command = command.to_string();
+        let connection = Arc::clone(&self.inner);
+        self.runtime_handle
+            .block_on(async move {
+                let mut guard = connection.lock().await;
+                guard.execute_command(&command).await
+            })
+            .map_err(|err| TaskError::new(std::io::Error::other(err)))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BlockingTaskRuntimeContext {
+    execution: TaskExecutionContext,
+    connection: Option<BlockingTaskConnection>,
+}
+
+impl BlockingTaskRuntimeContext {
+    pub fn new(
+        execution: TaskExecutionContext,
+        connection: Option<Arc<Mutex<dyn Connection>>>,
+        runtime_handle: Handle,
+    ) -> Self {
+        Self {
+            execution,
+            connection: connection.map(|connection| {
+                BlockingTaskConnection::new(connection, runtime_handle)
+            }),
+        }
+    }
+
+    pub fn execution(&self) -> &TaskExecutionContext {
+        &self.execution
+    }
+
+    pub fn current_depth(&self) -> usize {
+        self.execution.current_depth()
+    }
+
+    pub fn max_depth(&self) -> usize {
+        self.execution.max_depth()
+    }
+
+    pub fn connection(&self) -> Option<&BlockingTaskConnection> {
+        self.connection.as_ref()
+    }
+
+    pub fn has_connection(&self) -> bool {
+        self.connection.is_some()
+    }
+
+    pub fn with_connection<R>(
+        &self,
+        f: impl FnOnce(&mut dyn Connection) -> Result<R, TaskError>,
+    ) -> Result<Option<R>, TaskError> {
+        let Some(connection) = &self.connection else {
+            return Ok(None);
+        };
+
+        connection.with_connection(f).map(Some)
+    }
+
+    pub fn execute_command(&self, command: &str) -> Result<Option<String>, TaskError> {
+        let Some(connection) = &self.connection else {
+            return Ok(None);
+        };
+
+        connection.execute_command(command).map(Some)
     }
 }
 
@@ -3284,52 +3364,23 @@ impl fmt::Debug for dyn TaskConnectionResolver {
 /// # Fields
 ///
 /// * `inner` - A boxed trait object containing the actual task implementation.
-///   The task must implement the `Task` trait, which includes `TaskInfo` and
-///   `SubTasks` traits, providing metadata, execution logic, and sub-task management.
+///   The task must implement the `Task` trait, providing metadata, execution
+///   logic, and sub-task management.
 ///
 /// # Example
 ///
 /// ```rust
-/// use async_trait::async_trait;
-/// use genja_core::task::{
-///     HostTaskResult, Task, TaskDefinition, TaskInfo, TaskRuntimeContext, TaskSuccess, SubTasks,
-/// };
+/// use genja_core::genja_task;
 /// use genja_core::inventory::Host;
-/// use std::sync::Arc;
-/// use serde_json::Value;
+/// use genja_core::task::{
+///     HostTaskResult, Task, TaskDefinition, TaskInfo, TaskRuntimeContext, TaskSuccess,
+/// };
 ///
-/// struct MyTask {
-///     name: String,
-/// }
+/// struct MyTask;
 ///
-/// impl TaskInfo for MyTask {
-///     fn name(&self) -> &str {
-///         &self.name
-///     }
-///
-///     fn connection_plugin_name(&self) -> Option<&str> {
-///         Some("ssh")
-///     }
-///
-///     fn get_connection_key(&self, hostname: &str) -> Option<genja_core::inventory::ConnectionKey> {
-///         self.connection_plugin_name()
-///             .map(|plugin_name| genja_core::inventory::ConnectionKey::new(hostname, plugin_name))
-///     }
-///
-///     fn options(&self) -> Option<&Value> {
-///         None
-///     }
-/// }
-///
-/// impl SubTasks for MyTask {
-///     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-///         Vec::new()
-///     }
-/// }
-///
-/// #[async_trait]
-/// impl Task for MyTask {
-///     async fn start(
+/// #[genja_task(name = "deploy", connection_plugin_name = "ssh")]
+/// impl MyTask {
+///     async fn start_async(
 ///         &self,
 ///         _host: &Host,
 ///         _context: &TaskRuntimeContext,
@@ -3338,7 +3389,7 @@ impl fmt::Debug for dyn TaskConnectionResolver {
 ///     }
 /// }
 ///
-/// let task = MyTask { name: "deploy".to_string() };
+/// let task = MyTask;
 /// let definition = TaskDefinition::new(task);
 /// assert_eq!(definition.name(), "deploy");
 /// ```
@@ -3479,7 +3530,7 @@ impl TaskDefinition {
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
         Self::start_with_depth(
-            self.inner.as_ref(),
+            Arc::clone(&self.inner),
             hostname,
             host,
             results,
@@ -3503,7 +3554,7 @@ impl TaskDefinition {
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
         Self::start_with_depth(
-            self.inner.as_ref(),
+            Arc::clone(&self.inner),
             hostname,
             host,
             results,
@@ -3585,7 +3636,7 @@ impl TaskDefinition {
     #[async_recursion]
     #[allow(clippy::too_many_arguments)]
     async fn start_with_depth(
-        task: &dyn Task,
+        task: Arc<dyn Task>,
         hostname: &str,
         host: &Host,
         results: &mut TaskResults,
@@ -3641,7 +3692,7 @@ impl TaskDefinition {
 
         let connection = if let Some(connection_resolver) = connection_resolver {
             match connection_resolver
-                .resolve_task_connection(task, hostname)
+                .resolve_task_connection(task.as_ref(), hostname)
                 .await
             {
                 Ok(connection) => connection,
@@ -3679,8 +3730,28 @@ impl TaskDefinition {
         };
 
         let execution_context = TaskExecutionContext::new(depth, max_depth);
-        let runtime_context = TaskRuntimeContext::new(execution_context, connection);
-        let host_result = task.start(host, &runtime_context).await;
+        let host_result = match task.execution_mode() {
+            TaskExecutionMode::Async => {
+                let runtime_context =
+                    TaskRuntimeContext::new(execution_context, connection.clone());
+                task.start_async(host, &runtime_context).await
+            }
+            TaskExecutionMode::Blocking => {
+                let blocking_context = BlockingTaskRuntimeContext::new(
+                    execution_context,
+                    connection.clone(),
+                    Handle::current(),
+                );
+                let task = Arc::clone(&task);
+                let host = host.clone();
+                match task::spawn_blocking(move || task.start(&host, &blocking_context)).await {
+                    Ok(result) => result,
+                    Err(err) => Err(TaskError::new(std::io::Error::other(format!(
+                        "blocking task join error: {err}"
+                    )))),
+                }
+            }
+        };
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
             .duration_since(started_at)
@@ -3802,7 +3873,7 @@ impl TaskDefinition {
                 sub_task_started = true;
             }
             Self::start_with_depth(
-                sub.as_ref(),
+                Arc::clone(&sub),
                 hostname,
                 host,
                 sub_results,
@@ -3891,12 +3962,6 @@ impl TaskInfo for TaskDefinition {
     }
 }
 
-impl SubTasks for TaskDefinition {
-    fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-        self.inner.sub_tasks()
-    }
-}
-
 /// A collection of task definitions that can be executed together.
 ///
 /// `Tasks` is a wrapper around a vector of [`TaskDefinition`] instances, providing
@@ -3910,31 +3975,15 @@ impl SubTasks for TaskDefinition {
 /// # Example
 ///
 /// ```rust
-/// use genja_core::task::Tasks;
-/// use async_trait::async_trait;
-/// use genja_core::task::{Task, TaskInfo, TaskRuntimeContext, HostTaskResult, TaskSuccess, SubTasks};
+/// use genja_core::genja_task;
 /// use genja_core::inventory::Host;
-/// use std::sync::Arc;
+/// use genja_core::task::{HostTaskResult, Task, TaskRuntimeContext, TaskSuccess, Tasks};
 ///
-/// struct MyTask {
-///     name: String,
-/// }
+/// struct MyTask;
 ///
-/// impl TaskInfo for MyTask {
-///     fn name(&self) -> &str {
-///         &self.name
-///     }
-/// }
-///
-/// impl SubTasks for MyTask {
-///     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-///         Vec::new()
-///     }
-/// }
-///
-/// #[async_trait]
-/// impl Task for MyTask {
-///     async fn start(
+/// #[genja_task(name = "task")]
+/// impl MyTask {
+///     async fn start_async(
 ///         &self,
 ///         _host: &Host,
 ///         _context: &TaskRuntimeContext,
@@ -3944,8 +3993,8 @@ impl SubTasks for TaskDefinition {
 /// }
 ///
 /// let mut tasks = Tasks::new();
-/// tasks.add_task(MyTask { name: "deploy".to_string() });
-/// tasks.add_task(MyTask { name: "validate".to_string() });
+/// tasks.add_task(MyTask);
+/// tasks.add_task(MyTask);
 /// assert_eq!(tasks.len(), 2);
 /// ```
 #[derive(Default)]
@@ -4087,21 +4136,23 @@ mod tests {
         }
     }
 
-    impl SubTasks for TestTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            self.subs.clone()
-        }
-    }
-
     #[async_trait]
     impl Task for TestTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             self.counter.fetch_add(1, Ordering::SeqCst);
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            self.subs.clone()
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -4123,20 +4174,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for ProcessorTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for ProcessorTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -4197,15 +4246,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for FailingTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for FailingTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -4213,6 +4256,10 @@ mod tests {
             Ok(HostTaskResult::failed(TaskFailure::new(
                 TestTaskFailureError,
             )))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -4230,15 +4277,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for SkippingTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for SkippingTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -4246,6 +4287,10 @@ mod tests {
             Ok(HostTaskResult::Skipped(
                 TaskSkip::new().with_reason("filtered"),
             ))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -4601,20 +4646,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for ErroringTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for ErroringTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Err(TaskError::new(ExternalTaskError))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 

@@ -1030,6 +1030,30 @@ impl PyGenja {
         task::run_task(py, &self.inner, task_class, max_depth)
     }
 
+    #[pyo3(signature = (task_class, max_depth=None))]
+    fn _run_task_async_native(
+        &self,
+        py: Python<'_>,
+        task_class: Bound<'_, PyAny>,
+        max_depth: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        task::run_task_async(py, &self.inner, task_class, max_depth)
+    }
+
+    #[pyo3(signature = (task_class, max_depth=None))]
+    fn run_task_async(
+        slf: PyRef<'_, Self>,
+        py: Python<'_>,
+        task_class: Bound<'_, PyAny>,
+        max_depth: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        let async_helpers = PyModule::import(py, "genja._async")?;
+        let helper = async_helpers.getattr("run_task_async")?;
+        helper
+            .call1((slf.into_pyobject(py)?, task_class, max_depth))?
+            .extract()
+    }
+
     /// Executes an ordered task list across all selected hosts.
     ///
     /// Each entry in `tasks` is a root task definition and may declare its own
@@ -1043,6 +1067,30 @@ impl PyGenja {
         max_depth: Option<usize>,
     ) -> PyResult<Vec<PyTaskResults>> {
         task::run_tasks(py, &self.inner, tasks, max_depth)
+    }
+
+    #[pyo3(signature = (tasks, max_depth=None))]
+    fn _run_tasks_async_native(
+        &self,
+        py: Python<'_>,
+        tasks: Bound<'_, PyAny>,
+        max_depth: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        task::run_tasks_async(py, &self.inner, tasks, max_depth)
+    }
+
+    #[pyo3(signature = (tasks, max_depth=None))]
+    fn run_tasks_async(
+        slf: PyRef<'_, Self>,
+        py: Python<'_>,
+        tasks: Bound<'_, PyAny>,
+        max_depth: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        let async_helpers = PyModule::import(py, "genja._async")?;
+        let helper = async_helpers.getattr("run_tasks_async")?;
+        helper
+            .call1((slf.into_pyobject(py)?, tasks, max_depth))?
+            .extract()
     }
 
     /// Returns a string representation of the Genja runtime instance.
@@ -1879,12 +1927,27 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::Once;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn init_python() {
-        static INIT: Once = Once::new();
-        INIT.call_once(pyo3::prepare_freethreaded_python);
+        crate::init_embedded_python();
+        Python::with_gil(|py| {
+            let sys = PyModule::import(py, "sys").expect("sys module should import");
+            let modules = sys.getattr("modules").expect("sys.modules should exist");
+            for module_name in [
+                "tests",
+                "tests.fixtures",
+                "genja",
+                "genja.task",
+                "genja.processor",
+                "genja.connection",
+                "genja._async",
+                "tests.fixtures.task_definitions",
+                "tests.fixtures.runner_plugins",
+            ] {
+                let _ = modules.call_method1("pop", (module_name, py.None()));
+            }
+        });
     }
 
     fn temp_test_dir(name: &str) -> PathBuf {

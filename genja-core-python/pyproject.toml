@@ -28,6 +28,8 @@ distribution = false
 
 [tool.pdm.scripts]
 test = { shell = "maturin develop && pytest -v python/tests" }
+test-rust = { shell = "PYO3_PYTHON=$(pdm info --python) cargo test -p genja-core-python --lib -- --test-threads=1" }
+test-rust-debug = { shell = "PYO3_PYTHON=$(pdm info --python) cargo test -p genja-core-python --lib -- --nocapture --test-threads=1" }
 typecheck = { shell = "maturin develop && ty check python/tests/typecheck" }
 lint = { shell = "ruff check python && ruff format --check python" }
 
@@ -46,6 +48,7 @@ dev = [
     "pytest>=9.0.3",
     "ty>=0.0.34",
     "ruff>=0.15.12",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [build-system]

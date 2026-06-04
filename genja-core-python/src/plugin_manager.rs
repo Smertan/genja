@@ -62,6 +62,7 @@ use genja_plugin_manager::plugin_types::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
+use pyo3_async_runtimes::tokio::into_future;
 use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
 use std::path::PathBuf;
@@ -997,7 +998,7 @@ impl PluginRunner for PyRunnerPlugin {
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, genja_core::GenjaError> {
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let plugin = self.plugin.bind(py);
             let task_payload = Py::new(py, PyTaskDefinition::from_runtime_definition(task.clone()))
                 .map_err(python_processor_error)?;
@@ -1020,7 +1021,7 @@ impl PluginRunner for PyRunnerPlugin {
                 },
             )
             .map_err(python_processor_error)?;
-            let result = plugin
+            plugin
                 .call_method1(
                     "run_task",
                     (
@@ -1031,9 +1032,13 @@ impl PluginRunner for PyRunnerPlugin {
                         max_depth,
                     ),
                 )
-                .map_err(python_processor_error)?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(python_processor_error)?;
+                .map(Bound::unbind)
+                .map_err(python_processor_error)
+        })?;
+        let resolved = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(python_processor_error)?;
+        Python::with_gil(|py| {
             python_result_to_task_results(resolved.bind(py).clone()).map_err(python_processor_error)
         })
     }
@@ -1069,7 +1074,7 @@ impl PluginRunner for PyRunnerPlugin {
             return Ok(results);
         }
 
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let plugin = self.plugin.bind(py);
             let task_payloads = tasks
                 .iter()
@@ -1095,7 +1100,7 @@ impl PluginRunner for PyRunnerPlugin {
                 },
             )
             .map_err(python_processor_error)?;
-            let result = plugin
+            plugin
                 .call_method1(
                     "run_tasks",
                     (
@@ -1106,9 +1111,13 @@ impl PluginRunner for PyRunnerPlugin {
                         max_depth,
                     ),
                 )
-                .map_err(python_processor_error)?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(python_processor_error)?;
+                .map(Bound::unbind)
+                .map_err(python_processor_error)
+        })?;
+        let resolved = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(python_processor_error)?;
+        Python::with_gil(|py| {
             let sequence = resolved
                 .bind(py)
                 .try_iter()
@@ -1404,6 +1413,29 @@ pub(crate) fn resolve_python_maybe_awaitable<'py>(
     }
 }
 
+pub(crate) async fn resolve_python_maybe_awaitable_async(value: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    let is_awaitable = Python::with_gil(|py| -> PyResult<bool> {
+        let inspect = PyModule::import(py, "inspect")?;
+        inspect.call_method1("isawaitable", (value.bind(py),))?.extract()
+    })?;
+    if !is_awaitable {
+        return Ok(value);
+    }
+    let has_task_locals =
+        Python::with_gil(|py| pyo3_async_runtimes::tokio::get_current_locals(py).map(|_| ()))
+            .is_ok();
+
+    if has_task_locals {
+        let future = Python::with_gil(|py| into_future(value.bind(py).clone()))?;
+        future.await.map(PyObject::into)
+    } else {
+        Python::with_gil(|py| {
+            let asyncio = PyModule::import(py, "asyncio")?;
+            Ok(asyncio.call_method1("run", (value.bind(py),))?.unbind())
+        })
+    }
+}
+
 impl Plugin for PyConnectionInstance {
     fn name(&self) -> String {
         self.name.clone()
@@ -1485,16 +1517,19 @@ impl PluginConnection for PyConnectionInstance {
             return Err("python connection plugin instance is missing a connection".to_string());
         };
 
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let connection = connection.bind(py);
             let params_payload = build_python_resolved_connection_params(py, params)
                 .map_err(|err| err.to_string())?;
-            let result = connection
+            connection
                 .call_method1("open", (params_payload,))
-                .map_err(|err| err.to_string())?;
-            resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
-            Ok(())
-        })
+                .map(Bound::unbind)
+                .map_err(|err| err.to_string())
+        })?;
+        resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(())
     }
 
     /// Executes a command on the Python connection instance and returns its output.
@@ -1537,13 +1572,17 @@ impl PluginConnection for PyConnectionInstance {
             return Err("python connection plugin instance is missing a connection".to_string());
         };
 
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let connection = connection.bind(py);
-            let result = connection
+            connection
                 .call_method1("execute_command", (command,))
-                .map_err(|err| err.to_string())?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
+                .map(Bound::unbind)
+                .map_err(|err| err.to_string())
+        })?;
+        let resolved = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(|err| err.to_string())?;
+        Python::with_gil(|py| {
             resolved
                 .bind(py)
                 .extract::<String>()
@@ -2551,14 +2590,13 @@ mod tests {
         BaseBuilderHost, ConnectionManager, Defaults, Group, Host, TransformFunctionOptions,
     };
     use genja_core::task::{
-        SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
+        Task, TaskError, TaskExecutionMode, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
     };
     use genja_plugin_manager::connection_factory::build_connection_factory;
     use serde_json::{Value, json};
     use std::env;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::sync::Once;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::runtime::Builder;
 
@@ -2572,57 +2610,50 @@ mod tests {
     }
 
     fn init_python() {
-        static INIT: Once = Once::new();
-        INIT.call_once(|| {
-            pyo3::prepare_freethreaded_python();
-            Python::with_gil(|py| {
-                let sys = PyModule::import(py, "sys").expect("sys module should import");
-                let path = sys.getattr("path").expect("sys.path should exist");
-                let python_source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
-                path.call_method1("insert", (0, python_source.display().to_string()))
-                    .expect("python source path should be inserted");
-                let modules = sys.getattr("modules").expect("sys.modules should exist");
-                let genja = PyModule::from_code(
-                    py,
-                    pyo3::ffi::c_str!("__path__ = []\n"),
-                    pyo3::ffi::c_str!("genja/__init__.py"),
-                    pyo3::ffi::c_str!("genja"),
-                )
-                .expect("genja stub should build");
-                let processor = PyModule::from_code(
-                    py,
-                    pyo3::ffi::c_str!(
-                        "class TaskProcessorContext:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
-                    ),
-                    pyo3::ffi::c_str!("genja/processor.py"),
-                    pyo3::ffi::c_str!("genja.processor"),
-                )
-                .expect("processor stub should build");
-                genja
-                    .add("processor", &processor)
-                    .expect("processor module should attach to package");
-                modules
-                    .set_item("genja", &genja)
-                    .expect("genja stub should register");
-                modules
-                    .set_item("genja.processor", &processor)
-                    .expect("processor stub should register");
-                let connection = PyModule::from_code(
-                    py,
-                    pyo3::ffi::c_str!(
-                        "class ConnectionKey:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass ResolvedConnectionParams:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
-                    ),
-                    pyo3::ffi::c_str!("genja/connection.py"),
-                    pyo3::ffi::c_str!("genja.connection"),
-                )
-                .expect("connection stub should build");
-                genja
-                    .add("connection", &connection)
-                    .expect("connection module should attach to package");
-                modules
-                    .set_item("genja.connection", &connection)
-                    .expect("connection stub should register");
-            });
+        crate::init_embedded_python();
+        Python::with_gil(|py| {
+            let sys = PyModule::import(py, "sys").expect("sys module should import");
+            let modules = sys.getattr("modules").expect("sys.modules should exist");
+            let genja = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!("__path__ = []\n"),
+                pyo3::ffi::c_str!("genja/__init__.py"),
+                pyo3::ffi::c_str!("genja"),
+            )
+            .expect("genja stub should build");
+            let processor = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "class TaskProcessorContext:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
+                ),
+                pyo3::ffi::c_str!("genja/processor.py"),
+                pyo3::ffi::c_str!("genja.processor"),
+            )
+            .expect("processor stub should build");
+            genja
+                .add("processor", &processor)
+                .expect("processor module should attach to package");
+            modules
+                .set_item("genja", &genja)
+                .expect("genja stub should register");
+            modules
+                .set_item("genja.processor", &processor)
+                .expect("processor stub should register");
+            let connection = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "class ConnectionKey:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass ResolvedConnectionParams:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
+                ),
+                pyo3::ffi::c_str!("genja/connection.py"),
+                pyo3::ffi::c_str!("genja.connection"),
+            )
+            .expect("connection stub should build");
+            genja
+                .add("connection", &connection)
+                .expect("connection module should attach to package");
+            modules
+                .set_item("genja.connection", &connection)
+                .expect("connection stub should register");
         });
     }
 
@@ -2659,15 +2690,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for TestTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for TestTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -2675,6 +2700,10 @@ mod tests {
             Ok(HostTaskResult::passed(
                 TaskSuccess::new().with_summary(format!("handled {}", self.name)),
             ))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
