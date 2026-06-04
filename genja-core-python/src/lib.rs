@@ -132,12 +132,17 @@
 //!
 //! ## Testing
 //!
+//! The Rust tests embed Python through PyO3 and depend on packages installed in
+//! the PDM-managed virtualenv, including modules such as `pydantic`. Running
+//! plain `cargo test` bypasses that environment and can produce false failures
+//! from missing Python packages or fixture imports.
+//!
 //! ```bash
-//! # Run Rust tests
-//! cargo test
+//! # Run Rust tests with the PDM-managed virtualenv
+//! pdm run test-rust
 //!
 //! # Run Python tests
-//! pytest tests/
+//! pdm run test
 //! ```
 //!
 //! # See Also

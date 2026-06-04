@@ -231,6 +231,10 @@ Run the Rust-side binding tests:
 pdm run test-rust
 ```
 
+Use `pdm run test-rust` instead of plain `cargo test`. The Rust tests embed
+Python and need access to the PDM-managed virtualenv packages such as
+`pydantic`.
+
 Run the Python test suite:
 
 ```bash
