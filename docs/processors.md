@@ -32,12 +32,21 @@ registered before the runtime executes the task.
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
-    use genja::TaskDerive;
+    use genja::genja_task;
 
-    #[derive(TaskDerive)]
-    #[task(processors = ["audit"])]
-    struct BackupConfig {
-        name: &'static str,
+    struct BackupConfig;
+
+    #[genja_task(name = "backup_config", processors = ["audit"])]
+    impl BackupConfig {
+        async fn start_async(
+            &self,
+            _host: &genja::genja_core::inventory::Host,
+            _context: &genja::genja_core::task::TaskRuntimeContext,
+        ) -> Result<genja::genja_core::task::HostTaskResult, genja::genja_core::task::TaskError> {
+            Ok(genja::genja_core::task::HostTaskResult::passed(
+                genja::genja_core::task::TaskSuccess::new(),
+            ))
+        }
     }
     ```
 
@@ -64,7 +73,7 @@ use std::sync::Arc;
 use genja::genja_core::task::{
     HostTaskResult, TaskProcessor, TaskProcessorContext,
 };
-use genja::TaskDerive;
+use genja::genja_task;
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
 
@@ -94,10 +103,19 @@ impl TaskProcessor for AuditProcessor {
     }
 }
 
-#[derive(TaskDerive)]
-#[task(processors = ["audit"])]
-struct BackupConfig {
-    name: &'static str,
+struct BackupConfig;
+
+#[genja_task(name = "backup_config", processors = ["audit"])]
+impl BackupConfig {
+    async fn start_async(
+        &self,
+        _host: &genja::genja_core::inventory::Host,
+        _context: &genja::genja_core::task::TaskRuntimeContext,
+    ) -> Result<genja::genja_core::task::HostTaskResult, genja::genja_core::task::TaskError> {
+        Ok(genja::genja_core::task::HostTaskResult::passed(
+            genja::genja_core::task::TaskSuccess::new(),
+        ))
+    }
 }
 
 let mut plugins = PluginManager::new();

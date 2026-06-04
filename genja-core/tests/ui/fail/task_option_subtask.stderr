@@ -1,5 +1,0 @@
-error: subtask fields must be `Arc<dyn Task>`, `std::sync::Arc<dyn Task>`, or `Arc<dyn Task + Send + Sync>`
-  --> tests/ui/fail/task_option_subtask.rs:10:12
-   |
-10 |     child: Option<Arc<dyn Task>>,
-   |            ^^^^^^^^^^^^^^^^^^^^^

@@ -10,7 +10,7 @@
 //! The task system is built around several key concepts:
 //!
 //! - **Task Definition**: Tasks implement the [`Task`] trait, which combines metadata
-//!   ([`TaskInfo`]) with execution logic and optional sub-tasks ([`SubTasks`]).
+//!   ([`TaskInfo`]) with execution logic and optional sub-tasks.
 //! - **Task Collections**: [`Tasks`] stores an ordered list of root
 //!   [`TaskDefinition`] values. Each root task may own its own sub-task tree, so a
 //!   `Tasks` value represents a forest of task trees.
@@ -44,7 +44,7 @@
 //!                   ┌─────────────┐
 //!                   │ Task trait  │
 //!                   │ - TaskInfo  │
-//!                   │ - SubTasks  │
+//!                   │ - sub_tasks │
 //!                   │ - start()   │
 //!                   └─────────────┘
 //!
@@ -2938,9 +2938,9 @@ pub enum TaskFailureKind {
 
 /// Task metadata required for execution.
 ///
-/// When using `#[derive(Task)]`, this trait is implemented automatically.
-/// You do not need to import `TaskInfo` unless you reference it explicitly.
-/// You still must implement `Task` manually to provide `start()`.
+/// Task authoring macros such as `#[genja_task(...)]` implement this trait
+/// automatically. You only need to implement it manually when you are building
+/// a `Task` implementation without the macro.
 pub trait TaskInfo {
     /// Return the task's name.
     fn name(&self) -> &str;

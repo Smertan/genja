@@ -3,12 +3,9 @@
 //! `DerefMacro` and `DerefMutMacro` generate `Deref` and `DerefMut`
 //! implementations for tuple-wrapper types.
 //!
-//! `genja_task` is the primary public task-authoring macro. It generates both
+//! `genja_task` is the public task-authoring macro. It generates both
 //! `TaskInfo` and `Task` implementations from an inherent `impl` block and
 //! infers execution mode from `fn start(...)` versus `async fn start_async(...)`.
-//!
-//! The older `Task` derive macro remains available for low-level or legacy
-//! metadata generation, but it is no longer the recommended task-authoring API.
 //!
 //! # Task Authoring Example
 //! ```ignore
@@ -67,10 +64,9 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     DeriveInput, Expr, ExprArray, ExprLit, FnArg, GenericArgument, ImplItem, ItemImpl, Lit,
-    LitStr, PathArguments, ReturnType, Token, Type, TypePath, bracketed,
+    LitStr, PathArguments, ReturnType, Token, Type, TypePath,
     parse::{Parse, ParseStream},
     parse_macro_input,
-    punctuated::Punctuated,
 };
 
 /// Generates an implementation of the `Deref` trait for the given type.
@@ -144,369 +140,6 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
                 &mut self.0
             }
         }
-    };
-
-    TokenStream::from(expanded)
-}
-
-/// Derives task metadata helpers for a struct.
-///
-/// This procedural macro generates `TaskInfo` and `sub_tasks()` support for a
-/// struct by reading task metadata from fields and helper attributes.
-///
-/// This macro does **not** generate the core `genja_core::task::Task`
-/// implementation. For normal task authoring, prefer
-/// [`genja_task`](macro@genja_task), which generates both `TaskInfo` and `Task`
-/// from an inherent `impl` block.
-///
-/// The macro expects the struct to have:
-/// - A `name` field of type `String` or `&'static str` (required)
-/// - An optional `connection_plugin_name` field of type `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`
-/// - An optional `options` field of type `Option<serde_json::Value>`
-/// - An optional `processor_names` field of type `Vec<String>`
-/// - Or a struct-level `#[task(processors = ["processor_name"])]` attribute
-/// - Zero or more fields marked with `#[task(subtask)]` using a supported `Arc<dyn Task>` form:
-///   `Arc<dyn Task>`, `std::sync::Arc<dyn Task>`, `Arc<dyn Task + Send + Sync>`,
-///   or `std::sync::Arc<dyn Task + Send + Sync>`
-///
-/// After deriving, the generated behavior is:
-/// - `name()` reads from the struct's `name` field
-/// - `connection_plugin_name()` reads from `connection_plugin_name` if present, otherwise returns `None`
-/// - `options()` returns the `options` field if present, otherwise `None`
-/// - `processor_names()` returns the configured processor names if present, otherwise an empty vector
-/// - `with_processor()` and `with_processors()` are generated when `processor_names` is present
-/// - `sub_tasks()` returns all fields marked with `#[task(subtask)]` in declaration order
-/// - `get_connection_key(hostname)` builds a `ConnectionKey` from `hostname` and `connection_plugin_name()` when a connection plugin is set
-///
-/// # Parameters
-///
-/// * `input` - A `TokenStream` representing the input tokens of the derive macro, containing
-///   the struct definition for which `TaskInfo` and `sub_tasks()` support
-///   should be generated.
-///
-/// # Returns
-///
-/// A `TokenStream` containing the generated implementations of `TaskInfo` and
-/// `sub_tasks()` support.
-/// Returns a compile error if:
-/// - The macro is applied to a non-struct type
-/// - The struct doesn't have named fields
-/// - The struct has generic parameters, lifetimes, or a where clause
-/// - Required fields are missing or have incorrect types
-/// - Unknown `#[task(...)]` helper attributes are used
-/// - Subtask fields are not one of the supported `Arc<dyn Task>` forms
-///
-/// # Examples
-///
-/// ```ignore
-/// use std::sync::Arc;
-/// use genja_core::task::{Task, TaskInfo};
-/// use genja_core_derive::Task as TaskDerive;
-///
-/// #[derive(TaskDerive)]
-/// struct ChildTask {
-///     name: &'static str,
-/// }
-///
-/// #[derive(TaskDerive)]
-/// #[task(processors = ["audit"])]
-/// struct MyTask {
-///     name: String,
-///     connection_plugin_name: Option<String>,
-///     options: Option<serde_json::Value>,
-///     #[task(subtask)]
-///     child_task: Arc<dyn Task>,
-/// }
-///
-/// let task = MyTask {
-///     name: "deploy".to_string(),
-///     connection_plugin_name: Some("ssh".to_string()),
-///     options: Some(serde_json::json!({"dry_run": true})),
-///     child_task: Arc::new(ChildTask { name: "validate" }),
-/// };
-///
-/// assert_eq!(task.name(), "deploy");
-/// assert_eq!(task.connection_plugin_name(), Some("ssh"));
-/// assert_eq!(task.processor_names(), vec!["audit"]);
-/// assert_eq!(task.sub_tasks()[0].name(), "validate");
-/// ```
-#[proc_macro_derive(Task, attributes(task))]
-pub fn derive_task(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let name = &input.ident;
-    if let Err(error) = reject_generics(&input, "Task") {
-        return error.to_compile_error().into();
-    }
-
-    let attr_processor_names = match task_processor_attrs(&input.attrs) {
-        Ok(processor_names) => processor_names,
-        Err(error) => return error.to_compile_error().into(),
-    };
-
-    let data = match input.data {
-        syn::Data::Struct(data) => data,
-        _ => {
-            return syn::Error::new_spanned(name, "Task can only be derived for structs")
-                .to_compile_error()
-                .into();
-        }
-    };
-
-    let fields = match data.fields {
-        syn::Fields::Named(fields) => fields.named,
-        _ => {
-            return syn::Error::new_spanned(name, "Task requires named fields")
-                .to_compile_error()
-                .into();
-        }
-    };
-
-    let mut name_field = None;
-    let mut connection_plugin_name_field = None;
-    let mut options_field = None;
-    let mut processor_names_field: Option<(syn::Ident, Type)> = None;
-    let mut subtask_fields: Vec<(syn::Ident, SubtaskKind)> = Vec::new();
-
-    for field in fields.iter() {
-        let ident = match &field.ident {
-            Some(ident) => ident,
-            None => continue,
-        };
-
-        let has_subtask = match has_subtask_attr(&field.attrs) {
-            Ok(has_subtask) => has_subtask,
-            Err(error) => return error.to_compile_error().into(),
-        };
-
-        if has_subtask {
-            match subtask_kind(&field.ty) {
-                Some(kind) => subtask_fields.push((ident.clone(), kind)),
-                None => {
-                    return syn::Error::new_spanned(
-                        &field.ty,
-                        "subtask fields must be `Arc<dyn Task>`, `std::sync::Arc<dyn Task>`, or `Arc<dyn Task + Send + Sync>`",
-                    )
-                    .to_compile_error()
-                    .into();
-                }
-            }
-        }
-
-        match ident.to_string().as_str() {
-            "name" => name_field = Some(field.ty.clone()),
-            "connection_plugin_name" => connection_plugin_name_field = Some(field.ty.clone()),
-            "options" => options_field = Some(field.ty.clone()),
-            "processor_names" => {
-                processor_names_field = Some((ident.clone(), field.ty.clone()));
-            }
-            "processors" => {
-                return syn::Error::new_spanned(
-                    ident,
-                    "use `processor_names: Vec<String>` to select processor plugins by name",
-                )
-                .to_compile_error()
-                .into();
-            }
-            _ => {}
-        }
-    }
-
-    let name_ty = match name_field {
-        Some(ty) => ty,
-        None => {
-            return syn::Error::new_spanned(
-                name,
-                "Task requires a `name` field of type `String` or `&'static str`",
-            )
-            .to_compile_error()
-            .into();
-        }
-    };
-
-    if !is_string_type(&name_ty) && !is_static_str_type(&name_ty) {
-        return syn::Error::new_spanned(name_ty, "`name` must be `String` or `&'static str`")
-            .to_compile_error()
-            .into();
-    }
-
-    let connection_plugin_name_ty = connection_plugin_name_field.clone();
-    if let Some(ty) = &connection_plugin_name_ty
-        && !is_string_or_static_str(ty)
-        && !is_option_of(ty, is_string_or_static_str)
-    {
-        return syn::Error::new_spanned(
-            ty,
-            "`connection_plugin_name` must be `String`, `&'static str`, `Option<String>`, or `Option<&'static str>`",
-        )
-        .to_compile_error()
-        .into();
-    }
-
-    if let Some(options_ty) = &options_field
-        && !is_option_of(options_ty, is_value_type)
-    {
-        return syn::Error::new_spanned(
-            options_ty,
-            "`options` must be `Option<serde_json::Value>`",
-        )
-        .to_compile_error()
-        .into();
-    }
-
-    if let Some((_, processor_names_ty)) = &processor_names_field {
-        if !attr_processor_names.is_empty() {
-            return syn::Error::new_spanned(
-                processor_names_ty,
-                "use either `processor_names: Vec<String>` or `#[task(processors = [...])]`, not both",
-            )
-            .to_compile_error()
-            .into();
-        }
-
-        if !is_vec_of(processor_names_ty, is_string_type) {
-            return syn::Error::new_spanned(
-                processor_names_ty,
-                "`processor_names` must be `Vec<String>`",
-            )
-            .to_compile_error()
-            .into();
-        }
-    }
-
-    let name_getter = if is_string_type(&name_ty) {
-        quote! { self.name.as_str() }
-    } else {
-        quote! { self.name }
-    };
-
-    let connection_plugin_name_getter = match connection_plugin_name_ty {
-        Some(ty) if is_string_type(&ty) => quote! {
-            if self.connection_plugin_name.trim().is_empty() {
-                None
-            } else {
-                Some(self.connection_plugin_name.as_str())
-            }
-        },
-        Some(ty) if is_static_str_type(&ty) => quote! {
-            if self.connection_plugin_name.trim().is_empty() {
-                None
-            } else {
-                Some(self.connection_plugin_name)
-            }
-        },
-        Some(_) => quote! {
-            self.connection_plugin_name
-                .as_deref()
-                .filter(|plugin_name| !plugin_name.trim().is_empty())
-        },
-        None => quote! { None },
-    };
-
-    let options_getter = if options_field.is_some() {
-        quote! { self.options.as_ref() }
-    } else {
-        quote! { None }
-    };
-
-    let processor_names_getter = match processor_names_field.as_ref() {
-        Some((ident, _)) => quote! { self.#ident.iter().map(String::as_str).collect() },
-        None if !attr_processor_names.is_empty() => quote! { vec![#(#attr_processor_names),*] },
-        None => quote! { Vec::new() },
-    };
-
-    let processor_setters = match processor_names_field.as_ref() {
-        Some((ident, _)) => quote! {
-            impl #name {
-                pub fn with_processor(mut self, processor_name: impl Into<String>) -> Self {
-                    self.#ident.push(processor_name.into());
-                    self
-                }
-
-                pub fn with_processors<I, S>(mut self, processor_names: I) -> Self
-                where
-                    I: IntoIterator<Item = S>,
-                    S: Into<String>,
-                {
-                    self.#ident.extend(processor_names.into_iter().map(Into::into));
-                    self
-                }
-            }
-        },
-        None => quote! {},
-    };
-
-    // Generates token streams for pushing subtask fields into a task vector.
-    //
-    // This function creates a vector of `proc_macro2::TokenStream` objects, where each
-    // token stream represents a statement that pushes a subtask field (wrapped in `Arc<dyn Task>`)
-    // into a `tasks` vector. If there are no subtask fields, an empty vector is returned.
-    //
-    // # Parameters
-    //
-    // * `subtask_fields` - A slice of tuples containing the field identifier and its subtask kind.
-    //                      Each tuple represents a field marked with the `#[task(subtask)]` attribute.
-    //
-    // # Returns
-    //
-    // A `Vec<proc_macro2::TokenStream>` containing the generated push statements for each subtask field.
-    // Returns an empty vector if `subtask_fields` is empty.
-    let subtask_pushes = if subtask_fields.is_empty() {
-        Vec::new()
-    } else {
-        let mut pushes = Vec::new();
-        for (ident, _kind) in subtask_fields {
-            pushes.push(quote! { tasks.push(self.#ident.clone()); });
-        }
-        pushes
-    };
-
-    let expanded = quote! {
-        impl genja_core::task::TaskInfo for #name {
-            fn name(&self) -> &str {
-                #name_getter
-            }
-
-            fn connection_plugin_name(&self) -> Option<&str> {
-                #connection_plugin_name_getter
-            }
-
-            fn get_connection_key(
-                &self,
-                hostname: &str,
-            ) -> Option<genja_core::inventory::ConnectionKey> {
-                self.connection_plugin_name().map(|plugin_name| {
-                    genja_core::inventory::ConnectionKey::new(hostname, plugin_name)
-                })
-            }
-
-            fn options(&self) -> Option<&serde_json::Value> {
-                #options_getter
-            }
-
-            fn processor_names(&self) -> Vec<&str> {
-                #processor_names_getter
-            }
-        }
-
-        /// Implementation of the `SubTasks` trait for the derived type.
-        ///
-        /// This implementation collects all fields marked with the `#[task(subtask)]` attribute
-        /// and returns them as a vector of `Arc<dyn Task>`. This allows the task system to
-        /// traverse and execute subtasks in a hierarchical manner.
-        ///
-        /// # Returns
-        ///
-        /// A `Vec<std::sync::Arc<dyn genja_core::task::Task>>` containing all subtasks
-        /// associated with this task instance.
-        impl genja_core::task::SubTasks for #name {
-            fn sub_tasks(&self) -> Vec<std::sync::Arc<dyn genja_core::task::Task>> {
-                let mut tasks: Vec<std::sync::Arc<dyn genja_core::task::Task>> = Vec::new();
-                #(#subtask_pushes)*
-                tasks
-            }
-        }
-
-        #processor_setters
     };
 
     TokenStream::from(expanded)
@@ -988,7 +621,47 @@ fn is_vec_of_task_arcs(ty: &Type) -> bool {
         return false;
     }
     match args.args.first() {
-        Some(GenericArgument::Type(inner)) => subtask_kind(inner).is_some(),
+        Some(GenericArgument::Type(inner)) => is_arc_task(inner),
+        _ => false,
+    }
+}
+
+fn is_arc_task(ty: &Type) -> bool {
+    match ty {
+        Type::Path(TypePath { path, .. }) => {
+            let Some(seg) = path.segments.last() else {
+                return false;
+            };
+            if seg.ident != "Arc" {
+                return false;
+            }
+            match &seg.arguments {
+                PathArguments::AngleBracketed(args) => args
+                    .args
+                    .iter()
+                    .filter_map(|arg| match arg {
+                        GenericArgument::Type(ty) => Some(ty),
+                        _ => None,
+                    })
+                    .any(is_task_trait_object),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn is_task_trait_object(ty: &Type) -> bool {
+    match ty {
+        Type::TraitObject(obj) => obj.bounds.iter().any(|bound| match bound {
+            syn::TypeParamBound::Trait(trait_bound) => trait_bound
+                .path
+                .segments
+                .last()
+                .map(|seg| seg.ident == "Task")
+                .unwrap_or(false),
+            _ => false,
+        }),
         _ => false,
     }
 }
@@ -1029,220 +702,5 @@ fn require_tuple_wrapper(input: &DeriveInput, macro_name: &str) -> syn::Result<(
             &input.ident,
             format!("`{macro_name}` can only be derived for tuple structs"),
         )),
-    }
-}
-
-fn is_string_type(ty: &Type) -> bool {
-    match ty {
-        Type::Path(TypePath { path, .. }) => path
-            .segments
-            .last()
-            .map(|seg| seg.ident == "String")
-            .unwrap_or(false),
-        _ => false,
-    }
-}
-
-fn is_static_str_type(ty: &Type) -> bool {
-    match ty {
-        Type::Reference(reference) => {
-            if let Some(lifetime) = &reference.lifetime {
-                if lifetime.ident != "static" {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-            matches!(&*reference.elem, Type::Path(TypePath { path, .. }) if path.segments.last().map(|seg| seg.ident == "str").unwrap_or(false))
-        }
-        _ => false,
-    }
-}
-
-fn is_option_of(ty: &Type, inner_check: fn(&Type) -> bool) -> bool {
-    match ty {
-        Type::Path(TypePath { path, .. }) => {
-            let seg = match path.segments.last() {
-                Some(seg) => seg,
-                None => return false,
-            };
-            if seg.ident != "Option" {
-                return false;
-            }
-            match &seg.arguments {
-                PathArguments::AngleBracketed(args) => args
-                    .args
-                    .iter()
-                    .filter_map(|arg| match arg {
-                        GenericArgument::Type(ty) => Some(ty),
-                        _ => None,
-                    })
-                    .any(inner_check),
-                _ => false,
-            }
-        }
-        _ => false,
-    }
-}
-
-fn is_vec_of(ty: &Type, inner_check: fn(&Type) -> bool) -> bool {
-    match ty {
-        Type::Path(TypePath { path, .. }) => {
-            let seg = match path.segments.last() {
-                Some(seg) => seg,
-                None => return false,
-            };
-            if seg.ident != "Vec" {
-                return false;
-            }
-            match &seg.arguments {
-                PathArguments::AngleBracketed(args) => args
-                    .args
-                    .iter()
-                    .filter_map(|arg| match arg {
-                        GenericArgument::Type(ty) => Some(ty),
-                        _ => None,
-                    })
-                    .any(inner_check),
-                _ => false,
-            }
-        }
-        _ => false,
-    }
-}
-
-fn is_value_type(ty: &Type) -> bool {
-    match ty {
-        Type::Path(TypePath { path, .. }) => {
-            let mut segments = path.segments.iter();
-            let last = segments.next_back().map(|seg| seg.ident.to_string());
-            let second_last = segments.next_back().map(|seg| seg.ident.to_string());
-
-            matches!(
-                (second_last.as_deref(), last.as_deref()),
-                (Some("serde_json"), Some("Value")) | (None, Some("Value"))
-            )
-        }
-        _ => false,
-    }
-}
-
-fn is_string_or_static_str(ty: &Type) -> bool {
-    is_string_type(ty) || is_static_str_type(ty)
-}
-
-struct ProcessorList {
-    names: Punctuated<LitStr, Token![,]>,
-}
-
-impl Parse for ProcessorList {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let content;
-        bracketed!(content in input);
-        Ok(Self {
-            names: content.parse_terminated(|input| input.parse::<LitStr>(), Token![,])?,
-        })
-    }
-}
-
-fn task_processor_attrs(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::LitStr>> {
-    let mut processor_names = Vec::new();
-
-    for attr in attrs {
-        if !attr.path().is_ident("task") {
-            continue;
-        }
-
-        attr.parse_nested_meta(|meta| {
-            if !meta.path.is_ident("processors") {
-                return Err(meta.error(
-                    "unsupported struct-level `task` attribute; expected `processors = [...]`",
-                ));
-            }
-
-            let value = meta.value()?;
-            let processor_list = value.parse::<ProcessorList>()?;
-            for processor_name in processor_list.names {
-                processor_names.push(processor_name);
-            }
-
-            Ok(())
-        })?;
-    }
-
-    Ok(processor_names)
-}
-
-#[derive(Copy, Clone)]
-enum SubtaskKind {
-    SingleArc,
-}
-
-fn has_subtask_attr(attrs: &[syn::Attribute]) -> syn::Result<bool> {
-    let mut has_subtask = false;
-
-    for attr in attrs {
-        if !attr.path().is_ident("task") {
-            continue;
-        }
-
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("subtask") {
-                has_subtask = true;
-                return Ok(());
-            }
-
-            Err(meta.error("unsupported field-level `task` attribute; expected `subtask`"))
-        })?;
-    }
-
-    Ok(has_subtask)
-}
-
-fn subtask_kind(ty: &Type) -> Option<SubtaskKind> {
-    if is_arc_task(ty) {
-        return Some(SubtaskKind::SingleArc);
-    }
-    None
-}
-
-fn is_arc_task(ty: &Type) -> bool {
-    match ty {
-        Type::Path(TypePath { path, .. }) => {
-            let seg = match path.segments.last() {
-                Some(seg) => seg,
-                None => return false,
-            };
-            if seg.ident != "Arc" {
-                return false;
-            }
-            match &seg.arguments {
-                PathArguments::AngleBracketed(args) => args
-                    .args
-                    .iter()
-                    .filter_map(|arg| match arg {
-                        GenericArgument::Type(ty) => Some(ty),
-                        _ => None,
-                    })
-                    .any(is_task_trait_object),
-                _ => false,
-            }
-        }
-        _ => false,
-    }
-}
-
-fn is_task_trait_object(ty: &Type) -> bool {
-    match ty {
-        Type::TraitObject(obj) => obj.bounds.iter().any(|bound| match bound {
-            syn::TypeParamBound::Trait(trait_bound) => trait_bound
-                .path
-                .segments
-                .last()
-                .map(|seg| seg.ident == "Task")
-                .unwrap_or(false),
-            _ => false,
-        }),
-        _ => false,
     }
 }

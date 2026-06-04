@@ -8,25 +8,22 @@ structured result for that host.
 
 === ":fontawesome-brands-rust: Rust"
 
-    Rust tasks derive Genja task metadata with `TaskDerive` and implement the
-    `Task` trait to provide execution logic.
+    Rust tasks use `#[genja_task(...)]` to define metadata and execution in one
+    place.
 
     ```rust
     use genja::genja_core::inventory::Host;
     use genja::genja_core::task::{
-        HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess,
+        HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
     };
-    use genja::{async_trait, TaskDerive};
+    use genja::genja_task;
     use serde_json::json;
 
-    #[derive(TaskDerive)]
-    struct CollectFacts {
-        name: &'static str,
-    }
+    struct CollectFacts;
 
-    #[async_trait]
-    impl Task for CollectFacts {
-        async fn start(
+    #[genja_task(name = "collect_facts")]
+    impl CollectFacts {
+        async fn start_async(
             &self,
             host: &Host,
             _context: &TaskRuntimeContext,
@@ -44,8 +41,8 @@ structured result for that host.
 
 === ":fontawesome-brands-python: Python"
 
-    Python tasks use the `@task(...)` decorator and implement a `start(...)`
-    method. The method may be synchronous or asynchronous.
+    Python tasks use the `@task(...)` decorator and define exactly one of
+    `start(...)` or `start_async(...)`.
 
     ```python
     from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
@@ -77,7 +74,7 @@ structured result for that host.
 
     @task(name="collect_facts_async")
     class CollectFactsAsync:
-        async def start(
+        async def start_async(
             self,
             task: TaskInfo,
             host: Host,
@@ -133,7 +130,7 @@ Each task receives:
 
 ## Runtime Context
 
-`TaskRuntimeContext` is passed into every task `start(...)` call by the runtime.
+`TaskRuntimeContext` is passed into every task entrypoint call by the runtime.
 It describes the current execution state for that specific host run.
 
 The public Python task-facing context surface is intentionally narrow. Use it
@@ -311,12 +308,21 @@ centralized result decoration. Tasks opt into them by plugin name:
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
-    use genja::TaskDerive;
+    use genja::genja_task;
 
-    #[derive(TaskDerive)]
-    #[task(processors = ["audit"])]
-    struct BackupConfig {
-        name: &'static str,
+    struct BackupConfig;
+
+    #[genja_task(name = "backup_config", processors = ["audit"])]
+    impl BackupConfig {
+        async fn start_async(
+            &self,
+            _host: &genja::genja_core::inventory::Host,
+            _context: &genja::genja_core::task::TaskRuntimeContext,
+        ) -> Result<genja::genja_core::task::HostTaskResult, genja::genja_core::task::TaskError> {
+            Ok(genja::genja_core::task::HostTaskResult::passed(
+                genja::genja_core::task::TaskSuccess::new(),
+            ))
+        }
     }
     ```
 
@@ -341,13 +347,40 @@ sub-tasks for execution trees such as deploy, validate, and collect logs.
     ```rust
     use std::sync::Arc;
     use genja::genja_core::task::Task;
-    use genja::TaskDerive;
+    use genja::genja_task;
 
-    #[derive(TaskDerive)]
-    struct DeployConfig {
-        name: &'static str,
-        #[task(subtask)]
-        validate_config: Arc<dyn Task>,
+    struct ValidateConfig;
+
+    #[genja_task(name = "validate_config")]
+    impl ValidateConfig {
+        async fn start_async(
+            &self,
+            _host: &genja::genja_core::inventory::Host,
+            _context: &genja::genja_core::task::TaskRuntimeContext,
+        ) -> Result<genja::genja_core::task::HostTaskResult, genja::genja_core::task::TaskError> {
+            Ok(genja::genja_core::task::HostTaskResult::passed(
+                genja::genja_core::task::TaskSuccess::new(),
+            ))
+        }
+    }
+
+    struct DeployConfig;
+
+    #[genja_task(name = "deploy_config")]
+    impl DeployConfig {
+        async fn start_async(
+            &self,
+            _host: &genja::genja_core::inventory::Host,
+            _context: &genja::genja_core::task::TaskRuntimeContext,
+        ) -> Result<genja::genja_core::task::HostTaskResult, genja::genja_core::task::TaskError> {
+            Ok(genja::genja_core::task::HostTaskResult::passed(
+                genja::genja_core::task::TaskSuccess::new(),
+            ))
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            vec![Arc::new(ValidateConfig)]
+        }
     }
     ```
 
@@ -368,7 +401,7 @@ sub-tasks for execution trees such as deploy, validate, and collect logs.
             return TaskSuccessResult(summary=f"validated {host.hostname}")
 
 
-    @task(name="deploy_config", sub_task=ValidateConfig)
+    @task(name="deploy_config", sub_tasks=[ValidateConfig])
     class DeployConfig:
         def start(
             self,
@@ -385,26 +418,24 @@ Task options are JSON-serializable metadata passed into task execution.
 
 === ":fontawesome-brands-rust: Rust"
 
-    `TaskDerive` supports task options when the struct defines an
-    `options: Option<serde_json::Value>` field.
+    Rust tasks expose dynamic options by defining an `options()` helper method
+    inside the `#[genja_task(...)]` impl.
 
     ```rust
     use genja::genja_core::inventory::Host;
     use genja::genja_core::task::{
-        HostTaskResult, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+        HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
     };
-    use genja::{async_trait, TaskDerive};
+    use genja::genja_task;
     use serde_json::json;
 
-    #[derive(TaskDerive)]
     struct BackupConfig {
-        name: &'static str,
-        options: Option<serde_json::Value>,
+        options: serde_json::Value,
     }
 
-    #[async_trait]
-    impl Task for BackupConfig {
-        async fn start(
+    #[genja_task(name = "backup_config")]
+    impl BackupConfig {
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -420,11 +451,14 @@ Task options are JSON-serializable metadata passed into task execution.
                     .with_summary(format!("backup path is {backup_path}")),
             ))
         }
+
+        fn options(&self) -> Option<&serde_json::Value> {
+            Some(&self.options)
+        }
     }
 
     let task = BackupConfig {
-        name: "backup_config",
-        options: Some(json!({"backup_path": "/tmp/configs", "compress": true})),
+        options: json!({"backup_path": "/tmp/configs", "compress": true}),
     };
     ```
 

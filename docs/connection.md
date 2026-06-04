@@ -11,12 +11,21 @@ Tasks choose a connection plugin by name.
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
-    use genja::TaskDerive;
+    use genja::genja_task;
 
-    #[derive(TaskDerive)]
-    #[task(connection_plugin_name = "ssh")]
-    struct BackupConfig {
-        name: &'static str,
+    struct BackupConfig;
+
+    #[genja_task(name = "backup_config", connection_plugin_name = "ssh")]
+    impl BackupConfig {
+        async fn start_async(
+            &self,
+            _host: &genja::genja_core::inventory::Host,
+            _context: &genja::genja_core::task::TaskRuntimeContext,
+        ) -> Result<genja::genja_core::task::HostTaskResult, genja::genja_core::task::TaskError> {
+            Ok(genja::genja_core::task::HostTaskResult::passed(
+                genja::genja_core::task::TaskSuccess::new(),
+            ))
+        }
     }
     ```
 

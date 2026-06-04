@@ -103,19 +103,16 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
     ```rust
     use genja::genja_core::inventory::Host;
     use genja::genja_core::task::{
-        HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess,
+        HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
     };
-    use genja::{async_trait, Genja, TaskDerive};
+    use genja::{Genja, genja_task};
     use serde_json::json;
 
-    #[derive(TaskDerive)]
-    struct CollectFacts {
-        name: &'static str,
-    }
+    struct CollectFacts;
 
-    #[async_trait]
-    impl Task for CollectFacts {
-        async fn start(
+    #[genja_task(name = "collect_facts")]
+    impl CollectFacts {
+        async fn start_async(
             &self,
             host: &Host,
             _context: &TaskRuntimeContext,
@@ -132,7 +129,7 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
 
     fn main() -> Result<(), genja::GenjaError> {
         let genja = Genja::from_settings_file("settings.yaml")?;
-        let results = genja.run_task(CollectFacts { name: "collect_facts" }, 1)?;
+        let results = genja.run_task(CollectFacts, 1)?;
 
         let output = results.to_pretty_json_string().map_err(|err| {
             genja::GenjaError::Message(format!("failed to serialize task results: {err}"))
@@ -152,7 +149,7 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
     async fn main() -> Result<(), genja::GenjaError> {
         let genja = Genja::from_settings_file("settings.yaml")?;
         let results = genja
-            .run_task_async(CollectFacts { name: "collect_facts" }, 1)
+            .run_task_async(CollectFacts, 1)
             .await?;
 
         let output = results.to_pretty_json_string().map_err(|err| {
@@ -214,7 +211,7 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
 
     @task(name="collect_facts_async")
     class CollectFactsAsync:
-        async def start(
+        async def start_async(
             self,
             task: TaskInfo,
             host: Host,

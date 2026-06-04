@@ -129,29 +129,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Running A Task
 
-Task metadata and sub-task relationships are generated with `TaskDerive`; task
-behavior is implemented manually with the `Task` trait.
+Rust task metadata and execution are generated from `#[genja_task(...)]`.
 
 ```rust
 use genja::Genja;
-use genja::TaskDerive;
-use genja::async_trait;
+use genja::genja_task;
 use genja::genja_core::inventory::{
     BaseBuilderHost, // brings Host::builder() into scope
     Host,
     Hosts,
     Inventory,
 };
-use genja::genja_core::task::{HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess};
+use genja::genja_core::task::{HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess};
 
-#[derive(TaskDerive)]
-struct CheckConfig {
-    name: &'static str,
-}
+struct CheckConfig;
 
-#[async_trait]
-impl Task for CheckConfig {
-    async fn start(
+#[genja_task(name = "check_config")]
+impl CheckConfig {
+    async fn start_async(
         &self,
         _host: &Host,
         _context: &TaskRuntimeContext,
@@ -168,7 +163,7 @@ hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
 let inventory = Inventory::builder().hosts(hosts).build();
 let genja = Genja::builder(inventory).build()?;
 
-let results = genja.run_task(CheckConfig { name: "check_config" }, 1)?;
+let results = genja.run_task(CheckConfig, 1)?;
 
 assert!(results.host_result("router1").unwrap().is_passed());
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -183,7 +178,7 @@ use genja::Genja;
 async fn main() -> Result<(), genja::GenjaError> {
     let genja = Genja::from_settings_file("settings.yaml")?;
     let results = genja
-        .run_task_async(CheckConfig { name: "check_config" }, 1)
+        .run_task_async(CheckConfig, 1)
         .await?;
 
     assert!(results.host_result("router1").unwrap().is_passed());
