@@ -683,13 +683,13 @@ class TaskMessageLevel(str, Enum):
 
 
 class TaskSuccessResult(_GenjaModel):
-    """Successful task outcome returned from ``start(...)`` methods.
+    """Successful task outcome returned from task entrypoint methods.
 
     This class represents the result of a successfully completed task execution.
     It encapsulates all information about what the task accomplished, including
     the primary result payload, state change indicators, diagnostic messages,
     and additional metadata. Instances of this class are returned by task
-    ``start(...)`` methods when the task completes without errors.
+    task entrypoint methods when the task completes without errors.
 
     Attributes:
         status (Literal[TaskStatus.PASSED]): The task execution status, always
@@ -790,13 +790,13 @@ class TaskSuccessResult(_GenjaModel):
 
 
 class TaskFailureResult(_GenjaModel):
-    """Failed task outcome returned from ``start(...)`` methods.
+    """Failed task outcome returned from task entrypoint methods.
 
     This class represents the result of a task execution that encountered an
     error and could not complete successfully. It encapsulates all information
     about the failure, including the error message, failure category, retry
     eligibility, diagnostic messages, and additional failure details. Instances
-    of this class are returned by task ``start(...)`` methods when the task
+    of this class are returned by task entrypoint methods when the task
     encounters an error condition.
 
     Example:
@@ -901,13 +901,13 @@ class TaskFailureResult(_GenjaModel):
 
 
 class TaskSkipResult(_GenjaModel):
-    """Skipped task outcome returned from ``start(...)`` methods.
+    """Skipped task outcome returned from task entrypoint methods.
 
     This class represents the result of a task execution that was intentionally
     bypassed and did not execute its main logic. It encapsulates information
     about why the task was skipped, including both machine-readable reason codes
     and human-readable explanatory messages. Instances of this class are returned
-    by task ``start(...)`` methods when the task determines it should not execute
+    by task entrypoint methods when the task determines it should not execute
     based on conditional logic, prerequisites, or other criteria.
 
     Example:
