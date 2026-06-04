@@ -26,41 +26,31 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use async_trait::async_trait;
+//! use genja::genja_task;
 //! use genja_core::settings::RunnerConfig;
 //! use genja_core::inventory::{Host, Hosts};
 //! use genja_core::task::{
-//!     HostTaskResult, Task, TaskDefinition, TaskInfo, TaskRuntimeContext, TaskSuccess,
+//!     HostTaskResult, TaskDefinition, TaskError, TaskRuntimeContext, TaskSuccess,
 //! };
 //! use genja_plugin_manager::plugin_types::PluginRunner;
 //! use tokio::runtime::Builder;
 //! # use genja::plugins::SerialRunnerPlugin;
-//! # use genja_core_derive::Task as TaskDerive;
 //!
-//! #[derive(TaskDerive)]
-//! struct ExampleTask {
-//!     name: String,
-//!     connection_plugin_name: Option<String>,
-//!     options: Option<serde_json::Value>,
-//! }
+//! struct ExampleTask;
 //!
-//! #[async_trait]
-//! impl Task for ExampleTask {
-//!     async fn start(
+//! #[genja_task(name = "example", connection_plugin_name = "ssh")]
+//! impl ExampleTask {
+//!     async fn start_async(
 //!         &self,
 //!         _host: &Host,
 //!         _context: &TaskRuntimeContext,
-//!     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+//!     ) -> Result<HostTaskResult, TaskError> {
 //!         Ok(HostTaskResult::passed(TaskSuccess::new()))
 //!     }
 //! }
 //!
 //! let runner = SerialRunnerPlugin;
-//! let task = TaskDefinition::new(ExampleTask {
-//!     name: "example".to_string(),
-//!     connection_plugin_name: Some("ssh".to_string()),
-//!     options: None,
-//! });
+//! let task = TaskDefinition::new(ExampleTask);
 //! let hosts = Hosts::default();
 //! let config = RunnerConfig::default();
 //!

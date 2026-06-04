@@ -876,29 +876,17 @@ impl Genja {
     /// # Examples
     ///
     /// ```
-    /// use async_trait::async_trait;
-    /// use genja::Genja;
+    /// use genja::{Genja, genja_task};
     /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
     /// use genja_core::task::{
-    ///     HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    ///     HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
     /// };
-    /// use serde_json::Value;
-    /// use std::sync::Arc;
     ///
     /// struct MyTask;
     ///
-    /// impl TaskInfo for MyTask {
-    ///     fn name(&self) -> &str { "my-task" }
-    ///     fn options(&self) -> Option<&Value> { None }
-    /// }
-    ///
-    /// impl SubTasks for MyTask {
-    ///     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> { Vec::new() }
-    /// }
-    ///
-    /// #[async_trait]
-    /// impl Task for MyTask {
-    ///     async fn start(
+    /// #[genja_task(name = "my-task")]
+    /// impl MyTask {
+    ///     async fn start_async(
     ///         &self,
     ///         _host: &Host,
     ///         _context: &TaskRuntimeContext,
