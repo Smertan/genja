@@ -3,6 +3,10 @@
 Runners control how Genja executes tasks across the selected hosts. A runner is
 selected by name in settings or with `with_runner(...)`.
 
+The runner does not decide which hosts are selected. Inventory loading and
+filtering decide the selected host set, then the runner decides how task work is
+scheduled across those hosts.
+
 ## Built-In Runners
 
 Genja includes two built-in runners:
@@ -32,6 +36,12 @@ Runner settings:
 - `max_task_depth`: maximum nested task depth. Defaults to `10`.
 - `max_connection_attempts`: maximum connection attempts. Defaults to `3`.
 
+`max_connection_attempts` is part of the shared runner configuration. The
+built-in runners pass the task connection resolver into task execution; the
+connection layer is responsible for interpreting connection retry behavior.
+Custom runners should pass the resolver through when they delegate to task
+execution helpers.
+
 ## Threaded Runner
 
 The `threaded` runner executes a task across multiple hosts concurrently. It is
@@ -52,6 +62,14 @@ runner:
   worker_count: 20
 ```
 
+The threaded runner keeps up to `worker_count` host executions in flight. As
+soon as one host finishes, the next pending host is scheduled until the selected
+host list is exhausted.
+
+Host results are merged as workers finish, so the order of host keys in a
+threaded result should not be used as an execution-order guarantee. Use the
+status lists and host IDs in the result data when making automation decisions.
+
 ## Serial Runner
 
 The `serial` runner executes work sequentially. It is useful for debugging,
@@ -63,6 +81,10 @@ runner:
 ```
 
 `worker_count` does not affect the built-in `serial` runner.
+
+Serial execution follows the selected host iteration order. That makes logs and
+result inspection easier while you are developing a task or diagnosing an
+inventory issue.
 
 ## Select A Runner In Code
 
@@ -122,6 +144,10 @@ When running a task directly, the call may also provide a maximum depth.
 Use `0` for only the top-level task. Use a higher value when sub-tasks should
 run.
 
+Rust `run_task(...)` and `run_tasks(...)` require the depth argument. Python
+accepts `max_depth=None`; when omitted, the runtime uses
+`runner.max_task_depth` from settings.
+
 ## Multiple Tasks
 
 When running an ordered task list, root tasks are executed in list order. The
@@ -133,6 +159,34 @@ runner controls host execution for each root task.
 
 Sub-tasks belong to their parent task tree and are controlled by the same task
 depth limit.
+
+This means the built-in threaded runner parallelizes hosts within a root task;
+it does not run separate root tasks from the same `Tasks` list at the same time.
+
+## Empty Host Selections
+
+If filtering selects no hosts, runners still return a task result object for the
+requested task. The host result map is empty, and lifecycle processors can still
+observe task start and finish hooks.
+
+This is useful for workflows that treat "nothing matched" as a reportable
+outcome instead of a runtime crash. If an empty host set is unexpected, check
+`host_ids()` before running the task.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    if genja.host_ids().is_empty() {
+        eprintln!("no hosts selected");
+    }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    if not genja.host_ids():
+        print("no hosts selected")
+    ```
 
 ## Custom Runner Plugins
 
@@ -216,8 +270,12 @@ authored in and register under the `RunnerPlugin` group.
             runner_config: RunnerConfig,
             max_depth: int,
         ) -> genja_lib.TaskResults:
-            first_host = dict(list(hosts.items())[:1])
-            return task.run_on_hosts(first_host, connection_resolver, max_depth)
+            _, first_host = next(iter(hosts.items()))
+            return task.run_on_host(
+                first_host,
+                connection_resolver=connection_resolver,
+                max_depth=max_depth,
+            )
 
 
     plugins = genja_lib.PluginManager()
@@ -227,6 +285,9 @@ authored in and register under the `RunnerPlugin` group.
 Custom runners may also implement `run_tasks(...)` for custom ordered task-list
 execution. If `run_tasks(...)` is not provided, Genja delegates each root task to
 `run_task(...)` in order.
+
+Python runners that implement `run_tasks(...)` should inherit from
+`BatchRunnerPluginBase` when using the typed public API.
 
 ### Python Async Variant
 
@@ -251,8 +312,12 @@ Async Python runners use the same base class:
             runner_config: RunnerConfig,
             max_depth: int,
         ) -> genja_lib.TaskResults:
-            first_host = dict(list(hosts.items())[:1])
-            return task.run_on_hosts(first_host, connection_resolver, max_depth)
+            _, first_host = next(iter(hosts.items()))
+            return task.run_on_host(
+                first_host,
+                connection_resolver=connection_resolver,
+                max_depth=max_depth,
+            )
     ```
 
 ## Choosing A Runner
