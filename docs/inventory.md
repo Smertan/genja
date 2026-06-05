@@ -28,6 +28,17 @@ inventory:
     hosts_file: ./hosts.json
 ```
 
+Hosts, groups, and defaults can be split across three files:
+
+```yaml
+inventory:
+  plugin: FileInventoryPlugin
+  options:
+    hosts_file: ./hosts.yaml
+    groups_file: ./groups.yaml
+    defaults_file: ./defaults.yaml
+```
+
 ## Hosts
 
 Hosts files are maps keyed by host ID. The map key becomes the Genja host name.
@@ -98,6 +109,62 @@ Hosts support these fields:
 
 Unknown host fields are rejected so misspelled inventory keys fail early.
 
+## Resolved Hosts
+
+During execution, Genja resolves a host by applying inventory layers in this
+order:
+
+1. defaults
+2. groups, in the order listed on the host
+3. host fields
+
+Scalar fields such as `hostname`, `port`, `username`, `password`, and
+`platform` use the latest non-null value. Object-shaped `data` values are
+merged recursively, and later keys override earlier keys. Non-object `data`
+values replace the previous value.
+
+For example:
+
+```yaml
+# defaults.yaml
+username: automation
+port: 22
+data:
+  environment: lab
+  collection:
+    retries: 2
+```
+
+```yaml
+# groups.yaml
+core:
+  platform: ios
+  data:
+    site:
+      type: core
+    collection:
+      retries: 3
+
+ssh_users:
+  username: netops
+```
+
+```yaml
+# hosts.yaml
+router1:
+  hostname: 10.0.0.1
+  groups:
+    - core
+    - ssh_users
+  data:
+    site:
+      name: dc1
+```
+
+`router1` resolves with `username: netops`, `port: 22`, `platform: ios`, and
+merged `data` containing both `environment: lab` and the nested `site` and
+`collection` values.
+
 ## Groups
 
 Groups provide shared values for hosts. A host joins groups with the `groups`
@@ -128,6 +195,9 @@ inventory:
 
 Groups support the same fields as hosts.
 
+Groups can also inherit from other groups by setting their own `groups` field.
+Parent groups are resolved first, then the child group overrides them.
+
 ## Defaults
 
 Defaults provide base values for the inventory:
@@ -152,6 +222,31 @@ inventory:
 ```
 
 Defaults support the same fields as groups, except `groups` and `defaults`.
+
+## Connection Options
+
+Use `connection_options` when one host needs different values for a specific
+connection plugin. These options are keyed by connection plugin name:
+
+```yaml
+router1:
+  hostname: 10.0.0.1
+  username: automation
+  platform: ios
+  connection_options:
+    ssh:
+      port: 22
+    netconf:
+      port: 830
+      username: netconf-user
+      extras:
+        strict_host_key_checking: false
+```
+
+When a task asks for a connection plugin, Genja resolves the base host values
+and then applies `connection_options[plugin_name]` for that plugin. Defaults,
+groups, and hosts can all define `connection_options`; host-level values take
+the highest precedence.
 
 ## Custom Inventory Plugins
 

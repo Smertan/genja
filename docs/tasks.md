@@ -105,6 +105,10 @@ Each task receives:
 - runtime context: a `TaskRuntimeContext` value created by the runtime for the
   current task execution
 
+Use task metadata for values that belong to the task definition. Use host data
+for values that vary by inventory target. Use runtime context for values the
+runner resolves while executing, such as an optional task connection.
+
 ## Sync And Async Execution
 
 === ":fontawesome-brands-rust: Rust"
@@ -229,6 +233,10 @@ warnings, messages, and metadata. Failure results include a message, failure
 kind, retryability, details, warnings, and messages. Skip results include a
 machine-readable reason and human-readable message.
 
+Prefer returning an explicit failure or skip result when the task can classify
+the outcome. Reserve raised errors for unexpected internal errors that should be
+treated as task execution failures by the runtime.
+
 ## Failure Kinds
 
 Use failure kinds to make task failures easier to classify:
@@ -242,6 +250,26 @@ Use failure kinds to make task failures easier to classify:
 - `internal`
 - `external`
 
+## Error Behavior
+
+A task can finish a host in three normal states:
+
+- passed: the task completed successfully
+- failed: the task ran and determined that the host failed
+- skipped: the task intentionally did not apply to that host
+
+Rust task entrypoints return `Result<HostTaskResult, TaskError>`. Returning
+`Ok(HostTaskResult::failed(...))` records a classified host failure. Returning
+`Err(TaskError)` reports an execution error from the task implementation.
+
+Python task entrypoints return `TaskSuccessResult`, `TaskFailureResult`, or
+`TaskSkipResult`. If the method raises an exception, the runtime records it as
+a failed task execution for that host.
+
+Sub-tasks run after their parent task for the same host. The runner enforces
+the configured maximum depth, so a task tree can be defined once and run with
+different depth limits depending on the workflow.
+
 ## Run A Task
 
 === ":fontawesome-brands-rust: Rust"
@@ -251,7 +279,7 @@ Use failure kinds to make task failures easier to classify:
 
     fn main() -> Result<(), genja::GenjaError> {
         let genja = Genja::from_settings_file("settings.yaml")?;
-        let results = genja.run_task(CollectFacts { name: "collect_facts" }, 1)?;
+        let results = genja.run_task(CollectFacts, 1)?;
 
         let output = results.to_pretty_json_string().map_err(|err| {
             genja::GenjaError::Message(format!("failed to serialize task results: {err}"))
@@ -271,7 +299,7 @@ Use failure kinds to make task failures easier to classify:
     async fn main() -> Result<(), genja::GenjaError> {
         let genja = Genja::from_settings_file("settings.yaml")?;
         let results = genja
-            .run_task_async(CollectFacts { name: "collect_facts" }, 1)
+            .run_task_async(CollectFacts, 1)
             .await?;
 
         let output = results.to_pretty_json_string().map_err(|err| {

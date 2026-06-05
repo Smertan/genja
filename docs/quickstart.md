@@ -3,12 +3,22 @@
 This guide creates a small inventory, loads Genja settings, runs a task across
 two hosts, and prints the results.
 
+You should finish with a working runtime and a JSON result that shows the task
+passed for each host.
+
 ## Install
 
 === ":fontawesome-brands-rust: Rust"
 
     ```bash
     cargo add genja
+    ```
+
+    The task examples below also use Tokio and serde_json:
+
+    ```bash
+    cargo add tokio --features macros,rt-multi-thread
+    cargo add serde_json
     ```
 
 === ":fontawesome-brands-python: Python"
@@ -88,6 +98,13 @@ router2:
     for host_id in genja.host_ids():
         print(host_id)
     ```
+
+Expected output:
+
+```text
+router1
+router2
+```
 
 ## Run A Task
 
@@ -193,7 +210,7 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
 
 
     genja = genja_lib.Genja.from_settings_file("settings.yaml")
-    results = genja.run_task(CollectFacts)
+    results = genja.run_task(CollectFacts, max_depth=1)
 
     print(results.to_json(pretty=True))
     ```
@@ -235,7 +252,7 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
 
     async def main() -> None:
         genja = genja_lib.Genja.from_settings_file("settings.yaml")
-        results = await genja.run_task_async(CollectFactsAsync)
+        results = await genja.run_task_async(CollectFactsAsync, max_depth=1)
 
         print(results.to_json(pretty=True))
 
@@ -246,6 +263,10 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
     `TaskRuntimeContext` keeps execution depth internal. Python tasks access the
     resolved connection through `context.connection()` and can guard it with
     `context.has_connection()`.
+
+The printed JSON includes the task name, per-host statuses, summaries or
+metadata, and any nested sub-task results. For this task, both hosts should be
+reported as passed.
 
 ## Run Repository Examples
 
