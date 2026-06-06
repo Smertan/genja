@@ -329,6 +329,109 @@ different depth limits depending on the workflow.
 The maximum depth controls nested sub-task execution. Use `0` when only the
 top-level task should run, and a higher value when sub-tasks are expected.
 
+## Inspect Results
+
+`run_task(...)` returns a task result tree. Check the host summary before
+assuming the task succeeded for every host.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    let summary = results.task_summary();
+    let hosts = summary.hosts();
+
+    println!(
+        "passed={} failed={} skipped={}",
+        hosts.passed(),
+        hosts.failed(),
+        hosts.skipped(),
+    );
+
+    for host_id in results.failed_hosts() {
+        println!("failed host: {host_id}");
+    }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    print(results.host_summary())
+
+    for host_id in results.failed_hosts:
+        print(f"failed host: {host_id}")
+    ```
+
+Use `task_summary()` when you need recursive counts for a task tree with
+sub-tasks.
+
+Full results have two useful output shapes:
+
+- normalized output: default, stable field names for reports and scripts
+- raw output: internal enum-shaped data for debugging and bridge/plugin code
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    let json = results.to_pretty_json_string().map_err(|err| {
+        genja::GenjaError::Message(format!("failed to serialize task results: {err}"))
+    })?;
+    println!("{json}");
+
+    let raw_json = results.to_raw_pretty_json_string().map_err(|err| {
+        genja::GenjaError::Message(format!("failed to serialize raw task results: {err}"))
+    })?;
+    println!("{raw_json}");
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    print(results.to_json(pretty=True))
+    data = results.to_dict()
+
+    print(results.to_json(raw=True, pretty=True))
+    raw = results.to_dict(raw=True)
+    ```
+
+Normalized output stores each host result with fields such as `status`,
+`summary`, `metadata`, and `messages`:
+
+```json
+{
+  "task_name": "collect_facts",
+  "hosts": {
+    "router1": {
+      "status": "passed",
+      "summary": "collected facts from 10.0.0.1",
+      "metadata": {
+        "platform": "ios"
+      }
+    }
+  },
+  "sub_tasks": {}
+}
+```
+
+Raw output preserves the underlying variant names, such as `Passed`, `Failed`,
+and `Skipped`:
+
+```json
+{
+  "task_name": "collect_facts",
+  "hosts": {
+    "router1": {
+      "Passed": {
+        "summary": "collected facts from 10.0.0.1",
+        "metadata": {
+          "platform": "ios"
+        }
+      }
+    }
+  },
+  "sub_tasks": {}
+}
+```
+
 ## Processors
 
 Processors are lifecycle hooks selected by task metadata. They are documented

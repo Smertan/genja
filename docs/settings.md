@@ -295,43 +295,11 @@ defaults and emit a warning only if a logger has already been initialized.
 | `GENJA_LOGGING_LOG_FILE` | `logging.log_file` | current directory `genja.log` |
 | `GENJA_LOGGING_TO_CONSOLE` | `logging.to_console` | `false` |
 
-## Troubleshooting Settings Logging
+## Troubleshooting
 
-For troubleshooting settings loading, initialize a temporary logger before
-calling `Settings::from_file(...)`. Use a fixed level such as `debug` because
-the configured logging level is not available until after settings load.
-
-=== ":fontawesome-brands-rust: Rust"
-
-    ```rust
-    use genja::genja_core::Settings;
-    use tracing_subscriber::EnvFilter;
-
-    fn main() -> Result<(), Box<dyn std::error::Error>> {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new("debug"))
-            .init();
-
-        let settings = Settings::from_file("settings.yaml")?;
-
-        println!("Configured log level: {}", settings.logging().level());
-        Ok(())
-    }
-    ```
-
-=== ":fontawesome-brands-python: Python"
-
-    ```python
-    import logging
-
-    import genja as genja_lib
-
-    logging.basicConfig(level=logging.DEBUG)
-
-    settings = genja_lib.Settings.from_file("settings.yaml")
-
-    print(f"Configured log level: {settings.logging.level}")
-    ```
+See [Logging And Troubleshooting](logging-troubleshooting.md) for logger setup,
+settings load failures, inventory file issues, plugin load failures, runner
+errors, and empty host selections.
 
 ## References
 

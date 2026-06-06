@@ -22,3 +22,4 @@ the quickstart to load inventory and run your first task.
 - [Processors](processors.md)
 - [Runners](runners.md)
 - [Settings](settings.md)
+- [Logging And Troubleshooting](logging-troubleshooting.md)
