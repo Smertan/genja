@@ -266,6 +266,10 @@ Python task entrypoints return `TaskSuccessResult`, `TaskFailureResult`, or
 `TaskSkipResult`. If the method raises an exception, the runtime records it as
 a failed task execution for that host.
 
+The `core.raise_on_error` setting is not currently used as a task execution
+policy. Task failures and task entrypoint errors are recorded in the result tree
+regardless of that setting.
+
 Sub-tasks run after their parent task for the same host. The runner enforces
 the configured maximum depth, so a task tree can be defined once and run with
 different depth limits depending on the workflow.

@@ -18,6 +18,8 @@
   "runner": {
     "plugin": "threaded",
     "worker_count": 10,
+    "max_task_depth": 10,
+    "max_connection_attempts": 3,
     "options": {}
   },
   "logging": {
