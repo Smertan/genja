@@ -59,6 +59,7 @@ pub use ::async_trait::async_trait;
 pub use genja_core;
 pub use genja_core::GenjaError;
 pub use genja_core_derive::genja_task;
+pub use genja_plugin_manager;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
