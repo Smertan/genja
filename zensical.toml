@@ -29,7 +29,7 @@ nav = [
 ]
 
 [project.theme]
-features = ["content.tabs.link", "navigation.indexes"]
+features = ["content.tabs.link", "navigation.footer", "navigation.indexes"]
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme)"

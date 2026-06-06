@@ -95,6 +95,64 @@ structured result for that host.
             )
     ```
 
+## Rust Task Macro
+
+Rust tasks are usually defined with `#[genja_task(...)]`. The macro is
+re-exported from the `genja` crate, so application code should normally import
+it from there:
+
+```rust
+use genja::genja_task;
+```
+
+The macro applies to an inherent `impl` block. It generates the task metadata
+and the `Task` implementation from the methods and attributes on that block.
+
+```rust
+use genja::genja_core::inventory::Host;
+use genja::genja_core::task::{
+    HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
+};
+use genja::genja_task;
+
+struct BackupConfig;
+
+#[genja_task(
+    name = "backup_config",
+    connection_plugin_name = "ssh",
+    processors = ["audit"]
+)]
+impl BackupConfig {
+    async fn start_async(
+        &self,
+        host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::passed(
+            TaskSuccess::new().with_summary(format!(
+                "backed up {}",
+                host.hostname().unwrap_or(host.id())
+            )),
+        ))
+    }
+}
+```
+
+The common macro options are:
+
+- `name`: task name shown in results and task trees
+- `connection_plugin_name`: connection plugin to open before task execution
+- `processors`: processor plugin names to run around task execution
+
+Define exactly one task entrypoint in the macro `impl` block:
+
+- `async fn start_async(...)` for async task bodies
+- `fn start(...)` for blocking task bodies
+
+The macro can also read optional helper methods from the same `impl` block, such
+as `options(...)` and `sub_tasks(...)`. Use those helpers when a task needs
+dynamic JSON options or child tasks in a task tree.
+
 ## Task Inputs
 
 Each task receives:
