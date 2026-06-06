@@ -14,7 +14,7 @@ nav = [
   {"Tasks" = "tasks.md"},
   {"Runners" = "runners.md"},
   {"Plugins" = [
-    {"Overview" = "plugins.md"},
+    "plugins/index.md",
     {"Connections" = "connection.md"},
     {"Processors" = "processors.md"},
     {"Transforms" = "transforms.md"},
@@ -24,11 +24,12 @@ nav = [
   {"Logging And Troubleshooting" = "logging-troubleshooting.md"},
   {"Development" = [
     {"Contributing" = "contributing.md"},
+    {"License" = "license.md"},
   ]},
 ]
 
 [project.theme]
-features = ["content.tabs.link", "navigation.expand"]
+features = ["content.tabs.link", "navigation.indexes"]
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme)"

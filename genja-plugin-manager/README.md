@@ -234,7 +234,7 @@ Common entry points:
 
 ## License
 
-This project is licensed under the Apache License, Version 2.0. See `LICENSE`.
+This project is licensed under AGPL-3.0-only. See `LICENSE`.
 
 ## Contributing
 

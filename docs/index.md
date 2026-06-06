@@ -17,7 +17,7 @@ the quickstart to load inventory and run your first task.
 
 ## Reference
 
-- [Plugins](plugins.md)
+- [Plugins](plugins/index.md)
 - [Transforms](transforms.md)
 - [Connections](connection.md)
 - [Processors](processors.md)
@@ -30,3 +30,9 @@ the quickstart to load inventory and run your first task.
 ## Development
 
 - [Contributing](contributing.md)
+- [License](license.md)
+
+## Licensing
+
+Genja is licensed under `AGPL-3.0-only`. See [License](license.md) for package
+license details.

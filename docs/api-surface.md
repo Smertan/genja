@@ -141,5 +141,5 @@ Prefer public package APIs over workspace-internal details. In particular:
 - [Installation](installation.md)
 - [Quickstart](quickstart.md)
 - [Tasks](tasks.md)
-- [Plugins](plugins.md)
+- [Plugins](plugins/index.md)
 - [Examples](examples.md)

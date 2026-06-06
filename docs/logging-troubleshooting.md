@@ -250,5 +250,5 @@ After a run, inspect host summaries before assuming the workflow succeeded:
     ```
 
 Use [Settings](settings.md) for the field reference, [Inventory](inventory.md)
-for inventory structure, [Plugins](plugins.md) for registration and loading, and
+for inventory structure, [Plugins](plugins/index.md) for registration and loading, and
 [Runners](runners.md) for execution behavior.

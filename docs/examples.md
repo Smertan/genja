@@ -86,4 +86,4 @@ For fuller explanations, see:
 - [Quickstart](quickstart.md)
 - [Inventory](inventory.md)
 - [Tasks](tasks.md)
-- [Plugins](plugins.md)
+- [Plugins](plugins/index.md)
