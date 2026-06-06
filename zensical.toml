@@ -22,6 +22,9 @@ nav = [
   {"Examples" = "examples.md"},
   {"Versions And Compatibility" = "version-compatibility.md"},
   {"Logging And Troubleshooting" = "logging-troubleshooting.md"},
+  {"Development" = [
+    {"Contributing" = "contributing.md"},
+  ]},
 ]
 
 [project.theme]

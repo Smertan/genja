@@ -26,3 +26,7 @@ the quickstart to load inventory and run your first task.
 - [API Surface](api-surface.md)
 - [Versions And Compatibility](version-compatibility.md)
 - [Logging And Troubleshooting](logging-troubleshooting.md)
+
+## Development
+
+- [Contributing](contributing.md)
