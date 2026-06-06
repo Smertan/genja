@@ -29,7 +29,7 @@ Install the Genja package for the language you are using.
     `genja`:
 
     ```python
-    import genja
+    import genja as genja_lib
     ```
 
 ## Verify
@@ -49,9 +49,9 @@ Install the Genja package for the language you are using.
 === ":fontawesome-brands-python: Python"
 
     ```python
-    import genja
+    import genja as genja_lib
 
-    settings = genja.Settings()
+    settings = genja_lib.Settings()
     print(f"Runner plugin: {settings.runner.plugin}")
     ```
 
@@ -77,6 +77,4 @@ cd genja
 
 === ":fontawesome-brands-python: Python"
 
-    Python examples are published from the repository documentation and example
-    directories as they are added.
-
+    Python examples are available under `genja/examples/python`.

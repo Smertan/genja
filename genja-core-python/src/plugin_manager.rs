@@ -62,6 +62,7 @@ use genja_plugin_manager::plugin_types::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
+use pyo3_async_runtimes::tokio::into_future;
 use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
 use std::path::PathBuf;
@@ -154,8 +155,8 @@ impl PyPluginManager {
     ///
     /// This method serves as a public interface for registering Python plugins,
     /// accepting a bound Python object and delegating to the internal registration
-    /// logic. The plugin must implement the required plugin interface methods
-    /// (`name()` and `group()`) and belong to a supported plugin group
+    /// logic. The plugin must expose the required plugin identity attributes
+    /// (`name` and `group`) and belong to a supported plugin group
     /// (currently "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin",
     /// "RunnerPlugin",
     /// or "TransformFunctionPlugin").
@@ -164,17 +165,16 @@ impl PyPluginManager {
     ///
     /// * `plugin` - A bound reference to a Python object implementing the plugin
     ///   interface. The object will be unbound and stored internally for later use.
-    ///   The plugin must define callable `name()` and `group()` methods that return
-    ///   non-empty strings identifying the plugin.
+    ///   The plugin must expose non-empty string `name` and `group` attributes.
     ///
     /// # Returns
     ///
     /// Returns `Ok(())` if the plugin was successfully registered, or a `PyErr` if:
     /// - The plugin manager has already been consumed
     /// - The plugin manager lock is poisoned
-    /// - The plugin is missing required `name()` or `group()` methods
-    /// - The plugin's `name()` or `group()` methods are not callable
-    /// - The plugin's `name()` or `group()` returns an empty string
+    /// - The plugin is missing required `name` or `group` attributes
+    /// - The plugin's `name` or `group` attributes are callable
+    /// - The plugin's `name` or `group` is an empty string
     /// - The plugin's group is not a supported type ("ProcessorPlugin",
     ///   "ConnectionPlugin", "InventoryPlugin", "RunnerPlugin", or
     ///   "TransformFunctionPlugin")
@@ -195,7 +195,7 @@ impl PyPluginManager {
     /// "transform" plugin
     /// types. Each plugin entry
     /// must specify an import path in the format `module:attribute`, and the plugin's
-    /// declared name (from its `name()` method) must match the key used in the manifest.
+    /// declared name (from its `name` property) must match the key used in the manifest.
     ///
     /// The expected structure in `pyproject.toml` is:
     /// ```toml
@@ -229,7 +229,7 @@ impl PyPluginManager {
     /// - The plugin manager lock is poisoned
     /// - The `pyproject.toml` file cannot be read or parsed
     /// - Any plugin import path is invalid or the plugin cannot be imported
-    /// - A plugin's declared `name()` does not match its manifest key
+    /// - A plugin's declared `name` does not match its manifest key
     /// - Any plugin registration fails (e.g., missing required methods, unsupported group)
     ///
     /// # Errors
@@ -290,7 +290,7 @@ impl PyPluginManager {
                 })?;
                 if declared_name != *name {
                     return Err(PyValueError::new_err(format!(
-                        "{section_name} plugin name mismatch in {}: manifest key '{name}' does not match plugin.name() value '{declared_name}'",
+                        "{section_name} plugin name mismatch in {}: manifest key '{name}' does not match plugin.name value '{declared_name}'",
                         manifest_path.display()
                     )));
                 }
@@ -312,8 +312,7 @@ impl PyPluginManager {
     /// # Parameters
     ///
     /// * `name` - A string slice representing the unique name of the plugin to
-    ///   deregister. This should match the name returned by the plugin's `name()`
-    ///   method when it was registered.
+    ///   deregister. This should match the plugin's `name` property.
     ///
     /// # Returns
     ///
@@ -341,7 +340,7 @@ impl PyPluginManager {
     /// registered with the plugin manager, including both built-in plugins and
     /// any plugins that have been registered via `register_plugin`,
     /// `load_rust_plugins_from_directory`, or `load_python_plugins_from_pyproject`.
-    /// The names correspond to the values returned by each plugin's `name()` method.
+    /// The names correspond to each plugin's `name` property.
     ///
     /// # Returns
     ///
@@ -373,7 +372,7 @@ impl PyPluginManager {
     /// The information includes both built-in plugins and any plugins that have
     /// been registered via `register_plugin`, `load_rust_plugins_from_directory`,
     /// or `load_python_plugins_from_pyproject`. Each tuple contains the plugin's
-    /// name (from its `name()` method) and its group (from its `group()` method).
+    /// name (from its `name` property) and its group (from its `group` property).
     ///
     /// # Returns
     ///
@@ -474,14 +473,14 @@ impl PyPluginManager {
     /// This internal method handles the registration of Python plugins by acquiring
     /// the plugin manager lock, verifying the manager has not been consumed, and
     /// delegating to the registration logic. The plugin must implement the required
-    /// plugin interface methods (`name()` and `group()`) and belong to a supported
+    /// plugin identity attributes (`name` and `group`) and belong to a supported
     /// plugin group.
     ///
     /// # Parameters
     ///
     /// * `plugin` - A Python object implementing the plugin interface. The object
-    ///   must define callable `name()` and `group()` methods that return non-empty
-    ///   strings identifying the plugin. The plugin's group must be one of
+    ///   must expose non-empty string `name` and `group` attributes. The plugin's
+    ///   group must be one of
     ///   "ProcessorPlugin", "ConnectionPlugin", "InventoryPlugin",
     ///   "RunnerPlugin", or "TransformFunctionPlugin".
     ///
@@ -490,9 +489,9 @@ impl PyPluginManager {
     /// Returns `Ok(())` if the plugin was successfully registered, or a `PyErr` if:
     /// - The plugin manager has already been consumed
     /// - The plugin manager lock is poisoned
-    /// - The plugin is missing required `name()` or `group()` methods
-    /// - The plugin's `name()` or `group()` methods are not callable
-    /// - The plugin's `name()` or `group()` returns an empty string
+    /// - The plugin is missing required `name` or `group` attributes
+    /// - The plugin's `name` or `group` attributes are callable
+    /// - The plugin's `name` or `group` is an empty string
     /// - The plugin's group is not a supported type
     ///
     /// # Errors
@@ -510,8 +509,8 @@ impl PyPluginManager {
 
 /// Registers a Python plugin directly with a mutable `PluginManager` reference.
 ///
-/// This function extracts the plugin's identity (name and group) by calling its
-/// `name()` and `group()` methods, then wraps the plugin in the appropriate Rust
+/// This function extracts the plugin's identity (name and group) from its
+/// `name` and `group` properties, then wraps the plugin in the appropriate Rust
 /// adapter type based on its group. The wrapped plugin is then registered with
 /// the provided plugin manager. This function is used internally by the
 /// `PyPluginManager` wrapper and can also be used directly when a mutable
@@ -523,8 +522,8 @@ impl PyPluginManager {
 ///   will be registered. The manager maintains the registry of all plugins and
 ///   handles plugin lifecycle operations.
 /// * `plugin` - A Python object implementing the plugin interface. The object
-///   must define callable `name()` and `group()` methods that return non-empty
-///   strings. The plugin's group must be one of "ProcessorPlugin",
+///   must expose non-empty string `name` and `group` attributes. The plugin's
+///   group must be one of "ProcessorPlugin",
 ///   "ConnectionPlugin", "InventoryPlugin", "RunnerPlugin", or
 ///   "TransformFunctionPlugin". The plugin is wrapped in an `Arc` for shared
 ///   ownership across the plugin system.
@@ -532,9 +531,9 @@ impl PyPluginManager {
 /// # Returns
 ///
 /// Returns `Ok(())` if the plugin was successfully registered, or a `PyErr` if:
-/// - The plugin is missing required `name()` or `group()` methods
-/// - The plugin's `name()` or `group()` methods are not callable
-/// - The plugin's `name()` or `group()` returns an empty string
+/// - The plugin is missing required `name` or `group` attributes
+/// - The plugin's `name` or `group` attributes are callable
+/// - The plugin's `name` or `group` is an empty string
 /// - The plugin's group is not "ProcessorPlugin", "ConnectionPlugin",
 ///   "InventoryPlugin", "RunnerPlugin", or "TransformFunctionPlugin"
 /// - Any Python error occurs during identity extraction
@@ -623,10 +622,10 @@ pub(crate) fn register_python_plugin_on_manager(
 ///
 /// # Fields
 ///
-/// * `name` - The unique identifier for this connection plugin, matching the value
-///   returned by the Python plugin's `name()` method.
-/// * `group` - The group identifier for this plugin, matching the value returned by
-///   the Python plugin's `group()` method. For connection plugins, this is typically
+/// * `name` - The unique identifier for this connection plugin, matching the Python
+///   plugin's `name` property.
+/// * `group` - The group identifier for this plugin, matching the Python plugin's
+///   `group` property. For connection plugins, this is typically
 ///   "ConnectionPlugin".
 /// * `plugin` - An `Arc`-wrapped Python object implementing the connection plugin
 ///   interface. The `Arc` allows the plugin to be shared across multiple connection
@@ -702,7 +701,7 @@ struct PyConnectionPlugin {
 /// # Fields
 ///
 /// * `names` - A vector containing the unique names of all registered plugins.
-///   Each name corresponds to the value returned by a plugin's `name()` method.
+///   Each name corresponds to a plugin's `name` property.
 /// * `names_and_groups` - A vector of tuples containing both the name and group
 ///   identifier for each registered plugin. The group identifies the plugin type
 ///   (e.g., "Processor", "Connection", "Inventory").
@@ -719,7 +718,7 @@ impl PyLoadedPluginRegistry {
     ///
     /// This method returns a cloned list of the unique names of all plugins that
     /// were registered at the time this registry snapshot was created. The names
-    /// correspond to the values returned by each plugin's `name()` method.
+    /// correspond to each plugin's `name` property.
     ///
     /// # Returns
     ///
@@ -735,7 +734,7 @@ impl PyLoadedPluginRegistry {
     /// This method returns a cloned list of tuples containing both the unique name
     /// and group identifier for each plugin that was registered at the time this
     /// registry snapshot was created. Each tuple contains the plugin's name (from
-    /// its `name()` method) and its group (from its `group()` method), which
+    /// its `name` property) and its group (from its `group` property), which
     /// identifies the plugin type (e.g., "Processor", "Connection", "Inventory").
     ///
     /// # Returns
@@ -779,10 +778,10 @@ impl PyLoadedPluginRegistry {
 ///
 /// # Fields
 ///
-/// * `name` - The unique identifier for this inventory plugin, matching the value
-///   returned by the Python plugin's `name()` method.
-/// * `group` - The group identifier for this plugin, matching the value returned by
-///   the Python plugin's `group()` method. For inventory plugins, this is typically
+/// * `name` - The unique identifier for this inventory plugin, matching the Python
+///   plugin's `name` property.
+/// * `group` - The group identifier for this plugin, matching the Python plugin's
+///   `group` property. For inventory plugins, this is typically
 ///   "InventoryPlugin".
 /// * `plugin` - An `Arc`-wrapped Python object implementing the inventory plugin
 ///   interface. The `Arc` allows the plugin to be shared safely across threads and
@@ -999,7 +998,7 @@ impl PluginRunner for PyRunnerPlugin {
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, genja_core::GenjaError> {
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let plugin = self.plugin.bind(py);
             let task_payload = Py::new(py, PyTaskDefinition::from_runtime_definition(task.clone()))
                 .map_err(python_processor_error)?;
@@ -1022,9 +1021,9 @@ impl PluginRunner for PyRunnerPlugin {
                 },
             )
             .map_err(python_processor_error)?;
-            let result = plugin
+            plugin
                 .call_method1(
-                    "run",
+                    "run_task",
                     (
                         task_payload.bind(py),
                         hosts_payload.bind(py),
@@ -1033,9 +1032,13 @@ impl PluginRunner for PyRunnerPlugin {
                         max_depth,
                     ),
                 )
-                .map_err(python_processor_error)?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(python_processor_error)?;
+                .map(Bound::unbind)
+                .map_err(python_processor_error)
+        })?;
+        let resolved = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(python_processor_error)?;
+        Python::with_gil(|py| {
             python_result_to_task_results(resolved.bind(py).clone()).map_err(python_processor_error)
         })
     }
@@ -1071,7 +1074,7 @@ impl PluginRunner for PyRunnerPlugin {
             return Ok(results);
         }
 
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let plugin = self.plugin.bind(py);
             let task_payloads = tasks
                 .iter()
@@ -1097,7 +1100,7 @@ impl PluginRunner for PyRunnerPlugin {
                 },
             )
             .map_err(python_processor_error)?;
-            let result = plugin
+            plugin
                 .call_method1(
                     "run_tasks",
                     (
@@ -1108,9 +1111,13 @@ impl PluginRunner for PyRunnerPlugin {
                         max_depth,
                     ),
                 )
-                .map_err(python_processor_error)?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(python_processor_error)?;
+                .map(Bound::unbind)
+                .map_err(python_processor_error)
+        })?;
+        let resolved = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(python_processor_error)?;
+        Python::with_gil(|py| {
             let sequence = resolved
                 .bind(py)
                 .try_iter()
@@ -1406,6 +1413,29 @@ pub(crate) fn resolve_python_maybe_awaitable<'py>(
     }
 }
 
+pub(crate) async fn resolve_python_maybe_awaitable_async(value: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    let is_awaitable = Python::with_gil(|py| -> PyResult<bool> {
+        let inspect = PyModule::import(py, "inspect")?;
+        inspect.call_method1("isawaitable", (value.bind(py),))?.extract()
+    })?;
+    if !is_awaitable {
+        return Ok(value);
+    }
+    let has_task_locals =
+        Python::with_gil(|py| pyo3_async_runtimes::tokio::get_current_locals(py).map(|_| ()))
+            .is_ok();
+
+    if has_task_locals {
+        let future = Python::with_gil(|py| into_future(value.bind(py).clone()))?;
+        future.await.map(PyObject::into)
+    } else {
+        Python::with_gil(|py| {
+            let asyncio = PyModule::import(py, "asyncio")?;
+            Ok(asyncio.call_method1("run", (value.bind(py),))?.unbind())
+        })
+    }
+}
+
 impl Plugin for PyConnectionInstance {
     fn name(&self) -> String {
         self.name.clone()
@@ -1487,16 +1517,19 @@ impl PluginConnection for PyConnectionInstance {
             return Err("python connection plugin instance is missing a connection".to_string());
         };
 
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let connection = connection.bind(py);
             let params_payload = build_python_resolved_connection_params(py, params)
                 .map_err(|err| err.to_string())?;
-            let result = connection
+            connection
                 .call_method1("open", (params_payload,))
-                .map_err(|err| err.to_string())?;
-            resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
-            Ok(())
-        })
+                .map(Bound::unbind)
+                .map_err(|err| err.to_string())
+        })?;
+        resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(())
     }
 
     /// Executes a command on the Python connection instance and returns its output.
@@ -1539,13 +1572,17 @@ impl PluginConnection for PyConnectionInstance {
             return Err("python connection plugin instance is missing a connection".to_string());
         };
 
-        Python::with_gil(|py| {
+        let result = Python::with_gil(|py| {
             let connection = connection.bind(py);
-            let result = connection
+            connection
                 .call_method1("execute_command", (command,))
-                .map_err(|err| err.to_string())?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
+                .map(Bound::unbind)
+                .map_err(|err| err.to_string())
+        })?;
+        let resolved = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(|err| err.to_string())?;
+        Python::with_gil(|py| {
             resolved
                 .bind(py)
                 .extract::<String>()
@@ -1655,28 +1692,20 @@ impl Plugin for PyProcessorPlugin {
     }
 }
 
-/// Extracts and validates a plugin identity value by calling a specified method.
+/// Extracts and validates a plugin identity value from an attribute.
 ///
-/// This function retrieves a string identity value (such as name or group) from a Python
-/// plugin object by calling a specified method. It performs comprehensive validation to
-/// ensure the method exists, is callable, returns a string value, and that the returned
-/// string is not empty. This is used during plugin registration to extract required
-/// identity information like plugin names and groups that are needed to register the
-/// plugin in the plugin manager.
-///
-/// The function enforces the plugin contract by validating that identity methods are
-/// present, callable, and return non-empty strings. This ensures that all registered
-/// plugins have valid, usable identity information.
+/// Python plugin base classes expose `name` as a string attribute and `group`
+/// as a locked property.
 ///
 /// # Parameters
 ///
 /// * `plugin` - A reference to the bound Python plugin object from which to extract the
-///   identity value. This object must have the specified method defined as a callable
-///   attribute that returns a string when invoked with no arguments.
-/// * `method_name` - The name of the method to call on the plugin object to retrieve the
-///   identity value. Common examples include "name" for the plugin name or "group" for
-///   the plugin group. The method must exist on the plugin object and be callable.
-/// * `empty_message` - The error message to return if the method returns an empty or
+///   identity value. This object must have the specified attribute available as
+///   a string value.
+/// * `method_name` - The name of the identity attribute to read from the plugin
+///   object. Common examples include "name" for the plugin name or "group" for
+///   the plugin group.
+/// * `empty_message` - The error message to return if the attribute contains an empty or
 ///   whitespace-only string. This allows callers to provide context-specific error
 ///   messages for different identity values (e.g., "plugin name cannot be empty").
 /// * `plugin_kind` - A descriptive string identifying the type of plugin being validated,
@@ -1687,39 +1716,37 @@ impl Plugin for PyProcessorPlugin {
 /// # Returns
 ///
 /// Returns `Ok(String)` containing the extracted identity value if all validation passes:
-/// - The method exists on the plugin object
-/// - The method is callable
-/// - The method returns a string value
+/// - The attribute exists on the plugin object
+/// - The attribute is a string value
 /// - The string is not empty or whitespace-only
 ///
 /// Returns `Err(PyErr)` if any validation fails:
-/// - `PyValueError` if the method does not exist on the plugin object
-/// - `PyValueError` if the method exists but is not callable
-/// - `PyErr` if calling the method raises a Python exception
-/// - `PyErr` if the method's return value cannot be extracted as a string
+/// - `PyValueError` if the attribute does not exist on the plugin object
+/// - `PyValueError` if the attribute is callable
+/// - `PyErr` if the identity value cannot be extracted as a string
 /// - `PyValueError` if the extracted string is empty or contains only whitespace
 ///
 /// # Errors
 ///
 /// This function will return an error if the plugin does not conform to the expected
-/// interface, if the method call fails, or if the returned value is invalid.
+/// interface or if the value is invalid.
 fn extract_plugin_identity_value(
     plugin: &Bound<'_, PyAny>,
     method_name: &str,
     empty_message: &str,
     plugin_kind: &str,
 ) -> PyResult<String> {
-    let method = plugin.getattr(method_name).map_err(|_| {
+    let attribute = plugin.getattr(method_name).map_err(|_| {
         PyValueError::new_err(format!(
-            "{plugin_kind} must define a callable '{method_name}()' method"
+            "{plugin_kind} must define a '{method_name}' string property"
         ))
     })?;
-    if !method.is_callable() {
+    if attribute.is_callable() {
         return Err(PyValueError::new_err(format!(
-            "{plugin_kind} attribute '{method_name}' must be callable"
+            "{plugin_kind} attribute '{method_name}' must be a string property"
         )));
     }
-    let value: String = method.call0()?.extract()?;
+    let value: String = attribute.extract()?;
     if value.trim().is_empty() {
         return Err(PyValueError::new_err(empty_message.to_string()));
     }
@@ -1740,8 +1767,8 @@ impl PluginProcessor for PyProcessorPlugin {
 /// trait to integrate Python-based processors into the Rust task execution system. It
 /// delegates all task processing lifecycle events to the corresponding methods on the
 /// wrapped Python processor object, handling cross-language communication and error
-/// conversion. The processor supports both synchronous and asynchronous Python
-/// implementations through automatic awaitable resolution.
+/// conversion. Processor hooks are synchronous, matching the Rust `TaskProcessor`
+/// trait.
 ///
 /// The adapter checks for the presence of each lifecycle method on the Python processor
 /// before attempting to call it, allowing Python implementations to selectively implement
@@ -2563,14 +2590,13 @@ mod tests {
         BaseBuilderHost, ConnectionManager, Defaults, Group, Host, TransformFunctionOptions,
     };
     use genja_core::task::{
-        SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
+        Task, TaskError, TaskExecutionMode, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
     };
     use genja_plugin_manager::connection_factory::build_connection_factory;
     use serde_json::{Value, json};
     use std::env;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use std::sync::Once;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::runtime::Builder;
 
@@ -2584,57 +2610,50 @@ mod tests {
     }
 
     fn init_python() {
-        static INIT: Once = Once::new();
-        INIT.call_once(|| {
-            pyo3::prepare_freethreaded_python();
-            Python::with_gil(|py| {
-                let sys = PyModule::import(py, "sys").expect("sys module should import");
-                let path = sys.getattr("path").expect("sys.path should exist");
-                let python_source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
-                path.call_method1("insert", (0, python_source.display().to_string()))
-                    .expect("python source path should be inserted");
-                let modules = sys.getattr("modules").expect("sys.modules should exist");
-                let genja = PyModule::from_code(
-                    py,
-                    pyo3::ffi::c_str!("__path__ = []\n"),
-                    pyo3::ffi::c_str!("genja/__init__.py"),
-                    pyo3::ffi::c_str!("genja"),
-                )
-                .expect("genja stub should build");
-                let processor = PyModule::from_code(
-                    py,
-                    pyo3::ffi::c_str!(
-                        "class TaskProcessorContext:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
-                    ),
-                    pyo3::ffi::c_str!("genja/processor.py"),
-                    pyo3::ffi::c_str!("genja.processor"),
-                )
-                .expect("processor stub should build");
-                genja
-                    .add("processor", &processor)
-                    .expect("processor module should attach to package");
-                modules
-                    .set_item("genja", &genja)
-                    .expect("genja stub should register");
-                modules
-                    .set_item("genja.processor", &processor)
-                    .expect("processor stub should register");
-                let connection = PyModule::from_code(
-                    py,
-                    pyo3::ffi::c_str!(
-                        "class ConnectionKey:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass ResolvedConnectionParams:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
-                    ),
-                    pyo3::ffi::c_str!("genja/connection.py"),
-                    pyo3::ffi::c_str!("genja.connection"),
-                )
-                .expect("connection stub should build");
-                genja
-                    .add("connection", &connection)
-                    .expect("connection module should attach to package");
-                modules
-                    .set_item("genja.connection", &connection)
-                    .expect("connection stub should register");
-            });
+        crate::init_embedded_python();
+        Python::with_gil(|py| {
+            let sys = PyModule::import(py, "sys").expect("sys module should import");
+            let modules = sys.getattr("modules").expect("sys.modules should exist");
+            let genja = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!("__path__ = []\n"),
+                pyo3::ffi::c_str!("genja/__init__.py"),
+                pyo3::ffi::c_str!("genja"),
+            )
+            .expect("genja stub should build");
+            let processor = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "class TaskProcessorContext:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
+                ),
+                pyo3::ffi::c_str!("genja/processor.py"),
+                pyo3::ffi::c_str!("genja.processor"),
+            )
+            .expect("processor stub should build");
+            genja
+                .add("processor", &processor)
+                .expect("processor module should attach to package");
+            modules
+                .set_item("genja", &genja)
+                .expect("genja stub should register");
+            modules
+                .set_item("genja.processor", &processor)
+                .expect("processor stub should register");
+            let connection = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "class ConnectionKey:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass ResolvedConnectionParams:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
+                ),
+                pyo3::ffi::c_str!("genja/connection.py"),
+                pyo3::ffi::c_str!("genja.connection"),
+            )
+            .expect("connection stub should build");
+            genja
+                .add("connection", &connection)
+                .expect("connection module should attach to package");
+            modules
+                .set_item("genja.connection", &connection)
+                .expect("connection stub should register");
         });
     }
 
@@ -2671,15 +2690,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for TestTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for TestTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -2687,6 +2700,10 @@ mod tests {
             Ok(HostTaskResult::passed(
                 TaskSuccess::new().with_summary(format!("handled {}", self.name)),
             ))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -2911,7 +2928,7 @@ mod tests {
                 .expect_err("plugin without name/group should fail");
             assert!(
                 err.to_string()
-                    .contains("plugin must define a callable 'name()' method")
+                    .contains("plugin must define a 'name' string property")
             );
         });
     }

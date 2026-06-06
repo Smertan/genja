@@ -1,17 +1,21 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Awaitable
 
 from .connection import (
+    ConnectionBase,
     ConnectionKey,
-    ConnectionPluginProtocol,
-    ConnectionProtocol,
+    ConnectionPluginBase,
     ResolvedConnectionParams,
 )
-from .inventory import InventoryPluginProtocol
+from .inventory import InventoryPluginBase
 from .plugin_manager import PluginManager
-from .processor import TaskProcessorContext, TaskProcessorProtocol
-from .runner import BatchRunnerPluginProtocol, RunnerPluginProtocol
+from .plugin import PluginBase
+from .processor import (
+    ProcessorPluginBase,
+    TaskProcessorContext,
+)
+from .runner import BatchRunnerPluginBase, RunnerPluginBase
 from .settings import (
     CoreConfig,
     InventoryConfig,
@@ -35,7 +39,9 @@ from .task import (
     TaskSuccessResult,
     task,
 )
-from .transform import TransformFunctionPluginProtocol
+from .transform import (
+    TransformFunctionPluginBase,
+)
 
 class HostTaskResult:
     @staticmethod
@@ -129,11 +135,21 @@ class Genja:
         task_class: type[GenjaTaskProtocol],
         max_depth: int | None = None,
     ) -> TaskResults: ...
+    def run_task_async(
+        self,
+        task_class: type[GenjaTaskProtocol],
+        max_depth: int | None = None,
+    ) -> Awaitable[TaskResults]: ...
     def run_tasks(
         self,
         tasks: Tasks,
         max_depth: int | None = None,
     ) -> list[TaskResults]: ...
+    def run_tasks_async(
+        self,
+        tasks: Tasks,
+        max_depth: int | None = None,
+    ) -> Awaitable[list[TaskResults]]: ...
 
 class GenjaBuilder:
     def with_plugin(self, plugin: Any) -> GenjaBuilder: ...
@@ -152,15 +168,16 @@ __all__ = [
     "task",
     "ConnectionKey",
     "ResolvedConnectionParams",
-    "ConnectionProtocol",
-    "ConnectionPluginProtocol",
-    "InventoryPluginProtocol",
+    "ConnectionBase",
+    "ConnectionPluginBase",
+    "InventoryPluginBase",
     "PluginManager",
+    "PluginBase",
     "TaskProcessorContext",
-    "TaskProcessorProtocol",
-    "RunnerPluginProtocol",
-    "BatchRunnerPluginProtocol",
-    "TransformFunctionPluginProtocol",
+    "ProcessorPluginBase",
+    "RunnerPluginBase",
+    "BatchRunnerPluginBase",
+    "TransformFunctionPluginBase",
     "Settings",
     "CoreConfig",
     "InventoryConfig",

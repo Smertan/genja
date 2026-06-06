@@ -6,8 +6,8 @@ directly. The top-level package re-exports these names for compatibility, but
 
 - ``ConnectionKey``
 - ``ResolvedConnectionParams``
-- ``ConnectionPluginProtocol``
-- ``ConnectionProtocol``
+- ``ConnectionPluginBase``
+- ``ConnectionBase``
 
 Connection plugins are registered on ``PluginManager`` and selected by task
 metadata:
@@ -18,9 +18,9 @@ Connection factories and connection methods may be implemented as either
 .. code-block:: python
 
     import genja
-    from genja.connection import ConnectionKey, ResolvedConnectionParams
+    from genja.connection import ConnectionBase, ConnectionKey, ConnectionPluginBase, ResolvedConnectionParams
 
-    class NetmikoConnection:
+    class NetmikoConnection(ConnectionBase):
         def __init__(self, key: ConnectionKey):
             self.key = key
             self.alive = False
@@ -35,12 +35,8 @@ Connection factories and connection methods may be implemented as either
         def is_alive(self) -> bool:
             return self.alive
 
-    class NetmikoPlugin:
-        def name(self) -> str:
-            return "ssh"
-
-        def group(self) -> str:
-            return "ConnectionPlugin"
+    class NetmikoPlugin(ConnectionPluginBase):
+        name = "ssh"
 
         def create(self, key: ConnectionKey) -> NetmikoConnection:
             return NetmikoConnection(key)
@@ -51,9 +47,11 @@ Connection factories and connection methods may be implemented as either
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Protocol
+from abc import ABC, abstractmethod
+from typing import Any, Awaitable
 
 from pydantic import BaseModel
+from .plugin import PluginBase
 
 
 class _GenjaModel(BaseModel):
@@ -78,40 +76,47 @@ class ResolvedConnectionParams(_GenjaModel):
     extras: Any | None = None
 
 
-class ConnectionProtocol(Protocol):
+class ConnectionBase(ABC):
+    """Base class for Python-authored connection instances."""
+
+    @abstractmethod
     def open(
         self,
         params: ResolvedConnectionParams,
-    ) -> None | Awaitable[None]: ...
+    ) -> None | Awaitable[None]:
+        ...
 
-    def execute_command(self, command: str) -> str | Awaitable[str]: ...
+    def execute_command(self, command: str) -> str | Awaitable[str]:
+        raise NotImplementedError("connection does not implement execute_command")
 
+    @abstractmethod
     def close(
         self,
-    ) -> (
-        ConnectionKey
-        | dict[str, Any]
-        | None
-        | Awaitable[ConnectionKey | dict[str, Any] | None]
-    ): ...
+    ) -> ConnectionKey | dict[str, Any] | None | Awaitable[ConnectionKey | dict[str, Any] | None]:
+        ...
 
-    def is_alive(self) -> bool | Awaitable[bool]: ...
+    @abstractmethod
+    def is_alive(self) -> bool | Awaitable[bool]:
+        ...
 
 
-class ConnectionPluginProtocol(Protocol):
-    def name(self) -> str: ...
+class ConnectionPluginBase(PluginBase):
+    """Base class for Python-authored connection plugins."""
 
-    def group(self) -> str: ...
+    group_name = "ConnectionPlugin"
+    _locked_group_name = "ConnectionPlugin"
 
+    @abstractmethod
     def create(
         self,
         key: ConnectionKey,
-    ) -> ConnectionProtocol | Awaitable[ConnectionProtocol]: ...
+    ) -> ConnectionBase | Awaitable[ConnectionBase]:
+        ...
 
 
 __all__ = [
     "ConnectionKey",
     "ResolvedConnectionParams",
-    "ConnectionProtocol",
-    "ConnectionPluginProtocol",
+    "ConnectionBase",
+    "ConnectionPluginBase",
 ]

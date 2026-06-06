@@ -1,3 +1,5 @@
+import asyncio
+
 import genja
 from genja.inventory import Defaults, Group, Host as InventoryHost, Inventory
 from genja.task import (
@@ -33,7 +35,7 @@ def test_genja_from_settings_file_rejects_malformed_content(tmp_path):
 
 @task(name="runtime_backup")
 class RuntimeBackupTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(
             changed=True,
             summary=f"runtime handled {host.hostname}",
@@ -42,43 +44,48 @@ class RuntimeBackupTask:
         )
 
 
+@task(name="runtime_async_backup")
+class RuntimeAsyncBackupTask:
+    async def start_async(self, task, host, context):
+        await asyncio.sleep(0)
+        return TaskSuccessResult(
+            summary=f"async runtime handled {host.hostname}",
+            metadata={"has_connection": context.has_connection()},
+        )
+
+
 @task(name="runtime_child")
 class RuntimeChildTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(
             summary=f"child handled {host.hostname}",
-            metadata={
-                "current_depth": context.current_depth,
-                "max_depth": context.max_depth,
-            },
+            metadata={"has_connection": context.has_connection()},
         )
 
 
 @task(
     name="runtime_parent",
-    sub_task=RuntimeChildTask,
+    sub_tasks=[RuntimeChildTask],
 )
 class RuntimeParentTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(
             summary=f"parent handled {host.hostname}",
-            metadata={
-                "current_depth": context.current_depth,
-                "max_depth": context.max_depth,
-            },
+            metadata={"has_connection": context.has_connection()},
         )
 
 
 @task(name="runtime_connection", connection_plugin_name="ssh")
 class RuntimeConnectionTask:
-    def run(self, task, host, context):
-        assert isinstance(context.connection, TestConnection)
+    def start(self, task, host, context):
+        assert isinstance(context.connection(), TestConnection)
+        connection = context.connection()
         return TaskSuccessResult(
             summary=f"connected to {host.hostname}",
             metadata={
-                "connection_alive": context.connection.is_alive(),
-                "connection_hostname": context.connection.key.hostname,
-                "opened_with": context.connection.opened_with,
+                "connection_alive": connection.is_alive(),
+                "connection_hostname": connection.key.hostname,
+                "opened_with": connection.opened_with,
             },
         )
 
@@ -102,6 +109,64 @@ def test_genja_runtime_runs_python_task_definition():
     assert data["hosts"]["router1"]["summary"] == "runtime handled 10.0.0.1"
     assert data["hosts"]["router2"]["status"] == "passed"
     assert data["hosts"]["router2"]["metadata"]["platform"] == "ios"
+
+
+def test_genja_runtime_run_task_async_awaits_async_python_task():
+    async def run_case():
+        runtime = genja.Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+            "router2": Host(hostname="10.0.0.2", platform="ios"),
+        }).with_runner("serial")
+        return await runtime.run_task_async(RuntimeAsyncBackupTask)
+
+    results = asyncio.run(run_case())
+
+    assert results.task_name == "runtime_async_backup"
+    assert results.passed_hosts == ["router1", "router2"]
+    assert results.failed_hosts == []
+    assert results.skipped_hosts == []
+    data = results.to_dict()
+    assert data["hosts"]["router1"]["summary"] == "async runtime handled 10.0.0.1"
+
+
+def test_genja_runtime_run_tasks_async_preserves_order():
+    async def run_case():
+        runtime = genja.Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+            "router2": Host(hostname="10.0.0.2", platform="ios"),
+        }).with_runner("serial")
+        tasks = genja.Tasks()
+        tasks.add_task(RuntimeBackupTask)
+        tasks.add_task(RuntimeAsyncBackupTask)
+        return await runtime.run_tasks_async(tasks, max_depth=1)
+
+    results = asyncio.run(run_case())
+
+    assert [result.task_name for result in results] == [
+        "runtime_backup",
+        "runtime_async_backup",
+    ]
+    assert results[0].passed_hosts == ["router1", "router2"]
+    assert results[1].passed_hosts == ["router1", "router2"]
+
+
+def test_genja_runtime_run_task_async_supports_asyncio_gather():
+    async def run_case():
+        runtime = genja.Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
+        first, second = await asyncio.gather(
+            runtime.run_task_async(RuntimeBackupTask),
+            runtime.run_task_async(RuntimeAsyncBackupTask),
+        )
+        return first, second
+
+    first, second = asyncio.run(run_case())
+
+    assert first.task_name == "runtime_backup"
+    assert second.task_name == "runtime_async_backup"
+    assert first.passed_hosts == ["router1"]
+    assert second.passed_hosts == ["router1"]
 
 
 def test_genja_runtime_runs_ordered_task_list_with_nested_subtasks():
@@ -134,10 +199,7 @@ def test_genja_runtime_runs_ordered_task_list_with_nested_subtasks():
     assert "runtime_child" in parent_data["sub_tasks"]
     assert parent_data["sub_tasks"]["runtime_child"]["hosts"]["router1"]["Passed"][
         "metadata"
-    ] == {
-        "current_depth": 1,
-        "max_depth": 1,
-    }
+    ] == {"has_connection": False}
 
 
 def test_genja_runtime_run_tasks_rejects_plain_task_iterable():
@@ -270,23 +332,17 @@ def test_genja_filter_accessors_and_execution_respect_selected_hosts():
     assert filtered.hosts_raw()["router1"]["platform"] == "ios"
 
 
-def test_genja_runtime_passes_real_task_context_depth():
+def test_genja_runtime_hides_depth_from_python_task_context():
     runtime = genja.Genja.from_hosts({
         "router1": Host(hostname="10.0.0.1", platform="ios"),
     }).with_runner("serial")
     results = runtime.run_task(RuntimeParentTask, max_depth=1)
     data = results.to_dict(raw=True)
 
-    assert data["hosts"]["router1"]["Passed"]["metadata"] == {
-        "current_depth": 0,
-        "max_depth": 1,
-    }
+    assert data["hosts"]["router1"]["Passed"]["metadata"] == {"has_connection": False}
 
     child_results = data["sub_tasks"]["runtime_child"]
-    assert child_results["hosts"]["router1"]["Passed"]["metadata"] == {
-        "current_depth": 1,
-        "max_depth": 1,
-    }
+    assert child_results["hosts"]["router1"]["Passed"]["metadata"] == {"has_connection": False}
 
 
 def test_genja_runtime_passes_python_connection_into_runtime_context():

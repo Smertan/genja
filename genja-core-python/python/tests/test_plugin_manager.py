@@ -12,18 +12,18 @@ from tests.fixtures.processor_plugins import (
     UnsupportedGroupPlugin,
 )
 from tests.fixtures.runner_plugins import BatchRunnerPlugin
-from tests.fixtures.transform_plugins import HostOnlyTransformPlugin
+from tests.fixtures.transform_plugins import AsyncHostTransformPlugin, HostOnlyTransformPlugin
 
 
 @task(name="plugin_manager_runner_task")
 class PluginManagerRunnerTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(summary=f"ran on {host.hostname}")
 
 
 @task(name="plugin_manager_runner_task_two")
 class PluginManagerRunnerTaskTwo:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(summary=f"ran second on {host.hostname}")
 
 
@@ -122,6 +122,36 @@ def test_transform_plugin_with_host_only_method_still_builds_runtime():
     )
 
     assert runtime.inventory()["router1"]["hostname"] == "10.0.0.1"
+
+
+def test_transform_plugin_resolves_async_hooks(tmp_path):
+    hosts_path = tmp_path / "hosts.yaml"
+    hosts_path.write_text("router1:\n  hostname: 10.0.0.1\n  platform: ios\n")
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text(
+        textwrap.dedent(
+            f"""
+            inventory:
+              plugin: FileInventoryPlugin
+              options:
+                hosts_file: {hosts_path}
+              transform_function: python_async_transform
+              transform_function_options:
+                suffix: -lab
+            runner:
+              plugin: serial
+            """
+        )
+    )
+
+    manager = genja.PluginManager()
+    manager.register_plugin(AsyncHostTransformPlugin())
+    runtime = genja.Genja.from_settings_file(str(settings_path), plugin_manager=manager)
+
+    transformed_hosts = runtime.iter_inventory_hosts()
+    router1 = transformed_hosts[0][1]
+
+    assert router1["hostname"] == "10.0.0.1-lab"
 
 
 def test_plugin_manager_load_python_plugins_from_pyproject_rejects_name_mismatch(

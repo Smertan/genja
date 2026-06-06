@@ -132,12 +132,17 @@
 //!
 //! ## Testing
 //!
+//! The Rust tests embed Python through PyO3 and depend on packages installed in
+//! the PDM-managed virtualenv, including modules such as `pydantic`. Running
+//! plain `cargo test` bypasses that environment and can produce false failures
+//! from missing Python packages or fixture imports.
+//!
 //! ```bash
-//! # Run Rust tests
-//! cargo test
+//! # Run Rust tests with the PDM-managed virtualenv
+//! pdm run test-rust
 //!
 //! # Run Python tests
-//! pytest tests/
+//! pdm run test
 //! ```
 //!
 //! # See Also
@@ -182,18 +187,55 @@ fn genja(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) fn init_embedded_python() {
+    use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::Once;
 
-    fn init_python() {
-        static INIT: Once = Once::new();
-        INIT.call_once(pyo3::prepare_freethreaded_python);
+    static INIT: Once = Once::new();
+    INIT.call_once(pyo3::prepare_freethreaded_python);
+
+    let mut search_paths = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("python")
+        .display()
+        .to_string()];
+
+    if let Ok(python) = std::env::var("PYO3_PYTHON") {
+        if let Ok(output) = Command::new(python)
+            .args([
+                "-c",
+                "import sysconfig; print(sysconfig.get_paths().get('purelib', '')); print(sysconfig.get_paths().get('platlib', ''))",
+            ])
+            .output()
+        {
+            if output.status.success() {
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    let path = line.trim();
+                    if !path.is_empty() && !search_paths.iter().any(|existing| existing == path) {
+                        search_paths.push(path.to_string());
+                    }
+                }
+            }
+        }
     }
+
+    Python::with_gil(|py| {
+        let sys = PyModule::import(py, "sys").expect("sys module should import");
+        let path = sys.getattr("path").expect("sys.path should exist");
+        for search_path in search_paths.iter().rev() {
+            path.call_method1("insert", (0, search_path))
+                .expect("python search path should be inserted");
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 
     #[test]
     fn genja_module_registers_public_classes() {
-        init_python();
+        init_embedded_python();
         Python::with_gil(|py| {
             let module =
                 PyModule::new(py, "test_genja_module").expect("test module should be created");

@@ -55,7 +55,7 @@ class PluginManager:
 
         Plugin entries are read from ``[tool.genja.plugins.<group>]`` tables
         using ``module:attribute`` import paths. The manifest key must match the
-        plugin's declared ``name()``.
+        plugin's declared ``name`` property.
 
         Args:
             path: Path to ``pyproject.toml``. If ``None``, uses

@@ -6,11 +6,9 @@ from genja.plugin_manager import PluginManager
 
 
 class DummyPlugin:
-    def name(self) -> str:
-        return "dummy"
+    name = "dummy"
 
-    def group(self) -> str:
-        return "ProcessorPlugin"
+    group = "ProcessorPlugin"
 
 
 def check_plugin_manager_types() -> None:

@@ -216,6 +216,8 @@ pub enum GenjaError {
     PluginNotFound(String),
     /// The named plugin is not an inventory plugin.
     NotInventoryPlugin(String),
+    /// The named plugin is an async-only inventory plugin and requires async construction.
+    AsyncInventoryPluginRequiresAsyncConstruction(String),
     /// The named plugin is not a runner plugin.
     NotRunnerPlugin(String),
     /// A plugin failed to load.
@@ -238,6 +240,12 @@ impl fmt::Display for GenjaError {
             GenjaError::PluginNotFound(name) => write!(f, "plugin '{name}' not found"),
             GenjaError::NotInventoryPlugin(name) => {
                 write!(f, "plugin '{name}' is not an inventory plugin")
+            }
+            GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(name) => {
+                write!(
+                    f,
+                    "async inventory plugin '{name}' requires async runtime construction"
+                )
             }
             GenjaError::NotRunnerPlugin(name) => {
                 write!(f, "plugin '{name}' is not a runner plugin")

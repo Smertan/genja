@@ -1,18 +1,15 @@
 use genja::genja_core::inventory::Host;
 use genja::genja_core::task::{
-    HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess,
+    HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
 };
-use genja::{Genja, TaskDerive, async_trait};
+use genja::{Genja, genja_task};
 use serde_json::json;
 
-#[derive(TaskDerive)]
-struct CollectFacts {
-    name: &'static str,
-}
+struct CollectFacts;
 
-#[async_trait]
-impl Task for CollectFacts {
-    async fn start(
+#[genja_task(name = "collect_facts")]
+impl CollectFacts {
+    async fn start_async(
         &self,
         host: &Host,
         _context: &TaskRuntimeContext,
@@ -31,9 +28,7 @@ fn main() -> Result<(), genja::GenjaError> {
     let genja = Genja::from_settings_file("genja/examples/settings.yaml")?;
 
     let results = genja.run_task(
-        CollectFacts {
-            name: "collect_facts",
-        },
+        CollectFacts,
         1,
     )?;
 

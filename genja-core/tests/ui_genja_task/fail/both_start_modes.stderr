@@ -1,0 +1,19 @@
+error: define exactly one of `fn start(...)` or `async fn start_async(...)`
+  --> tests/ui_genja_task/fail/both_start_modes.rs:10:6
+   |
+10 | impl BadTask {
+   |      ^^^^^^^
+
+warning: unused import: `genja_core::inventory::Host`
+ --> tests/ui_genja_task/fail/both_start_modes.rs:2:5
+  |
+2 | use genja_core::inventory::Host;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `BlockingTaskRuntimeContext`, `HostTaskResult`, `TaskRuntimeContext`, and `TaskSuccess`
+ --> tests/ui_genja_task/fail/both_start_modes.rs:4:5
+  |
+4 |     BlockingTaskRuntimeContext, HostTaskResult, TaskRuntimeContext, TaskSuccess,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^

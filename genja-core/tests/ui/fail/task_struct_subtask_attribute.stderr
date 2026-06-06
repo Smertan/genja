@@ -1,5 +1,0 @@
-error: unsupported struct-level `task` attribute; expected `processors = [...]`
- --> tests/ui/fail/task_struct_subtask_attribute.rs:4:8
-  |
-4 | #[task(subtask)]
-  |        ^^^^^^^

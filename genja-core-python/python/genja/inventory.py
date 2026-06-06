@@ -9,7 +9,7 @@ directly. The top-level package re-exports these names for compatibility, but
 - ``Group``
 - ``Defaults``
 - ``Inventory``
-- ``InventoryPluginProtocol``
+- ``InventoryPluginBase``
 
 Inventory plugins are registered on ``PluginManager`` and selected through
 ``Settings.inventory.plugin``. The plugin ``load()`` method receives the current
@@ -23,14 +23,10 @@ shape accepted by ``Genja.from_hosts(...)`` or a full ``Inventory`` payload:
 .. code-block:: python
 
     import genja
-    from genja.inventory import InventoryPluginProtocol
+    from genja.inventory import InventoryPluginBase
 
-    class StaticInventoryPlugin:
-        def name(self) -> str:
-            return "python_inventory"
-
-        def group(self) -> str:
-            return "InventoryPlugin"
+    class StaticInventoryPlugin(InventoryPluginBase):
+        name = "python_inventory"
 
         def load(self, settings, plugins):
             return {
@@ -46,9 +42,11 @@ shape accepted by ``Genja.from_hosts(...)`` or a full ``Inventory`` payload:
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Protocol
+from abc import abstractmethod
+from typing import Any, Awaitable
 
 from pydantic import BaseModel
+from .plugin import PluginBase
 from .settings import Settings
 
 
@@ -107,18 +105,19 @@ class Inventory(_GenjaModel):
     defaults: Defaults | dict[str, Any] | None = None
 
 
-class InventoryPluginProtocol(Protocol):
-    """Structural typing contract for Python-authored inventory plugins."""
+class InventoryPluginBase(PluginBase):
+    """Base class for Python-authored inventory plugins."""
 
-    def name(self) -> str: ...
+    group_name = "InventoryPlugin"
+    _locked_group_name = "InventoryPlugin"
 
-    def group(self) -> str: ...
-
+    @abstractmethod
     def load(
         self,
         settings: Settings,
         plugins: Any,
-    ) -> Inventory | dict[str, Any] | Awaitable[Inventory | dict[str, Any]]: ...
+    ) -> Inventory | dict[str, Any] | Awaitable[Inventory | dict[str, Any]]:
+        ...
 
 
 __all__ = [
@@ -127,5 +126,5 @@ __all__ = [
     "Group",
     "Defaults",
     "Inventory",
-    "InventoryPluginProtocol",
+    "InventoryPluginBase",
 ]

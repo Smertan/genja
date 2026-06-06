@@ -6,11 +6,30 @@ site_dir = "site"
 nav = [
   {"Home" = "index.md"},
   {"Installation" = "installation.md"},
+  {"Quickstart" = "quickstart.md"},
+  {"Concepts" = "concepts.md"},
   {"Settings" = "settings.md"},
+  {"API Surface" = "api-surface.md"},
+  {"Inventory" = "inventory.md"},
+  {"Tasks" = "tasks.md"},
+  {"Runners" = "runners.md"},
+  {"Plugins" = [
+    "plugins/index.md",
+    {"Connections" = "connection.md"},
+    {"Processors" = "processors.md"},
+    {"Transforms" = "transforms.md"},
+  ]},
+  {"Examples" = "examples.md"},
+  {"Versions And Compatibility" = "version-compatibility.md"},
+  {"Logging And Troubleshooting" = "logging-troubleshooting.md"},
+  {"Development" = [
+    {"Contributing" = "contributing.md"},
+    {"License" = "license.md"},
+  ]},
 ]
 
 [project.theme]
-features = ["content.tabs.link"]
+features = ["content.tabs.link", "navigation.footer", "navigation.indexes"]
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme)"

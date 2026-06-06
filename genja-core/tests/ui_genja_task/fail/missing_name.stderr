@@ -1,0 +1,21 @@
+error: `name = "..."` is required
+ --> tests/ui_genja_task/fail/missing_name.rs:7:1
+  |
+7 | #[genja_task(processors = ["audit"])]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `genja_task` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `genja_core::inventory::Host`
+ --> tests/ui_genja_task/fail/missing_name.rs:2:5
+  |
+2 | use genja_core::inventory::Host;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `HostTaskResult`, `TaskRuntimeContext`, and `TaskSuccess`
+ --> tests/ui_genja_task/fail/missing_name.rs:3:24
+  |
+3 | use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+  |                        ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^

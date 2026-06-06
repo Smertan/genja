@@ -20,7 +20,7 @@ from typing import cast
     options={"mode": "strict"},
 )
 class VerifyBackupTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
         assert isinstance(context, TaskRuntimeContext)
@@ -35,11 +35,11 @@ class VerifyBackupTask:
 @task(
     name="backup_config",
     connection_plugin_name="ssh",
-    sub_task=VerifyBackupTask,
+    sub_tasks=[VerifyBackupTask],
     options={"backup_path": "/tmp/configs", "compress": True},
 )
 class BackupConfigTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
         assert isinstance(context, TaskRuntimeContext)
@@ -48,7 +48,7 @@ class BackupConfigTask:
             changed=True,
             summary=f"backed up {host.hostname}",
             metadata={
-                "sub_task_name": task.sub_task.name,
+                "sub_task_name": task.sub_tasks[0].name,
                 "backup_path": task.options["backup_path"],
             },
         )
@@ -60,7 +60,7 @@ class BackupConfigTask:
     options={"mode": "strict"},
 )
 class VerifyBackupPlainTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
         assert isinstance(context, TaskRuntimeContext)
@@ -74,11 +74,11 @@ class VerifyBackupPlainTask:
 @task(
     name="backup_config_plain",
     connection_plugin_name="ssh",
-    sub_task=VerifyBackupPlainTask,
+    sub_tasks=[VerifyBackupPlainTask],
     options={"backup_path": "/tmp/configs", "compress": True},
 )
 class BackupConfigPlainTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         assert isinstance(task, TaskInfo)
         assert isinstance(host, Host)
         assert isinstance(context, TaskRuntimeContext)
@@ -87,7 +87,7 @@ class BackupConfigPlainTask:
             changed=True,
             summary=f"backed up {host.hostname}",
             metadata={
-                "sub_task_name": task.sub_task.name,
+                "sub_task_name": task.sub_tasks[0].name,
                 "backup_path": task.options["backup_path"],
             },
         )
@@ -125,7 +125,7 @@ def test_task_definition_run_on_host_executes_python_body():
 
 def test_task_definition_from_python_class_requires_decorator_metadata():
     class MissingMetadataTask:
-        def run(self, task, host, context):
+        def start(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
     with pytest.raises(ValueError, match="missing __genja_task_info__"):
@@ -135,7 +135,7 @@ def test_task_definition_from_python_class_requires_decorator_metadata():
 def test_task_definition_from_python_class_allows_missing_connection_plugin_name():
     @task(name="backup_config")
     class NoConnectionTask:
-        def run(self, task, host, context):
+        def start(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
     task_definition = genja.TaskDefinition.from_python_class(NoConnectionTask)
@@ -151,7 +151,7 @@ def test_task_decorator_rejects_empty_connection_plugin_name():
 
         @task(name="backup_config", connection_plugin_name="")
         class InvalidTask:
-            def run(self, task, host, context):
+            def start(self, task, host, context):
                 return TaskSuccessResult(summary="noop")
 
 
@@ -160,7 +160,7 @@ def test_task_decorator_rejects_empty_name():
 
         @task(name="   ", connection_plugin_name="ssh")
         class InvalidTask:
-            def run(self, task, host, context):
+            def start(self, task, host, context):
                 return TaskSuccessResult(summary="noop")
 
 
@@ -173,14 +173,14 @@ def test_task_decorator_rejects_non_json_serializable_options():
             options={"callback": lambda: None},
         )
         class InvalidTask:
-            def run(self, task, host, context):
+            def start(self, task, host, context):
                 return TaskSuccessResult(summary="noop")
 
 
 def test_task_definition_from_python_class_rejects_empty_connection_plugin_name_in_metadata():
     @task(name="backup_config", connection_plugin_name="ssh")
     class InvalidTask:
-        def run(self, task, host, context):
+        def start(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
     cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__[
@@ -194,7 +194,7 @@ def test_task_definition_from_python_class_rejects_empty_connection_plugin_name_
 def test_task_definition_from_python_class_rejects_empty_name_in_metadata():
     @task(name="backup_config", connection_plugin_name="ssh")
     class InvalidTask:
-        def run(self, task, host, context):
+        def start(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
     cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__["name"] = "   "
@@ -206,7 +206,7 @@ def test_task_definition_from_python_class_rejects_empty_name_in_metadata():
 def test_task_definition_from_python_class_rejects_non_json_serializable_options_in_metadata():
     @task(name="backup_config", connection_plugin_name="ssh")
     class InvalidTask:
-        def run(self, task, host, context):
+        def start(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
     cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__["options"] = {
@@ -217,17 +217,29 @@ def test_task_definition_from_python_class_rejects_non_json_serializable_options
         genja.TaskDefinition.from_python_class(InvalidTask)
 
 
-def test_task_decorator_requires_callable_run_method():
-    with pytest.raises(TypeError, match="must define a 'run' method"):
+def test_task_decorator_requires_exactly_one_entrypoint():
+    with pytest.raises(TypeError, match="must define exactly one of 'start' or 'start_async'"):
 
         @task(name="backup_config", connection_plugin_name="ssh")
         class InvalidTask:
             pass
 
 
+def test_task_decorator_rejects_both_entrypoints():
+    with pytest.raises(TypeError, match="must define exactly one of 'start' or 'start_async'"):
+
+        @task(name="backup_config", connection_plugin_name="ssh")
+        class InvalidTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+            async def start_async(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
 def test_task_decorator_rejects_undecorated_sub_task():
     class PlainSubTask:
-        def run(self, task, host, context):
+        def start(self, task, host, context):
             return TaskSuccessResult(summary="noop")
 
     with pytest.raises(TypeError, match="must also be decorated with @task"):
@@ -235,8 +247,8 @@ def test_task_decorator_rejects_undecorated_sub_task():
         @task(
             name="backup_config",
             connection_plugin_name="ssh",
-            sub_task=PlainSubTask,
+            sub_tasks=[PlainSubTask],
         )
         class InvalidTask:
-            def run(self, task, host, context):
+            def start(self, task, host, context):
                 return TaskSuccessResult(summary="noop")

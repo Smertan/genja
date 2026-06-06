@@ -1,9 +1,7 @@
 class HostnameSuffixTransformPlugin:
-    def name(self) -> str:
-        return "python_transform"
+    name = "python_transform"
 
-    def group(self) -> str:
-        return "TransformFunctionPlugin"
+    group = "TransformFunctionPlugin"
 
     def transform_host(self, host, options):
         suffix = ""
@@ -25,13 +23,26 @@ class HostnameSuffixTransformPlugin:
 
 
 class HostOnlyTransformPlugin:
-    def name(self) -> str:
-        return "python_host_only_transform"
+    name = "python_host_only_transform"
 
-    def group(self) -> str:
-        return "TransformFunctionPlugin"
+    group = "TransformFunctionPlugin"
 
     def transform_host(self, host, options):
+        suffix = ""
+        if options:
+            suffix = options.get("suffix", "")
+        return {
+            **host,
+            "hostname": f"{host['hostname']}{suffix}",
+        }
+
+
+class AsyncHostTransformPlugin:
+    name = "python_async_transform"
+
+    group = "TransformFunctionPlugin"
+
+    async def transform_host(self, host, options):
         suffix = ""
         if options:
             suffix = options.get("suffix", "")

@@ -1,16 +1,17 @@
 # Settings
 
-This document summarizes the Genja configuration schema and links to examples.
+Settings describe how a Genja runtime should be built: inventory source,
+runner, SSH config validation, logging preferences, and core runtime behavior.
+The same JSON or YAML settings files are used from Rust and Python.
 
-Example file:
+Example files:
 
 - `examples/config.example.yaml`
 - `examples/config.example.json`
 
-## Loading Settings
+## Load Settings
 
-Use the same JSON or YAML settings files from Rust and Python. The API names are
-similar, but Rust exposes accessor methods and Python exposes properties.
+Supported settings file extensions are `.json`, `.yaml`, and `.yml`.
 
 === ":fontawesome-brands-rust: Rust"
 
@@ -30,150 +31,247 @@ similar, but Rust exposes accessor methods and Python exposes properties.
 === ":fontawesome-brands-python: Python"
 
     ```python
-    import genja
+    import genja as genja_lib
 
-    settings = genja.Settings.from_file("settings.yaml")
+    settings = genja_lib.Settings.from_file("settings.yaml")
 
     print(f"Runner plugin: {settings.runner.plugin}")
     print(f"Log level: {settings.logging.level}")
     ```
 
+## Complete Example
+
+```yaml
+core:
+  # Parsed and exposed, but task failures are currently recorded in results
+  # regardless of this value.
+  raise_on_error: false
+
+inventory:
+  plugin: FileInventoryPlugin
+  options:
+    hosts_file: ./inventory/hosts.yaml
+    groups_file: ./inventory/groups.yaml
+    defaults_file: ./inventory/defaults.yaml
+  transform_function: normalize_inventory
+  transform_function_options:
+    hostname_suffix: ".lab"
+
+ssh:
+  config_file: /home/user/.ssh/config
+
+runner:
+  plugin: threaded
+  options: {}
+  worker_count: 10
+  max_task_depth: 10
+  max_connection_attempts: 3
+
+logging:
+  enabled: true
+  level: info
+  log_file: ./genja.log
+  to_console: false
+  file_size: 10485760
+  max_file_count: 10
+```
+
 ## Precedence
 
 Configuration is loaded in this order:
 
-1. Config file values (JSON/YAML)
-2. Environment variables (used only by default functions, not to override explicit config)
-3. Hard-coded defaults
+1. Config file values.
+2. Environment variables used by default functions.
+3. Hard-coded defaults.
+
+Environment variables are fallback defaults for missing values. They do not
+override explicit values in a settings file.
+
+Boolean settings accept real booleans and loose string values such as
+`true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
 
 ## Top-Level Sections
 
-All sections are optional. Missing fields use defaults.
+These top-level sections are supported:
 
-- `core`
-- `inventory`
-- `ssh`
-- `runner`
-- `logging`
+| Section | Type | Default when omitted |
+| --- | --- | --- |
+| `core` | object | `CoreConfig::default()` |
+| `inventory` | object | `InventoryConfig::default()` |
+| `ssh` | object | `SSHConfig::default()` |
+| `runner` | object | `RunnerConfig::default()` |
+| `logging` | object | `LoggingConfig::default()` |
+
+Top-level sections are optional. Nested fields have the defaults listed below.
+Current implementation note: if the `inventory` section is present, include an
+`options` object; use `options: {}` when the selected inventory plugin does not
+need file paths.
 
 ## Core
 
-- `raise_on_error` (bool)
-  - Default: `false`
-  - Env fallback: `GENJA_CORE_RAISE_ON_ERROR` (loose bool parsing: `true/false`, `1/0`, `yes/no`, `on/off`)
+```yaml
+core:
+  raise_on_error: false
+```
+
+| Field | Type | Default | Env fallback |
+| --- | --- | --- | --- |
+| `raise_on_error` | bool | `false` | `GENJA_CORE_RAISE_ON_ERROR` |
+
+`raise_on_error` is currently parsed and exposed through settings, including its
+environment fallback, but task execution does not branch on this value. Task
+entrypoint errors are recorded as failed host results, and `run_task(...)` /
+`run_tasks(...)` can still return `Ok(...)` when hosts failed. Outer runtime
+errors such as invalid plugins, processor hook errors, runner errors, and config
+loading errors still return errors regardless of this field.
 
 ## Inventory
 
-- `plugin` (string)
-  - Default: `FileInventoryPlugin`
-  - Env fallback: `GENJA_INVENTORY_PLUGIN`
-- `options` (object)
-  - `hosts_file` (string | null)
-  - `groups_file` (string | null)
-  - `defaults_file` (string | null)
-- `transform_function` (string | null)
-- `transform_function_options` (object | null)
+```yaml
+inventory:
+  plugin: FileInventoryPlugin
+  options:
+    hosts_file: ./hosts.yaml
+    groups_file: ./groups.yaml
+    defaults_file: ./defaults.yaml
+  transform_function: normalize_inventory
+  transform_function_options:
+    hostname_suffix: ".lab"
+```
 
-Inventory file formats:
+| Field | Type | Default | Env fallback |
+| --- | --- | --- | --- |
+| `plugin` | string | `FileInventoryPlugin` | `GENJA_INVENTORY_PLUGIN` |
+| `options` | object | `{}` | none |
+| `transform_function` | string or null | `null` | none |
+| `transform_function_options` | object or null | `null` | none |
 
-- Files must be JSON (`.json`) or YAML (`.yaml`, `.yml`).
-- Hosts and groups files are maps keyed by name.
-- Defaults is a single object using the same fields as a group, minus `groups` and `defaults`.
+### Inventory Options
 
-Hosts file example (YAML):
+The built-in `FileInventoryPlugin` reads these options:
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `hosts_file` | string or null | `null` |
+| `groups_file` | string or null | `null` |
+| `defaults_file` | string or null | `null` |
+
+Inventory files must be JSON (`.json`) or YAML (`.yaml`, `.yml`).
+
+Hosts and groups files are maps keyed by name:
 
 ```yaml
-web-1:
-  hostname: 10.0.0.10
+router1:
+  hostname: 10.0.0.1
   port: 22
-  username: ubuntu
+  username: admin
   groups:
-    - web
+    - core
   data:
-    role: frontend
+    role: edge
 ```
 
-Groups file example (YAML):
+Defaults files contain one object:
 
 ```yaml
-web:
-  username: ubuntu
-  data:
-    env: prod
-```
-
-Defaults file example (YAML):
-
-```yaml
-username: ubuntu
+username: admin
 platform: linux
 data:
   retries: 3
-  timeout_seconds: 30
 ```
 
-Inventory schema (hosts/groups):
+Hosts and groups support:
 
-Hosts and groups support the same fields (hosts also require `name` via the map key):
+- `hostname` (string or null)
+- `port` (number or null)
+- `username` (string or null)
+- `password` (string or null)
+- `platform` (string or null)
+- `groups` (list of strings or null)
+- `data` (object or null)
+- `connection_options` (map of string to object or null)
 
-- `hostname` (string | null)
-- `port` (number | null)
-- `username` (string | null)
-- `password` (string | null)
-- `platform` (string | null)
-- `groups` (list of strings | null)
-- `data` (object | null)
-- `connection_options` (map of string to object | null)
-- `defaults` (object | null)
+Defaults support the same fields except `groups`.
 
-Defaults supports the same fields as a group, minus `groups` and `defaults`.
+See [Inventory](inventory.md) for file examples, group inheritance, filtering,
+and connection option precedence.
 
 ## SSH
 
-- `config_file` (string | null)
-  - When set, SSH config syntax is validated on load.
+```yaml
+ssh:
+  config_file: /home/user/.ssh/config
+```
+
+| Field | Type | Default | Env fallback |
+| --- | --- | --- | --- |
+| `config_file` | string or null | `null` | none |
+
+When `config_file` is set, `Settings::from_file(...)` checks that the file
+exists, can be opened, and parses as strict OpenSSH-style config. If the field
+is omitted or `null`, SSH config validation is skipped.
 
 ## Runner
 
-- `plugin` (string)
-  - Default: `threaded`
-  - Env fallback: `GENJA_RUNNER_PLUGIN`
-  - Common values: `threaded`, `serial`
-- `options` (object)
-  - Plugin-specific settings.
-  - Default: `{}`
-- `worker_count` (number | null)
-  - Optional explicit worker count for runners that support fixed concurrency.
-  - For `threaded`, this is the preferred way to control the number of worker threads.
-  - Default: `null`
-- `max_task_depth` (integer)
-  - Maximum recursion depth for task and sub-task execution.
-  - Default: `10`
-- `max_connection_attempts` (integer)
-  - Maximum number of connection attempts before retries stop.
-  - Default: `3`
+```yaml
+runner:
+  plugin: threaded
+  options: {}
+  worker_count: 10
+  max_task_depth: 10
+  max_connection_attempts: 3
+```
+
+| Field | Type | Default | Env fallback |
+| --- | --- | --- | --- |
+| `plugin` | string | `threaded` | `GENJA_RUNNER_PLUGIN` |
+| `options` | object | `{}` | none |
+| `worker_count` | number or null | `null` | none |
+| `max_task_depth` | number | `10` | none |
+| `max_connection_attempts` | number | `3` | none |
+
+Common `plugin` values are `threaded` and `serial`.
+
+`worker_count` is used by runners that support fixed concurrency. The built-in
+`threaded` runner uses it as the maximum number of in-flight host executions.
+The built-in `serial` runner ignores it.
+
+`max_task_depth` is the default nested sub-task depth used when the runtime API
+does not receive an explicit depth. Rust task execution APIs currently require
+an explicit depth argument. Python task execution APIs can omit `max_depth` to
+use this setting.
+
+`max_connection_attempts` is part of shared runner configuration. Connection
+plugins or connection layers are responsible for interpreting retry behavior.
+
+See [Runners](runners.md) for execution behavior and ordering details.
 
 ## Logging
 
-- `enabled` (bool)
-  - Default: `true`
-- `level` (string)
-  - Default: `info`
-  - Env fallback: `GENJA_LOGGING_LEVEL`
-- `log_file` (string)
-  - Default: `./genja.log`
-  - Env fallback: `GENJA_LOGGING_LOG_FILE`
-- `to_console` (bool)
-  - Default: `false`
-  - Env fallback: `GENJA_LOGGING_TO_CONSOLE`
-- `file_size` (integer)
-  - Default: `10485760` (10 MB)
-- `max_file_count` (integer)
-  - Default: `10`
+```yaml
+logging:
+  enabled: true
+  level: info
+  log_file: ./genja.log
+  to_console: false
+  file_size: 10485760
+  max_file_count: 10
+```
+
+| Field | Type | Default | Env fallback |
+| --- | --- | --- | --- |
+| `enabled` | bool | `true` | none |
+| `level` | string | `info` | `GENJA_LOGGING_LEVEL` |
+| `log_file` | string | current directory `genja.log` | `GENJA_LOGGING_LOG_FILE` |
+| `to_console` | bool | `false` | `GENJA_LOGGING_TO_CONSOLE` |
+| `file_size` | number | `10485760` | none |
+| `max_file_count` | number | `10` | none |
 
 Genja parses the `logging` section but does not initialize global logging
 automatically. Applications own logger setup because logging is process-wide in
-Rust and application-specific in Python. A typical application startup flow is:
+Rust and application-specific in Python.
+
+A typical application startup flow is:
 
 1. Load settings with `Settings::from_file(...)`.
 2. Read the `logging` section.
@@ -186,46 +284,26 @@ keeps normal default fallbacks silent for this reason. Invalid config file value
 fail settings loading. Invalid environment variable values may fall back to
 defaults and emit a warning only if a logger has already been initialized.
 
-## Troubleshooting Settings Logging
+## Environment Variables
 
-For troubleshooting settings loading, initialize a temporary logger before
-calling `Settings::from_file(...)`. Use a fixed level such as `debug` because
-the configured logging level is not available until after settings load.
+| Variable | Used by | Default when unset |
+| --- | --- | --- |
+| `GENJA_CORE_RAISE_ON_ERROR` | `core.raise_on_error` | `false` |
+| `GENJA_INVENTORY_PLUGIN` | `inventory.plugin` | `FileInventoryPlugin` |
+| `GENJA_RUNNER_PLUGIN` | `runner.plugin` | `threaded` |
+| `GENJA_LOGGING_LEVEL` | `logging.level` | `info` |
+| `GENJA_LOGGING_LOG_FILE` | `logging.log_file` | current directory `genja.log` |
+| `GENJA_LOGGING_TO_CONSOLE` | `logging.to_console` | `false` |
 
-=== ":fontawesome-brands-rust: Rust"
+## Troubleshooting
 
-    ```rust
-    use genja::genja_core::Settings;
-    use tracing_subscriber::EnvFilter;
-
-    fn main() -> Result<(), Box<dyn std::error::Error>> {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new("debug"))
-            .init();
-
-        let settings = Settings::from_file("settings.yaml")?;
-
-        println!("Configured log level: {}", settings.logging().level());
-        Ok(())
-    }
-    ```
-
-=== ":fontawesome-brands-python: Python"
-
-    ```python
-    import logging
-
-    import genja
-
-    logging.basicConfig(level=logging.DEBUG)
-
-    settings = genja.Settings.from_file("settings.yaml")
-
-    print(f"Configured log level: {settings.logging.level}")
-    ```
+See [Logging And Troubleshooting](logging-troubleshooting.md) for logger setup,
+settings load failures, inventory file issues, plugin load failures, runner
+errors, and empty host selections.
 
 ## References
 
 The source of truth for defaults and deserialization behavior is:
 
 - `genja-core/src/settings.rs`
+- `genja-core/src/settings/`

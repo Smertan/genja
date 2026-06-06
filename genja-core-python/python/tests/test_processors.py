@@ -8,7 +8,7 @@ from genja.task import Host, TaskSuccessResult, task
 
 @task(name="processor_backup", connection_plugin_name="ssh", processors=["audit"])
 class ProcessorBackupTask:
-    def run(self, task, host, context):
+    def start(self, task, host, context):
         return TaskSuccessResult(
             summary=f"backed up {host.hostname}",
             metadata={"platform": host.platform},
