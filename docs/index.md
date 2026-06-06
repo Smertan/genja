@@ -10,6 +10,7 @@ the quickstart to load inventory and run your first task.
 
 - [Installation](installation.md)
 - [Quickstart](quickstart.md)
+- [Settings](settings.md)
 - [Concepts](concepts.md)
 - [Inventory](inventory.md)
 - [Tasks](tasks.md)
@@ -23,5 +24,5 @@ the quickstart to load inventory and run your first task.
 - [Runners](runners.md)
 - [Examples](examples.md)
 - [API Surface](api-surface.md)
-- [Settings](settings.md)
+- [Versions And Compatibility](version-compatibility.md)
 - [Logging And Troubleshooting](logging-troubleshooting.md)
