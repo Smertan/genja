@@ -10,20 +10,22 @@ nav = [
   {"Concepts" = "concepts.md"},
   {"Settings" = "settings.md"},
   {"API Surface" = "api-surface.md"},
-  {"Plugins" = "plugins.md"},
   {"Inventory" = "inventory.md"},
-  {"Transforms" = "transforms.md"},
-  {"Connections" = "connection.md"},
   {"Tasks" = "tasks.md"},
-  {"Processors" = "processors.md"},
   {"Runners" = "runners.md"},
+  {"Plugins" = [
+    {"Overview" = "plugins.md"},
+    {"Connections" = "connection.md"},
+    {"Processors" = "processors.md"},
+    {"Transforms" = "transforms.md"},
+  ]},
   {"Examples" = "examples.md"},
   {"Versions And Compatibility" = "version-compatibility.md"},
   {"Logging And Troubleshooting" = "logging-troubleshooting.md"},
 ]
 
 [project.theme]
-features = ["content.tabs.link"]
+features = ["content.tabs.link", "navigation.expand"]
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme)"
