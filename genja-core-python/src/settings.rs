@@ -1,7 +1,7 @@
+use ::genja_core::Settings;
 use ::genja_core::settings::{
     CoreConfig, InventoryConfig, LoggingConfig, OptionsConfig, RunnerConfig, SSHConfig,
 };
-use ::genja_core::Settings;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;

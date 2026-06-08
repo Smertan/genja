@@ -1,6 +1,6 @@
 use crate::CustomTreeMap;
 use genja_core_derive::{DerefMacro, DerefMutMacro};
-use schemars::{schema_for, JsonSchema};
+use schemars::{JsonSchema, schema_for};
 use serde::de::{Error, SeqAccess, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;

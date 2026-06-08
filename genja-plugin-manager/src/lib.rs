@@ -990,8 +990,8 @@ mod tests {
 
     use super::*;
     use crate::plugin_types::{
-        AsyncPluginInventory, Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
-        PluginTransformFunction,
+        AsyncPluginInventory, Plugin, PluginConnection, PluginInventory, PluginProcessor,
+        PluginRunner, PluginTransformFunction,
     };
     use genja_core::inventory::{
         ConnectionKey, Inventory, ResolvedConnectionParams, TransformFunction,

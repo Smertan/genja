@@ -110,15 +110,18 @@ impl Task for PythonBackedTask {
         context: &::genja_core::task::BlockingTaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         let python_connection = match context.connection() {
-            Some(connection) => Some(
-                connection.with_connection(|connection| {
-                    Ok(python_connection_from_runtime_connection(connection))
-                })?,
-            ),
+            Some(connection) => Some(connection.with_connection(|connection| {
+                Ok(python_connection_from_runtime_connection(connection))
+            })?),
             None => None,
         }
         .flatten();
-        self.run_python_blocking(host, context.current_depth(), Some(context.max_depth()), python_connection)
+        self.run_python_blocking(
+            host,
+            context.current_depth(),
+            Some(context.max_depth()),
+            python_connection,
+        )
     }
 
     async fn start_async(
@@ -328,7 +331,7 @@ impl PyTaskDefinition {
             .allow_threads(|| {
                 run_task_definition_on_hosts(&self.inner, &hosts, resolver, max_depth)
             })
-        .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
+            .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
         Ok(PyTaskResults { inner })
     }
 
@@ -346,7 +349,7 @@ impl PyTaskDefinition {
             .allow_threads(|| {
                 run_task_definition_on_hosts(&self.inner, &hosts, resolver, max_depth)
             })
-        .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
+            .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
         Ok(PyTaskResults { inner })
     }
 
@@ -579,7 +582,7 @@ pub fn run_task(
         .allow_threads(|| runtime.run_task(task, max_depth))
         .map_err(|err| {
             PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
-    })?;
+        })?;
     Ok(PyTaskResults { inner })
 }
 
@@ -595,9 +598,12 @@ pub fn run_task_async(
     let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
 
     future_into_py(py, async move {
-        let inner = runtime.run_task_async(task, max_depth).await.map_err(|err| {
-            PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
-        })?;
+        let inner = runtime
+            .run_task_async(task, max_depth)
+            .await
+            .map_err(|err| {
+                PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
+            })?;
         Ok(PyTaskResults { inner })
     })
     .map(Bound::unbind)
@@ -641,9 +647,12 @@ pub fn run_tasks_async(
     let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
 
     future_into_py(py, async move {
-        let results = runtime.run_tasks_async(tasks, max_depth).await.map_err(|err| {
-            PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
-        })?;
+        let results = runtime
+            .run_tasks_async(tasks, max_depth)
+            .await
+            .map_err(|err| {
+                PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
+            })?;
         Ok(results
             .into_iter()
             .map(|inner| PyTaskResults { inner })

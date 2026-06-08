@@ -1416,7 +1416,9 @@ pub(crate) fn resolve_python_maybe_awaitable<'py>(
 pub(crate) async fn resolve_python_maybe_awaitable_async(value: Py<PyAny>) -> PyResult<Py<PyAny>> {
     let is_awaitable = Python::with_gil(|py| -> PyResult<bool> {
         let inspect = PyModule::import(py, "inspect")?;
-        inspect.call_method1("isawaitable", (value.bind(py),))?.extract()
+        inspect
+            .call_method1("isawaitable", (value.bind(py),))?
+            .extract()
     })?;
     if !is_awaitable {
         return Ok(value);

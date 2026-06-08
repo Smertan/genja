@@ -195,10 +195,12 @@ pub(crate) fn init_embedded_python() {
     static INIT: Once = Once::new();
     INIT.call_once(pyo3::prepare_freethreaded_python);
 
-    let mut search_paths = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("python")
-        .display()
-        .to_string()];
+    let mut search_paths = vec![
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("python")
+            .display()
+            .to_string(),
+    ];
 
     if let Ok(python) = std::env::var("PYO3_PYTHON") {
         if let Ok(output) = Command::new(python)

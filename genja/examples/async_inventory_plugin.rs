@@ -1,8 +1,6 @@
 use genja::genja_core::async_trait;
 use genja::genja_core::inventory::{BaseBuilderHost, Data, Host, Hosts, Inventory};
-use genja::genja_core::task::{
-    HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
-};
+use genja::genja_core::task::{HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess};
 use genja::genja_core::{InventoryLoadError, Settings};
 use genja::{Genja, genja_task};
 use genja_plugin_manager::PluginManager;
@@ -96,9 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::from_file("genja/examples/settings.yaml")?;
 
     let mut plugins = PluginManager::new();
-    plugins.register_plugin(Plugins::AsyncInventory(Box::new(
-        ControllerInventoryPlugin,
-    )));
+    plugins.register_plugin(Plugins::AsyncInventory(Box::new(ControllerInventoryPlugin)));
 
     let inventory = plugins
         .get_async_inventory_plugin("controller_inventory")
@@ -111,9 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_plugin_manager(plugins)
         .build()?;
 
-    let results = genja
-        .run_task_async(CollectFacts, 1)
-        .await?;
+    let results = genja.run_task_async(CollectFacts, 1).await?;
 
     let output = results.to_pretty_json_string()?;
     println!("{output}");

@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use genja::genja_core::inventory::Host;
-use genja::genja_core::task::{
-    HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess,
-};
+use genja::genja_core::task::{HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess};
 use genja::{Genja, genja_task};
 use serde_json::json;
 

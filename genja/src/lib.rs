@@ -58,8 +58,6 @@
 pub use ::async_trait::async_trait;
 pub use genja_core;
 pub use genja_core::GenjaError;
-pub use genja_core_derive::genja_task;
-pub use genja_plugin_manager;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
@@ -67,6 +65,8 @@ use genja_core::task::{
     TaskResultsSummary, Tasks,
 };
 use genja_core::{NatString, Settings};
+pub use genja_core_derive::genja_task;
+pub use genja_plugin_manager;
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
 use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
@@ -300,7 +300,11 @@ impl Genja {
                 return Ok(());
             }
 
-            if self.plugins.get_async_inventory_plugin(plugin_name).is_some() {
+            if self
+                .plugins
+                .get_async_inventory_plugin(plugin_name)
+                .is_some()
+            {
                 return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
                     plugin_name.to_string(),
                 ));
@@ -322,7 +326,11 @@ impl Genja {
             return Ok(());
         }
 
-        if self.plugins.get_async_inventory_plugin(default_name).is_some() {
+        if self
+            .plugins
+            .get_async_inventory_plugin(default_name)
+            .is_some()
+        {
             return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
                 default_name.to_string(),
             ));
@@ -1058,13 +1066,11 @@ fn current_plugin_directory() -> Result<PathBuf, std::io::Error> {
     Ok(directory.join("plugins"))
 }
 
-fn ensure_sync_execution_outside_tokio(
-    sync_api: &str,
-    async_api: &str,
-) -> Result<(), GenjaError> {
+fn ensure_sync_execution_outside_tokio(sync_api: &str, async_api: &str) -> Result<(), GenjaError> {
     if tokio::runtime::Handle::try_current().is_ok() {
-        let message =
-            format!("{sync_api} cannot be called from an active Tokio runtime; use {async_api} instead");
+        let message = format!(
+            "{sync_api} cannot be called from an active Tokio runtime; use {async_api} instead"
+        );
         log::error!("{message}");
         return Err(GenjaError::Message(message));
     }
@@ -2164,7 +2170,10 @@ mod tests {
     async fn run_tasks_errors_inside_existing_tokio_runtime() {
         let genja = Genja::from_inventory(single_host_inventory());
         let mut tasks = Tasks::new();
-        tasks.add_task(RecordingTask::leaf("collect_facts", Arc::new(Mutex::new(Vec::new()))));
+        tasks.add_task(RecordingTask::leaf(
+            "collect_facts",
+            Arc::new(Mutex::new(Vec::new())),
+        ));
 
         let error = genja
             .run_tasks(tasks, 0)

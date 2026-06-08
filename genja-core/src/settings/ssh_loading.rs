@@ -60,7 +60,7 @@ impl SSHConfig {
                     return Err(SshConfigError::OpenFailed {
                         path: path.display().to_string(),
                         message: e.to_string(),
-                    })
+                    });
                 }
             };
             let mut reader = BufReader::new(file);

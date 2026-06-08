@@ -1,8 +1,8 @@
 use super::env_defaults::{
-    deserialize_bool_loose, get_default_log_file, get_inventory_plugin_config,
+    ENV_INVENTORY_PLUGIN, ENV_LOG_FILE, ENV_LOG_LEVEL, ENV_LOG_TO_CONSOLE, ENV_RAISE_ON_ERROR,
+    ENV_RUNNER_PLUGIN, deserialize_bool_loose, get_default_log_file, get_inventory_plugin_config,
     get_log_level_default, get_log_to_console_default, get_runner_plugin_default, parse_bool_loose,
-    raise_on_error, ENV_INVENTORY_PLUGIN, ENV_LOG_FILE, ENV_LOG_LEVEL, ENV_LOG_TO_CONSOLE,
-    ENV_RAISE_ON_ERROR, ENV_RUNNER_PLUGIN,
+    raise_on_error,
 };
 use super::{OptionsConfig, RunnerConfig, SSHConfig};
 use regex::Regex;
