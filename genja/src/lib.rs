@@ -55,8 +55,11 @@
 //!
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
-use async_trait::async_trait;
+pub use ::async_trait::async_trait;
+pub use genja_core;
 pub use genja_core::GenjaError;
+pub use genja_core_derive::genja_task;
+pub use genja_plugin_manager;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
@@ -258,6 +261,20 @@ impl Genja {
         Ok(genja)
     }
 
+    /// Creates a `Genja` instance from a settings file path using async inventory loading.
+    ///
+    /// This follows the same flow as [`Self::from_settings_file`], but allows
+    /// async inventory plugins to participate in runtime construction.
+    pub async fn from_settings_file_async(settings_file_path: &str) -> Result<Self, GenjaError> {
+        let settings = Settings::from_file(settings_file_path).map_err(GenjaError::from)?;
+
+        let mut genja = Self::new();
+        genja.set_settings(settings);
+        genja.load_plugins()?;
+        genja.load_inventory_from_settings_async().await?;
+        Ok(genja)
+    }
+
     /// Loads inventory using the plugin specified in settings.
     ///
     /// Attempts to load inventory through the configured inventory plugin. Falls
@@ -283,6 +300,12 @@ impl Genja {
                 return Ok(());
             }
 
+            if self.plugins.get_async_inventory_plugin(plugin_name).is_some() {
+                return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
+                    plugin_name.to_string(),
+                ));
+            }
+
             if self.plugins.get_plugin(plugin_name).is_some() {
                 return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
             }
@@ -291,6 +314,67 @@ impl Genja {
         }
 
         let default_name = "FileInventoryPlugin";
+        if let Some(plugin) = self.plugins.get_inventory_plugin(default_name) {
+            let inventory = plugin
+                .load(&self.settings, &self.plugins)
+                .map_err(GenjaError::from)?;
+            self.load_inventory(inventory);
+            return Ok(());
+        }
+
+        if self.plugins.get_async_inventory_plugin(default_name).is_some() {
+            return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
+                default_name.to_string(),
+            ));
+        }
+
+        if self.plugins.get_plugin(default_name).is_some() {
+            return Err(GenjaError::NotInventoryPlugin(default_name.to_string()));
+        }
+
+        Err(GenjaError::PluginNotFound(default_name.to_string()))
+    }
+
+    async fn load_inventory_from_settings_async(&mut self) -> Result<(), GenjaError> {
+        self.ensure_plugins_loaded()?;
+        let inventory_cfg = self.settings.inventory();
+        let plugin_name = inventory_cfg.plugin();
+
+        if !plugin_name.is_empty() {
+            if let Some(plugin) = self.plugins.get_async_inventory_plugin(plugin_name) {
+                let inventory = plugin
+                    .load_async(&self.settings, &self.plugins)
+                    .await
+                    .map_err(GenjaError::from)?;
+                self.load_inventory(inventory);
+                return Ok(());
+            }
+
+            if let Some(plugin) = self.plugins.get_inventory_plugin(plugin_name) {
+                let inventory = plugin
+                    .load(&self.settings, &self.plugins)
+                    .map_err(GenjaError::from)?;
+                self.load_inventory(inventory);
+                return Ok(());
+            }
+
+            if self.plugins.get_plugin(plugin_name).is_some() {
+                return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
+            }
+
+            return Err(GenjaError::PluginNotFound(plugin_name.to_string()));
+        }
+
+        let default_name = "FileInventoryPlugin";
+        if let Some(plugin) = self.plugins.get_async_inventory_plugin(default_name) {
+            let inventory = plugin
+                .load_async(&self.settings, &self.plugins)
+                .await
+                .map_err(GenjaError::from)?;
+            self.load_inventory(inventory);
+            return Ok(());
+        }
+
         if let Some(plugin) = self.plugins.get_inventory_plugin(default_name) {
             let inventory = plugin
                 .load(&self.settings, &self.plugins)
@@ -793,29 +877,17 @@ impl Genja {
     /// # Examples
     ///
     /// ```
-    /// use async_trait::async_trait;
-    /// use genja::Genja;
+    /// use genja::{Genja, genja_task};
     /// use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
     /// use genja_core::task::{
-    ///     HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    ///     HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
     /// };
-    /// use serde_json::Value;
-    /// use std::sync::Arc;
     ///
     /// struct MyTask;
     ///
-    /// impl TaskInfo for MyTask {
-    ///     fn name(&self) -> &str { "my-task" }
-    ///     fn options(&self) -> Option<&Value> { None }
-    /// }
-    ///
-    /// impl SubTasks for MyTask {
-    ///     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> { Vec::new() }
-    /// }
-    ///
-    /// #[async_trait]
-    /// impl Task for MyTask {
-    ///     async fn start(
+    /// #[genja_task(name = "my-task")]
+    /// impl MyTask {
+    ///     async fn start_async(
     ///         &self,
     ///         _host: &Host,
     ///         _context: &TaskRuntimeContext,
@@ -838,10 +910,29 @@ impl Genja {
         task: T,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
-        self.run_task_definition(TaskDefinition::new(task), max_depth)
+        ensure_sync_execution_outside_tokio("run_task()", "run_task_async()")?;
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
+        runtime.block_on(self.run_task_async(task, max_depth))
     }
 
-    fn run_task_definition(
+    /// Executes a task against the currently selected hosts using the configured runner plugin.
+    ///
+    /// This is the async counterpart to [`Self::run_task`]. Use it when Genja is called
+    /// from an existing Tokio runtime or when task execution should compose with other
+    /// async application work.
+    pub async fn run_task_async<T: Task + 'static>(
+        &self,
+        task: T,
+        max_depth: usize,
+    ) -> Result<TaskResults, GenjaError> {
+        self.run_task_definition_async(TaskDefinition::new(task), max_depth)
+            .await
+    }
+
+    async fn run_task_definition_async(
         &self,
         task_definition: TaskDefinition,
         max_depth: usize,
@@ -870,21 +961,15 @@ impl Genja {
             host_count
         );
         let runner = self.get_runner_plugin(runner_name)?;
-        let runtime = Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        let results = runtime.block_on(async {
-            runner
-                .run_task(
-                    &task_definition,
-                    &hosts,
-                    Some(connection_resolver),
-                    self.settings.runner(),
-                    max_depth,
-                )
-                .await
-        })?;
+        let results = runner
+            .run_task(
+                &task_definition,
+                &hosts,
+                Some(connection_resolver),
+                self.settings.runner(),
+                max_depth,
+            )
+            .await?;
         let summary = results.task_summary();
         log_task_summary(&summary, host_count, 0);
         Ok(results)
@@ -896,6 +981,24 @@ impl Genja {
     /// preserves the order of the root task list, so `results[n]` corresponds to
     /// `tasks[n]`.
     pub fn run_tasks(
+        &self,
+        tasks: Tasks,
+        max_depth: usize,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        ensure_sync_execution_outside_tokio("run_tasks()", "run_tasks_async()")?;
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
+        runtime.block_on(self.run_tasks_async(tasks, max_depth))
+    }
+
+    /// Executes an ordered list of root task trees using the configured runner plugin.
+    ///
+    /// This is the async counterpart to [`Self::run_tasks`]. Use it when Genja is called
+    /// from an existing Tokio runtime or when task execution should compose with other
+    /// async application work.
+    pub async fn run_tasks_async(
         &self,
         mut tasks: Tasks,
         max_depth: usize,
@@ -930,21 +1033,15 @@ impl Genja {
             task_names
         );
         let runner = self.get_runner_plugin(runner_name)?;
-        let runtime = Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        let results = runtime.block_on(async {
-            runner
-                .run_tasks(
-                    &tasks,
-                    &hosts,
-                    Some(connection_resolver),
-                    self.settings.runner(),
-                    max_depth,
-                )
-                .await
-        })?;
+        let results = runner
+            .run_tasks(
+                &tasks,
+                &hosts,
+                Some(connection_resolver),
+                self.settings.runner(),
+                max_depth,
+            )
+            .await?;
         for result in &results {
             let summary = result.task_summary();
             log_task_summary(&summary, host_count, 0);
@@ -959,6 +1056,20 @@ fn current_plugin_directory() -> Result<PathBuf, std::io::Error> {
         .parent()
         .ok_or_else(|| std::io::Error::other("executable has no parent directory"))?;
     Ok(directory.join("plugins"))
+}
+
+fn ensure_sync_execution_outside_tokio(
+    sync_api: &str,
+    async_api: &str,
+) -> Result<(), GenjaError> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let message =
+            format!("{sync_api} cannot be called from an active Tokio runtime; use {async_api} instead");
+        log::error!("{message}");
+        return Err(GenjaError::Message(message));
+    }
+
+    Ok(())
 }
 
 fn log_task_summary(summary: &TaskResultsSummary, host_count: usize, depth: usize) {
@@ -1018,24 +1129,54 @@ impl Default for Genja {
 
 #[cfg(test)]
 mod tests {
-    use super::{Genja, GenjaError};
+    use super::{Genja, GenjaError, genja_task};
     use async_trait::async_trait;
     use genja_core::Settings;
     use genja_core::inventory::{
         BaseBuilderHost, Connection, ConnectionKey, Data, Host, Hosts, Inventory,
         ResolvedConnectionParams,
     };
-    use genja_core::settings::RunnerConfig;
+    use genja_core::settings::{InventoryConfig, RunnerConfig};
     use genja_core::task::{
-        HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
+        BlockingTaskRuntimeContext, HostTaskResult, Task, TaskDefinition, TaskError,
+        TaskExecutionMode, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
     };
-    use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, Plugins};
+    use genja_plugin_manager::PluginManager;
+    use genja_plugin_manager::plugin_types::{
+        AsyncPluginInventory, Plugin, PluginConnection, Plugins,
+    };
     use serde_json::{Value, json};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     struct TestTask {
         name: String,
+    }
+
+    #[derive(Debug)]
+    struct TestAsyncInventoryPlugin;
+
+    impl Plugin for TestAsyncInventoryPlugin {
+        fn name(&self) -> String {
+            "async_inventory".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl AsyncPluginInventory for TestAsyncInventoryPlugin {
+        async fn load_async(
+            &self,
+            _settings: &Settings,
+            _plugins: &genja_plugin_manager::PluginManager,
+        ) -> Result<Inventory, genja_core::InventoryLoadError> {
+            let mut hosts = Hosts::new();
+            hosts.add_host(
+                "router1",
+                Host::builder().hostname("10.0.0.1").platform("ios").build(),
+            );
+            Ok(Inventory::builder().hosts(hosts).build())
+        }
     }
 
     impl TaskInfo for TestTask {
@@ -1052,20 +1193,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for TestTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for TestTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1085,15 +1224,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for FailedTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for FailedTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -1101,6 +1234,10 @@ mod tests {
             Ok(HostTaskResult::failed(genja_core::task::TaskFailure::new(
                 std::io::Error::other("boom"),
             )))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1120,20 +1257,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for SkippedTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for SkippedTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::skipped_with_reason("filtered"))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1153,20 +1288,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for ChildTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for ChildTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1191,16 +1324,27 @@ mod tests {
         saw_connection: Arc<AtomicBool>,
     }
 
-    #[derive(genja_core_derive::Task)]
-    struct DerivedProcessorTask {
-        name: &'static str,
-        processor_names: Vec<String>,
+    struct BlockingSuccessTask;
+
+    struct SlowBlockingTask {
+        started: Arc<AtomicBool>,
+        finished: Arc<AtomicBool>,
+        pause: Duration,
     }
 
-    #[derive(genja_core_derive::Task)]
-    #[task(processors = ["audit", "metrics"])]
-    struct DerivedAttributeProcessorTask {
-        name: &'static str,
+    struct DerivedProcessorTask;
+
+    struct DerivedAttributeProcessorTask;
+
+    #[genja_task(name = "attribute", processors = ["audit", "metrics"])]
+    impl DerivedAttributeProcessorTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
     }
 
     impl TaskInfo for ParentTask {
@@ -1217,20 +1361,22 @@ mod tests {
         }
     }
 
-    impl SubTasks for ParentTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            vec![Arc::new(ChildTask)]
-        }
-    }
-
     #[async_trait]
     impl Task for ParentTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            vec![Arc::new(ChildTask)]
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1270,15 +1416,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for RecordingTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            self.sub_tasks.clone()
-        }
-    }
-
     #[async_trait]
     impl Task for RecordingTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -1288,6 +1428,14 @@ mod tests {
                 .expect("order mutex should not be poisoned")
                 .push(self.name);
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            self.sub_tasks.clone()
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -1383,15 +1531,9 @@ mod tests {
         }
     }
 
-    impl SubTasks for ConnectionAwareTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for ConnectionAwareTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             context: &TaskRuntimeContext,
@@ -1407,11 +1549,15 @@ mod tests {
                 TaskSuccess::new().with_changed(alive),
             ))
         }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
     }
 
-    #[async_trait]
-    impl Task for DerivedProcessorTask {
-        async fn start(
+    #[genja_task(name = "derived")]
+    impl DerivedProcessorTask {
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
@@ -1420,14 +1566,46 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl Task for DerivedAttributeProcessorTask {
-        async fn start(
+    impl TaskInfo for BlockingSuccessTask {
+        fn name(&self) -> &str {
+            "blocking-success"
+        }
+    }
+
+    impl Task for BlockingSuccessTask {
+        fn start(
             &self,
             _host: &Host,
-            _context: &TaskRuntimeContext,
+            _context: &BlockingTaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Blocking
+        }
+    }
+
+    impl TaskInfo for SlowBlockingTask {
+        fn name(&self) -> &str {
+            "slow-blocking"
+        }
+    }
+
+    impl Task for SlowBlockingTask {
+        fn start(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.started.store(true, Ordering::SeqCst);
+            std::thread::sleep(self.pause);
+            self.finished.store(true, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Blocking
         }
     }
 
@@ -1534,19 +1712,13 @@ mod tests {
 
     #[test]
     fn derive_task_exposes_processor_names() {
-        let task = DerivedProcessorTask {
-            name: "derived",
-            processor_names: Vec::new(),
-        }
-        .with_processor("audit")
-        .with_processors(["metrics"]);
-        let no_processors = DerivedProcessorTask {
-            name: "none",
-            processor_names: Vec::new(),
-        };
-        let attribute_task = DerivedAttributeProcessorTask { name: "attribute" };
+        let task = TaskDefinition::new(DerivedProcessorTask)
+            .with_processor("audit")
+            .with_processors(["metrics"]);
+        let no_processors = DerivedProcessorTask;
+        let attribute_task = DerivedAttributeProcessorTask;
 
-        assert_eq!(task.processor_names(), ["audit", "metrics"]);
+        assert_eq!(task.processor_names(), vec!["audit", "metrics"]);
         assert_eq!(attribute_task.processor_names(), ["audit", "metrics"]);
         assert!(no_processors.processor_names().is_empty());
     }
@@ -1671,6 +1843,57 @@ mod tests {
     }
 
     #[test]
+    fn sync_inventory_loading_rejects_async_only_inventory_plugin() {
+        let mut plugin_manager = genja_plugin_manager::PluginManager::new();
+        plugin_manager.register_plugin(Plugins::AsyncInventory(Box::new(TestAsyncInventoryPlugin)));
+
+        let settings = Settings::builder()
+            .inventory(InventoryConfig::builder().plugin("async_inventory").build())
+            .build();
+
+        let mut genja = Genja::new();
+        genja.set_settings(settings);
+        genja.plugins = Arc::new(plugin_manager);
+        genja.plugins_loaded = true;
+
+        let error = genja
+            .load_inventory_from_settings()
+            .expect_err("sync settings load should reject async-only inventory plugins");
+
+        assert!(matches!(
+            error,
+            GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(name)
+                if name == "async_inventory"
+        ));
+    }
+
+    #[test]
+    fn async_inventory_loading_supports_async_inventory_plugin() {
+        let mut plugin_manager = genja_plugin_manager::PluginManager::new();
+        plugin_manager.register_plugin(Plugins::AsyncInventory(Box::new(TestAsyncInventoryPlugin)));
+
+        let settings = Settings::builder()
+            .inventory(InventoryConfig::builder().plugin("async_inventory").build())
+            .build();
+
+        let mut genja = Genja::new();
+        genja.set_settings(settings);
+        genja.plugins = Arc::new(plugin_manager);
+        genja.plugins_loaded = true;
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(genja.load_inventory_from_settings_async())
+            .expect("async settings load should support async inventory plugins");
+
+        assert!(genja.inventory_loaded());
+        assert_eq!(genja.host_ids().len(), 1);
+        assert_eq!(genja.host_ids()[0].as_str(), "router1");
+    }
+
+    #[test]
     fn filter_by_key_value_with_empty_key_matches_no_hosts() {
         let genja = Genja::from_inventory(test_inventory_with_data());
 
@@ -1761,6 +1984,101 @@ mod tests {
         assert!(results.duration_ns().is_some());
     }
 
+    #[tokio::test]
+    async fn run_task_async_executes_task_inside_existing_tokio_runtime() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja
+            .run_task_async(
+                TestTask {
+                    name: "async-task".to_string(),
+                },
+                0,
+            )
+            .await
+            .expect("async task execution should succeed");
+
+        assert_eq!(results.task_name(), "async-task");
+        assert_eq!(results.passed_hosts().len(), 2);
+    }
+
+    #[test]
+    fn run_task_executes_blocking_task() {
+        let genja = Genja::from_inventory(single_host_inventory());
+
+        let results = genja
+            .run_task(BlockingSuccessTask, 0)
+            .expect("blocking task execution should succeed");
+
+        assert_eq!(results.task_name(), "blocking-success");
+        assert_eq!(results.passed_hosts().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_task_async_executes_blocking_task() {
+        let genja = Genja::from_inventory(single_host_inventory());
+
+        let results = genja
+            .run_task_async(BlockingSuccessTask, 0)
+            .await
+            .expect("blocking task execution should succeed");
+
+        assert_eq!(results.task_name(), "blocking-success");
+        assert_eq!(results.passed_hosts().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_task_async_offloads_blocking_task_work() {
+        let genja = Genja::from_inventory(single_host_inventory());
+        let started = Arc::new(AtomicBool::new(false));
+        let finished = Arc::new(AtomicBool::new(false));
+
+        let task = SlowBlockingTask {
+            started: Arc::clone(&started),
+            finished: Arc::clone(&finished),
+            pause: Duration::from_millis(150),
+        };
+
+        let started_for_signal = Arc::clone(&started);
+        let finished_for_signal = Arc::clone(&finished);
+        let signal_future = async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert!(started_for_signal.load(Ordering::SeqCst));
+            assert!(!finished_for_signal.load(Ordering::SeqCst));
+        };
+
+        let began_at = Instant::now();
+        let (results, _) = tokio::join!(genja.run_task_async(task, 0), signal_future);
+        let elapsed = began_at.elapsed();
+
+        let results = results.expect("blocking task execution should succeed");
+        assert_eq!(results.task_name(), "slow-blocking");
+        assert_eq!(results.passed_hosts().len(), 1);
+        assert!(elapsed >= Duration::from_millis(150));
+        assert!(elapsed < Duration::from_millis(350));
+    }
+
+    #[tokio::test]
+    async fn run_task_errors_inside_existing_tokio_runtime() {
+        let genja = Genja::from_inventory(test_inventory());
+
+        let error = genja
+            .run_task(
+                TestTask {
+                    name: "sync-task".to_string(),
+                },
+                0,
+            )
+            .expect_err("sync task execution should error inside Tokio");
+
+        assert!(matches!(
+            error,
+            GenjaError::Message(message)
+                if message.contains("run_task() cannot be called from an active Tokio runtime")
+                    && message.contains("run_task_async()")
+        ));
+    }
+
     #[test]
     fn run_tasks_accepts_ordered_task_list_with_nested_subtasks() {
         let genja = Genja::from_inventory(single_host_inventory());
@@ -1801,6 +2119,65 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn run_tasks_async_preserves_root_task_order() {
+        let genja = Genja::from_inventory(single_host_inventory());
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let validate_config = Arc::new(RecordingTask::leaf("validate_config", order.clone()));
+        let upload_artifact = Arc::new(RecordingTask::leaf("upload_artifact", order.clone()));
+
+        let mut tasks = Tasks::new();
+        tasks.add_task(RecordingTask::leaf("collect_facts", order.clone()));
+        tasks.add_task(RecordingTask::parent(
+            "deploy_changes",
+            vec![validate_config, upload_artifact],
+            order.clone(),
+        ));
+        tasks.add_task(RecordingTask::leaf("collect_logs", order.clone()));
+
+        let results = genja
+            .run_tasks_async(tasks, 10)
+            .await
+            .expect("async task list should execute");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].task_name(), "collect_facts");
+        assert_eq!(results[1].task_name(), "deploy_changes");
+        assert!(results[1].sub_task("validate_config").is_some());
+        assert!(results[1].sub_task("upload_artifact").is_some());
+        assert_eq!(results[2].task_name(), "collect_logs");
+
+        let order = order.lock().expect("order mutex should not be poisoned");
+        assert_eq!(
+            order.as_slice(),
+            [
+                "collect_facts",
+                "deploy_changes",
+                "validate_config",
+                "upload_artifact",
+                "collect_logs"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tasks_errors_inside_existing_tokio_runtime() {
+        let genja = Genja::from_inventory(single_host_inventory());
+        let mut tasks = Tasks::new();
+        tasks.add_task(RecordingTask::leaf("collect_facts", Arc::new(Mutex::new(Vec::new()))));
+
+        let error = genja
+            .run_tasks(tasks, 0)
+            .expect_err("sync task list execution should error inside Tokio");
+
+        assert!(matches!(
+            error,
+            GenjaError::Message(message)
+                if message.contains("run_tasks() cannot be called from an active Tokio runtime")
+                    && message.contains("run_tasks_async()")
+        ));
+    }
+
     #[test]
     fn run_preserves_failed_host_outcomes_and_timing() {
         let genja = Genja::from_inventory(test_inventory());
@@ -1839,7 +2216,7 @@ mod tests {
     #[test]
     fn run_passes_open_connection_into_task_runtime_context() {
         let saw_connection = Arc::new(AtomicBool::new(false));
-        let mut plugin_manager = crate::plugins::built_in_plugin_manager();
+        let mut plugin_manager = PluginManager::new();
         plugin_manager.register_plugin(Plugins::Connection(Box::new(TestConnectionPlugin)));
 
         let genja = Genja::builder(test_inventory())
@@ -1864,6 +2241,23 @@ mod tests {
                 .expect("router1 result should exist")
                 .is_passed()
         );
+    }
+
+    #[test]
+    fn builder_with_custom_plugin_manager_still_loads_builtin_runners() {
+        let mut plugin_manager = PluginManager::new();
+        plugin_manager.register_plugin(Plugins::Connection(Box::new(TestConnectionPlugin)));
+
+        let genja = Genja::builder(test_inventory())
+            .with_plugin_manager(plugin_manager)
+            .build()
+            .expect("genja should build with merged built-in plugins");
+
+        let updated = genja
+            .with_runner("serial")
+            .expect("serial runner should still be available");
+
+        assert_eq!(updated.settings().runner().plugin(), "serial");
     }
 
     #[test]
@@ -2055,7 +2449,9 @@ impl GenjaBuilder {
         }
 
         if let Some(plugin_manager) = self.plugin_manager {
-            genja.plugins = Arc::new(plugin_manager);
+            let mut merged_plugins = crate::plugins::built_in_plugin_manager();
+            merged_plugins.merge(plugin_manager);
+            genja.plugins = Arc::new(merged_plugins);
             genja.plugins_loaded = true;
         } else {
             genja.load_plugins()?;

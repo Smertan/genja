@@ -10,8 +10,36 @@ def test_settings_from_file_loads_yaml():
     assert settings.core.raise_on_error is False
     assert settings.inventory.plugin == "FileInventoryPlugin"
     assert settings.inventory.options.hosts_file == "./inventory/hosts.yaml"
+    assert settings.inventory.transform_function_options is None
     assert settings.ssh.config_file is None
     assert settings.runner.plugin == "threaded"
     assert settings.runner.worker_count == 10
     assert settings.logging.level == "info"
     assert settings.logging.max_file_count == 10
+
+
+def test_inventory_transform_function_options_are_exposed(tmp_path):
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(
+        "\n".join(
+            [
+                "inventory:",
+                "  plugin: FileInventoryPlugin",
+                "  options:",
+                "    hosts_file: ./hosts.yaml",
+                "  transform_function: normalize_inventory",
+                "  transform_function_options:",
+                "    suffix: -lab",
+                "    defaults:",
+                "      platform: linux",
+            ]
+        )
+    )
+
+    settings = genja.Settings.from_file(str(settings_file))
+
+    assert settings.inventory.transform_function == "normalize_inventory"
+    assert settings.inventory.transform_function_options == {
+        "suffix": "-lab",
+        "defaults": {"platform": "linux"},
+    }

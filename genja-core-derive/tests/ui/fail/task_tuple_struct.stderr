@@ -1,5 +1,0 @@
-error: Task requires named fields
- --> tests/ui/fail/task_tuple_struct.rs:4:8
-  |
-4 | struct TupleTask(String);
-  |        ^^^^^^^^^

@@ -6,6 +6,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
+use crate::task;
+
 #[pyclass(name = "OptionsConfig")]
 #[derive(Clone)]
 pub struct PyOptionsConfig {
@@ -80,6 +82,14 @@ impl PyInventoryConfig {
     #[getter]
     pub(crate) fn transform_function(&self) -> Option<String> {
         self.inner.transform_function().map(str::to_owned)
+    }
+
+    #[getter]
+    pub(crate) fn transform_function_options(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match self.inner.transform_function_options() {
+            Some(options) => task::json_value_to_py(py, options),
+            None => Ok(py.None()),
+        }
     }
 
     fn __repr__(&self) -> String {

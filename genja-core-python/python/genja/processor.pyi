@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, ClassVar
+from .plugin import PluginBase
 
 class TaskProcessorContext:
     task_name: str
@@ -12,9 +13,9 @@ class TaskProcessorContext:
     def is_sub_task(self) -> bool: ...
     def to_dict(self) -> dict[str, Any]: ...
 
-class TaskProcessorProtocol(Protocol):
-    def name(self) -> str: ...
-    def group(self) -> str: ...
+class ProcessorPluginBase(PluginBase):
+    group_name: ClassVar[str]
+    _locked_group_name: ClassVar[str]
     def on_task_start(
         self, context: TaskProcessorContext, results: Any
     ) -> Any | None: ...

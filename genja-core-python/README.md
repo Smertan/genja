@@ -1,4 +1,4 @@
-# genja
+# genja-py
 
 Python bindings for the Genja runtime.
 
@@ -15,7 +15,7 @@ lets Python code:
 For end users, install the package with `pip`:
 
 ```bash
-pip install genja
+pip install genja-py
 ```
 
 The package currently exposes the `genja` Python module:
@@ -30,13 +30,26 @@ Create a runtime from a simple host mapping:
 
 ```python
 import genja
-from genja.task import TaskSuccessResult, task
+from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
 
 
 @task(name="backup_config")
 class BackupTask:
-    def run(self, task, host, context):
-        return TaskSuccessResult(summary=f"backed up {host.hostname}")
+    def start(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult:
+        connection = context.connection()
+        command_output = None
+        if connection is not None:
+            command_output = connection.execute_command("show running-config")
+
+        return TaskSuccessResult(
+            summary=f"backed up {host.hostname}",
+            metadata={"show_running_config": command_output},
+        )
 
 
 genja = genja.Genja.from_hosts(
@@ -55,6 +68,63 @@ tasks.add_task(BackupTask)
 all_results = genja.run_tasks(tasks)
 print([result.task_name for result in all_results])
 ```
+
+`TaskRuntimeContext` exposes the resolved connection through
+`context.connection()` and `context.has_connection()`. Execution depth remains
+internal to the runtime.
+
+For async Python applications, use the async entrypoints:
+
+```python
+import asyncio
+import genja
+from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
+
+
+@task(name="backup_config_async")
+class BackupTaskAsync:
+    async def start_async(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult:
+        connection = context.connection()
+        command_output = None
+        if connection is not None:
+            command_output = await connection.execute_command("show running-config")
+
+        return TaskSuccessResult(
+            summary=f"backed up {host.hostname}",
+            metadata={"show_running_config": command_output},
+        )
+
+
+async def main() -> None:
+    runtime = genja.Genja.from_hosts(
+        {
+            "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+        }
+    ).with_runner("serial")
+
+    results = await runtime.run_task_async(BackupTaskAsync)
+    print(results.to_dict())
+
+
+asyncio.run(main())
+```
+
+Use `run_task_async(...)` and `run_tasks_async(...)` when composing Genja with
+`asyncio.gather(...)` or other async application code. The synchronous
+`run_task(...)` and `run_tasks(...)` entrypoints remain available for scripts
+and non-async callers.
+
+Python task authoring rules:
+
+- Define `def start(...)` for blocking tasks.
+- Define `async def start_async(...)` for async tasks.
+- Define exactly one of those methods on a `@task(...)` class.
+- Use `sub_tasks=[ChildTask, ...]` to declare child tasks.
 
 ## Full Inventory
 
@@ -97,11 +167,8 @@ import genja
 
 
 class MyProcessorPlugin:
-    def name(self) -> str:
-        return "audit"
-
-    def group(self) -> str:
-        return "ProcessorPlugin"
+    name = "audit"
+    group = "ProcessorPlugin"
 
     def on_task_finish(self, context, results):
         return None
@@ -161,8 +228,12 @@ pdm run maturin develop
 Run the Rust-side binding tests:
 
 ```bash
-cargo test -p genja-core-python
+pdm run test-rust
 ```
+
+Use `pdm run test-rust` instead of plain `cargo test`. The Rust tests embed
+Python and need access to the PDM-managed virtualenv packages such as
+`pydantic`.
 
 Run the Python test suite:
 

@@ -16,17 +16,17 @@
 //! │                   - group() -> String                         │
 //! └───────────────────────────┬───────────────────────────────────┘
 //!                             │
-//!           ┌─────────────────┼─────────────────┬────────────────┬────────────────┐
-//!           │                 │                 │                │                │
-//!           ▼                 ▼                 ▼                ▼                ▼
-//! ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
-//! │PluginConnection│  │PluginInventory │  │ PluginRunner   │  │PluginTransform │  │PluginProcessor │
-//! │                │  │                │  │                │  │  Function      │  │                │
-//! │ - create()     │  │ - load()       │  │ - run_task()   │  │ - transform_   │  │ - processor()  │
-//! │ - open()       │  │                │  │ - run_tasks()  │  │   function()   │  │                │
-//! │ - close()      │  │                │  │                │  │                │  │                │
-//! │ - is_alive()   │  │                │  │                │  │                │  │                │
-//! └────────────────┘  └────────────────┘  └────────────────┘  └────────────────┘  └────────────────┘
+//!           ┌─────────────────┼─────────────────┬─────────────────┬─────────────────┬─────────────────┐
+//!           │                 │                 │                 │                 │                 │
+//!           ▼                 ▼                 ▼                 ▼                 ▼                 ▼    
+//! ┌─────────────────┐┌─────────────────┐┌─────────────────┐┌─────────────────┐┌─────────────────┐┌─────────────────┐
+//! │PluginConnection ││PluginInventory  ││AsyncPluginInv.  ││  PluginRunner   ││PluginTransform  ││PluginProcessor  │
+//! │                 ││                 ││                 ││                 ││    Function     ││                 │
+//! │ - create()      ││ - load()        ││ - load_async()  ││ - run_task()    ││ - transform_    ││ - processor()   │
+//! │ - open()        ││                 ││                 ││ - run_tasks()   ││   function()    ││                 │
+//! │ - close()       ││                 ││                 ││                 ││                 ││                 │
+//! │ - is_alive()    ││                 ││                 ││                 ││                 ││                 │
+//! └─────────────────┘└─────────────────┘└─────────────────┘└─────────────────┘└─────────────────┘└─────────────────┘
 //! ```
 //!
 //! # Plugin Types
@@ -56,6 +56,13 @@
 //! **Key Methods:**
 //! - `load()` - Load inventory from source (files, APIs, databases, etc.)
 //!
+//! ### [`AsyncPluginInventory`]
+//! Loads and prepares inventory data asynchronously for remote sources such as
+//! HTTP APIs, databases, or service-discovery systems.
+//!
+//! **Key Methods:**
+//! - `load_async()` - Load inventory from an async source
+//!
 //! ### [`PluginRunner`]
 //! Executes tasks against sets of hosts. Provides different execution strategies
 //! (sequential, parallel, etc.).
@@ -74,7 +81,7 @@
 //! ### [`PluginProcessor`]
 //! Provides task-result lifecycle hooks. Processor plugins are registered by
 //! name, and tasks opt into them by listing processor names on the task or with
-//! `#[task(processors = ["name"])]` when using the derive macro.
+//! `#[genja_task(processors = ["name"])]` when using the task authoring macro.
 //!
 //! **Key Methods:**
 //! - `processor()` - Returns the task processor implementation
@@ -101,6 +108,7 @@
 //! let plugins: Vec<Plugins> = vec![
 //!     // Plugins::Connection(Box::new(ssh_plugin)),
 //!     // Plugins::Inventory(Box::new(file_plugin)),
+//!     // Plugins::AsyncInventory(Box::new(remote_inventory_plugin)),
 //!     // Plugins::Processor(Box::new(audit_processor_plugin)),
 //!     // Plugins::Runner(Box::new(threaded_runner)),
 //! ];
@@ -216,6 +224,37 @@
 //!         // let inventory = fetch_from_database(settings)?;
 //!         // Ok(inventory)
 //!         unimplemented!()
+//!     }
+//! }
+//! ```
+//!
+//! ## Implementing an Async Inventory Plugin
+//!
+//! ```rust
+//! use async_trait::async_trait;
+//! use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
+//! use genja_plugin_manager::PluginManager;
+//! use genja_core::{InventoryLoadError, Settings};
+//! use genja_core::inventory::Inventory;
+//!
+//! #[derive(Debug)]
+//! struct RemoteInventoryPlugin;
+//!
+//! impl Plugin for RemoteInventoryPlugin {
+//!     fn name(&self) -> String {
+//!         "remote_inventory".to_string()
+//!     }
+//! }
+//!
+//! #[async_trait]
+//! impl AsyncPluginInventory for RemoteInventoryPlugin {
+//!     async fn load_async(
+//!         &self,
+//!         settings: &Settings,
+//!         plugins: &PluginManager,
+//!     ) -> Result<Inventory, InventoryLoadError> {
+//!         let _ = (settings, plugins);
+//!         Ok(Inventory::builder().build())
 //!     }
 //! }
 //! ```
@@ -349,6 +388,9 @@
 //!         Plugins::Inventory(inv) => {
 //!             println!("Inventory plugin: {}", inv.name());
 //!         }
+//!         Plugins::AsyncInventory(inv) => {
+//!             println!("Async inventory plugin: {}", inv.name());
+//!         }
 //!         Plugins::Processor(processor) => {
 //!             println!("Processor plugin: {}", processor.name());
 //!         }
@@ -458,6 +500,27 @@ pub trait PluginInventory: Plugin {
     }
 }
 
+/// Loads or prepares inventory data for the system asynchronously.
+///
+/// Async inventory plugins are intended for remote inventory sources such as
+/// HTTP APIs, databases, or service-discovery systems. The runtime can prefer
+/// them from async construction paths while keeping synchronous inventory
+/// plugins available for file-based and blocking implementations.
+#[async_trait]
+pub trait AsyncPluginInventory: Plugin {
+    /// Load and return inventory data for the system.
+    async fn load_async(
+        &self,
+        settings: &Settings,
+        plugins: &PluginManager,
+    ) -> Result<Inventory, InventoryLoadError>;
+
+    /// Returns the group name
+    fn group(&self) -> String {
+        String::from("InventoryPlugin")
+    }
+}
+
 impl Debug for dyn Plugin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} {{ name: {} }}", Plugin::group(self), self.name())
@@ -470,6 +533,17 @@ impl Debug for dyn PluginInventory {
             f,
             "{} {{ name: {} }}",
             PluginInventory::group(self),
+            self.name()
+        )
+    }
+}
+
+impl Debug for dyn AsyncPluginInventory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {{ name: {} }}",
+            AsyncPluginInventory::group(self),
             self.name()
         )
     }
@@ -636,6 +710,7 @@ pub trait PluginConnection: Plugin {
 pub enum Plugins {
     Connection(Box<dyn PluginConnection>),
     Inventory(Box<dyn PluginInventory>),
+    AsyncInventory(Box<dyn AsyncPluginInventory>),
     Processor(Box<dyn PluginProcessor>),
     Runner(Box<dyn PluginRunner>),
     TransformFunction(Box<dyn PluginTransformFunction>),
@@ -647,6 +722,7 @@ impl Plugins {
         match self {
             Plugins::Connection(connection) => connection.name(),
             Plugins::Inventory(inventory) => inventory.name(),
+            Plugins::AsyncInventory(inventory) => inventory.name(),
             Plugins::Processor(processor) => processor.name(),
             Plugins::Runner(runner) => runner.name(),
             Plugins::TransformFunction(transform) => transform.name(),
@@ -658,6 +734,7 @@ impl Plugins {
         match self {
             Plugins::Connection(_) => String::from("Connection"),
             Plugins::Inventory(_) => String::from("Inventory"),
+            Plugins::AsyncInventory(_) => String::from("Inventory"),
             Plugins::Processor(_) => String::from("Processor"),
             Plugins::Runner(_) => String::from("Runner"),
             Plugins::TransformFunction(_) => String::from("TransformFunction"),
@@ -672,7 +749,8 @@ mod tests {
         ConnectionKey, Host, Hosts, ResolvedConnectionParams, TransformFunction,
     };
     use genja_core::task::{
-        HostTaskResult, SubTasks, Task, TaskError, TaskInfo, TaskRuntimeContext, TaskSuccess,
+        HostTaskResult, Task, TaskError, TaskExecutionMode, TaskInfo, TaskRuntimeContext,
+        TaskSuccess,
     };
     use serde_json::{Value, json};
     use std::future::Future;
@@ -714,6 +792,34 @@ mod tests {
 
     impl PluginInventory for DummyInventory {
         fn load(
+            &self,
+            _settings: &Settings,
+            _plugins: &PluginManager,
+        ) -> Result<Inventory, InventoryLoadError> {
+            Ok(Inventory::builder().build())
+        }
+    }
+
+    #[derive(Debug)]
+    struct DummyAsyncInventory {
+        name: &'static str,
+    }
+
+    impl DummyAsyncInventory {
+        fn new(name: &'static str) -> Self {
+            Self { name }
+        }
+    }
+
+    impl Plugin for DummyAsyncInventory {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    #[async_trait]
+    impl AsyncPluginInventory for DummyAsyncInventory {
+        async fn load_async(
             &self,
             _settings: &Settings,
             _plugins: &PluginManager,
@@ -771,20 +877,18 @@ mod tests {
         }
     }
 
-    impl SubTasks for DummyTask {
-        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
-            Vec::new()
-        }
-    }
-
     #[async_trait]
     impl Task for DummyTask {
-        async fn start(
+        async fn start_async(
             &self,
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -894,6 +998,7 @@ mod tests {
     fn plugins_name_and_group_name_match_variants() {
         let connection = Plugins::Connection(Box::new(DummyConnection::new("conn")));
         let inventory = Plugins::Inventory(Box::new(DummyInventory::new("inv")));
+        let async_inventory = Plugins::AsyncInventory(Box::new(DummyAsyncInventory::new("ainv")));
         let runner = Plugins::Runner(Box::new(DummyRunner::new("run")));
         let transform = Plugins::TransformFunction(Box::new(DummyTransform::new("tf")));
 
@@ -902,6 +1007,9 @@ mod tests {
 
         assert_eq!(inventory.name(), "inv");
         assert_eq!(inventory.group_name(), "Inventory");
+
+        assert_eq!(async_inventory.name(), "ainv");
+        assert_eq!(async_inventory.group_name(), "Inventory");
 
         assert_eq!(runner.name(), "run");
         assert_eq!(runner.group_name(), "Runner");

@@ -4,17 +4,14 @@ class AsyncRuntimeTask:
         "connection_plugin_name": None,
         "processors": [],
         "options": None,
-        "sub_task": None,
+        "sub_tasks": [],
     }
 
-    async def run(self, task, host, context):
+    async def start_async(self, task, host, context):
         return {
             "status": "passed",
             "changed": True,
             "summary": f"async handled {host.hostname}",
             "messages": [{"level": "info", "text": task.name}],
-            "metadata": {
-                "current_depth": context.current_depth,
-                "max_depth": context.max_depth,
-            },
+            "metadata": {"has_connection": context.has_connection()},
         }

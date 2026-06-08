@@ -1,0 +1,14 @@
+core:
+  raise_on_error: false
+
+inventory:
+  plugin: FileInventoryPlugin
+  options:
+    hosts_file: genja/examples/inventory/hosts.json
+
+runner:
+  plugin: serial
+  max_task_depth: 10
+
+logging:
+  enabled: false

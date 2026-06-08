@@ -3,15 +3,18 @@ name = "genja-core-derive"
 version = "0.1.0"
 edition = "2024"
 readme = "README.md"
+description = "Procedural macros for Genja task types, including derives for task metadata, subtasks, and wrapper dereferencing"
+license = "AGPL-3.0-only"
+repository = "https://github.com/Smertan/genja"
+keywords = ["automation", "derive", "macro"]
+categories = ["development-tools"]
 
 [dependencies]
+proc-macro2 = "1.0.101"
 quote = "1.0.40"
-syn = "2.0.106"
+syn = { version = "2.0.106", features = ["full"] }
 
 [dev-dependencies]
-async-trait = "0.1.89"
-genja-core = { path = "../genja-core" }
-serde_json = "1.0.142"
 trybuild = "1.0.113"
 
 [lib]

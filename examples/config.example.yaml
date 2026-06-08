@@ -4,7 +4,8 @@
 # as defaults for some fields. See README.md and genja-core/src/settings.rs.
 
 core:
-  # Whether to raise (panic/abort) on errors. Defaults to false.
+  # Parsed and exposed in settings. Task execution currently records task
+  # errors as failed host results regardless of this value. Defaults to false.
   raise_on_error: false
 
 inventory:
@@ -28,6 +29,10 @@ runner:
   plugin: threaded
   # Optional fixed worker count for runners that support concurrency control.
   worker_count: 10
+  # Maximum nested task depth. Defaults to 10.
+  max_task_depth: 10
+  # Maximum connection attempts. Defaults to 3.
+  max_connection_attempts: 3
   # Optional plugin-specific settings.
   options: {}
 

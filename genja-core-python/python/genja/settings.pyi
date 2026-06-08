@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 class OptionsConfig:
     @property
     def hosts_file(self) -> str | None: ...
@@ -19,6 +21,8 @@ class InventoryConfig:
     def options(self) -> OptionsConfig: ...
     @property
     def transform_function(self) -> str | None: ...
+    @property
+    def transform_function_options(self) -> Any | None: ...
 
 class SSHConfig:
     @property

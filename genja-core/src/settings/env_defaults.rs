@@ -101,20 +101,17 @@ where
 pub(super) fn raise_on_error() -> bool {
     match std::env::var(ENV_RAISE_ON_ERROR) {
         Ok(s) => match parse_bool_loose(s.as_str()) {
-            Some(true) => true,
-            Some(false) => false,
-            _ => {
-                eprintln!(
-                    "Invalid {} value: {:?}, using default false",
-                    ENV_RAISE_ON_ERROR, s
+            Some(value) => value,
+            None => {
+                log::warn!(
+                    "Invalid {} value {:?}; using default false",
+                    ENV_RAISE_ON_ERROR,
+                    s
                 );
                 false
             }
         },
-        Err(_) => {
-            eprintln!("{} not found, using default false", ENV_RAISE_ON_ERROR);
-            false
-        }
+        Err(_) => false,
     }
 }
 
@@ -175,7 +172,17 @@ pub(super) fn get_log_level_default() -> String {
 /// See tests in this module for behavioral verification.
 pub(super) fn get_log_to_console_default() -> bool {
     match env::var(ENV_LOG_TO_CONSOLE) {
-        Ok(val) => parse_bool_loose(val.as_str()).unwrap_or(false),
+        Ok(val) => match parse_bool_loose(val.as_str()) {
+            Some(value) => value,
+            None => {
+                log::warn!(
+                    "Invalid {} value {:?}; using default false",
+                    ENV_LOG_TO_CONSOLE,
+                    val
+                );
+                false
+            }
+        },
         Err(_) => false,
     }
 }

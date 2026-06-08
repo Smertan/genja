@@ -17,7 +17,8 @@
 //! - Plugin lifecycle management (registration, deregistration)
 //! - Type-safe plugin registry access
 //! - Metadata-driven plugin configuration
-//! - Support for multiple plugin types (Connection, Inventory, Runner, Processor, Transform)
+//! - Support for multiple plugin types (Connection, Inventory, AsyncInventory,
+//!   Runner, Processor, Transform)
 //!
 //! ## Architecture
 //!
@@ -36,6 +37,7 @@
 //! │                         Plugins Enum                            │
 //! │  - Connection(Box<dyn PluginConnection>)                        │
 //! │  - Inventory(Box<dyn PluginInventory>)                          │
+//! │  - AsyncInventory(Box<dyn AsyncPluginInventory>)                │
 //! │  - Processor(Box<dyn PluginProcessor>)                          │
 //! │  - Runner(Box<dyn PluginRunner>)                                │
 //! │  - TransformFunction(Box<dyn PluginTransformFunction>)          │
@@ -251,6 +253,35 @@
 //!     ) -> Result<Inventory, InventoryLoadError> {
 //!         // Load from database
 //!         unimplemented!()
+//!     }
+//! }
+//! ```
+//!
+//! Async inventory plugins are also supported for remote inventory sources:
+//!
+//! ```rust
+//! use async_trait::async_trait;
+//! use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
+//! use genja_plugin_manager::PluginManager;
+//! use genja_core::{InventoryLoadError, Settings};
+//! use genja_core::inventory::Inventory;
+//!
+//! #[derive(Debug)]
+//! struct RemoteInventoryPlugin;
+//!
+//! impl Plugin for RemoteInventoryPlugin {
+//!     fn name(&self) -> String { "remote_inventory".to_string() }
+//! }
+//!
+//! #[async_trait]
+//! impl AsyncPluginInventory for RemoteInventoryPlugin {
+//!     async fn load_async(
+//!         &self,
+//!         settings: &Settings,
+//!         plugins: &PluginManager,
+//!     ) -> Result<Inventory, InventoryLoadError> {
+//!         let _ = (settings, plugins);
+//!         Ok(Inventory::builder().build())
 //!     }
 //! }
 //! ```
@@ -474,8 +505,9 @@ use async_trait::async_trait;
 use genja_core::task::{TaskProcessor, TaskProcessorResolver};
 use libloading::{Library, Symbol};
 use plugin_types::{
-    GroupOrName, PluginConnection, PluginCreatePlugins, PluginEntry, PluginInventory, PluginName,
-    PluginProcessor, PluginResultPlugins, PluginRunner, PluginTransformFunction, Plugins,
+    AsyncPluginInventory, GroupOrName, PluginConnection, PluginCreatePlugins, PluginEntry,
+    PluginInventory, PluginName, PluginProcessor, PluginResultPlugins, PluginRunner,
+    PluginTransformFunction, Plugins,
 };
 use serde::Deserialize;
 use std::collections::{HashMap, hash_map};
@@ -723,7 +755,6 @@ impl PluginManager {
         let name = plugin.name();
         log::info!("Registering plugin: {:?}", name);
 
-        println!("Registering plugin: {}", name);
         if let hash_map::Entry::Vacant(entry) = self.plugins.entry(name.clone()) {
             entry.insert(plugin);
         } else {
@@ -752,6 +783,15 @@ impl PluginManager {
     pub fn get_inventory_plugin(&self, name: &str) -> Option<&Box<dyn PluginInventory>> {
         self.plugins.get(name).and_then(|plugin| match plugin {
             Plugins::Inventory(inventory) => Some(inventory),
+            _ => None,
+        })
+    }
+
+    #[allow(clippy::borrowed_box)]
+    /// Gets an async inventory plugin, returns None if the plugin is not an AsyncInventory variant
+    pub fn get_async_inventory_plugin(&self, name: &str) -> Option<&Box<dyn AsyncPluginInventory>> {
+        self.plugins.get(name).and_then(|plugin| match plugin {
+            Plugins::AsyncInventory(inventory) => Some(inventory),
             _ => None,
         })
     }
@@ -813,6 +853,18 @@ impl PluginManager {
         get_plugins_by_variant!(self, Plugins::Inventory, &Box<dyn PluginInventory>)
     }
 
+    /// Gets all async inventory plugins with their trait objects
+    #[allow(clippy::borrowed_box)]
+    pub fn get_plugins_by_type_async_inventory(
+        &self,
+    ) -> Vec<(&String, &Box<dyn AsyncPluginInventory>)> {
+        get_plugins_by_variant!(
+            self,
+            Plugins::AsyncInventory,
+            &Box<dyn AsyncPluginInventory>
+        )
+    }
+
     /// Gets all Processor plugins with their trait objects
     #[allow(clippy::borrowed_box)]
     pub fn get_plugins_by_type_processor(&self) -> Vec<(&String, &Box<dyn PluginProcessor>)> {
@@ -849,6 +901,24 @@ impl PluginManager {
             deregistered_plugins.push(plugin.name());
         }
         deregistered_plugins
+    }
+
+    /// Merge another plugin manager into this one, overriding plugins with the same name.
+    ///
+    /// Plugin libraries and deferred plugin path entries are retained so any loaded
+    /// dynamic plugins remain valid after the merge. When a plugin name collision
+    /// occurs, the incoming plugin replaces the existing registration.
+    pub fn merge(&mut self, other: PluginManager) {
+        self.plugin_path.extend(other.plugin_path);
+        self.libraries.extend(other.libraries);
+
+        for (name, plugin) in other.plugins {
+            if self.plugins.insert(name.clone(), plugin).is_some() {
+                log::info!("Overriding plugin: {}", name);
+            } else {
+                log::info!("Registering merged plugin: {}", name);
+            }
+        }
     }
 
     /// Gets all the **names** of the registered plugins.
@@ -920,7 +990,7 @@ mod tests {
 
     use super::*;
     use crate::plugin_types::{
-        Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
+        AsyncPluginInventory, Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
         PluginTransformFunction,
     };
     use genja_core::inventory::{
@@ -955,7 +1025,7 @@ mod tests {
                     "-p",
                     "plugin_inventory",
                     "-p",
-                    "plugin_tasks",
+                    "plugin_connection",
                 ])
                 .status()
                 .expect("Failed to run cargo build for test plugins");
@@ -1325,7 +1395,7 @@ inventory_a = "../this/path/does/not/exist.so"
     #[test]
     fn with_path_test() {
         let _env = set_env_var();
-        let path = make_file_path("plugin_tasks");
+        let path = make_file_path("plugin_connection");
         let plugin_manager = PluginManager::new()
             .with_path(&path, None)
             .unwrap()
@@ -1337,7 +1407,7 @@ inventory_a = "../this/path/does/not/exist.so"
     #[test]
     fn with_path_group_loads_plugins() {
         let _env = set_env_var();
-        let path = make_file_path("plugin_tasks");
+        let path = make_file_path("plugin_connection");
         let plugin_manager = PluginManager::new()
             .with_path(&path, Some("extra"))
             .unwrap()
@@ -1411,6 +1481,28 @@ inventory_a = "../this/path/does/not/exist.so"
 
     impl PluginInventory for DummyInventory {
         fn load(
+            &self,
+            _settings: &Settings,
+            _plugins: &PluginManager,
+        ) -> Result<Inventory, InventoryLoadError> {
+            Ok(Inventory::builder().build())
+        }
+    }
+
+    #[derive(Debug)]
+    struct DummyAsyncInventory {
+        name: &'static str,
+    }
+
+    impl Plugin for DummyAsyncInventory {
+        fn name(&self) -> String {
+            self.name.to_string()
+        }
+    }
+
+    #[async_trait]
+    impl AsyncPluginInventory for DummyAsyncInventory {
+        async fn load_async(
             &self,
             _settings: &Settings,
             _plugins: &PluginManager,
@@ -1504,6 +1596,9 @@ inventory_a = "../this/path/does/not/exist.so"
             name: "conn",
         })));
         manager.register_plugin(Plugins::Inventory(Box::new(DummyInventory { name: "inv" })));
+        manager.register_plugin(Plugins::AsyncInventory(Box::new(DummyAsyncInventory {
+            name: "ainv",
+        })));
         manager.register_plugin(Plugins::Runner(Box::new(DummyRunner { name: "run" })));
         manager.register_plugin(Plugins::TransformFunction(Box::new(DummyTransform {
             name: "tf",
@@ -1511,28 +1606,37 @@ inventory_a = "../this/path/does/not/exist.so"
 
         assert!(manager.get_plugin("conn").is_some());
         assert!(manager.get_plugin("inv").is_some());
+        assert!(manager.get_plugin("ainv").is_some());
         assert!(manager.get_plugin("run").is_some());
         assert!(manager.get_plugin("tf").is_some());
         assert!(manager.get_plugin("missing").is_none());
 
         assert!(manager.get_connection_plugin("conn").is_some());
         assert!(manager.get_connection_plugin("inv").is_none());
+        assert!(manager.get_connection_plugin("ainv").is_none());
         assert!(manager.get_connection_plugin("run").is_none());
         assert!(manager.get_connection_plugin("tf").is_none());
 
         assert!(manager.get_inventory_plugin("inv").is_some());
         assert!(manager.get_inventory_plugin("conn").is_none());
+        assert!(manager.get_inventory_plugin("ainv").is_none());
         assert!(manager.get_inventory_plugin("run").is_none());
         assert!(manager.get_inventory_plugin("tf").is_none());
+
+        assert!(manager.get_async_inventory_plugin("ainv").is_some());
+        assert!(manager.get_async_inventory_plugin("inv").is_none());
+        assert!(manager.get_async_inventory_plugin("conn").is_none());
 
         assert!(manager.get_runner_plugin("run").is_some());
         assert!(manager.get_runner_plugin("conn").is_none());
         assert!(manager.get_runner_plugin("inv").is_none());
+        assert!(manager.get_runner_plugin("ainv").is_none());
         assert!(manager.get_runner_plugin("tf").is_none());
 
         assert!(manager.get_transform_function_plugin("tf").is_some());
         assert!(manager.get_transform_function_plugin("conn").is_none());
         assert!(manager.get_transform_function_plugin("inv").is_none());
+        assert!(manager.get_transform_function_plugin("ainv").is_none());
         assert!(manager.get_transform_function_plugin("run").is_none());
     }
 
@@ -1579,6 +1683,9 @@ inventory_a = "../this/path/does/not/exist.so"
             name: "conn",
         })));
         manager.register_plugin(Plugins::Inventory(Box::new(DummyInventory { name: "inv" })));
+        manager.register_plugin(Plugins::AsyncInventory(Box::new(DummyAsyncInventory {
+            name: "ainv",
+        })));
         manager.register_plugin(Plugins::TransformFunction(Box::new(DummyTransform {
             name: "tf",
         })));
@@ -1587,10 +1694,35 @@ inventory_a = "../this/path/does/not/exist.so"
         assert_eq!(transforms.len(), 1);
         assert_eq!(transforms[0].0.as_str(), "tf");
 
+        let async_inventory_plugins = manager.get_plugins_by_type_async_inventory();
+        assert_eq!(async_inventory_plugins.len(), 1);
+        assert_eq!(async_inventory_plugins[0].0.as_str(), "ainv");
+
         let names = manager.get_all_plugin_names();
-        assert_eq!(names.len(), 3);
+        assert_eq!(names.len(), 4);
         assert!(names.contains(&&"conn".to_string()));
         assert!(names.contains(&&"inv".to_string()));
+        assert!(names.contains(&&"ainv".to_string()));
         assert!(names.contains(&&"tf".to_string()));
+    }
+
+    #[test]
+    fn merge_overrides_existing_plugins_by_name() {
+        let mut base = PluginManager::new();
+        base.register_plugin(Plugins::Connection(Box::new(DummyConnection {
+            name: "conn",
+        })));
+
+        let mut custom = PluginManager::new();
+        custom.register_plugin(Plugins::Runner(Box::new(DummyRunner { name: "run" })));
+        custom.register_plugin(Plugins::Connection(Box::new(DummyConnection {
+            name: "conn",
+        })));
+
+        base.merge(custom);
+
+        assert!(base.get_connection_plugin("conn").is_some());
+        assert!(base.get_runner_plugin("run").is_some());
+        assert_eq!(base.get_all_plugin_names().len(), 2);
     }
 }

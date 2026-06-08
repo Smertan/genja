@@ -1,0 +1,42 @@
+{
+  "router1": {
+    "hostname": "10.0.0.1",
+    "platform": "ios",
+    "data": {
+      "site": {
+        "name": "core",
+        "role": "edge"
+      }
+    }
+  },
+  "router2": {
+    "hostname": "10.0.0.2",
+    "platform": "nxos",
+    "data": {
+      "site": {
+        "name": "branch",
+        "role": "access"
+      }
+    }
+  },
+  "router3": {
+    "hostname": "10.0.0.3",
+    "platform": "eos",
+    "data": {
+      "site": {
+        "name": "core",
+        "role": "aggregation"
+      }
+    }
+  },
+  "router4": {
+    "hostname": "10.0.0.4",
+    "platform": "junos",
+    "data": {
+      "site": {
+        "name": "lab",
+        "role": "access"
+      }
+    }
+  }
+}

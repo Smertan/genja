@@ -24,15 +24,19 @@ from .genja import (
     Tasks,
 )
 from .connection import (
+    ConnectionBase,
     ConnectionKey,
-    ConnectionPluginProtocol,
-    ConnectionProtocol,
+    ConnectionPluginBase,
     ResolvedConnectionParams,
 )
-from .inventory import InventoryPluginProtocol
+from .inventory import InventoryPluginBase
 from .plugin_manager import PluginManager
-from .processor import TaskProcessorContext, TaskProcessorProtocol
-from .runner import BatchRunnerPluginProtocol, RunnerPluginProtocol
+from .plugin import PluginBase
+from .processor import (
+    ProcessorPluginBase,
+    TaskProcessorContext,
+)
+from .runner import BatchRunnerPluginBase, RunnerPluginBase
 from .settings import Settings
 from .task import (
     GenjaTaskProtocol,
@@ -48,7 +52,9 @@ from .task import (
     TaskSuccessResult,
     task,
 )
-from .transform import TransformFunctionPluginProtocol
+from .transform import (
+    TransformFunctionPluginBase,
+)
 
 assert PluginManager is _CorePluginManager
 assert Settings is _CoreSettings
@@ -64,15 +70,16 @@ __all__ = [
     "task",
     "ConnectionKey",
     "ResolvedConnectionParams",
-    "ConnectionProtocol",
-    "ConnectionPluginProtocol",
-    "InventoryPluginProtocol",
+    "ConnectionBase",
+    "ConnectionPluginBase",
+    "InventoryPluginBase",
     "PluginManager",
+    "PluginBase",
     "TaskProcessorContext",
-    "TaskProcessorProtocol",
-    "RunnerPluginProtocol",
-    "BatchRunnerPluginProtocol",
-    "TransformFunctionPluginProtocol",
+    "ProcessorPluginBase",
+    "RunnerPluginBase",
+    "BatchRunnerPluginBase",
+    "TransformFunctionPluginBase",
     "Settings",
     "CoreConfig",
     "InventoryConfig",
