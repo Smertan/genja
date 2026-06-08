@@ -1,7 +1,7 @@
 [package]
 name = "genja-core"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Core Genja primitives for task execution, inventory modeling, settings loading, connection state, and structured task results"
 license = "AGPL-3.0-only"
 repository = "https://github.com/Smertan/genja"

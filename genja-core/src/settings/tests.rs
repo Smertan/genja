@@ -27,6 +27,18 @@ fn env_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn set_env_var(key: &str, val: &str) {
+    // Tests using this helper hold `env_lock`, so process-wide environment
+    // mutation is serialized within this test module.
+    unsafe { env::set_var(key, val) };
+}
+
+fn remove_env_var(key: &str) {
+    // Tests using this helper hold `env_lock`, so process-wide environment
+    // mutation is serialized within this test module.
+    unsafe { env::remove_var(key) };
+}
+
 /// Temporarily sets or removes an environment variable for the duration of a test function.
 ///
 /// This function provides a safe way to test code that depends on environment variables by:
@@ -46,13 +58,13 @@ fn with_env_var(key: &str, val: Option<&str>, f: impl FnOnce()) {
     let _guard = env_lock().lock().unwrap();
     let prev = env::var(key).ok();
     match val {
-        Some(v) => env::set_var(key, v),
-        None => env::remove_var(key),
+        Some(v) => set_env_var(key, v),
+        None => remove_env_var(key),
     }
     f();
     match prev {
-        Some(v) => env::set_var(key, v),
-        None => env::remove_var(key),
+        Some(v) => set_env_var(key, &v),
+        None => remove_env_var(key),
     }
 }
 
@@ -336,7 +348,7 @@ fn get_default_log_file_prefers_env() {
 fn get_default_log_file_uses_cwd_when_env_missing() {
     let _guard = env_lock().lock().unwrap();
     let prev = env::var(ENV_LOG_FILE).ok();
-    env::remove_var(ENV_LOG_FILE);
+    remove_env_var(ENV_LOG_FILE);
 
     let tempdir = tempfile::tempdir().unwrap();
     let prev_dir = env::current_dir().unwrap();
@@ -350,8 +362,8 @@ fn get_default_log_file_uses_cwd_when_env_missing() {
 
     env::set_current_dir(prev_dir).unwrap();
     match prev {
-        Some(v) => env::set_var(ENV_LOG_FILE, v),
-        None => env::remove_var(ENV_LOG_FILE),
+        Some(v) => set_env_var(ENV_LOG_FILE, &v),
+        None => remove_env_var(ENV_LOG_FILE),
     }
 }
 
@@ -402,7 +414,7 @@ fn settings_from_file_uses_defaults_for_empty_file() {
         .collect();
 
     for key in keys {
-        env::remove_var(key);
+        remove_env_var(key);
     }
 
     let tempdir = tempfile::tempdir().unwrap();
@@ -418,8 +430,8 @@ fn settings_from_file_uses_defaults_for_empty_file() {
 
     for (key, val) in prev {
         match val {
-            Some(v) => env::set_var(&key, v),
-            None => env::remove_var(&key),
+            Some(v) => set_env_var(&key, &v),
+            None => remove_env_var(&key),
         }
     }
 }

@@ -285,8 +285,8 @@ where
         format!("{}", V::schema_name()).into()
     }
 
-    fn json_schema(gen: &mut SchemaGenerator) -> Schema {
-        <BTreeMap<String, V>>::json_schema(gen)
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        <BTreeMap<String, V>>::json_schema(generator)
     }
 }
 
