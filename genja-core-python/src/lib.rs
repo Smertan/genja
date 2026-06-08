@@ -202,22 +202,20 @@ pub(crate) fn init_embedded_python() {
             .to_string(),
     ];
 
-    if let Ok(python) = std::env::var("PYO3_PYTHON") {
-        if let Ok(output) = Command::new(python)
+    if let Ok(python) = std::env::var("PYO3_PYTHON")
+        && let Ok(output) = Command::new(python)
             .args([
                 "-c",
                 "import sysconfig; print(sysconfig.get_paths().get('purelib', '')); print(sysconfig.get_paths().get('platlib', ''))",
             ])
             .output()
-        {
-            if output.status.success() {
-                for line in String::from_utf8_lossy(&output.stdout).lines() {
-                    let path = line.trim();
-                    if !path.is_empty() && !search_paths.iter().any(|existing| existing == path) {
-                        search_paths.push(path.to_string());
-                    }
+        && output.status.success()
+    {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let path = line.trim();
+            if !path.is_empty() && !search_paths.iter().any(|existing| existing == path) {
+                search_paths.push(path.to_string());
                 }
-            }
         }
     }
 

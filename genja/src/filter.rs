@@ -147,7 +147,7 @@ impl KeyFilter {
     /// # Parameters
     ///
     /// * `key` - The key or dot-separated path to search for in the host data.
-    ///           Supports nested paths like "data.metadata.owner.name" and paths through arrays.
+    ///   Supports nested paths like "data.metadata.owner.name" and paths through arrays.
     ///
     /// # Returns
     ///
@@ -186,7 +186,7 @@ impl ValueFilter {
     /// # Parameters
     ///
     /// * `key` - The key or dot-separated path to search for in the host data.
-    ///           Supports nested paths like "data.metadata.owner.name" and paths through arrays.
+    ///   Supports nested paths like "data.metadata.owner.name" and paths through arrays.
     /// * `value_pattern` - A regular expression pattern that the value associated with the key must match.
     ///
     /// # Returns
@@ -236,7 +236,7 @@ impl ValueFilter {
 ///
 /// * `value` - A reference to the JSON `Value` to search within.
 /// * `key` - The key or dot-separated path to search for (e.g., "name" or "metadata.owner.name").
-///           Empty path segments are filtered out.
+///   Empty path segments are filtered out.
 ///
 /// # Returns
 ///
@@ -265,7 +265,7 @@ fn json_has_key(value: &Value, key: &str) -> bool {
 ///
 /// * `value` - A reference to the JSON `Value` to search within.
 /// * `key` - The key or dot-separated path to search for (e.g., "name" or "metadata.owner.name").
-///           Empty path segments are filtered out.
+///   Empty path segments are filtered out.
 /// * `value_regex` - A reference to the compiled `Regex` pattern that the value must match.
 ///
 /// # Returns
@@ -294,9 +294,9 @@ fn json_matches_key_value(value: &Value, key: &str, value_regex: &Regex) -> bool
 /// # Parameters
 ///
 /// * `value` - A reference to the JSON `Value` to search within. Can be any JSON type
-///             (object, array, string, number, boolean, or null).
+///   (object, array, string, number, boolean, or null).
 /// * `key` - The exact key name to search for. Must match a key in a JSON object exactly
-///           (case-sensitive, no partial matches).
+///   (case-sensitive, no partial matches).
 ///
 /// # Returns
 ///
@@ -322,11 +322,11 @@ fn json_contains_key(value: &Value, key: &str) -> bool {
 /// # Parameters
 ///
 /// * `value` - A reference to the JSON `Value` to search within. Can be any JSON type
-///             (object, array, string, number, boolean, or null).
+///   (object, array, string, number, boolean, or null).
 /// * `key` - The exact key name to search for. Must match a key in a JSON object exactly
-///           (case-sensitive, no partial matches).
+///   (case-sensitive, no partial matches).
 /// * `value_regex` - A reference to the compiled `Regex` pattern that the value associated
-///                   with the key must match.
+///   with the key must match.
 ///
 /// # Returns
 ///
@@ -356,10 +356,10 @@ fn json_matches_key(value: &Value, key: &str, value_regex: &Regex) -> bool {
 /// # Parameters
 ///
 /// * `value` - A reference to the JSON `Value` to search within. Can be any JSON type
-///             (object, array, string, number, boolean, or null).
+///   (object, array, string, number, boolean, or null).
 /// * `path` - A slice of path segments representing the dot-separated path to search for.
-///            Each segment represents a key to look up in objects. Empty path indicates
-///            the target has been reached.
+///   Each segment represents a key to look up in objects. Empty path indicates
+///   the target has been reached.
 ///
 /// # Returns
 ///
@@ -389,12 +389,12 @@ fn json_contains_path(value: &Value, path: &[&str]) -> bool {
 /// # Parameters
 ///
 /// * `value` - A reference to the JSON `Value` to search within. Can be any JSON type
-///             (object, array, string, number, boolean, or null).
+///   (object, array, string, number, boolean, or null).
 /// * `path` - A slice of path segments representing the dot-separated path to search for.
-///            Each segment represents a key to look up in objects. Empty path indicates
-///            the target has been reached.
+///   Each segment represents a key to look up in objects. Empty path indicates
+///   the target has been reached.
 /// * `value_regex` - A reference to the compiled `Regex` pattern that the value associated
-///                   with the path must match.
+///   with the path must match.
 ///
 /// # Returns
 ///
@@ -425,10 +425,10 @@ fn json_matches_path(value: &Value, path: &[&str], value_regex: &Regex) -> bool 
 /// # Parameters
 ///
 /// * `value` - An optional reference to the JSON `Value` to traverse. If `None`, the function
-///             returns `false` immediately.
+///   returns `false` immediately.
 /// * `path` - A slice of path segments to follow through the JSON structure. Each segment
-///            represents a key to look up in objects. When empty, indicates the target value
-///            has been reached.
+///   represents a key to look up in objects. When empty, indicates the target value
+///   has been reached.
 ///
 /// # Returns
 ///
@@ -460,10 +460,10 @@ fn path_exists(value: Option<&Value>, path: &[&str]) -> bool {
 /// # Parameters
 ///
 /// * `value` - An optional reference to the JSON `Value` to traverse. If `None`, the function
-///             returns `false` immediately.
+///   returns `false` immediately.
 /// * `path` - A slice of path segments to follow through the JSON structure. Each segment
-///            represents a key to look up in objects. When empty, indicates the target value
-///            has been reached.
+///   represents a key to look up in objects. When empty, indicates the target value
+///   has been reached.
 /// * `value_regex` - A reference to the compiled `Regex` pattern that the final value must match.
 ///
 /// # Returns
@@ -499,7 +499,7 @@ fn path_value_matches(value: Option<&Value>, path: &[&str], value_regex: &Regex)
 /// # Parameters
 ///
 /// * `value` - A reference to the JSON `Value` to convert to text. Can be any JSON type
-///             (string, null, boolean, number, array, or object).
+///   (string, null, boolean, number, array, or object).
 ///
 /// # Returns
 ///

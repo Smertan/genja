@@ -1097,11 +1097,11 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     };
 
     let mut sub_tasks = Vec::new();
-    if let Some(py_sub_tasks) = info.get_item("sub_tasks")? {
-        if !py_sub_tasks.is_none() {
-            for sub_task in py_sub_tasks.try_iter()? {
-                sub_tasks.push(extract_python_task_spec(sub_task?)?);
-            }
+    if let Some(py_sub_tasks) = info.get_item("sub_tasks")?
+        && !py_sub_tasks.is_none()
+    {
+        for sub_task in py_sub_tasks.try_iter()? {
+            sub_tasks.push(extract_python_task_spec(sub_task?)?);
         }
     }
 
@@ -1750,7 +1750,7 @@ mod tests {
                 HostTaskResult::Passed(success) => success,
                 _ => unreachable!("host result should be passed"),
             };
-            assert_eq!(success.changed(), true);
+            assert!(success.changed());
             assert_eq!(success.summary(), Some("async handled router1"));
             assert_eq!(success.metadata().unwrap()["has_connection"], json!(false));
         });

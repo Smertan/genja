@@ -1024,26 +1024,26 @@ impl Host {
             extras: None,
         };
 
-        if let Some(options_map) = &self.connection_options {
-            if let Some(options) = options_map.get(connection_type) {
-                if let Some(hostname) = options.hostname.clone() {
-                    resolved.hostname = hostname;
-                }
-                if options.port.is_some() {
-                    resolved.port = options.port;
-                }
-                if options.username.is_some() {
-                    resolved.username = options.username.clone();
-                }
-                if options.password.is_some() {
-                    resolved.password = options.password.clone();
-                }
-                if options.platform.is_some() {
-                    resolved.platform = options.platform.clone();
-                }
-                if options.extras.is_some() {
-                    resolved.extras = options.extras.clone();
-                }
+        if let Some(options_map) = &self.connection_options
+            && let Some(options) = options_map.get(connection_type)
+        {
+            if let Some(hostname) = options.hostname.clone() {
+                resolved.hostname = hostname;
+            }
+            if options.port.is_some() {
+                resolved.port = options.port;
+            }
+            if options.username.is_some() {
+                resolved.username = options.username.clone();
+            }
+            if options.password.is_some() {
+                resolved.password = options.password.clone();
+            }
+            if options.platform.is_some() {
+                resolved.platform = options.platform.clone();
+            }
+            if options.extras.is_some() {
+                resolved.extras = options.extras.clone();
             }
         }
 

@@ -740,7 +740,7 @@ impl PyGenja {
         let selected_ids = self.host_ids();
         selected_ids
             .into_iter()
-            .zip(hosts.into_iter())
+            .zip(hosts)
             .map(|(host_id, host)| {
                 Ok((
                     host_id,
@@ -2010,8 +2010,7 @@ mod tests {
             let not_a_dict = PyString::new(py, "not-a-dict");
 
             let err = python_hosts_to_inventory(not_a_dict.into_any())
-                .err()
-                .expect("non-dict input should fail");
+                .expect_err("non-dict input should fail");
             assert!(
                 err.to_string()
                     .contains("hosts must be a dict mapping host id to host payload")
@@ -2117,8 +2116,7 @@ mod tests {
             hosts.set_item("router1", "not-a-dict").unwrap();
 
             let err = python_inventory_to_rust_inventory(hosts.into_any())
-                .err()
-                .expect("invalid host structure should fail");
+                .expect_err("invalid host structure should fail");
             assert!(err.to_string().contains("invalid host payload"));
         });
     }

@@ -1429,7 +1429,7 @@ pub(crate) async fn resolve_python_maybe_awaitable_async(value: Py<PyAny>) -> Py
 
     if has_task_locals {
         let future = Python::with_gil(|py| into_future(value.bind(py).clone()))?;
-        future.await.map(PyObject::into)
+        future.await
     } else {
         Python::with_gil(|py| {
             let asyncio = PyModule::import(py, "asyncio")?;
@@ -2732,8 +2732,7 @@ mod tests {
 
         let err = manager
             .plugin_names()
-            .err()
-            .expect("consumed manager should reject access");
+            .expect_err("consumed manager should reject access");
         assert!(err.to_string().contains("already been consumed"));
     }
 
