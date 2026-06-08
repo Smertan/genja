@@ -1,6 +1,25 @@
 # Genja
 
+Genja is a plugin-based automation framework for executing tasks across
+multiple hosts. It is usable from Rust and Python:
+
+- Rust applications use the `genja` crate.
+- Python applications use the `genja-py` distribution and import it as `genja`;
+  see the [Python package README](genja-core-python/README.md) for
+  Python-specific usage.
+
+For a complete walkthrough, see the repository
+[quickstart guide](docs/quickstart.md). The full documentation starts at
+[docs/index.md](docs/index.md).
+
 ## Quick Start
+
+Install Genja for the language you are using:
+
+```bash
+cargo add genja
+pip install genja-py
+```
 
 Use a JSON or YAML config file and load it with `Settings::from_file`:
 
