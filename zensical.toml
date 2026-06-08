@@ -1,6 +1,6 @@
 [project]
 site_name = "Genja"
-site_url = "https://smertan.github.io/genja/"
+site_url = "https://docs.genja.co.uk/"
 docs_dir = "docs"
 site_dir = "site"
 nav = [
