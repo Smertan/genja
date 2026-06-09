@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+      - feature/**
+      - "*-genja-*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate release metadata
+        run: python scripts/validate-release.py
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test workspace
+        run: cargo test --workspace --exclude genja-core-python
+
+  python:
+    name: Python bindings
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up PDM
+        uses: pdm-project/setup-pdm@v4
+
+      - name: Install Python dependencies
+        working-directory: genja-core-python
+        run: pdm install -d
+
+      - name: Lint Python
+        working-directory: genja-core-python
+        run: pdm run lint
+
+      - name: Typecheck Python
+        working-directory: genja-core-python
+        run: pdm run typecheck
+
+      - name: Test Python
+        working-directory: genja-core-python
+        run: pdm run test
+
+      - name: Test PyO3 Rust crate
+        working-directory: genja-core-python
+        run: pdm run test-rust

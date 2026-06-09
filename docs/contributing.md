@@ -65,6 +65,23 @@ Use Cargo formatting before submitting Rust changes:
 cargo fmt --all -- --check
 ```
 
+This CI command is read-only. It fails when formatting changes are needed; fix
+those locally with:
+
+```bash
+cargo fmt --all
+```
+
+Run Clippy with warnings treated as errors:
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+CI does not auto-fix formatting or Clippy warnings. If you use
+`cargo clippy --fix`, review the generated changes and commit the ones you want
+to keep.
+
 If a change touches shared runtime behavior, task execution, plugin loading, or
 public APIs, prefer running both the focused package tests and the Rust
 workspace test command above.
@@ -73,6 +90,12 @@ workspace test command above.
 
 The Python bindings live in `genja-core-python`. Run commands from that
 directory.
+
+Install the Python development dependencies before running checks:
+
+```bash
+pdm install -d
+```
 
 Build the extension into the active Python environment and run the Python tests:
 
@@ -175,6 +198,16 @@ Keep changes focused. A good contribution usually includes:
 
 Before opening a pull request, run the smallest focused checks that prove the
 change and the broader checks for any shared runtime or public API changes.
+
+GitHub Actions runs CI for pull requests and for pushes to `main`, `develop`,
+`feature/**`, and issue-style `*-genja-*` branches. CI runs formatting checks,
+Clippy with `-D warnings`, Rust tests excluding `genja-core-python`, and the
+Python binding lint, typecheck, Python test, and PyO3 Rust test commands.
+
+Release publishing is separate from CI. Rust crates are published only from
+`vX.Y.Z` tags on commits reachable from `main`, and the release workflow
+publishes the crates in dependency order after validating crate versions and
+internal dependency metadata.
 
 ## Release Notes
 
