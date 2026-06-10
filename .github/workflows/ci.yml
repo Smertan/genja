@@ -64,14 +64,19 @@ jobs:
 
       - name: Set up PDM
         uses: pdm-project/setup-pdm@v4
+        with:
+          python-version: ${{ matrix.python-version }}
 
       - name: Use selected Python for PDM
         working-directory: genja-core-python
         run: pdm use -f "$(python -c 'import sys; print(sys.executable)')"
 
-      - name: Lock Python dependencies
+      - name: Show Python environment
         working-directory: genja-core-python
-        run: pdm lock --python "==${{ matrix.python-version }}.*"
+        run: |
+          python --version
+          pdm --version
+          pdm info --python
 
       - name: Install Python dependencies
         working-directory: genja-core-python
