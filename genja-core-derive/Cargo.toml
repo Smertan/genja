@@ -2,12 +2,14 @@
 name = "genja-core-derive"
 version = "0.1.0"
 edition = "2024"
+authors = ["Andre Bowen-Brown <contact@genja.co.uk>"]
 readme = "README.md"
 description = "Procedural macros for Genja task types, including derives for task metadata, subtasks, and wrapper dereferencing"
 license = "AGPL-3.0-only"
 repository = "https://github.com/Smertan/genja"
-keywords = ["automation", "derive", "macro"]
-categories = ["development-tools"]
+homepage = "https://docs.genja.co.uk"
+keywords = ["macro", "derive", "tasks", "automation"]
+categories = ["development-tools", "rust-patterns"]
 
 [dependencies]
 proc-macro2 = "1.0.101"

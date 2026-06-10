@@ -1,3 +1,16 @@
+[package]
+name = "genja-plugin-manager"
+version = "0.1.0"
+edition = "2024"
+authors = ["Andre Bowen-Brown <contact@genja.co.uk>"]
+description = "Dynamic plugin loading and build support for Genja-compatible Rust applications and shared-library plugins"
+license = "AGPL-3.0-only"
+homepage = "https://docs.genja.co.uk"
+repository = "https://github.com/Smertan/genja"
+readme = "README.md"
+keywords = ["plugin", "manager", "dynamic", "loading"]
+categories = ["development-tools", "rust-patterns"]
+
 [dependencies]
 async-trait = "0.1.89"
 genja-core = { version = "0.1.0", path = "../genja-core" }
@@ -10,23 +23,3 @@ tokio = { version = "1.48.0", features = ["rt-multi-thread", "sync"] }
 [dependencies.serde]
 features = ["derive"]
 version = "1.0.225"
-
-[package]
-authors = ["Andre Bowen-Brown <contact@genja.co.uk>"]
-categories = [
-    "development-tools",
-    "rust-patterns",
-]
-description = "Dynamic plugin loading and build support for Genja-compatible Rust applications and shared-library plugins"
-edition = "2024"
-keywords = [
-    "plugin",
-    "manager",
-    "dynamic",
-    "loading",
-]
-license = "AGPL-3.0-only"
-name = "genja-plugin-manager"
-readme = "README.md"
-repository = "https://github.com/Smertan/genja"
-version = "0.1.0"
