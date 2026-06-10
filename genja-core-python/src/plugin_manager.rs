@@ -279,8 +279,8 @@ impl PyPluginManager {
                         manifest_path.display()
                     ))
                 })?;
-                let plugin = Python::with_gil(|py| import_python_plugin(py, import_path))?;
-                let declared_name = Python::with_gil(|py| {
+                let plugin = Python::attach(|py| import_python_plugin(py, import_path))?;
+                let declared_name = Python::attach(|py| {
                     extract_plugin_identity_value(
                         plugin.bind(py),
                         "name",
@@ -546,7 +546,7 @@ pub(crate) fn register_python_plugin_on_manager(
     manager: &mut PluginManager,
     plugin: Py<PyAny>,
 ) -> PyResult<()> {
-    let (declared_name, declared_group) = Python::with_gil(|py| {
+    let (declared_name, declared_group) = Python::attach(|py| {
         let plugin_ref = plugin.bind(py);
         let declared_name = extract_plugin_identity_value(
             plugin_ref,
@@ -705,7 +705,7 @@ struct PyConnectionPlugin {
 /// * `names_and_groups` - A vector of tuples containing both the name and group
 ///   identifier for each registered plugin. The group identifies the plugin type
 ///   (e.g., "Processor", "Connection", "Inventory").
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 struct PyLoadedPluginRegistry {
     names: Vec<String>,
@@ -844,7 +844,7 @@ impl PluginInventory for PyInventoryPlugin {
         settings: &Settings,
         plugins: &PluginManager,
     ) -> Result<Inventory, InventoryLoadError> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let plugin = self.plugin.bind(py);
             let settings_payload = Py::new(
                 py,
@@ -917,7 +917,7 @@ impl PyTransformBridge {
     where
         T: Serialize + DeserializeOwned,
     {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let plugin = self.plugin.bind(py);
             if !plugin.hasattr(method_name).map_err(|err| err.to_string())? {
                 return Ok(None);
@@ -998,7 +998,7 @@ impl PluginRunner for PyRunnerPlugin {
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, genja_core::GenjaError> {
-        let result = Python::with_gil(|py| {
+        let result = Python::attach(|py| {
             let plugin = self.plugin.bind(py);
             let task_payload = Py::new(py, PyTaskDefinition::from_runtime_definition(task.clone()))
                 .map_err(python_processor_error)?;
@@ -1038,7 +1038,7 @@ impl PluginRunner for PyRunnerPlugin {
         let resolved = resolve_python_maybe_awaitable_async(result)
             .await
             .map_err(python_processor_error)?;
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             python_result_to_task_results(resolved.bind(py).clone()).map_err(python_processor_error)
         })
     }
@@ -1051,7 +1051,7 @@ impl PluginRunner for PyRunnerPlugin {
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
-        let has_run_tasks = Python::with_gil(|py| {
+        let has_run_tasks = Python::attach(|py| {
             self.plugin
                 .bind(py)
                 .hasattr("run_tasks")
@@ -1074,7 +1074,7 @@ impl PluginRunner for PyRunnerPlugin {
             return Ok(results);
         }
 
-        let result = Python::with_gil(|py| {
+        let result = Python::attach(|py| {
             let plugin = self.plugin.bind(py);
             let task_payloads = tasks
                 .iter()
@@ -1117,7 +1117,7 @@ impl PluginRunner for PyRunnerPlugin {
         let resolved = resolve_python_maybe_awaitable_async(result)
             .await
             .map_err(python_processor_error)?;
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let sequence = resolved
                 .bind(py)
                 .try_iter()
@@ -1294,7 +1294,7 @@ impl PyConnectionInstance {
         group: String,
         key: ConnectionKey,
     ) -> Self {
-        let created = Python::with_gil(|py| {
+        let created = Python::attach(|py| {
             let plugin = factory_plugin.bind(py);
             let key_payload = build_python_connection_key(py, &key)?;
             let created = plugin.call_method1("create", (key_payload,))?;
@@ -1358,7 +1358,7 @@ pub(crate) fn python_connection_from_runtime_connection(
     let adapter = (connection as &dyn std::any::Any).downcast_ref::<PluginConnectionAdapter>()?;
     let py_connection = (adapter.inner_plugin_connection() as &dyn std::any::Any)
         .downcast_ref::<PyConnectionInstance>()?;
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         py_connection
             .connection
             .as_ref()
@@ -1414,7 +1414,7 @@ pub(crate) fn resolve_python_maybe_awaitable<'py>(
 }
 
 pub(crate) async fn resolve_python_maybe_awaitable_async(value: Py<PyAny>) -> PyResult<Py<PyAny>> {
-    let is_awaitable = Python::with_gil(|py| -> PyResult<bool> {
+    let is_awaitable = Python::attach(|py| -> PyResult<bool> {
         let inspect = PyModule::import(py, "inspect")?;
         inspect
             .call_method1("isawaitable", (value.bind(py),))?
@@ -1424,14 +1424,13 @@ pub(crate) async fn resolve_python_maybe_awaitable_async(value: Py<PyAny>) -> Py
         return Ok(value);
     }
     let has_task_locals =
-        Python::with_gil(|py| pyo3_async_runtimes::tokio::get_current_locals(py).map(|_| ()))
-            .is_ok();
+        Python::attach(|py| pyo3_async_runtimes::tokio::get_current_locals(py).map(|_| ())).is_ok();
 
     if has_task_locals {
-        let future = Python::with_gil(|py| into_future(value.bind(py).clone()))?;
+        let future = Python::attach(|py| into_future(value.bind(py).clone()))?;
         future.await
     } else {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let asyncio = PyModule::import(py, "asyncio")?;
             Ok(asyncio.call_method1("run", (value.bind(py),))?.unbind())
         })
@@ -1519,7 +1518,7 @@ impl PluginConnection for PyConnectionInstance {
             return Err("python connection plugin instance is missing a connection".to_string());
         };
 
-        let result = Python::with_gil(|py| {
+        let result = Python::attach(|py| {
             let connection = connection.bind(py);
             let params_payload = build_python_resolved_connection_params(py, params)
                 .map_err(|err| err.to_string())?;
@@ -1574,7 +1573,7 @@ impl PluginConnection for PyConnectionInstance {
             return Err("python connection plugin instance is missing a connection".to_string());
         };
 
-        let result = Python::with_gil(|py| {
+        let result = Python::attach(|py| {
             let connection = connection.bind(py);
             connection
                 .call_method1("execute_command", (command,))
@@ -1584,7 +1583,7 @@ impl PluginConnection for PyConnectionInstance {
         let resolved = resolve_python_maybe_awaitable_async(result)
             .await
             .map_err(|err| err.to_string())?;
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             resolved
                 .bind(py)
                 .extract::<String>()
@@ -1615,7 +1614,7 @@ impl PluginConnection for PyConnectionInstance {
             return self.key.clone();
         };
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let connection = connection.bind(py);
             match connection.call_method0("close") {
                 Ok(value) => match resolve_python_maybe_awaitable(py, value) {
@@ -1663,7 +1662,7 @@ impl PluginConnection for PyConnectionInstance {
             return false;
         };
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let connection = connection.bind(py);
             let value = match connection.call_method0("is_alive") {
                 Ok(value) => value,
@@ -1876,7 +1875,7 @@ impl TaskProcessor for PyTaskProcessor {
         &self,
         context: &TaskProcessorContext,
     ) -> Result<(), genja_core::GenjaError> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let processor = self.processor.bind(py);
             if !processor
                 .hasattr("on_instance_start")
@@ -1923,7 +1922,7 @@ impl TaskProcessor for PyTaskProcessor {
         context: &TaskProcessorContext,
         result: &mut HostTaskResult,
     ) -> Result<(), genja_core::GenjaError> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let processor = self.processor.bind(py);
             if !processor
                 .hasattr("on_instance_finish")
@@ -1994,7 +1993,7 @@ impl PyTaskProcessor {
         context: &TaskProcessorContext,
         results: &mut TaskResults,
     ) -> Result<(), genja_core::GenjaError> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let processor = self.processor.bind(py);
             if !processor
                 .hasattr(method_name)
@@ -2613,7 +2612,7 @@ mod tests {
 
     fn init_python() {
         crate::init_embedded_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let sys = PyModule::import(py, "sys").expect("sys module should import");
             let modules = sys.getattr("modules").expect("sys.modules should exist");
             let genja = PyModule::from_code(
@@ -2739,7 +2738,7 @@ mod tests {
     #[test]
     fn register_adds_plugin_manager_class_to_module() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let module = PyModule::new(py, "test_plugin_manager_module")
                 .expect("test module should be created");
 
@@ -2752,7 +2751,7 @@ mod tests {
     #[test]
     fn register_plugin_adds_processor_plugin() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class = import_fixture_attr(
                 py,
@@ -2784,7 +2783,7 @@ mod tests {
     #[test]
     fn register_plugin_adds_inventory_plugin() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class = import_fixture_attr(
                 py,
@@ -2816,7 +2815,7 @@ mod tests {
     #[test]
     fn register_plugin_adds_runner_plugin() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class = import_fixture_attr(
                 py,
@@ -2848,7 +2847,7 @@ mod tests {
     #[test]
     fn register_plugin_adds_transform_plugin() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class = import_fixture_attr(
                 py,
@@ -2878,7 +2877,7 @@ mod tests {
     #[test]
     fn deregister_plugin_removes_registered_plugin() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class = import_fixture_attr(
                 py,
@@ -2914,7 +2913,7 @@ mod tests {
     #[test]
     fn register_plugin_requires_name_and_group_methods() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class = import_fixture_attr(
                 py,
@@ -2937,7 +2936,7 @@ mod tests {
     #[test]
     fn register_plugin_rejects_unsupported_group() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class = import_fixture_attr(
                 py,
@@ -2960,7 +2959,7 @@ mod tests {
     #[test]
     fn consumed_manager_rejects_remaining_public_methods() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class = import_fixture_attr(
                 py,
@@ -3004,7 +3003,7 @@ audit = "tests.fixtures.processor_plugins:MinimalAuditProcessor"
     #[test]
     fn register_connection_plugin_supports_factory_open_and_close() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class =
                 import_fixture_attr(py, "tests.fixtures.connection_plugins", "ConnectionPlugin")
@@ -3054,7 +3053,7 @@ audit = "tests.fixtures.processor_plugins:MinimalAuditProcessor"
     #[test]
     fn register_connection_plugin_supports_async_factory_and_methods() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class = import_fixture_attr(
                 py,
@@ -3114,7 +3113,7 @@ audit = "tests.fixtures.processor_plugins:MinimalAuditProcessor"
     #[test]
     fn load_python_plugins_from_pyproject_registers_inventory_plugins() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let temp_dir = temp_test_dir("inventory-pyproject");
             let module_path = temp_dir.join("inventory_plugins.py");
             fs::write(
@@ -3163,7 +3162,7 @@ python_inventory = "inventory_plugins:StaticInventoryPlugin"
     #[test]
     fn load_python_plugins_from_pyproject_registers_runner_plugins() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let temp_dir = temp_test_dir("runner-pyproject");
             let module_path = temp_dir.join("runner_plugins.py");
             fs::write(
@@ -3212,7 +3211,7 @@ python_runner = "runner_plugins:FirstHostOnlyRunnerPlugin"
     #[test]
     fn load_python_plugins_from_pyproject_registers_transform_plugins() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let temp_dir = temp_test_dir("transform-pyproject");
             let module_path = temp_dir.join("transform_plugins.py");
             fs::write(
@@ -3261,7 +3260,7 @@ python_transform = "transform_plugins:HostnameSuffixTransformPlugin"
     #[test]
     fn load_python_plugins_from_pyproject_rejects_name_mismatch() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let temp_dir = temp_test_dir("name-mismatch-pyproject");
             let module_path = temp_dir.join("processor_plugins.py");
             fs::write(
@@ -3304,7 +3303,7 @@ wrong_name = "processor_plugins:MinimalAuditProcessor"
     #[test]
     fn load_python_plugins_from_pyproject_rejects_non_string_entry() {
         init_python();
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let temp_dir = temp_test_dir("non-string-pyproject");
             let pyproject_path = temp_dir.join("pyproject.toml");
             fs::write(
@@ -3329,7 +3328,7 @@ audit = { path = "processor_plugins:MinimalAuditProcessor" }
     #[test]
     fn transform_plugin_falls_back_for_missing_group_and_defaults_methods() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class = import_fixture_attr(
                 py,
@@ -3370,7 +3369,7 @@ audit = { path = "processor_plugins:MinimalAuditProcessor" }
     #[test]
     fn runner_plugin_run_tasks_uses_python_run_tasks_when_available() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let manager = PyPluginManager::new();
             let plugin_class =
                 import_fixture_attr(py, "tests.fixtures.runner_plugins", "BatchRunnerPlugin")
@@ -3432,7 +3431,7 @@ audit = { path = "processor_plugins:MinimalAuditProcessor" }
     #[test]
     fn python_task_processor_context_model_exposes_expected_fields() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let context = TaskProcessorContext::new("backup", Some("parent"), 1, Some("router1"));
             let payload = build_python_processor_context(py, &context)
                 .expect("processor context should be built");

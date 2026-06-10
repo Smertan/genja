@@ -193,7 +193,7 @@ pub(crate) fn init_embedded_python() {
     use std::sync::Once;
 
     static INIT: Once = Once::new();
-    INIT.call_once(pyo3::prepare_freethreaded_python);
+    INIT.call_once(pyo3::Python::initialize);
 
     let mut search_paths = vec![
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -219,7 +219,7 @@ pub(crate) fn init_embedded_python() {
         }
     }
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let sys = PyModule::import(py, "sys").expect("sys module should import");
         let path = sys.getattr("path").expect("sys.path should exist");
         for search_path in search_paths.iter().rev() {
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn genja_module_registers_public_classes() {
         init_embedded_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let module =
                 PyModule::new(py, "test_genja_module").expect("test module should be created");
 

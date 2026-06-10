@@ -420,7 +420,7 @@ use crate::task::{self, PyTaskResults};
 /// ios_runtime = runtime.filter_by_key_value("platform", "ios")
 /// results = ios_runtime.run_task(ShowVersionTask)
 /// ```
-#[pyclass(name = "Genja")]
+#[pyclass(name = "Genja", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyGenja {
     inner: RuntimeGenja,
@@ -1049,9 +1049,9 @@ impl PyGenja {
     ) -> PyResult<Py<PyAny>> {
         let async_helpers = PyModule::import(py, "genja._async")?;
         let helper = async_helpers.getattr("run_task_async")?;
-        helper
+        Ok(helper
             .call1((slf.into_pyobject(py)?, task_class, max_depth))?
-            .extract()
+            .unbind())
     }
 
     /// Executes an ordered task list across all selected hosts.
@@ -1088,9 +1088,9 @@ impl PyGenja {
     ) -> PyResult<Py<PyAny>> {
         let async_helpers = PyModule::import(py, "genja._async")?;
         let helper = async_helpers.getattr("run_tasks_async")?;
-        helper
+        Ok(helper
             .call1((slf.into_pyobject(py)?, tasks, max_depth))?
-            .extract()
+            .unbind())
     }
 
     /// Returns a string representation of the Genja runtime instance.
@@ -1626,7 +1626,7 @@ fn raw_inventory_to_py_dict(py: Python<'_>, inventory: &Inventory) -> PyResult<P
 /// - Any host ID cannot be extracted as a string
 /// - Any host payload cannot be converted to a valid Rust host structure
 pub(crate) fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
-    let dict = obj.downcast::<PyDict>().map_err(|_| {
+    let dict = obj.cast::<PyDict>().map_err(|_| {
         PyValueError::new_err("hosts must be a dict mapping host id to host payload")
     })?;
 
@@ -1671,7 +1671,7 @@ pub(crate) fn python_hosts_to_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inven
 /// - JSON serialization or deserialization fails during conversion
 pub(crate) fn python_inventory_to_rust_inventory(obj: Bound<'_, PyAny>) -> PyResult<Inventory> {
     let normalized = normalize_python_mapping_payload(obj)?;
-    if let Ok(dict) = normalized.clone().downcast::<PyDict>() {
+    if let Ok(dict) = normalized.clone().cast_into::<PyDict>() {
         let has_inventory_keys =
             dict.contains("hosts")? || dict.contains("groups")? || dict.contains("defaults")?;
         if has_inventory_keys {
@@ -1931,7 +1931,7 @@ mod tests {
 
     fn init_python() {
         crate::init_embedded_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let sys = PyModule::import(py, "sys").expect("sys module should import");
             let modules = sys.getattr("modules").expect("sys.modules should exist");
             for module_name in [
@@ -1966,7 +1966,7 @@ mod tests {
     #[test]
     fn python_hosts_to_inventory_converts_host_dict() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let hosts = PyDict::new(py);
 
             let router1 = PyDict::new(py);
@@ -2006,7 +2006,7 @@ mod tests {
     #[test]
     fn python_hosts_to_inventory_rejects_non_dict_input() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let not_a_dict = PyString::new(py, "not-a-dict");
 
             let err = python_hosts_to_inventory(not_a_dict.into_any())
@@ -2021,7 +2021,7 @@ mod tests {
     #[test]
     fn python_inventory_to_rust_inventory_accepts_hosts_key() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let inventory = PyDict::new(py);
             let hosts = PyDict::new(py);
             let router = PyDict::new(py);
@@ -2046,7 +2046,7 @@ mod tests {
     #[test]
     fn python_inventory_to_rust_inventory_accepts_groups_and_defaults() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let inventory = PyDict::new(py);
 
             let hosts = PyDict::new(py);
@@ -2111,7 +2111,7 @@ mod tests {
     #[test]
     fn python_inventory_to_rust_inventory_fails_with_invalid_host_structure() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let hosts = PyDict::new(py);
             hosts.set_item("router1", "not-a-dict").unwrap();
 
@@ -2124,7 +2124,7 @@ mod tests {
     #[test]
     fn py_genja_from_hosts_builds_runtime() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let hosts = PyDict::new(py);
             let router = PyDict::new(py);
             router.set_item("hostname", "10.0.0.1").unwrap();
@@ -2146,7 +2146,7 @@ mod tests {
     #[test]
     fn py_genja_from_inventory_builds_runtime_with_groups_and_defaults() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let inventory = PyDict::new(py);
 
             let hosts = PyDict::new(py);
@@ -2174,12 +2174,12 @@ mod tests {
                 .inventory_full(py)
                 .expect("inventory_full should work");
             let full_inventory: Bound<'_, PyDict> =
-                full_inventory.bind(py).clone().downcast_into().unwrap();
+                full_inventory.bind(py).clone().cast_into().unwrap();
             let full_groups: Bound<'_, PyDict> = full_inventory
                 .get_item("groups")
                 .unwrap()
                 .expect("groups should exist")
-                .downcast_into()
+                .cast_into()
                 .unwrap();
             assert_eq!(
                 full_groups
@@ -2197,7 +2197,7 @@ mod tests {
                 .inventory_raw(py)
                 .expect("inventory_raw should work");
             let raw_inventory: Bound<'_, PyDict> =
-                raw_inventory.bind(py).clone().downcast_into().unwrap();
+                raw_inventory.bind(py).clone().cast_into().unwrap();
             assert_eq!(
                 raw_inventory
                     .get_item("defaults")
@@ -2215,7 +2215,7 @@ mod tests {
     #[test]
     fn py_genja_builder_builds_runtime_with_runner() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let hosts = PyDict::new(py);
             let router = PyDict::new(py);
             router.set_item("hostname", "10.0.0.1").unwrap();
@@ -2237,7 +2237,7 @@ mod tests {
     #[test]
     fn py_genja_from_hosts_accepts_plugin_manager() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let hosts = PyDict::new(py);
             let router = PyDict::new(py);
             router.set_item("hostname", "10.0.0.1").unwrap();
@@ -2260,7 +2260,7 @@ mod tests {
     #[test]
     fn py_genja_run_task_uses_python_runner_plugin() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let plugin_manager =
                 Py::new(py, PyPluginManager::new()).expect("plugin manager should be created");
             let importlib = PyModule::import(py, "importlib").expect("importlib should import");
@@ -2323,7 +2323,7 @@ mod tests {
     #[test]
     fn py_genja_builder_consumes_previous_builder_instance() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let hosts = PyDict::new(py);
             let router = PyDict::new(py);
             router.set_item("hostname", "10.0.0.1").unwrap();
@@ -2349,7 +2349,7 @@ mod tests {
     #[test]
     fn py_genja_inventory_accessors_return_host_payloads() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let hosts = PyDict::new(py);
             let router1 = PyDict::new(py);
             router1.set_item("hostname", "10.0.0.1").unwrap();
@@ -2372,7 +2372,7 @@ mod tests {
             let inventory = runtime
                 .inventory(py)
                 .expect("inventory accessor should work");
-            let inventory: Bound<'_, PyDict> = inventory.bind(py).clone().downcast_into().unwrap();
+            let inventory: Bound<'_, PyDict> = inventory.bind(py).clone().cast_into().unwrap();
             assert_eq!(
                 inventory
                     .get_item("router1")
@@ -2388,7 +2388,7 @@ mod tests {
             let raw_hosts = runtime
                 .hosts_raw(py)
                 .expect("hosts_raw accessor should work");
-            let raw_hosts: Bound<'_, PyDict> = raw_hosts.bind(py).clone().downcast_into().unwrap();
+            let raw_hosts: Bound<'_, PyDict> = raw_hosts.bind(py).clone().cast_into().unwrap();
             assert_eq!(
                 raw_hosts
                     .get_item("router1")
@@ -2438,7 +2438,7 @@ mod tests {
     #[test]
     fn py_genja_iter_selected_hosts_respects_filters() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let hosts = PyDict::new(py);
 
             let router1 = PyDict::new(py);
@@ -2471,7 +2471,7 @@ mod tests {
     #[test]
     fn py_genja_from_settings_file_accepts_python_inventory_plugin_manager() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let plugin_manager =
                 Py::new(py, PyPluginManager::new()).expect("plugin manager should be created");
             let importlib = PyModule::import(py, "importlib").expect("importlib should import");
@@ -2505,7 +2505,7 @@ mod tests {
             let inventory = runtime
                 .inventory(py)
                 .expect("inventory accessor should work");
-            let inventory: Bound<'_, PyDict> = inventory.bind(py).clone().downcast_into().unwrap();
+            let inventory: Bound<'_, PyDict> = inventory.bind(py).clone().cast_into().unwrap();
             assert_eq!(
                 inventory
                     .get_item("router1")
@@ -2524,7 +2524,7 @@ mod tests {
     #[test]
     fn py_genja_from_settings_file_fails_with_invalid_path() {
         init_python();
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let err = PyGenja::from_settings_file("/nonexistent/path/settings.yaml", None)
                 .err()
                 .expect("invalid path should fail");
@@ -2538,7 +2538,7 @@ mod tests {
     #[test]
     fn py_genja_from_settings_file_fails_with_malformed_content() {
         init_python();
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             let temp_dir = temp_test_dir("malformed-settings");
             let settings_path = temp_dir.join("settings.yaml");
             fs::write(&settings_path, "invalid: yaml: content: [")
@@ -2558,7 +2558,7 @@ mod tests {
     #[test]
     fn py_genja_from_settings_file_applies_python_transform_plugin() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let plugin_manager =
                 Py::new(py, PyPluginManager::new()).expect("plugin manager should be created");
             let importlib = PyModule::import(py, "importlib").expect("importlib should import");
@@ -2614,7 +2614,7 @@ mod tests {
             );
 
             let raw_hosts = runtime.hosts_raw(py).expect("hosts_raw should work");
-            let raw_hosts: Bound<'_, PyDict> = raw_hosts.bind(py).clone().downcast_into().unwrap();
+            let raw_hosts: Bound<'_, PyDict> = raw_hosts.bind(py).clone().cast_into().unwrap();
             assert_eq!(
                 raw_hosts
                     .get_item("router1")
@@ -2633,7 +2633,7 @@ mod tests {
     #[test]
     fn py_genja_filter_methods_return_filtered_runtime() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let hosts = PyDict::new(py);
 
             let router1 = PyDict::new(py);
@@ -2676,7 +2676,7 @@ mod tests {
     #[test]
     fn register_adds_genja_class_to_module() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let module =
                 PyModule::new(py, "test_runtime_module").expect("test module should be created");
 
