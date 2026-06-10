@@ -38,8 +38,17 @@ jobs:
         run: cargo test --workspace --exclude genja-core-python
 
   python:
-    name: Python bindings
+    name: Python bindings (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
 
     steps:
       - name: Checkout
@@ -48,7 +57,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -56,9 +65,17 @@ jobs:
       - name: Set up PDM
         uses: pdm-project/setup-pdm@v4
 
+      - name: Use selected Python for PDM
+        working-directory: genja-core-python
+        run: pdm use -f "$(python -c 'import sys; print(sys.executable)')"
+
+      - name: Lock Python dependencies
+        working-directory: genja-core-python
+        run: pdm lock --python "==${{ matrix.python-version }}.*"
+
       - name: Install Python dependencies
         working-directory: genja-core-python
-        run: pdm install -d
+        run: pdm install -d --frozen-lockfile
 
       - name: Lint Python
         working-directory: genja-core-python
