@@ -67,6 +67,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Configure PDM virtualenv
+        working-directory: genja-core-python
+        run: pdm config venv.with_pip true
+
       - name: Use selected Python for PDM
         working-directory: genja-core-python
         run: pdm use -f "$(python -c 'import sys; print(sys.executable)')"
@@ -81,6 +85,10 @@ jobs:
       - name: Install Python dependencies
         working-directory: genja-core-python
         run: pdm install -d --frozen-lockfile
+
+      - name: Show Python package installer
+        working-directory: genja-core-python
+        run: pdm run pip --version
 
       - name: Lint Python
         working-directory: genja-core-python
