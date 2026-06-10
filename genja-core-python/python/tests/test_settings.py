@@ -21,19 +21,17 @@ def test_settings_from_file_loads_yaml():
 def test_inventory_transform_function_options_are_exposed(tmp_path):
     settings_file = tmp_path / "settings.yaml"
     settings_file.write_text(
-        "\n".join(
-            [
-                "inventory:",
-                "  plugin: FileInventoryPlugin",
-                "  options:",
-                "    hosts_file: ./hosts.yaml",
-                "  transform_function: normalize_inventory",
-                "  transform_function_options:",
-                "    suffix: -lab",
-                "    defaults:",
-                "      platform: linux",
-            ]
-        )
+        "\n".join([
+            "inventory:",
+            "  plugin: FileInventoryPlugin",
+            "  options:",
+            "    hosts_file: ./hosts.yaml",
+            "  transform_function: normalize_inventory",
+            "  transform_function_options:",
+            "    suffix: -lab",
+            "    defaults:",
+            "      platform: linux",
+        ])
     )
 
     settings = genja.Settings.from_file(str(settings_file))

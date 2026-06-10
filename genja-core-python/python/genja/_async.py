@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .genja import Genja, TaskResults, Tasks
     from .task import GenjaTaskProtocol
 
+
 async def run_task_async(
     runtime: "Genja",
     task_class: type["GenjaTaskProtocol"],

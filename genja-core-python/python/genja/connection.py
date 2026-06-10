@@ -83,8 +83,7 @@ class ConnectionBase(ABC):
     def open(
         self,
         params: ResolvedConnectionParams,
-    ) -> None | Awaitable[None]:
-        ...
+    ) -> None | Awaitable[None]: ...
 
     def execute_command(self, command: str) -> str | Awaitable[str]:
         raise NotImplementedError("connection does not implement execute_command")
@@ -92,12 +91,15 @@ class ConnectionBase(ABC):
     @abstractmethod
     def close(
         self,
-    ) -> ConnectionKey | dict[str, Any] | None | Awaitable[ConnectionKey | dict[str, Any] | None]:
-        ...
+    ) -> (
+        ConnectionKey
+        | dict[str, Any]
+        | None
+        | Awaitable[ConnectionKey | dict[str, Any] | None]
+    ): ...
 
     @abstractmethod
-    def is_alive(self) -> bool | Awaitable[bool]:
-        ...
+    def is_alive(self) -> bool | Awaitable[bool]: ...
 
 
 class ConnectionPluginBase(PluginBase):
@@ -110,8 +112,7 @@ class ConnectionPluginBase(PluginBase):
     def create(
         self,
         key: ConnectionKey,
-    ) -> ConnectionBase | Awaitable[ConnectionBase]:
-        ...
+    ) -> ConnectionBase | Awaitable[ConnectionBase]: ...
 
 
 __all__ = [

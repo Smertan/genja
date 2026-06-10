@@ -218,7 +218,9 @@ def test_task_definition_from_python_class_rejects_non_json_serializable_options
 
 
 def test_task_decorator_requires_exactly_one_entrypoint():
-    with pytest.raises(TypeError, match="must define exactly one of 'start' or 'start_async'"):
+    with pytest.raises(
+        TypeError, match="must define exactly one of 'start' or 'start_async'"
+    ):
 
         @task(name="backup_config", connection_plugin_name="ssh")
         class InvalidTask:
@@ -226,7 +228,9 @@ def test_task_decorator_requires_exactly_one_entrypoint():
 
 
 def test_task_decorator_rejects_both_entrypoints():
-    with pytest.raises(TypeError, match="must define exactly one of 'start' or 'start_async'"):
+    with pytest.raises(
+        TypeError, match="must define exactly one of 'start' or 'start_async'"
+    ):
 
         @task(name="backup_config", connection_plugin_name="ssh")
         class InvalidTask:
