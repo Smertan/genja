@@ -205,9 +205,10 @@ Clippy with `-D warnings`, Rust tests excluding `genja-core-python`, and the
 Python binding lint, typecheck, Python test, and PyO3 Rust test commands.
 
 Release publishing is separate from CI. Rust crates are published only from
-`vX.Y.Z` tags on commits reachable from `main`, and the release workflow
+`rs-vX.Y.Z` tags on commits reachable from `main`, and the release workflow
 publishes the crates in dependency order after validating crate versions and
-internal dependency metadata.
+internal dependency metadata. Python package releases should use matching
+`py-vX.Y.Z` tags when a separate PyPI publishing workflow is added.
 
 ## Release Notes
 

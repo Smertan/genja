@@ -18,7 +18,7 @@ PUBLISH_ORDER = [
     "genja",
 ]
 
-VERSION_TAG = re.compile(r"^v(?P<version>[0-9]+\.[0-9]+\.[0-9]+)$")
+VERSION_TAG = re.compile(r"^rs-v(?P<version>[0-9]+\.[0-9]+\.[0-9]+)$")
 
 
 def cargo_metadata() -> dict[str, Any]:
@@ -49,7 +49,10 @@ def main() -> int:
     if args.tag is not None:
         match = VERSION_TAG.fullmatch(args.tag)
         if match is None:
-            print(f"error: release tag must match vX.Y.Z: {args.tag}", file=sys.stderr)
+            print(
+                f"error: release tag must match rs-vX.Y.Z: {args.tag}",
+                file=sys.stderr,
+            )
             return 1
         expected_version = match.group("version")
 
