@@ -75,20 +75,9 @@ jobs:
         working-directory: genja-core-python
         run: pdm use -f "$(python -c 'import sys; print(sys.executable)')"
 
-      - name: Show Python environment
-        working-directory: genja-core-python
-        run: |
-          python --version
-          pdm --version
-          pdm info --python
-
       - name: Install Python dependencies
         working-directory: genja-core-python
         run: pdm install -d --frozen-lockfile
-
-      - name: Show Python package installer
-        working-directory: genja-core-python
-        run: pdm run pip --version
 
       - name: Lint Python
         working-directory: genja-core-python
