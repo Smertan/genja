@@ -1154,7 +1154,7 @@ mod tests {
     use serde_json::{Value, json};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     struct TestTask {
         name: String,
@@ -1335,7 +1335,7 @@ mod tests {
     struct SlowBlockingTask {
         started: Arc<AtomicBool>,
         finished: Arc<AtomicBool>,
-        pause: Duration,
+        release: Arc<std::sync::Barrier>,
     }
 
     struct DerivedProcessorTask;
@@ -1605,7 +1605,7 @@ mod tests {
             _context: &BlockingTaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             self.started.store(true, Ordering::SeqCst);
-            std::thread::sleep(self.pause);
+            self.release.wait();
             self.finished.store(true, Ordering::SeqCst);
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
@@ -2038,30 +2038,38 @@ mod tests {
         let genja = Genja::from_inventory(single_host_inventory());
         let started = Arc::new(AtomicBool::new(false));
         let finished = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(std::sync::Barrier::new(2));
 
         let task = SlowBlockingTask {
             started: Arc::clone(&started),
             finished: Arc::clone(&finished),
-            pause: Duration::from_millis(150),
+            release: Arc::clone(&release),
         };
 
-        let started_for_signal = Arc::clone(&started);
-        let finished_for_signal = Arc::clone(&finished);
-        let signal_future = async move {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            assert!(started_for_signal.load(Ordering::SeqCst));
-            assert!(!finished_for_signal.load(Ordering::SeqCst));
-        };
+        let task_handle = tokio::spawn(async move { genja.run_task_async(task, 0).await });
 
-        let began_at = Instant::now();
-        let (results, _) = tokio::join!(genja.run_task_async(task, 0), signal_future);
-        let elapsed = began_at.elapsed();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocking task should start");
+
+        assert!(!finished.load(Ordering::SeqCst));
+        assert!(!task_handle.is_finished());
+
+        tokio::task::spawn_blocking(move || release.wait())
+            .await
+            .expect("blocking task should be released");
+
+        let results = task_handle
+            .await
+            .expect("blocking task join should succeed");
 
         let results = results.expect("blocking task execution should succeed");
         assert_eq!(results.task_name(), "slow-blocking");
         assert_eq!(results.passed_hosts().len(), 1);
-        assert!(elapsed >= Duration::from_millis(150));
-        assert!(elapsed < Duration::from_millis(350));
     }
 
     #[tokio::test]
