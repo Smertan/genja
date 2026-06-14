@@ -207,8 +207,9 @@ Python binding lint, typecheck, Python test, and PyO3 Rust test commands.
 Release publishing is separate from CI. Rust crates are published only from
 `rs-vX.Y.Z` tags on commits reachable from `main`, and the release workflow
 publishes the crates in dependency order after validating crate versions and
-internal dependency metadata. Python package releases should use matching
-`py-vX.Y.Z` tags when a separate PyPI publishing workflow is added.
+internal dependency metadata. Python package releases use matching `py-vX.Y.Z`
+tags, validate `genja-core-python/pyproject.toml`, build wheels plus a source
+distribution, and publish to PyPI with trusted publishing.
 
 ## Release Notes
 
