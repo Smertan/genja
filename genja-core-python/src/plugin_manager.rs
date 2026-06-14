@@ -2610,6 +2610,15 @@ mod tests {
             .block_on(future)
     }
 
+    fn run_python_async<F, T>(py: Python<'_>, future: F) -> T
+    where
+        F: std::future::Future<Output = T> + Send + 'static,
+        T: Send + Sync + 'static,
+    {
+        pyo3_async_runtimes::tokio::run(py, async move { Ok(future.await) })
+            .expect("test async runtime should complete")
+    }
+
     fn init_python() {
         crate::init_embedded_python();
         Python::attach(|py| {
@@ -3084,15 +3093,23 @@ audit = "tests.fixtures.processor_plugins:MinimalAuditProcessor"
                 extras: None,
             };
 
-            let connection = run_async(connection_manager.open_connection(&key, &params))
-                .expect("open should succeed")
-                .expect("connection should be created");
+            let (connection_manager, key, connection) = run_python_async(py, async move {
+                let connection = connection_manager
+                    .open_connection(&key, &params)
+                    .await
+                    .expect("open should succeed")
+                    .expect("connection should be created");
+                (connection_manager, key, connection)
+            });
 
-            let output = run_async(async {
-                let mut guard = connection.lock().await;
-                guard.execute_command("show version").await
-            })
-            .expect("execute_command should succeed");
+            let (connection, output) = run_python_async(py, async move {
+                let output = {
+                    let mut guard = connection.lock().await;
+                    guard.execute_command("show version").await
+                };
+                (connection, output)
+            });
+            let output = output.expect("execute_command should succeed");
             assert_eq!(output, "10.0.0.1:show version");
 
             {
