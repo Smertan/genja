@@ -96,6 +96,10 @@ fn write_temp_ssh_config(contents: &str) -> Context {
     }
 }
 
+fn yaml_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
 #[test]
 fn validate_ok_with_valid_config() {
     let context = write_temp_ssh_config("Host example\n  HostName example.com\n");
@@ -460,7 +464,7 @@ inventory:
     mode: "strict"
     retries: 2
 ssh:
-  config_file: "{}"
+  config_file: '{}'
 runner:
   plugin: "serial"
   options:
@@ -476,7 +480,7 @@ logging:
   file_size: 2048
   max_file_count: 4
 "#,
-        ssh_context.filename.display()
+        yaml_single_quoted(ssh_context.filename.to_string_lossy().as_ref())
     );
     std::fs::write(&file_path, yaml).unwrap();
 
@@ -541,9 +545,9 @@ fn settings_from_file_errors_on_invalid_ssh_config() {
     let yaml = format!(
         r#"
 ssh:
-  config_file: "{}"
+  config_file: '{}'
 "#,
-        ssh_context.filename.display()
+        yaml_single_quoted(ssh_context.filename.to_string_lossy().as_ref())
     );
     std::fs::write(&file_path, yaml).unwrap();
 
