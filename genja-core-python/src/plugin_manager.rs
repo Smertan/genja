@@ -3051,7 +3051,7 @@ audit = "tests.fixtures.processor_plugins:MinimalAuditProcessor"
     }
 
     #[test]
-    fn register_connection_plugin_supports_async_factory_and_methods() {
+    fn register_connection_plugin_supports_async_methods() {
         init_python();
         Python::attach(|py| {
             let manager = PyPluginManager::new();
