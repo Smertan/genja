@@ -8,8 +8,8 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::btree_map::{IntoIter, Iter, Keys, Values};
 use std::collections::BTreeMap;
+use std::collections::btree_map::{IntoIter, Iter, Keys, Values};
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
@@ -285,8 +285,8 @@ where
         format!("{}", V::schema_name()).into()
     }
 
-    fn json_schema(gen: &mut SchemaGenerator) -> Schema {
-        <BTreeMap<String, V>>::json_schema(gen)
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        <BTreeMap<String, V>>::json_schema(generator)
     }
 }
 

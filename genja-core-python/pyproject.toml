@@ -1,16 +1,5 @@
 [project]
 name = "genja-py"
-requires-python = ">=3.10"
-classifiers = [
-    "Programming Language :: Rust",
-    "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
-]
-# dynamic = ["version"]
-dependencies = [
-    "pip>=26.1",
-    "pydantic>=2.11.0",
-]
 version = "0.1.0"
 description = "Python bindings for the Genja runtime"
 authors = [
@@ -18,6 +7,34 @@ authors = [
 ]
 readme = "README.md"
 license = {text = "AGPL-3.0-only"}
+requires-python = ">=3.10"
+keywords = ["automation", "tasks", "inventory", "orchestration", "rust"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+]
+
+dependencies = [
+    "pydantic>=2.11.0",
+]
+
+[project.urls]
+Homepage = "https://docs.genja.co.uk"
+Documentation = "https://docs.genja.co.uk"
+Repository = "https://github.com/Smertan/genja"
+Issues = "https://github.com/Smertan/genja/issues"
 
 [tool.maturin]
 python-source = "python"
@@ -28,8 +45,8 @@ distribution = false
 
 [tool.pdm.scripts]
 test = { shell = "maturin develop && pytest -v python/tests" }
-test-rust = { shell = "PYO3_PYTHON=$(pdm info --python) cargo test -p genja-core-python --lib -- --test-threads=1" }
-test-rust-debug = { shell = "PYO3_PYTHON=$(pdm info --python) cargo test -p genja-core-python --lib -- --nocapture --test-threads=1" }
+test-rust = { cmd = "python scripts/test_rust.py" }
+test-rust-debug = { cmd = "python scripts/test_rust.py --nocapture" }
 typecheck = { shell = "maturin develop && ty check python/tests/typecheck" }
 lint = { shell = "ruff check python && ruff format --check python" }
 
@@ -44,7 +61,8 @@ indent-style = "space"
 
 [dependency-groups]
 dev = [
-    "patchelf>=0.17.2.4",
+    "maturin>=1,<2",
+    "patchelf>=0.17.2.4; sys_platform == 'linux'",
     "pytest>=9.0.3",
     "ty>=0.0.34",
     "ruff>=0.15.12",
@@ -52,5 +70,5 @@ dev = [
 ]
 
 [build-system]
-requires = ["maturin[patchelf]>=1,<2"]
+requires = ["maturin>=1,<2"]
 build-backend = "maturin"

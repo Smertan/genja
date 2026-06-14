@@ -64,12 +64,10 @@ class MixedTask:
 
 def test_runtime_run_task_async_executes_async_task():
     async def run_case():
-        runtime = Genja.from_hosts(
-            {
-                "router1": Host(hostname="10.0.0.1", platform="ios"),
-                "router2": Host(hostname="10.0.0.2", platform="ios"),
-            }
-        ).with_runner("serial")
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+            "router2": Host(hostname="10.0.0.2", platform="ios"),
+        }).with_runner("serial")
 
         return await runtime.run_task_async(AsyncBackupTask)
 
@@ -85,11 +83,9 @@ def test_runtime_run_task_async_executes_async_task():
 
 def test_runtime_run_task_async_handles_failures():
     async def run_case():
-        runtime = Genja.from_hosts(
-            {
-                "router1": Host(hostname="10.0.0.1", platform="ios"),
-            }
-        ).with_runner("serial")
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
 
         return await runtime.run_task_async(AsyncFailingTask)
 
@@ -124,11 +120,9 @@ def test_runtime_run_task_async_with_connection():
 
 def test_runtime_run_task_async_with_sub_tasks():
     async def run_case():
-        runtime = Genja.from_hosts(
-            {
-                "router1": Host(hostname="10.0.0.1", platform="ios"),
-            }
-        ).with_runner("serial")
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
 
         return await runtime.run_task_async(AsyncParentTask, max_depth=2)
 
@@ -146,11 +140,9 @@ def test_runtime_run_task_async_with_sub_tasks():
 
 def test_runtime_run_task_async_supports_asyncio_gather():
     async def run_case():
-        runtime = Genja.from_hosts(
-            {
-                "router1": Host(hostname="10.0.0.1", platform="ios"),
-            }
-        ).with_runner("serial")
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
 
         first, second = await asyncio.gather(
             runtime.run_task_async(AsyncBackupTask),
@@ -168,12 +160,10 @@ def test_runtime_run_task_async_supports_asyncio_gather():
 
 def test_runtime_run_tasks_async_executes_multiple_tasks():
     async def run_case():
-        runtime = Genja.from_hosts(
-            {
-                "router1": Host(hostname="10.0.0.1", platform="ios"),
-                "router2": Host(hostname="10.0.0.2", platform="ios"),
-            }
-        ).with_runner("serial")
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+            "router2": Host(hostname="10.0.0.2", platform="ios"),
+        }).with_runner("serial")
 
         results = []
         for task_class in [AsyncBackupTask, SyncBackupTask, MixedTask]:
@@ -194,13 +184,11 @@ def test_runtime_run_tasks_async_executes_multiple_tasks():
 
 def test_runtime_run_task_async_preserves_order_with_multiple_hosts():
     async def run_case():
-        runtime = Genja.from_hosts(
-            {
-                "router1": Host(hostname="10.0.0.1", platform="ios"),
-                "router2": Host(hostname="10.0.0.2", platform="ios"),
-                "router3": Host(hostname="10.0.0.3", platform="ios"),
-            }
-        ).with_runner("serial")
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+            "router2": Host(hostname="10.0.0.2", platform="ios"),
+            "router3": Host(hostname="10.0.0.3", platform="ios"),
+        }).with_runner("serial")
 
         return await runtime.run_task_async(AsyncBackupTask)
 
@@ -211,11 +199,9 @@ def test_runtime_run_task_async_preserves_order_with_multiple_hosts():
 
 @pytest.mark.asyncio
 async def test_runtime_run_task_async_works_in_pytest_asyncio():
-    runtime = Genja.from_hosts(
-        {
-            "router1": Host(hostname="10.0.0.1", platform="ios"),
-        }
-    ).with_runner("serial")
+    runtime = Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
 
     results = await runtime.run_task_async(AsyncBackupTask)
 
@@ -231,11 +217,9 @@ def test_runtime_run_task_async_handles_exception_in_task():
             raise ValueError("something went wrong")
 
     async def run_case():
-        runtime = Genja.from_hosts(
-            {
-                "router1": Host(hostname="10.0.0.1", platform="ios"),
-            }
-        ).with_runner("serial")
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
 
         return await runtime.run_task_async(AsyncExceptionTask)
 
@@ -254,11 +238,9 @@ def test_runtime_run_task_async_with_timeout():
             return TaskSuccessResult(summary="completed")
 
     async def run_case():
-        runtime = Genja.from_hosts(
-            {
-                "router1": Host(hostname="10.0.0.1", platform="ios"),
-            }
-        ).with_runner("serial")
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
 
         try:
             return await asyncio.wait_for(
@@ -273,11 +255,9 @@ def test_runtime_run_task_async_with_timeout():
 
 
 def test_runtime_run_task_async_returns_immediately():
-    runtime = Genja.from_hosts(
-        {
-            "router1": Host(hostname="10.0.0.1", platform="ios"),
-        }
-    ).with_runner("serial")
+    runtime = Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
 
     coro = runtime.run_task_async(AsyncBackupTask)
 
@@ -288,11 +268,9 @@ def test_runtime_run_task_async_returns_immediately():
 
 def test_mixed_sync_and_async_tasks_in_sequence():
     async def run_case():
-        runtime = Genja.from_hosts(
-            {
-                "router1": Host(hostname="10.0.0.1", platform="ios"),
-            }
-        ).with_runner("serial")
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
 
         results = []
         for task_class in [

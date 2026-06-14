@@ -42,8 +42,7 @@ class RunnerPluginBase(PluginBase):
         connection_resolver: TaskConnectionResolver | None,
         runner_config: RunnerConfig,
         max_depth: int,
-    ) -> TaskResults | Awaitable[TaskResults]:
-        ...
+    ) -> TaskResults | Awaitable[TaskResults]: ...
 
 
 class BatchRunnerPluginBase(RunnerPluginBase, ABC):
@@ -57,8 +56,7 @@ class BatchRunnerPluginBase(RunnerPluginBase, ABC):
         connection_resolver: TaskConnectionResolver | None,
         runner_config: RunnerConfig,
         max_depth: int,
-    ) -> list[TaskResults] | Awaitable[list[TaskResults]]:
-        ...
+    ) -> list[TaskResults] | Awaitable[list[TaskResults]]: ...
 
 
 __all__ = ["RunnerPluginBase", "BatchRunnerPluginBase"]

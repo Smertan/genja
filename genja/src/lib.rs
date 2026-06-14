@@ -58,8 +58,6 @@
 pub use ::async_trait::async_trait;
 pub use genja_core;
 pub use genja_core::GenjaError;
-pub use genja_core_derive::genja_task;
-pub use genja_plugin_manager;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
 use genja_core::task::{
@@ -67,6 +65,8 @@ use genja_core::task::{
     TaskResultsSummary, Tasks,
 };
 use genja_core::{NatString, Settings};
+pub use genja_core_derive::genja_task;
+pub use genja_plugin_manager;
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
 use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
@@ -300,7 +300,11 @@ impl Genja {
                 return Ok(());
             }
 
-            if self.plugins.get_async_inventory_plugin(plugin_name).is_some() {
+            if self
+                .plugins
+                .get_async_inventory_plugin(plugin_name)
+                .is_some()
+            {
                 return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
                     plugin_name.to_string(),
                 ));
@@ -322,7 +326,11 @@ impl Genja {
             return Ok(());
         }
 
-        if self.plugins.get_async_inventory_plugin(default_name).is_some() {
+        if self
+            .plugins
+            .get_async_inventory_plugin(default_name)
+            .is_some()
+        {
             return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
                 default_name.to_string(),
             ));
@@ -1058,13 +1066,11 @@ fn current_plugin_directory() -> Result<PathBuf, std::io::Error> {
     Ok(directory.join("plugins"))
 }
 
-fn ensure_sync_execution_outside_tokio(
-    sync_api: &str,
-    async_api: &str,
-) -> Result<(), GenjaError> {
+fn ensure_sync_execution_outside_tokio(sync_api: &str, async_api: &str) -> Result<(), GenjaError> {
     if tokio::runtime::Handle::try_current().is_ok() {
-        let message =
-            format!("{sync_api} cannot be called from an active Tokio runtime; use {async_api} instead");
+        let message = format!(
+            "{sync_api} cannot be called from an active Tokio runtime; use {async_api} instead"
+        );
         log::error!("{message}");
         return Err(GenjaError::Message(message));
     }
@@ -1148,7 +1154,7 @@ mod tests {
     use serde_json::{Value, json};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     struct TestTask {
         name: String,
@@ -1329,7 +1335,7 @@ mod tests {
     struct SlowBlockingTask {
         started: Arc<AtomicBool>,
         finished: Arc<AtomicBool>,
-        pause: Duration,
+        release: Arc<std::sync::Barrier>,
     }
 
     struct DerivedProcessorTask;
@@ -1599,7 +1605,7 @@ mod tests {
             _context: &BlockingTaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             self.started.store(true, Ordering::SeqCst);
-            std::thread::sleep(self.pause);
+            self.release.wait();
             self.finished.store(true, Ordering::SeqCst);
             Ok(HostTaskResult::passed(TaskSuccess::new()))
         }
@@ -2032,30 +2038,38 @@ mod tests {
         let genja = Genja::from_inventory(single_host_inventory());
         let started = Arc::new(AtomicBool::new(false));
         let finished = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(std::sync::Barrier::new(2));
 
         let task = SlowBlockingTask {
             started: Arc::clone(&started),
             finished: Arc::clone(&finished),
-            pause: Duration::from_millis(150),
+            release: Arc::clone(&release),
         };
 
-        let started_for_signal = Arc::clone(&started);
-        let finished_for_signal = Arc::clone(&finished);
-        let signal_future = async move {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            assert!(started_for_signal.load(Ordering::SeqCst));
-            assert!(!finished_for_signal.load(Ordering::SeqCst));
-        };
+        let task_handle = tokio::spawn(async move { genja.run_task_async(task, 0).await });
 
-        let began_at = Instant::now();
-        let (results, _) = tokio::join!(genja.run_task_async(task, 0), signal_future);
-        let elapsed = began_at.elapsed();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocking task should start");
+
+        assert!(!finished.load(Ordering::SeqCst));
+        assert!(!task_handle.is_finished());
+
+        tokio::task::spawn_blocking(move || release.wait())
+            .await
+            .expect("blocking task should be released");
+
+        let results = task_handle
+            .await
+            .expect("blocking task join should succeed");
 
         let results = results.expect("blocking task execution should succeed");
         assert_eq!(results.task_name(), "slow-blocking");
         assert_eq!(results.passed_hosts().len(), 1);
-        assert!(elapsed >= Duration::from_millis(150));
-        assert!(elapsed < Duration::from_millis(350));
     }
 
     #[tokio::test]
@@ -2164,7 +2178,10 @@ mod tests {
     async fn run_tasks_errors_inside_existing_tokio_runtime() {
         let genja = Genja::from_inventory(single_host_inventory());
         let mut tasks = Tasks::new();
-        tasks.add_task(RecordingTask::leaf("collect_facts", Arc::new(Mutex::new(Vec::new()))));
+        tasks.add_task(RecordingTask::leaf(
+            "collect_facts",
+            Arc::new(Mutex::new(Vec::new())),
+        ));
 
         let error = genja
             .run_tasks(tasks, 0)

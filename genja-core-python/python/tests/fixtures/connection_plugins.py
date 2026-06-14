@@ -54,5 +54,5 @@ class AsyncConnectionPlugin:
 
     group = "ConnectionPlugin"
 
-    async def create(self, key):
+    def create(self, key):
         return AsyncConnection(key)

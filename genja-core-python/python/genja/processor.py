@@ -81,7 +81,9 @@ class ProcessorPluginBase(PluginBase):
     def on_instance_start(self, context: TaskProcessorContext) -> None:
         return None
 
-    def on_instance_finish(self, context: TaskProcessorContext, result: Any) -> Any | None:
+    def on_instance_finish(
+        self, context: TaskProcessorContext, result: Any
+    ) -> Any | None:
         return None
 
 

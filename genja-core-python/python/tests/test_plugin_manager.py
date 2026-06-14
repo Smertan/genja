@@ -12,7 +12,10 @@ from tests.fixtures.processor_plugins import (
     UnsupportedGroupPlugin,
 )
 from tests.fixtures.runner_plugins import BatchRunnerPlugin
-from tests.fixtures.transform_plugins import AsyncHostTransformPlugin, HostOnlyTransformPlugin
+from tests.fixtures.transform_plugins import (
+    AsyncHostTransformPlugin,
+    HostOnlyTransformPlugin,
+)
 
 
 @task(name="plugin_manager_runner_task")

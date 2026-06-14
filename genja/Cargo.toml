@@ -2,12 +2,14 @@
 name = "genja"
 version = "0.1.0"
 edition = "2024"
+authors = ["Andre Bowen-Brown <contact@genja.co.uk>"]
 description = "A plugin-based Rust framework for executing tasks across multiple hosts with inventory filtering, hierarchical task execution, dynamic plugin loading, and result tracking"
 license = "AGPL-3.0-only"
 repository = "https://github.com/Smertan/genja"
+homepage = "https://docs.genja.co.uk"
 readme = "README.md"
-keywords = ["automation", "tasks", "inventory"]
-categories = ["development-tools"]
+keywords = ["automation", "tasks", "inventory", "plugin", "orchestration"]
+categories = ["development-tools", "asynchronous", "network-programming"]
 
 [dependencies]
 async-trait = "0.1.89"

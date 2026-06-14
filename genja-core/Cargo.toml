@@ -1,12 +1,15 @@
 [package]
 name = "genja-core"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+authors = ["Andre Bowen-Brown <contact@genja.co.uk>"]
 description = "Core Genja primitives for task execution, inventory modeling, settings loading, connection state, and structured task results"
 license = "AGPL-3.0-only"
 repository = "https://github.com/Smertan/genja"
-keywords = ["automation", "inventory", "tasks"]
-categories = ["development-tools"]
+homepage = "https://docs.genja.co.uk"
+readme = "README.md"
+keywords = ["automation", "inventory", "tasks", "orchestration", "plugin"]
+categories = ["development-tools", "asynchronous", "network-programming"]
 
 [dependencies]
 async-recursion = "1.1.1"

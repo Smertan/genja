@@ -3174,9 +3174,8 @@ impl BlockingTaskRuntimeContext {
     ) -> Self {
         Self {
             execution,
-            connection: connection.map(|connection| {
-                BlockingTaskConnection::new(connection, runtime_handle)
-            }),
+            connection: connection
+                .map(|connection| BlockingTaskConnection::new(connection, runtime_handle)),
         }
     }
 

@@ -108,6 +108,9 @@ fn genja_task_generates_sub_tasks_delegate() {
 
 #[test]
 fn genja_task_sets_execution_mode_from_method_shape() {
-    assert_eq!(AsyncTask { options: None }.execution_mode(), TaskExecutionMode::Async);
+    assert_eq!(
+        AsyncTask { options: None }.execution_mode(),
+        TaskExecutionMode::Async
+    );
     assert_eq!(BlockingTask.execution_mode(), TaskExecutionMode::Blocking);
 }

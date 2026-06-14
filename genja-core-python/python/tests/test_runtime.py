@@ -342,7 +342,9 @@ def test_genja_runtime_hides_depth_from_python_task_context():
     assert data["hosts"]["router1"]["Passed"]["metadata"] == {"has_connection": False}
 
     child_results = data["sub_tasks"]["runtime_child"]
-    assert child_results["hosts"]["router1"]["Passed"]["metadata"] == {"has_connection": False}
+    assert child_results["hosts"]["router1"]["Passed"]["metadata"] == {
+        "has_connection": False
+    }
 
 
 def test_genja_runtime_passes_python_connection_into_runtime_context():

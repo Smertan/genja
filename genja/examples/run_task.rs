@@ -1,7 +1,5 @@
 use genja::genja_core::inventory::Host;
-use genja::genja_core::task::{
-    HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
-};
+use genja::genja_core::task::{HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess};
 use genja::{Genja, genja_task};
 use serde_json::json;
 
@@ -27,10 +25,7 @@ impl CollectFacts {
 fn main() -> Result<(), genja::GenjaError> {
     let genja = Genja::from_settings_file("genja/examples/settings.yaml")?;
 
-    let results = genja.run_task(
-        CollectFacts,
-        1,
-    )?;
+    let results = genja.run_task(CollectFacts, 1)?;
 
     let output = results.to_pretty_json_string().map_err(|err| {
         genja::GenjaError::Message(format!("failed to serialize task results: {err}"))

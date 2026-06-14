@@ -116,8 +116,7 @@ class InventoryPluginBase(PluginBase):
         self,
         settings: Settings,
         plugins: Any,
-    ) -> Inventory | dict[str, Any] | Awaitable[Inventory | dict[str, Any]]:
-        ...
+    ) -> Inventory | dict[str, Any] | Awaitable[Inventory | dict[str, Any]]: ...
 
 
 __all__ = [

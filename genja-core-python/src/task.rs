@@ -25,7 +25,7 @@ enum PythonTaskExecutionMode {
     Async,
 }
 
-#[pyclass(name = "HostTaskResult")]
+#[pyclass(name = "HostTaskResult", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyHostTaskResult {
     pub(crate) inner: HostTaskResult,
@@ -110,15 +110,18 @@ impl Task for PythonBackedTask {
         context: &::genja_core::task::BlockingTaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         let python_connection = match context.connection() {
-            Some(connection) => Some(
-                connection.with_connection(|connection| {
-                    Ok(python_connection_from_runtime_connection(connection))
-                })?,
-            ),
+            Some(connection) => Some(connection.with_connection(|connection| {
+                Ok(python_connection_from_runtime_connection(connection))
+            })?),
             None => None,
         }
         .flatten();
-        self.run_python_blocking(host, context.current_depth(), Some(context.max_depth()), python_connection)
+        self.run_python_blocking(
+            host,
+            context.current_depth(),
+            Some(context.max_depth()),
+            python_connection,
+        )
     }
 
     async fn start_async(
@@ -161,7 +164,7 @@ impl PythonBackedTask {
         max_depth: Option<usize>,
         connection: Option<Py<PyAny>>,
     ) -> Result<HostTaskResult, TaskError> {
-        let result = Python::with_gil(|py| {
+        let result = Python::attach(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
             let instance = class.call0().map_err(python_task_error)?;
             let task_payload = build_python_task_model(
@@ -206,7 +209,7 @@ impl PythonBackedTask {
         max_depth: Option<usize>,
         connection: Option<Py<PyAny>>,
     ) -> Result<HostTaskResult, TaskError> {
-        let result = Python::with_gil(|py| {
+        let result = Python::attach(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
             let instance = class.call0().map_err(python_task_error)?;
             let task_payload = build_python_task_model(
@@ -233,26 +236,26 @@ impl PythonBackedTask {
         let result = resolve_python_maybe_awaitable_async(result)
             .await
             .map_err(python_task_error)?;
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             python_result_to_host_task_result(result.bind(py).clone()).map_err(python_task_error)
         })
     }
 }
 
-#[pyclass(name = "TaskDefinition")]
+#[pyclass(name = "TaskDefinition", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyTaskDefinition {
     spec: Option<PythonTaskSpec>,
     inner: TaskDefinition,
 }
 
-#[pyclass(name = "Tasks")]
+#[pyclass(name = "Tasks", skip_from_py_object)]
 #[derive(Clone, Default)]
 pub struct PyTasks {
     specs: Vec<PythonTaskSpec>,
 }
 
-#[pyclass(name = "TaskConnectionResolver")]
+#[pyclass(name = "TaskConnectionResolver", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyTaskConnectionResolver {
     pub(crate) inner: Option<Arc<dyn TaskConnectionResolver>>,
@@ -325,10 +328,8 @@ impl PyTaskDefinition {
         hosts.add_host(host_id, host);
         let resolver = connection_resolver.and_then(|resolver| resolver.inner.clone());
         let inner = py
-            .allow_threads(|| {
-                run_task_definition_on_hosts(&self.inner, &hosts, resolver, max_depth)
-            })
-        .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
+            .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, max_depth))
+            .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
         Ok(PyTaskResults { inner })
     }
 
@@ -343,10 +344,8 @@ impl PyTaskDefinition {
         let hosts = python_hosts_to_rust_hosts(hosts)?;
         let resolver = connection_resolver.and_then(|resolver| resolver.inner.clone());
         let inner = py
-            .allow_threads(|| {
-                run_task_definition_on_hosts(&self.inner, &hosts, resolver, max_depth)
-            })
-        .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
+            .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, max_depth))
+            .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
         Ok(PyTaskResults { inner })
     }
 
@@ -444,7 +443,7 @@ impl PyTaskConnectionResolver {
     }
 }
 
-#[pyclass(name = "TaskResults")]
+#[pyclass(name = "TaskResults", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyTaskResults {
     pub(crate) inner: TaskResults,
@@ -576,10 +575,10 @@ pub fn run_task(
     let task = task_from_spec(&spec);
     let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
     let inner = py
-        .allow_threads(|| runtime.run_task(task, max_depth))
+        .detach(|| runtime.run_task(task, max_depth))
         .map_err(|err| {
             PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
-    })?;
+        })?;
     Ok(PyTaskResults { inner })
 }
 
@@ -595,9 +594,12 @@ pub fn run_task_async(
     let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
 
     future_into_py(py, async move {
-        let inner = runtime.run_task_async(task, max_depth).await.map_err(|err| {
-            PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
-        })?;
+        let inner = runtime
+            .run_task_async(task, max_depth)
+            .await
+            .map_err(|err| {
+                PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
+            })?;
         Ok(PyTaskResults { inner })
     })
     .map(Bound::unbind)
@@ -616,7 +618,7 @@ pub fn run_tasks(
 
     let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
     let results = py
-        .allow_threads(|| runtime.run_tasks(tasks, max_depth))
+        .detach(|| runtime.run_tasks(tasks, max_depth))
         .map_err(|err| {
             PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
         })?;
@@ -641,9 +643,12 @@ pub fn run_tasks_async(
     let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
 
     future_into_py(py, async move {
-        let results = runtime.run_tasks_async(tasks, max_depth).await.map_err(|err| {
-            PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
-        })?;
+        let results = runtime
+            .run_tasks_async(tasks, max_depth)
+            .await
+            .map_err(|err| {
+                PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
+            })?;
         Ok(results
             .into_iter()
             .map(|inner| PyTaskResults { inner })
@@ -1045,7 +1050,7 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         .extract::<Option<Py<PyAny>>>()?
         .map(|value| value.bind(py_task_class.py()).clone())
         .ok_or_else(|| PyValueError::new_err("python task class is missing __genja_task_info__"))?;
-    let info: Bound<'_, PyDict> = info_obj.downcast_into()?;
+    let info: Bound<'_, PyDict> = info_obj.cast_into()?;
 
     let name: String = info
         .get_item("name")?
@@ -1088,11 +1093,11 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     };
 
     let mut sub_tasks = Vec::new();
-    if let Some(py_sub_tasks) = info.get_item("sub_tasks")? {
-        if !py_sub_tasks.is_none() {
-            for sub_task in py_sub_tasks.try_iter()? {
-                sub_tasks.push(extract_python_task_spec(sub_task?)?);
-            }
+    if let Some(py_sub_tasks) = info.get_item("sub_tasks")?
+        && !py_sub_tasks.is_none()
+    {
+        for sub_task in py_sub_tasks.try_iter()? {
+            sub_tasks.push(extract_python_task_spec(sub_task?)?);
         }
     }
 
@@ -1239,7 +1244,7 @@ pub(crate) fn python_host_to_rust_host(obj: Bound<'_, PyAny>) -> PyResult<Host> 
 }
 
 pub(crate) fn python_hosts_to_rust_hosts(obj: Bound<'_, PyAny>) -> PyResult<Hosts> {
-    let dict = obj.downcast::<PyDict>().map_err(|_| {
+    let dict = obj.cast::<PyDict>().map_err(|_| {
         PyValueError::new_err("hosts must be a dict mapping host id to host payload")
     })?;
 
@@ -1402,7 +1407,7 @@ mod tests {
 
     fn init_python() {
         crate::init_embedded_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let sys = PyModule::import(py, "sys").expect("sys module should import");
             let modules = sys.getattr("modules").expect("sys.modules should exist");
             let genja = PyModule::from_code(
@@ -1490,7 +1495,7 @@ mod tests {
     #[test]
     fn python_result_to_host_task_result_round_trips_success_dict() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let result = PyDict::new(py);
             result.set_item("status", "passed").unwrap();
             result.set_item("changed", true).unwrap();
@@ -1539,7 +1544,7 @@ mod tests {
     #[test]
     fn python_result_to_host_task_result_rejects_unknown_status() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let result = PyDict::new(py);
             result.set_item("status", "unknown").unwrap();
 
@@ -1555,7 +1560,7 @@ mod tests {
     #[test]
     fn python_host_to_rust_host_converts_dict_payload() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let host = PyDict::new(py);
             host.set_item("hostname", "10.0.0.1").unwrap();
             host.set_item("port", 22).unwrap();
@@ -1586,7 +1591,7 @@ mod tests {
     #[test]
     fn extract_python_task_spec_extracts_nested_sub_task_metadata() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let verify = make_task_class(
                 py,
                 "verify_backup",
@@ -1621,7 +1626,7 @@ mod tests {
     #[test]
     fn extract_python_task_spec_extracts_options_payload() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let task = make_task_class(
                 py,
                 "backup_config",
@@ -1632,7 +1637,7 @@ mod tests {
             .expect("task class should be created");
             task.getattr("__genja_task_info__")
                 .expect("task metadata should exist")
-                .downcast::<PyDict>()
+                .cast::<PyDict>()
                 .expect("task metadata should be a dict")
                 .set_item(
                     "options",
@@ -1656,7 +1661,7 @@ mod tests {
     #[test]
     fn extract_python_task_spec_rejects_empty_connection_plugin_name() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let task = make_task_class(
                 py,
                 "backup_config",
@@ -1680,7 +1685,7 @@ mod tests {
     #[test]
     fn extract_python_task_spec_allows_missing_connection_plugin_name() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let task = make_task_class(
                 py,
                 "backup_config",
@@ -1699,7 +1704,7 @@ mod tests {
     #[test]
     fn register_adds_task_classes_to_module() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let module =
                 PyModule::new(py, "test_task_module").expect("test module should be created");
 
@@ -1714,7 +1719,7 @@ mod tests {
     #[test]
     fn task_definition_run_on_host_executes_async_python_body() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let task_class = PyModule::import(py, "tests.fixtures.task_definitions")
                 .and_then(|module| module.getattr("AsyncRuntimeTask"))
                 .expect("fixture task class should import");
@@ -1741,7 +1746,7 @@ mod tests {
                 HostTaskResult::Passed(success) => success,
                 _ => unreachable!("host result should be passed"),
             };
-            assert_eq!(success.changed(), true);
+            assert!(success.changed());
             assert_eq!(success.summary(), Some("async handled router1"));
             assert_eq!(success.metadata().unwrap()["has_connection"], json!(false));
         });
@@ -1750,7 +1755,7 @@ mod tests {
     #[test]
     fn python_result_to_task_results_accepts_py_task_results_raw_shape() {
         init_python();
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let mut results = TaskResults::new("backup");
             results.insert_host_result(
                 "router1",

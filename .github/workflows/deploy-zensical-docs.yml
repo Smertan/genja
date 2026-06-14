@@ -44,6 +44,9 @@ jobs:
       - name: Build docs
         run: zensical build
 
+      - name: Add custom domain
+        run: echo "docs.genja.co.uk" > site/CNAME
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:

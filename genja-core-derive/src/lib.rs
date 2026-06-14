@@ -63,8 +63,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    DeriveInput, Expr, ExprArray, ExprLit, FnArg, GenericArgument, ImplItem, ItemImpl, Lit,
-    LitStr, PathArguments, ReturnType, Token, Type, TypePath,
+    DeriveInput, Expr, ExprArray, ExprLit, FnArg, GenericArgument, ImplItem, ItemImpl, Lit, LitStr,
+    PathArguments, ReturnType, Token, Type, TypePath,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
@@ -220,7 +220,10 @@ impl Parse for GenjaTaskArgs {
     }
 }
 
-fn expand_genja_task(args: GenjaTaskArgs, item_impl: ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
+fn expand_genja_task(
+    args: GenjaTaskArgs,
+    item_impl: ItemImpl,
+) -> syn::Result<proc_macro2::TokenStream> {
     if item_impl.trait_.is_some() {
         return Err(syn::Error::new_spanned(
             &item_impl.self_ty,
@@ -427,7 +430,11 @@ fn validate_start_method(method: &syn::ImplItemFn, is_async: bool) -> syn::Resul
 
     let mut inputs = method.sig.inputs.iter();
     validate_receiver(inputs.next().unwrap())?;
-    validate_typed_arg(inputs.next().unwrap(), is_host_ref, "`host` must be `&Host`")?;
+    validate_typed_arg(
+        inputs.next().unwrap(),
+        is_host_ref,
+        "`host` must be `&Host`",
+    )?;
     validate_typed_arg(
         inputs.next().unwrap(),
         if is_async {
@@ -442,11 +449,15 @@ fn validate_start_method(method: &syn::ImplItemFn, is_async: bool) -> syn::Resul
         },
     )?;
 
-    validate_return_type(&method.sig.output, is_result_host_task_error, if is_async {
-        "`start_async` must return `Result<HostTaskResult, TaskError>`"
-    } else {
-        "`start` must return `Result<HostTaskResult, TaskError>`"
-    })
+    validate_return_type(
+        &method.sig.output,
+        is_result_host_task_error,
+        if is_async {
+            "`start_async` must return `Result<HostTaskResult, TaskError>`"
+        } else {
+            "`start` must return `Result<HostTaskResult, TaskError>`"
+        },
+    )
 }
 
 fn validate_options_method(method: &syn::ImplItemFn) -> syn::Result<()> {
@@ -523,15 +534,14 @@ fn validate_receiver(arg: &FnArg) -> syn::Result<()> {
         {
             Ok(())
         }
-        _ => Err(syn::Error::new_spanned(arg, "first argument must be `&self`")),
+        _ => Err(syn::Error::new_spanned(
+            arg,
+            "first argument must be `&self`",
+        )),
     }
 }
 
-fn validate_typed_arg(
-    arg: &FnArg,
-    predicate: fn(&Type) -> bool,
-    message: &str,
-) -> syn::Result<()> {
+fn validate_typed_arg(arg: &FnArg, predicate: fn(&Type) -> bool, message: &str) -> syn::Result<()> {
     match arg {
         FnArg::Typed(typed) if predicate(&typed.ty) => Ok(()),
         FnArg::Typed(typed) => Err(syn::Error::new_spanned(&typed.ty, message)),

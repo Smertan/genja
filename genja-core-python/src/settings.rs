@@ -1,14 +1,14 @@
+use ::genja_core::Settings;
 use ::genja_core::settings::{
     CoreConfig, InventoryConfig, LoggingConfig, OptionsConfig, RunnerConfig, SSHConfig,
 };
-use ::genja_core::Settings;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 use crate::task;
 
-#[pyclass(name = "OptionsConfig")]
+#[pyclass(name = "OptionsConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyOptionsConfig {
     pub(crate) inner: OptionsConfig,
@@ -41,7 +41,7 @@ impl PyOptionsConfig {
     }
 }
 
-#[pyclass(name = "CoreConfig")]
+#[pyclass(name = "CoreConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyCoreConfig {
     pub(crate) inner: CoreConfig,
@@ -59,7 +59,7 @@ impl PyCoreConfig {
     }
 }
 
-#[pyclass(name = "InventoryConfig")]
+#[pyclass(name = "InventoryConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyInventoryConfig {
     pub(crate) inner: InventoryConfig,
@@ -102,7 +102,7 @@ impl PyInventoryConfig {
     }
 }
 
-#[pyclass(name = "SSHConfig")]
+#[pyclass(name = "SSHConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PySSHConfig {
     pub(crate) inner: SSHConfig,
@@ -120,7 +120,7 @@ impl PySSHConfig {
     }
 }
 
-#[pyclass(name = "RunnerConfig")]
+#[pyclass(name = "RunnerConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyRunnerConfig {
     pub(crate) inner: RunnerConfig,
@@ -159,7 +159,7 @@ impl PyRunnerConfig {
     }
 }
 
-#[pyclass(name = "LoggingConfig")]
+#[pyclass(name = "LoggingConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyLoggingConfig {
     pub(crate) inner: LoggingConfig,
@@ -210,7 +210,7 @@ impl PyLoggingConfig {
     }
 }
 
-#[pyclass(name = "Settings")]
+#[pyclass(name = "Settings", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PySettings {
     pub(crate) inner: Settings,
@@ -336,8 +336,8 @@ mod tests {
 
     #[test]
     fn register_adds_settings_classes_to_module() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
+        pyo3::Python::initialize();
+        Python::attach(|py| {
             let module =
                 PyModule::new(py, "test_settings_module").expect("test module should be created");
 

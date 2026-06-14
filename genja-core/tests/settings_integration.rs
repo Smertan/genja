@@ -32,6 +32,10 @@ fn write_temp_ssh_config(contents: &str) -> Context {
     }
 }
 
+fn yaml_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
 #[test]
 fn settings_from_file_loads_populated_yaml_via_public_api() {
     let ssh_context = write_temp_ssh_config("Host example\n  HostName example.com\n");
@@ -46,7 +50,7 @@ inventory:
   options:
     hosts_file: "./inventory/hosts.yaml"
 ssh:
-  config_file: "{}"
+  config_file: '{}'
 runner:
   plugin: "serial"
   worker_count: 4
@@ -58,7 +62,7 @@ logging:
   log_file: "./custom.log"
   to_console: "yes"
 "#,
-        ssh_context.filename.display()
+        yaml_single_quoted(ssh_context.filename.to_string_lossy().as_ref())
     );
     fs::write(&file_path, yaml).expect("settings file should be written");
 
@@ -93,9 +97,9 @@ fn settings_from_file_rejects_invalid_ssh_config_via_public_api() {
     let yaml = format!(
         r#"
 ssh:
-  config_file: "{}"
+  config_file: '{}'
 "#,
-        ssh_context.filename.display()
+        yaml_single_quoted(ssh_context.filename.to_string_lossy().as_ref())
     );
     fs::write(&file_path, yaml).expect("settings file should be written");
 

@@ -5,8 +5,8 @@ use genja_core::inventory::{
 };
 // use genja_core::CustomTreeMap;
 use serde_json::json;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 mod common;
 
