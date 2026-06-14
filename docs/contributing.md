@@ -202,14 +202,54 @@ change and the broader checks for any shared runtime or public API changes.
 GitHub Actions runs CI for pull requests and for pushes to `main`, `develop`,
 `feature/**`, and issue-style `*-genja-*` branches. CI runs formatting checks,
 Clippy with `-D warnings`, Rust tests excluding `genja-core-python`, and the
-Python binding lint, typecheck, Python test, and PyO3 Rust test commands.
+Python binding lint, typecheck, Python test, and PyO3 Rust test commands. A
+separate cross-platform compatibility workflow runs on pull requests into
+`main` and checks Linux, macOS, and Windows across all supported Python versions.
 
 Release publishing is separate from CI. Rust crates are published only from
 `rs-vX.Y.Z` tags on commits reachable from `main`, and the release workflow
 publishes the crates in dependency order after validating crate versions and
 internal dependency metadata. Python package releases use matching `py-vX.Y.Z`
 tags, validate `genja-core-python/pyproject.toml`, build wheels plus a source
-distribution, and publish to PyPI with trusted publishing.
+distribution, install and test each built wheel, and publish to PyPI with
+trusted publishing.
+
+## Release Flow
+
+Use `develop` as the integration branch and `main` as the release branch. Release
+preparation should happen on a release branch cut from `develop`:
+
+```text
+feature/* -> PR -> develop
+develop -> release/x.y.z
+release/x.y.z -> PR -> main
+main -> fast-forward develop
+```
+
+While the release pull request is open, avoid merging new work into `develop` so
+`develop` can be fast-forwarded to the released `main` commit after publication.
+If `develop` has moved ahead, do not force it; either finish the release sync
+first or use a normal merge from `main` into `develop`.
+
+After the release pull request is merged, tag the exact resulting `main` commit.
+Rust and Python release tags may point at the same commit:
+
+```bash
+git checkout main
+git pull origin main
+git tag rs-vX.Y.Z
+git tag py-vX.Y.Z
+git push origin rs-vX.Y.Z py-vX.Y.Z
+```
+
+Fast-forward `develop` to the released commit before resuming feature merges:
+
+```bash
+git checkout develop
+git pull origin develop
+git merge --ff-only main
+git push origin develop
+```
 
 ## Release Notes
 

@@ -145,6 +145,48 @@ jobs:
           working-directory: genja-core-python
           manylinux: auto
 
+      - name: Test installed wheel
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob
+          import os
+          import shutil
+          import subprocess
+          import sys
+          import tempfile
+
+          wheels = glob.glob(os.path.join("genja-core-python", "dist", "*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"Expected exactly one wheel, found {len(wheels)}: {wheels}")
+
+          subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], check=True)
+          subprocess.run(
+              [
+                  sys.executable,
+                  "-m",
+                  "pip",
+                  "install",
+                  wheels[0],
+                  "pytest>=9.0.3",
+                  "pytest-asyncio>=1.4.0",
+              ],
+              check=True,
+          )
+
+          source_tests = os.path.join(
+              os.environ["GITHUB_WORKSPACE"],
+              "genja-core-python",
+              "python",
+              "tests",
+          )
+          test_root = tempfile.mkdtemp(prefix="genja-wheel-tests-")
+          tests = os.path.join(test_root, "tests")
+          shutil.copytree(source_tests, tests)
+          os.chdir(test_root)
+          subprocess.run([sys.executable, "-m", "pytest", "-v", tests], check=True)
+          PY
+
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
