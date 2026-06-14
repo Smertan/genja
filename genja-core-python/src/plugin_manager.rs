@@ -2622,6 +2622,25 @@ mod tests {
     fn init_python() {
         crate::init_embedded_python();
         Python::attach(|py| {
+            let asyncio = PyModule::import(py, "asyncio").expect("asyncio module should import");
+            let platform = py
+                .import("sys")
+                .expect("sys module should import")
+                .getattr("platform")
+                .expect("sys.platform should exist")
+                .extract::<String>()
+                .expect("sys.platform should be a string");
+            if platform == "win32" {
+                let policy = asyncio
+                    .getattr("WindowsSelectorEventLoopPolicy")
+                    .expect("Windows selector event loop policy should exist")
+                    .call0()
+                    .expect("Windows selector event loop policy should instantiate");
+                asyncio
+                    .call_method1("set_event_loop_policy", (policy,))
+                    .expect("Windows selector event loop policy should be set");
+            }
+
             let sys = PyModule::import(py, "sys").expect("sys module should import");
             let modules = sys.getattr("modules").expect("sys.modules should exist");
             let genja = PyModule::from_code(
