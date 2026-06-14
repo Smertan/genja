@@ -7,10 +7,10 @@ edition = "2024"
 genja-plugin-manager = { path = "..\\..\\genja-plugin-manager" }
 
 [package.metadata.plugins]
-plugin_a_b = "..\\target\\release\\plugin_mods.dll"
+plugin_a_b = "..\\target\\debug\\plugin_mods.dll"
 
 [package.metadata.plugins.inventory]
-inventory_a = "..\\target\\release\\plugin_inventory.dll"
+inventory_a = "..\\target\\debug\\plugin_inventory.dll"
 
 
 [lib]
