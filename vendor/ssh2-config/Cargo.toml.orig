@@ -1,0 +1,60 @@
+[package]
+authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
+categories = ["network-programming"]
+description = "an ssh configuration parser for ssh2-rs"
+documentation = "https://docs.rs/ssh2-config"
+edition = "2024"
+rust-version = "1.88.0"
+homepage = "https://veeso.github.io/ssh2-config/"
+include = [
+    "build/**/*",
+    "examples/**/*",
+    "src/**/*",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+]
+keywords = ["ssh2", "ssh", "ssh-config", "ssh-config-parser"]
+license = "MIT"
+name = "ssh2-config"
+readme = "README.md"
+repository = "https://github.com/veeso/ssh2-config"
+version = "0.6.5"
+build = "build/main.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bitflags = "^2"
+dirs = "^6"
+log = "^0.4"
+glob = "0.3"
+thiserror = "^2"
+wildmatch = "^2"
+
+[dev-dependencies]
+env_logger = "^0.11"
+pretty_assertions = "^1"
+rpassword = "^7"
+ssh2 = "^0.9"
+tempfile = "^3"
+
+[build-dependencies]
+anyhow = "1"
+git2 = { version = "0.20", features = ["vendored-openssl"] }
+
+[features]
+default = []
+nolog = ["log/max_level_off"]
+
+[[example]]
+name = "client"
+path = "examples/client.rs"
+
+[[example]]
+name = "query"
+path = "examples/query.rs"
+
+[[example]]
+name = "print"
+path = "examples/print.rs"
