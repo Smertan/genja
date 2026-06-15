@@ -9,6 +9,3 @@ members = ["genja",
     "genja-plugin-manager/tests/plugin_mods",
     "genja-plugin-manager/tests/plugin_tasks",
 ]
-
-[patch.crates-io]
-ssh2-config = { path = "vendor/ssh2-config" }

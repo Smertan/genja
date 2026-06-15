@@ -139,11 +139,15 @@ jobs:
 
       - name: Build wheel
         uses: PyO3/maturin-action@v1
+        env:
+          OPENSSL_NO_VENDOR: 1
         with:
           command: build
           args: ${{ matrix.maturin-args }}
           working-directory: genja-core-python
           manylinux: auto
+          before-script-linux: |
+            yum install -y openssl-devel pkgconfig
 
       - name: Test installed wheel
         shell: bash
