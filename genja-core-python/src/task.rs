@@ -6,7 +6,6 @@ use ::genja_core::task::{
     TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
 };
 use async_trait::async_trait;
-use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
@@ -42,11 +41,7 @@ impl PyHostTaskResult {
 
     #[getter]
     fn status(&self) -> &'static str {
-        match self.inner {
-            HostTaskResult::Passed(_) => "passed",
-            HostTaskResult::Failed(_) => "failed",
-            HostTaskResult::Skipped(_) => "skipped",
-        }
+        self.inner.status()
     }
 
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -677,6 +672,10 @@ pub(crate) fn python_result_to_task_results(obj: Bound<'_, PyAny>) -> PyResult<T
 }
 
 fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
+    if let Some(outcome) = value.get("outcome") {
+        return host_task_result_from_payload(outcome);
+    }
+
     let result_value = if let Some(passed) = value.get("Passed") {
         let mut tagged = passed.clone();
         tagged["status"] = Value::String("passed".to_string());
@@ -701,7 +700,9 @@ fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
     match status {
         "passed" => Ok(HostTaskResult::passed(json_to_task_success(&result_value)?)),
         "failed" => Ok(HostTaskResult::failed(json_to_task_failure(&result_value)?)),
-        "skipped" => Ok(HostTaskResult::Skipped(json_to_task_skip(&result_value))),
+        "skipped" => Ok(HostTaskResult::skipped_with_detail(json_to_task_skip(
+            &result_value,
+        ))),
         other => Err(PyValueError::new_err(format!(
             "unsupported python task result status '{other}'"
         ))),
@@ -843,32 +844,7 @@ fn parse_failure_kind(kind: &str) -> PyResult<TaskFailureKind> {
 }
 
 fn host_task_result_to_json(result: &HostTaskResult) -> Value {
-    match result {
-        HostTaskResult::Passed(success) => json!({
-            "status": "passed",
-            "result": success.result(),
-            "changed": success.changed(),
-            "diff": success.diff(),
-            "summary": success.summary(),
-            "warnings": success.warnings(),
-            "messages": success.messages().iter().map(task_message_to_json).collect::<Vec<_>>(),
-            "metadata": success.metadata(),
-        }),
-        HostTaskResult::Failed(failure) => json!({
-            "status": "failed",
-            "kind": failure_kind_to_str(failure.kind()),
-            "message": failure.message(),
-            "retryable": failure.retryable(),
-            "details": failure.details(),
-            "warnings": failure.warnings(),
-            "messages": failure.messages().iter().map(task_message_to_json).collect::<Vec<_>>(),
-        }),
-        HostTaskResult::Skipped(skip) => json!({
-            "status": "skipped",
-            "reason": skip.reason(),
-            "message": skip.message(),
-        }),
-    }
+    serde_json::to_value(result).expect("host task result should serialize")
 }
 
 fn normalize_task_results_json(value: &Value) -> Value {
@@ -930,41 +906,6 @@ fn task_results_summary_to_json(summary: &TaskResultsSummary) -> Value {
         "duration": summary.duration_display(),
         "sub_tasks": Value::Object(sub_tasks),
     })
-}
-
-pub(crate) fn task_message_to_json(message: &TaskMessage) -> Value {
-    json!({
-        "level": message_level_to_str(message.level()),
-        "text": message.text(),
-        "code": message.code(),
-        "timestamp": message.timestamp().map(format_timestamp),
-    })
-}
-
-fn message_level_to_str(level: &MessageLevel) -> &'static str {
-    match level {
-        MessageLevel::Info => "info",
-        MessageLevel::Warning => "warning",
-        MessageLevel::Error => "error",
-        MessageLevel::Debug => "debug",
-    }
-}
-
-fn failure_kind_to_str(kind: &TaskFailureKind) -> &'static str {
-    match kind {
-        TaskFailureKind::Connection => "connection",
-        TaskFailureKind::Authentication => "authentication",
-        TaskFailureKind::Validation => "validation",
-        TaskFailureKind::Timeout => "timeout",
-        TaskFailureKind::Command => "command",
-        TaskFailureKind::Unsupported => "unsupported",
-        TaskFailureKind::Internal => "internal",
-        TaskFailureKind::External => "external",
-    }
-}
-
-fn format_timestamp(timestamp: SystemTime) -> String {
-    format_rfc3339(timestamp).to_string()
 }
 
 fn task_definition_to_json(task_definition: &TaskDefinition) -> Value {
@@ -1531,13 +1472,22 @@ mod tests {
                 .expect("success result should convert");
             let data = host_task_result_to_json(&host_result);
 
-            assert!(matches!(host_result, HostTaskResult::Passed(_)));
-            assert_eq!(data["status"], "passed");
-            assert_eq!(data["changed"], true);
-            assert_eq!(data["summary"], "backup complete");
-            assert_eq!(data["warnings"], json!(["using fallback path"]));
-            assert_eq!(data["messages"][0]["code"], "BACKUP_DONE");
-            assert_eq!(data["metadata"]["backup_file"], "/tmp/router1.cfg");
+            assert!(host_result.is_passed());
+            assert!(data["outcome"]["Passed"].is_object());
+            assert_eq!(data["outcome"]["Passed"]["changed"], true);
+            assert_eq!(data["outcome"]["Passed"]["summary"], "backup complete");
+            assert_eq!(
+                data["outcome"]["Passed"]["warnings"],
+                json!(["using fallback path"])
+            );
+            assert_eq!(
+                data["outcome"]["Passed"]["messages"][0]["code"],
+                "BACKUP_DONE"
+            );
+            assert_eq!(
+                data["outcome"]["Passed"]["metadata"]["backup_file"],
+                "/tmp/router1.cfg"
+            );
         });
     }
 
@@ -1742,10 +1692,9 @@ mod tests {
                 .host_result("router1")
                 .expect("router1 result should exist");
             assert!(host_result.is_passed());
-            let success = match host_result {
-                HostTaskResult::Passed(success) => success,
-                _ => unreachable!("host result should be passed"),
-            };
+            let success = host_result
+                .success()
+                .expect("host result should be passed");
             assert!(success.changed());
             assert_eq!(success.summary(), Some("async handled router1"));
             assert_eq!(success.metadata().unwrap()["has_connection"], json!(false));

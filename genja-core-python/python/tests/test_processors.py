@@ -28,8 +28,7 @@ def test_plugin_manager_register_plugin_executes_python_processor():
     data = results.to_dict()
 
     assert data["summary"] == "processed by audit"
-    assert data["hosts"]["router1"]["status"] == "passed"
-    assert data["hosts"]["router1"]["metadata"] == {
+    assert data["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
         "platform": "ios",
         "processor": "audit",
         "hostname": "router1",
@@ -82,5 +81,7 @@ def test_plugin_manager_loads_python_processors_from_pyproject(tmp_path):
         sys.modules.pop("processor_plugins", None)
 
     data = results.to_dict()
-    assert data["hosts"]["router1"]["status"] == "passed"
-    assert data["hosts"]["router1"]["metadata"]["loaded_from"] == "pyproject"
+    assert (
+        data["hosts"]["router1"]["outcome"]["Passed"]["metadata"]["loaded_from"]
+        == "pyproject"
+    )

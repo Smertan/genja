@@ -842,10 +842,26 @@ struct TaskResultsHumanJson<'a> {
 }
 
 #[derive(Serialize)]
-enum HostTaskResultHumanJson<'a> {
+struct HostTaskResultHumanJson<'a> {
+    outcome: HostTaskOutcomeHumanJson<'a>,
+    execution_metadata: HostExecutionMetadataHumanJson,
+}
+
+#[derive(Serialize)]
+enum HostTaskOutcomeHumanJson<'a> {
     Passed(TaskSuccessHumanJson<'a>),
     Failed(TaskFailureHumanJson<'a>),
     Skipped(TaskSkipHumanJson<'a>),
+}
+
+#[derive(Serialize)]
+struct HostExecutionMetadataHumanJson {
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    duration: Option<String>,
+    attempts: usize,
+    retried: bool,
+    retry_exhausted: bool,
 }
 
 #[derive(Serialize)]
@@ -959,10 +975,32 @@ impl TaskResultsSummary {
 
 impl<'a> From<&'a HostTaskResult> for HostTaskResultHumanJson<'a> {
     fn from(result: &'a HostTaskResult) -> Self {
+        Self {
+            outcome: HostTaskOutcomeHumanJson::from(result.outcome()),
+            execution_metadata: HostExecutionMetadataHumanJson::from(result.execution_metadata()),
+        }
+    }
+}
+
+impl<'a> From<&'a HostTaskOutcome> for HostTaskOutcomeHumanJson<'a> {
+    fn from(result: &'a HostTaskOutcome) -> Self {
         match result {
-            HostTaskResult::Passed(success) => Self::Passed(TaskSuccessHumanJson::from(success)),
-            HostTaskResult::Failed(failure) => Self::Failed(TaskFailureHumanJson::from(failure)),
-            HostTaskResult::Skipped(skip) => Self::Skipped(TaskSkipHumanJson::from(skip)),
+            HostTaskOutcome::Passed(success) => Self::Passed(TaskSuccessHumanJson::from(success)),
+            HostTaskOutcome::Failed(failure) => Self::Failed(TaskFailureHumanJson::from(failure)),
+            HostTaskOutcome::Skipped(skip) => Self::Skipped(TaskSkipHumanJson::from(skip)),
+        }
+    }
+}
+
+impl From<&HostExecutionMetadata> for HostExecutionMetadataHumanJson {
+    fn from(metadata: &HostExecutionMetadata) -> Self {
+        Self {
+            started_at: metadata.started_at_display(),
+            finished_at: metadata.finished_at_display(),
+            duration: metadata.duration_display(),
+            attempts: metadata.attempts(),
+            retried: metadata.retried(),
+            retry_exhausted: metadata.retry_exhausted(),
         }
     }
 }
@@ -1503,10 +1541,123 @@ impl TaskResults {
 /// assert!(skipped.is_skipped());
 /// ```
 #[derive(Debug, Clone, Serialize)]
-pub enum HostTaskResult {
+pub struct HostTaskResult {
+    outcome: HostTaskOutcome,
+    execution_metadata: HostExecutionMetadata,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum HostTaskOutcome {
     Passed(TaskSuccess),
     Failed(TaskFailure),
     Skipped(TaskSkip),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HostExecutionMetadata {
+    started_at: Option<SystemTime>,
+    finished_at: Option<SystemTime>,
+    duration_ns: Option<u128>,
+    duration_ms: Option<u128>,
+    attempts: usize,
+    retried: bool,
+    retry_exhausted: bool,
+}
+
+impl Default for HostExecutionMetadata {
+    fn default() -> Self {
+        Self {
+            started_at: None,
+            finished_at: None,
+            duration_ns: None,
+            duration_ms: None,
+            attempts: 1,
+            retried: false,
+            retry_exhausted: false,
+        }
+    }
+}
+
+impl HostExecutionMetadata {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_started_at(mut self, started_at: SystemTime) -> Self {
+        self.started_at = Some(started_at);
+        self
+    }
+
+    pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
+        self.finished_at = Some(finished_at);
+        self
+    }
+
+    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
+        self.duration_ns = Some(duration_ns);
+        self.duration_ms = Some(duration_ns / 1_000_000);
+        self
+    }
+
+    pub fn with_attempts(mut self, attempts: usize) -> Self {
+        self.attempts = attempts;
+        self
+    }
+
+    pub fn with_retried(mut self, retried: bool) -> Self {
+        self.retried = retried;
+        self
+    }
+
+    pub fn with_retry_exhausted(mut self, retry_exhausted: bool) -> Self {
+        self.retry_exhausted = retry_exhausted;
+        self
+    }
+
+    pub fn started_at(&self) -> Option<SystemTime> {
+        self.started_at
+    }
+
+    pub fn finished_at(&self) -> Option<SystemTime> {
+        self.finished_at
+    }
+
+    pub fn duration_ns(&self) -> Option<u128> {
+        self.duration_ns.or_else(|| {
+            self.duration_ms
+                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
+        })
+    }
+
+    pub fn duration_ms(&self) -> Option<u128> {
+        self.duration_ns
+            .map(|duration_ns| duration_ns / 1_000_000)
+            .or(self.duration_ms)
+    }
+
+    pub fn attempts(&self) -> usize {
+        self.attempts
+    }
+
+    pub fn retried(&self) -> bool {
+        self.retried
+    }
+
+    pub fn retry_exhausted(&self) -> bool {
+        self.retry_exhausted
+    }
+
+    pub fn started_at_display(&self) -> Option<String> {
+        self.started_at.map(format_timestamp_display)
+    }
+
+    pub fn finished_at_display(&self) -> Option<String> {
+        self.finished_at.map(format_timestamp_display)
+    }
+
+    pub fn duration_display(&self) -> Option<String> {
+        self.duration_ns().map(format_duration_display)
+    }
 }
 
 impl HostTaskResult {
@@ -1524,7 +1675,10 @@ impl HostTaskResult {
     ///
     /// A `HostTaskResult::Passed` variant containing the provided success details.
     pub fn passed(result: TaskSuccess) -> Self {
-        Self::Passed(result)
+        Self {
+            outcome: HostTaskOutcome::Passed(result),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
     }
 
     /// Creates a new `HostTaskResult` representing a failed task execution.
@@ -1541,7 +1695,10 @@ impl HostTaskResult {
     ///
     /// A `HostTaskResult::Failed` variant containing the provided failure details.
     pub fn failed(failure: TaskFailure) -> Self {
-        Self::Failed(failure)
+        Self {
+            outcome: HostTaskOutcome::Failed(failure),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
     }
 
     /// Creates a new `HostTaskResult` representing a skipped task execution.
@@ -1553,7 +1710,10 @@ impl HostTaskResult {
     ///
     /// A `HostTaskResult::Skipped` variant with default skip information (no reason or message).
     pub fn skipped() -> Self {
-        Self::Skipped(TaskSkip::default())
+        Self {
+            outcome: HostTaskOutcome::Skipped(TaskSkip::default()),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
     }
 
     /// Creates a new `HostTaskResult` representing a skipped task execution with a reason.
@@ -1571,7 +1731,18 @@ impl HostTaskResult {
     ///
     /// A `HostTaskResult::Skipped` variant with the specified reason set.
     pub fn skipped_with_reason(reason: impl Into<String>) -> Self {
-        Self::Skipped(TaskSkip::new().with_reason(reason))
+        Self {
+            outcome: HostTaskOutcome::Skipped(TaskSkip::new().with_reason(reason)),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
+    }
+
+    /// Creates a skipped host result from an explicit skip payload.
+    pub fn skipped_with_detail(skip: TaskSkip) -> Self {
+        Self {
+            outcome: HostTaskOutcome::Skipped(skip),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
     }
 
     /// Checks if the task execution passed (completed successfully).
@@ -1581,7 +1752,7 @@ impl HostTaskResult {
     /// `true` if this result represents a successful task execution (`Passed` variant),
     /// `false` otherwise.
     pub fn is_passed(&self) -> bool {
-        matches!(self, Self::Passed(_))
+        matches!(self.outcome, HostTaskOutcome::Passed(_))
     }
 
     /// Checks if the task execution failed.
@@ -1591,7 +1762,7 @@ impl HostTaskResult {
     /// `true` if this result represents a failed task execution (`Failed` variant),
     /// `false` otherwise.
     pub fn is_failed(&self) -> bool {
-        matches!(self, Self::Failed(_))
+        matches!(self.outcome, HostTaskOutcome::Failed(_))
     }
 
     /// Checks if the task execution was skipped.
@@ -1601,7 +1772,27 @@ impl HostTaskResult {
     /// `true` if this result represents a skipped task execution (`Skipped` variant),
     /// `false` otherwise.
     pub fn is_skipped(&self) -> bool {
-        matches!(self, Self::Skipped(_))
+        matches!(self.outcome, HostTaskOutcome::Skipped(_))
+    }
+
+    pub fn outcome(&self) -> &HostTaskOutcome {
+        &self.outcome
+    }
+
+    pub fn execution_metadata(&self) -> &HostExecutionMetadata {
+        &self.execution_metadata
+    }
+
+    pub fn execution_metadata_mut(&mut self) -> &mut HostExecutionMetadata {
+        &mut self.execution_metadata
+    }
+
+    pub fn status(&self) -> &'static str {
+        match self.outcome() {
+            HostTaskOutcome::Passed(_) => "passed",
+            HostTaskOutcome::Failed(_) => "failed",
+            HostTaskOutcome::Skipped(_) => "skipped",
+        }
     }
 
     /// Retrieves the success details if the task passed.
@@ -1614,9 +1805,9 @@ impl HostTaskResult {
     /// `Some(&TaskSuccess)` if this is a `Passed` result, `None` if the task failed
     /// or was skipped.
     pub fn success(&self) -> Option<&TaskSuccess> {
-        match self {
-            Self::Passed(success) => Some(success),
-            Self::Failed(_) | Self::Skipped(_) => None,
+        match self.outcome() {
+            HostTaskOutcome::Passed(success) => Some(success),
+            HostTaskOutcome::Failed(_) | HostTaskOutcome::Skipped(_) => None,
         }
     }
 
@@ -1630,9 +1821,9 @@ impl HostTaskResult {
     /// `Some(&TaskFailure)` if this is a `Failed` result, `None` if the task passed
     /// or was skipped.
     pub fn failure(&self) -> Option<&TaskFailure> {
-        match self {
-            Self::Failed(failure) => Some(failure),
-            Self::Passed(_) | Self::Skipped(_) => None,
+        match self.outcome() {
+            HostTaskOutcome::Failed(failure) => Some(failure),
+            HostTaskOutcome::Passed(_) | HostTaskOutcome::Skipped(_) => None,
         }
     }
 
@@ -1646,9 +1837,9 @@ impl HostTaskResult {
     /// `Some(&TaskSkip)` if this is a `Skipped` result, `None` if the task passed
     /// or failed.
     pub fn skipped_detail(&self) -> Option<&TaskSkip> {
-        match self {
-            Self::Skipped(skip) => Some(skip),
-            Self::Passed(_) | Self::Failed(_) => None,
+        match self.outcome() {
+            HostTaskOutcome::Skipped(skip) => Some(skip),
+            HostTaskOutcome::Passed(_) | HostTaskOutcome::Failed(_) => None,
         }
     }
 
@@ -1658,20 +1849,30 @@ impl HostTaskResult {
         finished_at: SystemTime,
         duration_ns: u128,
     ) -> Self {
-        match self {
-            Self::Passed(success) => Self::Passed(
+        let execution_metadata = self
+            .execution_metadata
+            .clone()
+            .with_started_at(started_at)
+            .with_finished_at(finished_at)
+            .with_duration_ns(duration_ns);
+        let outcome = match self.outcome {
+            HostTaskOutcome::Passed(success) => HostTaskOutcome::Passed(
                 success
                     .with_started_at(started_at)
                     .with_finished_at(finished_at)
                     .with_duration_ns(duration_ns),
             ),
-            Self::Failed(failure) => Self::Failed(
+            HostTaskOutcome::Failed(failure) => HostTaskOutcome::Failed(
                 failure
                     .with_started_at(started_at)
                     .with_finished_at(finished_at)
                     .with_duration_ns(duration_ns),
             ),
-            Self::Skipped(skip) => Self::Skipped(skip),
+            HostTaskOutcome::Skipped(skip) => HostTaskOutcome::Skipped(skip),
+        };
+        Self {
+            outcome,
+            execution_metadata,
         }
     }
 }
@@ -3820,14 +4021,14 @@ impl TaskDefinition {
 
         let mut host_result =
             host_result.with_execution_timing(started_at, finished_at, duration_ns);
-        let duration_display = match &host_result {
-            HostTaskResult::Passed(success) => success
+        let duration_display = match host_result.outcome() {
+            HostTaskOutcome::Passed(success) => success
                 .duration_display()
                 .unwrap_or_else(|| format_duration_display(duration_ns)),
-            HostTaskResult::Failed(failure) => failure
+            HostTaskOutcome::Failed(failure) => failure
                 .duration_display()
                 .unwrap_or_else(|| format_duration_display(duration_ns)),
-            HostTaskResult::Skipped(_) => format_duration_display(duration_ns),
+            HostTaskOutcome::Skipped(_) => format_duration_display(duration_ns),
         };
 
         info!(
@@ -4283,9 +4484,7 @@ mod tests {
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
-            Ok(HostTaskResult::Skipped(
-                TaskSkip::new().with_reason("filtered"),
-            ))
+            Ok(HostTaskResult::skipped_with_reason("filtered"))
         }
 
         fn execution_mode(&self) -> TaskExecutionMode {
@@ -4718,11 +4917,14 @@ mod tests {
 
     #[test]
     fn task_skip_and_host_task_result_expose_skip_metadata() {
-        let skipped = HostTaskResult::Skipped(
-            TaskSkip::new()
-                .with_reason("filtered")
-                .with_message("host excluded by selector"),
-        );
+        let skipped = HostTaskResult {
+            outcome: HostTaskOutcome::Skipped(
+                TaskSkip::new()
+                    .with_reason("filtered")
+                    .with_message("host excluded by selector"),
+            ),
+            execution_metadata: HostExecutionMetadata::new(),
+        };
 
         assert!(skipped.is_skipped());
         assert_eq!(
@@ -4899,7 +5101,7 @@ mod tests {
         );
         results.insert_host_result(
             "router3",
-            HostTaskResult::Skipped(TaskSkip::new().with_reason("filtered")),
+            HostTaskResult::skipped_with_reason("filtered"),
         );
 
         let json = results
@@ -5006,11 +5208,14 @@ mod tests {
         );
         validate.insert_host_result(
             "router2",
-            HostTaskResult::Skipped(
-                TaskSkip::new()
-                    .with_reason("parent_failed")
-                    .with_message("validation skipped because deploy failed"),
-            ),
+            HostTaskResult {
+                outcome: HostTaskOutcome::Skipped(
+                    TaskSkip::new()
+                        .with_reason("parent_failed")
+                        .with_message("validation skipped because deploy failed"),
+                ),
+                execution_metadata: HostExecutionMetadata::new(),
+            },
         );
 
         let mut collect_logs = TaskResults::new("collect_logs");
