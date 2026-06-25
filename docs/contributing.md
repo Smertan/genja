@@ -127,6 +127,21 @@ When debugging PyO3 test failures, the project also provides:
 pdm run test-rust-debug
 ```
 
+## Changelog And Compatibility
+
+This repository uses a single top-level `CHANGELOG.md`.
+This repository follows Keep a Changelog style for `CHANGELOG.md`.
+
+- Add user-visible changes under `Unreleased`.
+- Use release-note headings such as:
+  - `Added`
+  - `Changed`
+  - `Fixed`
+  - `Removed`
+- Mark breaking entries inline with `**Breaking:**` and include migration guidance in the same bullet.
+- Update the changelog during the branch, not only at merge time.
+- For linked work items, use `Refs: #<issue>` when an issue exists.
+
 ## Documentation
 
 Documentation pages live in `docs/` and the navigation is configured in
