@@ -580,6 +580,7 @@
 //! Tasks can define sub-tasks that execute after the parent task completes. This
 //!
 use crate::inventory::{Connection, Host};
+use crate::settings::RunnerConfig;
 use crate::types::{CustomTreeMap, NatString};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
@@ -595,6 +596,64 @@ use std::time::SystemTime;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::task;
+
+#[derive(Debug, Clone, Copy)]
+struct TaskRetryDefaults {
+    allow_retries: bool,
+    max_task_attempts: usize,
+}
+
+impl Default for TaskRetryDefaults {
+    fn default() -> Self {
+        Self {
+            allow_retries: false,
+            max_task_attempts: 1,
+        }
+    }
+}
+
+impl From<&RunnerConfig> for TaskRetryDefaults {
+    fn from(runner_config: &RunnerConfig) -> Self {
+        Self {
+            allow_retries: runner_config.allow_retries(),
+            max_task_attempts: runner_config.max_task_attempts().max(1),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EffectiveTaskRetryPolicy {
+    max_task_attempts: usize,
+}
+
+impl EffectiveTaskRetryPolicy {
+    fn for_task(task: &dyn Task, defaults: TaskRetryDefaults) -> Self {
+        let allow_retries = task.allow_retries().unwrap_or(defaults.allow_retries);
+        let configured_attempts = task
+            .max_task_attempts()
+            .unwrap_or(defaults.max_task_attempts)
+            .max(1);
+
+        Self {
+            max_task_attempts: if allow_retries { configured_attempts } else { 1 },
+        }
+    }
+
+    fn max_task_attempts(&self) -> usize {
+        self.max_task_attempts
+    }
+
+    fn should_retry(&self, result: &HostTaskResult, attempts: usize) -> bool {
+        attempts < self.max_task_attempts
+            && matches!(result.failure(), Some(failure) if failure.retryable())
+    }
+
+    fn retry_exhausted(&self, result: &HostTaskResult, attempts: usize) -> bool {
+        attempts >= self.max_task_attempts
+            && self.max_task_attempts > 1
+            && matches!(result.failure(), Some(failure) if failure.retryable())
+    }
+}
 
 /// Represents an error that occurred during task execution.
 ///
@@ -3739,17 +3798,14 @@ impl TaskDefinition {
         results: &mut TaskResults,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
-        Self::start_with_depth(
+        self.start_with_retry_defaults(
             Arc::clone(&self.inner),
             hostname,
             host,
             results,
             None,
-            self.processor_resolver.as_deref(),
-            self.processor_names(),
-            None,
-            0,
             max_depth,
+            TaskRetryDefaults::default(),
         )
         .await
     }
@@ -3763,8 +3819,52 @@ impl TaskDefinition {
         connection_resolver: Option<&dyn TaskConnectionResolver>,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
-        Self::start_with_depth(
+        self.start_with_retry_defaults(
             Arc::clone(&self.inner),
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            max_depth,
+            TaskRetryDefaults::default(),
+        )
+        .await
+    }
+
+    /// Executes this task definition with runner-supplied retry defaults.
+    pub async fn start_with_connection_resolver_and_runner_config(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        runner_config: &RunnerConfig,
+        max_depth: usize,
+    ) -> Result<(), crate::GenjaError> {
+        self.start_with_retry_defaults(
+            Arc::clone(&self.inner),
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            max_depth,
+            TaskRetryDefaults::from(runner_config),
+        )
+        .await
+    }
+
+    async fn start_with_retry_defaults(
+        &self,
+        task: Arc<dyn Task>,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        max_depth: usize,
+        retry_defaults: TaskRetryDefaults,
+    ) -> Result<(), crate::GenjaError> {
+        Self::start_with_depth(
+            task,
             hostname,
             host,
             results,
@@ -3774,6 +3874,7 @@ impl TaskDefinition {
             None,
             0,
             max_depth,
+            retry_defaults,
         )
         .await
     }
@@ -3856,6 +3957,7 @@ impl TaskDefinition {
         parent_task_name: Option<&str>,
         depth: usize,
         max_depth: usize,
+        retry_defaults: TaskRetryDefaults,
     ) -> Result<(), crate::GenjaError> {
         if depth > max_depth {
             let started_at = SystemTime::now();
@@ -3869,16 +3971,21 @@ impl TaskDefinition {
                 max_depth
             );
             results.record_execution_timing(started_at, finished_at);
-            results.insert_host_result(
-                hostname,
-                HostTaskResult::failed(
-                    TaskFailure::new(error)
-                        .with_kind(TaskFailureKind::Internal)
-                        .with_started_at(started_at)
-                        .with_finished_at(finished_at)
-                        .with_duration_ns(0),
-                ),
-            );
+            let mut host_result = HostTaskResult::failed(
+                TaskFailure::new(error)
+                    .with_kind(TaskFailureKind::Internal)
+                    .with_started_at(started_at)
+                    .with_finished_at(finished_at)
+                    .with_duration_ns(0),
+            )
+            .with_execution_timing(started_at, finished_at, 0);
+            *host_result.execution_metadata_mut() = host_result
+                .execution_metadata()
+                .clone()
+                .with_attempts(1)
+                .with_retried(false)
+                .with_retry_exhausted(false);
+            results.insert_host_result(hostname, host_result);
             return Ok(());
         }
 
@@ -3893,12 +4000,10 @@ impl TaskDefinition {
             max_depth,
             connection_resolver.is_some()
         );
+        let retry_policy = EffectiveTaskRetryPolicy::for_task(task.as_ref(), retry_defaults);
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
-        for processor in &processors {
-            processor.on_instance_start(&processor_context)?;
-        }
 
         let connection = if let Some(connection_resolver) = connection_resolver {
             match connection_resolver
@@ -3923,11 +4028,18 @@ impl TaskDefinition {
 
                     let mut host_result = HostTaskResult::failed(
                         TaskFailure::new(error)
-                            .with_kind(TaskFailureKind::Connection)
-                            .with_started_at(started_at)
-                            .with_finished_at(finished_at)
-                            .with_duration_ns(duration_ns),
+                        .with_kind(TaskFailureKind::Connection)
+                        .with_started_at(started_at)
+                        .with_finished_at(finished_at)
+                        .with_duration_ns(duration_ns),
                     );
+                    host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
+                    *host_result.execution_metadata_mut() = host_result
+                        .execution_metadata()
+                        .clone()
+                        .with_attempts(1)
+                        .with_retried(false)
+                        .with_retry_exhausted(false);
                     for processor in &processors {
                         processor.on_instance_finish(&processor_context, &mut host_result)?;
                     }
@@ -3939,29 +4051,59 @@ impl TaskDefinition {
             None
         };
 
-        let execution_context = TaskExecutionContext::new(depth, max_depth);
-        let host_result = match task.execution_mode() {
-            TaskExecutionMode::Async => {
-                let runtime_context =
-                    TaskRuntimeContext::new(execution_context, connection.clone());
-                task.start_async(host, &runtime_context).await
+        let mut attempts = 0;
+        let host_result = loop {
+            attempts += 1;
+            for processor in &processors {
+                processor.on_instance_start(&processor_context)?;
             }
-            TaskExecutionMode::Blocking => {
-                let blocking_context = BlockingTaskRuntimeContext::new(
-                    execution_context,
-                    connection.clone(),
-                    Handle::current(),
-                );
-                let task = Arc::clone(&task);
-                let host = host.clone();
-                match task::spawn_blocking(move || task.start(&host, &blocking_context)).await {
-                    Ok(result) => result,
-                    Err(err) => Err(TaskError::new(std::io::Error::other(format!(
-                        "blocking task join error: {err}"
-                    )))),
+
+            let execution_context = TaskExecutionContext::new(depth, max_depth);
+            let host_result = match task.execution_mode() {
+                TaskExecutionMode::Async => {
+                    let runtime_context =
+                        TaskRuntimeContext::new(execution_context, connection.clone());
+                    task.start_async(host, &runtime_context).await
                 }
+                TaskExecutionMode::Blocking => {
+                    let blocking_context = BlockingTaskRuntimeContext::new(
+                        execution_context,
+                        connection.clone(),
+                        Handle::current(),
+                    );
+                    let task = Arc::clone(&task);
+                    let host = host.clone();
+                    match task::spawn_blocking(move || task.start(&host, &blocking_context)).await {
+                        Ok(result) => result,
+                        Err(err) => Err(TaskError::new(std::io::Error::other(format!(
+                            "blocking task join error: {err}"
+                        )))),
+                    }
+                }
+            };
+
+            let host_result = match host_result {
+                Ok(host_result) => host_result,
+                Err(error) => HostTaskResult::failed(TaskFailure::from_task_error(error)),
+            };
+
+            if retry_policy.should_retry(&host_result, attempts) {
+                if let Some(failure) = host_result.failure() {
+                    warn!(
+                        "retrying task '{}' for host '{}' after attempt {}/{}: {}",
+                        task.name(),
+                        hostname,
+                        attempts,
+                        retry_policy.max_task_attempts(),
+                        failure.message()
+                    );
+                }
+                continue;
             }
+
+            break host_result;
         };
+
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
             .duration_since(started_at)
@@ -3969,38 +4111,6 @@ impl TaskDefinition {
             .unwrap_or(0);
 
         results.record_execution_timing(started_at, finished_at);
-
-        let host_result = match host_result {
-            Ok(host_result) => host_result,
-            Err(error) => {
-                let failure = TaskFailure::from_task_error(error)
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(duration_ns);
-                warn!(
-                    "task '{}' failed for host '{}': {}",
-                    task.name(),
-                    hostname,
-                    failure.message()
-                );
-                let duration_display = failure
-                    .duration_display()
-                    .unwrap_or_else(|| format_duration_display(duration_ns));
-                info!(
-                    "finished task '{}' for host '{}' with status=failed duration_ms={} duration={}",
-                    task.name(),
-                    hostname,
-                    duration_ns / 1_000_000,
-                    duration_display
-                );
-                let mut host_result = HostTaskResult::failed(failure);
-                for processor in &processors {
-                    processor.on_instance_finish(&processor_context, &mut host_result)?;
-                }
-                results.insert_host_result(hostname, host_result);
-                return Ok(());
-            }
-        };
 
         if let Some(failure) = host_result.failure() {
             warn!(
@@ -4029,8 +4139,14 @@ impl TaskDefinition {
             "skipped"
         };
 
-        let mut host_result =
-            host_result.with_execution_timing(started_at, finished_at, duration_ns);
+        let retry_exhausted = retry_policy.retry_exhausted(&host_result, attempts);
+        let mut host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
+        *host_result.execution_metadata_mut() = host_result
+            .execution_metadata()
+            .clone()
+            .with_attempts(attempts)
+            .with_retried(attempts > 1)
+            .with_retry_exhausted(retry_exhausted);
         let duration_display = match host_result.outcome() {
             HostTaskOutcome::Passed(success) => success
                 .duration_display()
@@ -4093,6 +4209,7 @@ impl TaskDefinition {
                 Some(task.name()),
                 depth + 1,
                 max_depth,
+                retry_defaults,
             )
             .await?;
             if sub_task_started {
@@ -4310,6 +4427,12 @@ mod tests {
 
     struct SkippingTask;
 
+    struct FlakyTask {
+        name: &'static str,
+        attempts: Arc<AtomicUsize>,
+        succeed_on_attempt: usize,
+    }
+
     #[derive(Debug)]
     struct TestConnection {
         key: ConnectionKey,
@@ -4503,6 +4626,50 @@ mod tests {
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::skipped_with_reason("filtered"))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    impl TaskInfo for FlakyTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    #[async_trait]
+    impl Task for FlakyTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt >= self.succeed_on_attempt {
+                Ok(HostTaskResult::passed(
+                    TaskSuccess::new().with_summary(format!("passed on attempt {attempt}")),
+                ))
+            } else {
+                Ok(HostTaskResult::failed(
+                    TaskFailure::new(TestTaskFailureError)
+                        .with_kind(TaskFailureKind::Connection)
+                        .with_retryable(true)
+                        .with_message(TaskMessage::new(
+                            MessageLevel::Warning,
+                            format!("attempt {attempt} failed"),
+                        )),
+                ))
+            }
         }
 
         fn execution_mode(&self) -> TaskExecutionMode {
@@ -4708,6 +4875,100 @@ mod tests {
             .expect("host result should be skipped");
         assert_eq!(skip.reason(), Some("filtered"));
         assert_eq!(skip.message(), None);
+    }
+
+    #[test]
+    fn start_retries_retryable_failures_when_enabled_by_runner_config() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(FlakyTask {
+            name: "flaky",
+            attempts: Arc::clone(&attempts),
+            succeed_on_attempt: 2,
+        });
+        let runner_config = RunnerConfig::builder()
+            .allow_retries(true)
+            .max_task_attempts(3)
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("flaky");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should succeed after retry");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_passed());
+        assert_eq!(host_result.execution_metadata().attempts(), 2);
+        assert!(host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_marks_retry_exhausted_after_final_retryable_failure() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(FlakyTask {
+            name: "always_fails",
+            attempts: Arc::clone(&attempts),
+            succeed_on_attempt: usize::MAX,
+        });
+        let runner_config = RunnerConfig::builder()
+            .allow_retries(true)
+            .max_task_attempts(3)
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("always_fails");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should capture exhausted retries");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_failed());
+        assert_eq!(host_result.execution_metadata().attempts(), 3);
+        assert!(host_result.execution_metadata().retried());
+        assert!(host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_does_not_retry_without_effective_retry_policy() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(FlakyTask {
+            name: "no_retry",
+            attempts: Arc::clone(&attempts),
+            succeed_on_attempt: 2,
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("no_retry");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("start should record first failure without retry");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_failed());
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
     }
 
     #[test]

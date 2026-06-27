@@ -312,6 +312,16 @@ impl PyTaskDefinition {
             .collect()
     }
 
+    #[getter]
+    fn allow_retries(&self) -> Option<bool> {
+        self.inner.allow_retries()
+    }
+
+    #[getter]
+    fn max_task_attempts(&self) -> Option<usize> {
+        self.inner.max_task_attempts()
+    }
+
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self.spec.as_ref() {
             Some(spec) => json_value_to_py(py, &python_task_spec_to_json(spec)),
@@ -927,6 +937,8 @@ fn task_to_json(task: &dyn Task) -> Value {
         "name": task.name(),
         "connection_plugin_name": task.connection_plugin_name(),
         "processors": task.processor_names(),
+        "allow_retries": task.allow_retries(),
+        "max_task_attempts": task.max_task_attempts(),
         "options": task.options(),
         "sub_tasks": task.sub_tasks().into_iter().map(|sub_task| task_to_json(sub_task.as_ref())).collect::<Vec<_>>(),
     })

@@ -17,7 +17,7 @@ development environment needs:
 
 ## Tool Versions
 
-The workspace pins Rust and Cargo to 1.85.0 in `rust-toolchain.toml`. Use that
+The workspace pins Rust and Cargo to 1.88.0 in `rust-toolchain.toml`. Use that
 toolchain locally so compiler diagnostics, formatting, and trybuild snapshots
 match CI.
 

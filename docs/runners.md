@@ -48,6 +48,8 @@ execution helpers.
 
 `allow_retries` and `max_task_attempts` define default retry policy for task
 execution. Tasks may override these defaults through task metadata.
+Retries are only attempted when the effective policy allows them and the task
+returns a failed host result marked as retryable.
 
 ## Threaded Runner
 

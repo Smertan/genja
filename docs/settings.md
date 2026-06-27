@@ -250,7 +250,8 @@ plugins or connection layers are responsible for interpreting retry behavior.
 
 `allow_retries` controls whether retries are allowed by default for task
 execution. `max_task_attempts` controls the default total attempt count for a
-task. Tasks may override either setting through task metadata.
+task. Tasks may override either setting through task metadata. Retries are only
+attempted for failures explicitly marked as retryable.
 
 See [Runners](runners.md) for execution behavior and ordering details.
 

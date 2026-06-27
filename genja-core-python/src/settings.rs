@@ -148,13 +148,25 @@ impl PyRunnerConfig {
         self.inner.max_connection_attempts()
     }
 
+    #[getter]
+    pub(crate) fn allow_retries(&self) -> bool {
+        self.inner.allow_retries()
+    }
+
+    #[getter]
+    pub(crate) fn max_task_attempts(&self) -> usize {
+        self.inner.max_task_attempts()
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "RunnerConfig(plugin={:?}, worker_count={:?}, max_task_depth={}, max_connection_attempts={})",
+            "RunnerConfig(plugin={:?}, worker_count={:?}, max_task_depth={}, max_connection_attempts={}, allow_retries={}, max_task_attempts={})",
             self.plugin(),
             self.worker_count(),
             self.max_task_depth(),
-            self.max_connection_attempts()
+            self.max_connection_attempts(),
+            self.allow_retries(),
+            self.max_task_attempts()
         )
     }
 }

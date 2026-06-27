@@ -295,6 +295,10 @@ Prefer returning an explicit failure or skip result when the task can classify
 the outcome. Reserve raised errors for unexpected internal errors that should be
 treated as task execution failures by the runtime.
 
+When task retries are enabled by runner settings or task metadata, Genja only
+retries failures explicitly marked as retryable. Return a failed host result
+with `retryable=true` when the failure is transient and safe to retry.
+
 ## Failure Kinds
 
 Use failure kinds to make task failures easier to classify:
