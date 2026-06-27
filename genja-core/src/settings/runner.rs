@@ -1,5 +1,6 @@
 use super::env_defaults::{
-    get_runner_max_connection_attempts_default, get_runner_max_task_depth_default,
+    get_runner_allow_retries_default, get_runner_max_connection_attempts_default,
+    get_runner_max_task_attempts_default, get_runner_max_task_depth_default,
     get_runner_options_default, get_runner_plugin_default,
 };
 use serde::{Deserialize, Serialize};
@@ -7,8 +8,9 @@ use serde::{Deserialize, Serialize};
 /// Task runner configuration.
 ///
 /// The plugin name defaults from `GENJA_RUNNER_PLUGIN`. `worker_count`,
-/// `max_task_depth`, and `max_connection_attempts` control built-in runner
-/// behavior; `options` carries plugin-specific JSON for custom runners.
+/// `max_task_depth`, `max_connection_attempts`, `allow_retries`, and
+/// `max_task_attempts` control built-in runner behavior; `options` carries
+/// plugin-specific JSON for custom runners.
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct RunnerConfig {
@@ -17,6 +19,8 @@ pub struct RunnerConfig {
     worker_count: Option<usize>,
     max_task_depth: usize,
     max_connection_attempts: usize,
+    allow_retries: bool,
+    max_task_attempts: usize,
 }
 
 impl Default for RunnerConfig {
@@ -27,6 +31,8 @@ impl Default for RunnerConfig {
             worker_count: None,
             max_task_depth: get_runner_max_task_depth_default(),
             max_connection_attempts: get_runner_max_connection_attempts_default(),
+            allow_retries: get_runner_allow_retries_default(),
+            max_task_attempts: get_runner_max_task_attempts_default(),
         }
     }
 }
@@ -55,6 +61,14 @@ impl RunnerConfig {
     pub fn max_connection_attempts(&self) -> usize {
         self.max_connection_attempts
     }
+
+    pub fn allow_retries(&self) -> bool {
+        self.allow_retries
+    }
+
+    pub fn max_task_attempts(&self) -> usize {
+        self.max_task_attempts
+    }
 }
 
 /// Builder for `RunnerConfig`.
@@ -65,6 +79,8 @@ pub struct RunnerConfigBuilder {
     worker_count: Option<usize>,
     max_task_depth: Option<usize>,
     max_connection_attempts: Option<usize>,
+    allow_retries: Option<bool>,
+    max_task_attempts: Option<usize>,
 }
 
 impl RunnerConfigBuilder {
@@ -93,6 +109,16 @@ impl RunnerConfigBuilder {
         self
     }
 
+    pub fn allow_retries(mut self, allow_retries: bool) -> Self {
+        self.allow_retries = Some(allow_retries);
+        self
+    }
+
+    pub fn max_task_attempts(mut self, max_task_attempts: usize) -> Self {
+        self.max_task_attempts = Some(max_task_attempts);
+        self
+    }
+
     pub fn build(self) -> RunnerConfig {
         RunnerConfig {
             plugin: self.plugin.unwrap_or_else(get_runner_plugin_default),
@@ -104,6 +130,12 @@ impl RunnerConfigBuilder {
             max_connection_attempts: self
                 .max_connection_attempts
                 .unwrap_or_else(get_runner_max_connection_attempts_default),
+            allow_retries: self
+                .allow_retries
+                .unwrap_or_else(get_runner_allow_retries_default),
+            max_task_attempts: self
+                .max_task_attempts
+                .unwrap_or_else(get_runner_max_task_attempts_default),
         }
     }
 }

@@ -3166,6 +3166,16 @@ pub trait TaskInfo {
     fn processor_names(&self) -> Vec<&str> {
         Vec::new()
     }
+
+    /// Returns whether retries are explicitly allowed for this task.
+    fn allow_retries(&self) -> Option<bool> {
+        None
+    }
+
+    /// Returns the maximum number of attempts explicitly configured for this task.
+    fn max_task_attempts(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// Sub-task provider interface.
@@ -4160,6 +4170,14 @@ impl TaskInfo for TaskDefinition {
     fn processor_names(&self) -> Vec<&str> {
         self.processor_names()
     }
+
+    fn allow_retries(&self) -> Option<bool> {
+        self.inner.allow_retries()
+    }
+
+    fn max_task_attempts(&self) -> Option<usize> {
+        self.inner.max_task_attempts()
+    }
 }
 
 /// A collection of task definitions that can be executed together.
@@ -5108,15 +5126,16 @@ mod tests {
             .to_json_string()
             .expect("human json should serialize host timing");
 
-        assert!(json.contains("\"router1\":{\"Passed\":{"));
+        assert!(json.contains("\"router1\":{\"outcome\":{\"Passed\":{"));
         assert!(json.contains("\"summary\":\"ok\""));
         assert!(json.contains("\"started_at\":\"1970-01-01T00:00:00Z\""));
         assert!(json.contains("\"finished_at\":\"1970-01-01T00:00:00Z\""));
         assert!(json.contains("\"duration\":\"2ms\""));
-        assert!(json.contains("\"router2\":{\"Failed\":"));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}"));
+        assert!(json.contains("\"router2\":{\"outcome\":{\"Failed\":"));
         assert!(json.contains("\"duration\":\"250us\""));
-        assert!(json.contains("\"router3\":{\"Skipped\":{\"reason\":\"filtered\""));
-        assert!(!json.contains("\"router3\":{\"Skipped\":{\"started_at\""));
+        assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\""));
+        assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\",\"message\":null}},\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}}"));
         assert!(!json.contains("\"duration_ns\""));
         assert!(!json.contains("\"duration_ms\""));
     }

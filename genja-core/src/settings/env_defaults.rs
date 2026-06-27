@@ -160,6 +160,16 @@ pub(super) fn get_runner_max_connection_attempts_default() -> usize {
     3
 }
 
+/// Returns the default task retry authorization for runner execution.
+pub(super) fn get_runner_allow_retries_default() -> bool {
+    false
+}
+
+/// Returns the default maximum number of task attempts for runner execution.
+pub(super) fn get_runner_max_task_attempts_default() -> usize {
+    1
+}
+
 /// Returns the default log level from `GENJA_LOGGING_LEVEL`, or "info".
 ///
 /// See tests in this module for behavioral verification.

@@ -64,7 +64,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     DeriveInput, Expr, ExprArray, ExprLit, FnArg, GenericArgument, ImplItem, ItemImpl, Lit, LitStr,
-    PathArguments, ReturnType, Token, Type, TypePath,
+    LitBool, LitInt, PathArguments, ReturnType, Token, Type, TypePath,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
@@ -161,6 +161,8 @@ struct GenjaTaskArgs {
     name: Option<LitStr>,
     connection_plugin_name: Option<LitStr>,
     processors: Vec<LitStr>,
+    allow_retries: Option<LitBool>,
+    max_task_attempts: Option<LitInt>,
 }
 
 impl Parse for GenjaTaskArgs {
@@ -194,10 +196,25 @@ impl Parse for GenjaTaskArgs {
                     let array: ExprArray = input.parse()?;
                     args.processors = parse_processor_exprs(&array)?;
                 }
+                "allow_retries" => {
+                    if args.allow_retries.is_some() {
+                        return Err(syn::Error::new_spanned(key, "duplicate `allow_retries`"));
+                    }
+                    args.allow_retries = Some(input.parse()?);
+                }
+                "max_task_attempts" => {
+                    if args.max_task_attempts.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate `max_task_attempts`",
+                        ));
+                    }
+                    args.max_task_attempts = Some(input.parse()?);
+                }
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "unsupported key; expected `name`, `connection_plugin_name`, or `processors`",
+                        "unsupported key; expected `name`, `connection_plugin_name`, `processors`, `allow_retries`, or `max_task_attempts`",
                     ));
                 }
             }
@@ -284,6 +301,8 @@ fn expand_genja_task(
     let name = args.name.expect("validated above");
     let connection_plugin_name = args.connection_plugin_name;
     let processors = args.processors;
+    let allow_retries = args.allow_retries;
+    let max_task_attempts = args.max_task_attempts;
 
     let connection_impl = match connection_plugin_name {
         Some(plugin_name) => quote! { Some(#plugin_name) },
@@ -318,6 +337,24 @@ fn expand_genja_task(
                 vec![#(#processors),*]
             }
         }
+    };
+
+    let allow_retries_impl = match allow_retries {
+        Some(allow_retries) => quote! {
+            fn allow_retries(&self) -> Option<bool> {
+                Some(#allow_retries)
+            }
+        },
+        None => quote! {},
+    };
+
+    let max_task_attempts_impl = match max_task_attempts {
+        Some(max_task_attempts) => quote! {
+            fn max_task_attempts(&self) -> Option<usize> {
+                Some(#max_task_attempts)
+            }
+        },
+        None => quote! {},
     };
 
     let task_impl = if has_start {
@@ -375,6 +412,10 @@ fn expand_genja_task(
             #options_impl
 
             #processor_names_impl
+
+            #allow_retries_impl
+
+            #max_task_attempts_impl
         }
 
         #task_impl

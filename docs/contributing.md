@@ -17,11 +17,12 @@ development environment needs:
 
 ## Tool Versions
 
-The workspace includes Rust 2024 edition crates, so contributors should use
-Rust and Cargo 1.85.0 or newer.
+The workspace pins Rust and Cargo to 1.85.0 in `rust-toolchain.toml`. Use that
+toolchain locally so compiler diagnostics, formatting, and trybuild snapshots
+match CI.
 
-This is the contributor baseline for the current workspace. Individual crates do
-not currently declare a formal `rust-version` MSRV in their package metadata.
+Individual crates do not currently declare a formal `rust-version` MSRV in
+their package metadata.
 
 Python binding development requires Python 3.10 or newer, as declared by the
 `genja-py` package.
@@ -86,6 +87,34 @@ If a change touches shared runtime behavior, task execution, plugin loading, or
 public APIs, prefer running both the focused package tests and the Rust
 workspace test command above.
 
+### Trybuild UI Fixtures
+
+The derive macro compile-fail tests under `genja-core/tests/ui_genja_task/`
+use trybuild `.stderr` snapshot files.
+
+These snapshots are sensitive to Rust compiler diagnostic formatting. In
+practice, drift is usually caused by `rustc` version changes rather than by the
+feature change itself.
+
+When a trybuild test fails only because the expected and actual diagnostics have
+drifted, refresh the fixtures with:
+
+```bash
+TRYBUILD=overwrite cargo test -p genja-core --test derive_compile
+```
+
+Do not hand-edit `.stderr` fixtures unless you are making a small targeted
+correction. Prefer regenerating them from compiler output.
+
+Refresh trybuild snapshots only when:
+
+- macro diagnostics intentionally changed
+- the Rust toolchain changed and the emitted diagnostics legitimately drifted
+
+When adding new compile-fail fixtures, minimize unrelated warnings in the test
+case where possible so snapshot files are less brittle across toolchain
+updates.
+
 ## Python Checks
 
 The Python bindings live in `genja-core-python`. Run commands from that
@@ -108,6 +137,16 @@ Run the Rust tests that exercise the PyO3 crate:
 ```bash
 pdm run test-rust
 ```
+
+Use `pdm run test-rust` instead of invoking `cargo test -p genja-core-python`
+directly. The wrapper runs Cargo through the project Python environment, sets
+the correct `PYO3_PYTHON` interpreter, and ensures the PyO3-backed tests can
+access the installed Python packages.
+
+Avoid launching multiple `genja-core-python` Rust-backed test commands
+concurrently from separate processes. Each run is already single-threaded
+internally, and concurrent invocations may hang or fail to return output
+reliably in this workspace.
 
 Run type checks for the Python examples and tests:
 

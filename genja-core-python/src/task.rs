@@ -59,6 +59,8 @@ struct PythonTaskSpec {
     name: String,
     connection_plugin_name: Option<String>,
     processor_names: Vec<String>,
+    allow_retries: Option<bool>,
+    max_task_attempts: Option<usize>,
     options: Option<Value>,
     py_task_class: Arc<Py<PyAny>>,
     execution_mode: PythonTaskExecutionMode,
@@ -94,6 +96,14 @@ impl TaskInfo for PythonBackedTask {
 
     fn options(&self) -> Option<&Value> {
         self.spec.options.as_ref()
+    }
+
+    fn allow_retries(&self) -> Option<bool> {
+        self.spec.allow_retries
+    }
+
+    fn max_task_attempts(&self) -> Option<usize> {
+        self.spec.max_task_attempts
     }
 }
 
@@ -1022,6 +1032,30 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     } else {
         Vec::new()
     };
+    let allow_retries = if let Some(value) = info.get_item("allow_retries")? {
+        if value.is_none() {
+            None
+        } else {
+            Some(value.extract::<bool>()?)
+        }
+    } else {
+        None
+    };
+    let max_task_attempts = if let Some(value) = info.get_item("max_task_attempts")? {
+        if value.is_none() {
+            None
+        } else {
+            let max_task_attempts = value.extract::<usize>()?;
+            if max_task_attempts < 1 {
+                return Err(PyValueError::new_err(
+                    "python task metadata field 'max_task_attempts' must be at least 1",
+                ));
+            }
+            Some(max_task_attempts)
+        }
+    } else {
+        None
+    };
 
     let options = if let Some(options) = info.get_item("options")? {
         if options.is_none() {
@@ -1046,6 +1080,8 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         name,
         connection_plugin_name,
         processor_names,
+        allow_retries,
+        max_task_attempts,
         options,
         py_task_class: Arc::new(py_task_class.unbind()),
         execution_mode,
@@ -1073,6 +1109,8 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
         "name": spec.name,
         "connection_plugin_name": spec.connection_plugin_name,
         "processors": spec.processor_names,
+        "allow_retries": spec.allow_retries,
+        "max_task_attempts": spec.max_task_attempts,
         "options": spec.options,
         "sub_tasks": spec.sub_tasks.iter().map(python_task_spec_to_json).collect::<Vec<_>>(),
     })
@@ -1091,6 +1129,14 @@ fn python_task_spec_to_py_dict<'py>(
         None => task.set_item("connection_plugin_name", py.None())?,
     }
     task.set_item("processors", &spec.processor_names)?;
+    match spec.allow_retries {
+        Some(allow_retries) => task.set_item("allow_retries", allow_retries)?,
+        None => task.set_item("allow_retries", py.None())?,
+    }
+    match spec.max_task_attempts {
+        Some(max_task_attempts) => task.set_item("max_task_attempts", max_task_attempts)?,
+        None => task.set_item("max_task_attempts", py.None())?,
+    }
     if let Some(options) = spec.options.as_ref() {
         task.set_item("options", json_value_to_py(py, options)?)?;
     } else {
@@ -1225,6 +1271,14 @@ impl TaskInfo for RuntimeTaskWrapper {
 
     fn options(&self) -> Option<&Value> {
         self.inner.options()
+    }
+
+    fn allow_retries(&self) -> Option<bool> {
+        self.inner.allow_retries()
+    }
+
+    fn max_task_attempts(&self) -> Option<usize> {
+        self.inner.max_task_attempts()
     }
 }
 
@@ -1563,6 +1617,8 @@ mod tests {
 
             assert_eq!(spec.name, "backup_config");
             assert_eq!(spec.connection_plugin_name.as_deref(), Some("ssh"));
+            assert_eq!(spec.allow_retries, None);
+            assert_eq!(spec.max_task_attempts, None);
             assert_eq!(spec.options, None);
             assert_eq!(spec.sub_tasks.len(), 1);
             assert_eq!(spec.sub_tasks[0].name, "verify_backup");
@@ -1605,6 +1661,38 @@ mod tests {
                 spec.options,
                 Some(json!({"backup_path": "/tmp/configs", "compress": true}))
             );
+        });
+    }
+
+    #[test]
+    fn extract_python_task_spec_extracts_retry_overrides() {
+        init_python();
+        Python::attach(|py| {
+            let task = make_task_class(
+                py,
+                "backup_config",
+                Some("ssh"),
+                &[],
+                PythonTaskExecutionMode::Blocking,
+            )
+            .expect("task class should be created");
+            task.getattr("__genja_task_info__")
+                .expect("task metadata should exist")
+                .cast::<PyDict>()
+                .expect("task metadata should be a dict")
+                .set_item("allow_retries", true)
+                .unwrap();
+            task.getattr("__genja_task_info__")
+                .expect("task metadata should exist")
+                .cast::<PyDict>()
+                .expect("task metadata should be a dict")
+                .set_item("max_task_attempts", 3)
+                .unwrap();
+
+            let spec = extract_python_task_spec(task).expect("task spec should extract");
+
+            assert_eq!(spec.allow_retries, Some(true));
+            assert_eq!(spec.max_task_attempts, Some(3));
         });
     }
 

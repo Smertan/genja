@@ -26,6 +26,8 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
+  allow_retries: false
+  max_task_attempts: 1
 ```
 
 Runner settings:
@@ -35,12 +37,17 @@ Runner settings:
 - `worker_count`: optional concurrency limit for runners that support it.
 - `max_task_depth`: maximum nested task depth. Defaults to `10`.
 - `max_connection_attempts`: maximum connection attempts. Defaults to `3`.
+- `allow_retries`: whether task retries are allowed by default. Defaults to `false`.
+- `max_task_attempts`: total number of task attempts allowed by default. Defaults to `1`.
 
 `max_connection_attempts` is part of the shared runner configuration. The
 built-in runners pass the task connection resolver into task execution; the
 connection layer is responsible for interpreting connection retry behavior.
 Custom runners should pass the resolver through when they delegate to task
 execution helpers.
+
+`allow_retries` and `max_task_attempts` define default retry policy for task
+execution. Tasks may override these defaults through task metadata.
 
 ## Threaded Runner
 

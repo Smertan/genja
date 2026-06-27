@@ -38,7 +38,20 @@ Repository-specific instructions for AI coding agents working in this workspace.
 - For `genja-core-python`, run Rust-backed tests from the `genja-core-python` directory.
 - Use:
   - `pdm run test-rust`
+- Use `pdm run test-rust` instead of invoking `cargo test -p genja-core-python` directly. The PDM wrapper runs Cargo through the project Python environment, sets the correct `PYO3_PYTHON` interpreter, and ensures PyO3-backed tests can access the installed Python packages.
+- Avoid launching multiple `genja-core-python` Rust-backed test commands concurrently from separate tool calls. Each run is already single-threaded internally, and concurrent invocations may hang or fail to return output reliably in this workspace.
 - Prefer repo-documented test commands over ad hoc commands.
+
+### Trybuild UI Tests
+
+- `genja-core/tests/ui_genja_task/**/*.stderr` are snapshot fixtures for trybuild compile-fail tests.
+- These snapshots are sensitive to Rust compiler diagnostic formatting. Drift is usually caused by `rustc` version changes, not by the feature change itself.
+- Do not edit trybuild `.stderr` files manually unless needed for a small targeted correction. Prefer refreshing them by rerunning the relevant test with `TRYBUILD=overwrite`.
+- Refresh trybuild snapshots only when:
+  - macro diagnostics intentionally changed, or
+  - the Rust toolchain changed and the emitted diagnostics legitimately drifted.
+- If trybuild fixtures changed, mention in the commit or PR that the snapshot refresh was due to diagnostic output drift or intentional diagnostic changes.
+- When adding new trybuild compile-fail fixtures, minimize unrelated warnings in the test case so snapshots are less brittle across toolchain updates.
 
 ## Commit Conventions
 
