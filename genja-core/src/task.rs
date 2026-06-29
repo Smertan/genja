@@ -932,9 +932,6 @@ struct TaskSuccessHumanJson<'a> {
     warnings: &'a [String],
     messages: &'a [TaskMessage],
     metadata: Option<&'a Value>,
-    started_at: Option<String>,
-    finished_at: Option<String>,
-    duration: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -946,9 +943,6 @@ struct TaskFailureHumanJson<'a> {
     details: Option<&'a Value>,
     warnings: &'a [String],
     messages: &'a [TaskMessage],
-    started_at: Option<String>,
-    finished_at: Option<String>,
-    duration: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1074,9 +1068,6 @@ impl<'a> From<&'a TaskSuccess> for TaskSuccessHumanJson<'a> {
             warnings: success.warnings(),
             messages: success.messages(),
             metadata: success.metadata(),
-            started_at: success.started_at_display(),
-            finished_at: success.finished_at_display(),
-            duration: success.duration_display(),
         }
     }
 }
@@ -1091,9 +1082,6 @@ impl<'a> From<&'a TaskFailure> for TaskFailureHumanJson<'a> {
             details: failure.details(),
             warnings: failure.warnings(),
             messages: failure.messages(),
-            started_at: failure.started_at_display(),
-            finished_at: failure.finished_at_display(),
-            duration: failure.duration_display(),
         }
     }
 }
@@ -5359,25 +5347,22 @@ mod tests {
             .checked_add(std::time::Duration::from_millis(2))
             .expect("valid timestamp");
         let mut results = TaskResults::new("deploy");
-        results.insert_host_result(
-            "router1",
-            HostTaskResult::passed(
-                TaskSuccess::new()
-                    .with_summary("ok")
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(2_000_000),
-            ),
-        );
-        results.insert_host_result(
-            "router2",
-            HostTaskResult::failed(
-                TaskFailure::new(TestTaskFailureError)
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(250_000),
-            ),
-        );
+        let mut passed = HostTaskResult::passed(TaskSuccess::new().with_summary("ok"));
+        *passed.execution_metadata_mut() = passed
+            .execution_metadata()
+            .clone()
+            .with_started_at(started_at)
+            .with_finished_at(finished_at)
+            .with_duration_ns(2_000_000);
+        results.insert_host_result("router1", passed);
+        let mut failed = HostTaskResult::failed(TaskFailure::new(TestTaskFailureError));
+        *failed.execution_metadata_mut() = failed
+            .execution_metadata()
+            .clone()
+            .with_started_at(started_at)
+            .with_finished_at(finished_at)
+            .with_duration_ns(250_000);
+        results.insert_host_result("router2", failed);
         results.insert_host_result(
             "router3",
             HostTaskResult::skipped_with_reason("filtered"),
@@ -5389,14 +5374,13 @@ mod tests {
 
         assert!(json.contains("\"router1\":{\"outcome\":{\"Passed\":{"));
         assert!(json.contains("\"summary\":\"ok\""));
-        assert!(json.contains("\"started_at\":\"1970-01-01T00:00:00Z\""));
-        assert!(json.contains("\"finished_at\":\"1970-01-01T00:00:00Z\""));
-        assert!(json.contains("\"duration\":\"2ms\""));
-        assert!(json.contains("\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}"));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"2ms\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}"));
         assert!(json.contains("\"router2\":{\"outcome\":{\"Failed\":"));
-        assert!(json.contains("\"duration\":\"250us\""));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"250us\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}"));
         assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\""));
         assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\",\"message\":null}},\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}}"));
+        assert!(!json.contains("\"Passed\":{\"result\":null,\"changed\":false,\"diff\":null,\"summary\":\"ok\",\"warnings\":[],\"messages\":[],\"metadata\":null,\"started_at\""));
+        assert!(!json.contains("\"Failed\":{\"kind\":\"Internal\",\"error_type\":\"genja_core::task::tests::TestTaskFailureError\",\"message\":\"task failure test error\",\"retryable\":false,\"details\":null,\"warnings\":[],\"messages\":[],\"started_at\""));
         assert!(!json.contains("\"duration_ns\""));
         assert!(!json.contains("\"duration_ms\""));
     }
