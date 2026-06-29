@@ -2202,12 +2202,12 @@ mod tests {
         let results = genja.run_task(FailedTask, 0).expect("run should succeed");
 
         assert_eq!(results.failed_hosts().len(), 2);
-        let failure = results
+        let host_result = results
             .host_result("router1")
-            .and_then(genja_core::task::HostTaskResult::failure)
             .expect("router1 should have a failed result");
-        assert!(failure.duration_ns().is_some());
-        assert!(failure.duration_display().is_some());
+        assert!(host_result.is_failed());
+        assert!(host_result.execution_metadata().duration_ns().is_some());
+        assert!(host_result.execution_metadata().duration_display().is_some());
         assert!(results.duration_ns().is_some());
     }
 

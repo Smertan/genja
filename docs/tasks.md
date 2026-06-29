@@ -289,7 +289,9 @@ Tasks return one result per host.
 Success results can include result payloads, change status, diffs, summaries,
 warnings, messages, and metadata. Failure results include a message, failure
 kind, retryability, details, warnings, and messages. Skip results include a
-machine-readable reason and human-readable message.
+machine-readable reason and human-readable message. Per-host timing and retry
+data are reported on `HostTaskResult.execution_metadata`, not inside success or
+failure payloads.
 
 Prefer returning an explicit failure or skip result when the task can classify
 the outcome. Reserve raised errors for unexpected internal errors that should be

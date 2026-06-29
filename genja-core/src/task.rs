@@ -1902,23 +1902,8 @@ impl HostTaskResult {
             .with_started_at(started_at)
             .with_finished_at(finished_at)
             .with_duration_ns(duration_ns);
-        let outcome = match self.outcome {
-            HostTaskOutcome::Passed(success) => HostTaskOutcome::Passed(
-                success
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(duration_ns),
-            ),
-            HostTaskOutcome::Failed(failure) => HostTaskOutcome::Failed(
-                failure
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(duration_ns),
-            ),
-            HostTaskOutcome::Skipped(skip) => HostTaskOutcome::Skipped(skip),
-        };
         Self {
-            outcome,
+            outcome: self.outcome,
             execution_metadata,
         }
     }
@@ -1927,7 +1912,7 @@ impl HostTaskResult {
 /// Represents the successful execution of a task on a host.
 ///
 /// `TaskSuccess` captures detailed information about a task that completed successfully,
-/// including the execution result, whether changes were made, timing information, and any
+/// including the execution result, whether changes were made, and any
 /// warnings or messages generated during execution. This structure provides a comprehensive
 /// view of what happened during task execution, even when the task succeeded.
 ///
@@ -1952,12 +1937,6 @@ impl HostTaskResult {
 ///
 /// * `metadata` - Additional structured metadata about the execution, such as version information,
 ///   configuration details, or other contextual data.
-///
-/// * `started_at` - The timestamp when the task execution started, if available.
-///
-/// * `finished_at` - The timestamp when the task execution finished, if available.
-///
-/// * `duration_ms` - The duration of the task execution in milliseconds, if available.
 ///
 /// # Example
 ///
@@ -1984,10 +1963,6 @@ pub struct TaskSuccess {
     warnings: Vec<String>,
     messages: Vec<TaskMessage>,
     metadata: Option<Value>,
-    started_at: Option<SystemTime>,
-    finished_at: Option<SystemTime>,
-    duration_ns: Option<u128>,
-    duration_ms: Option<u128>,
 }
 
 impl TaskSuccess {
@@ -1995,7 +1970,7 @@ impl TaskSuccess {
     ///
     /// This constructor initializes a `TaskSuccess` with all fields set to their default values:
     /// no result data, no changes made, no diff, no summary, empty warnings and messages lists,
-    /// no metadata, and no timing information.
+    /// no metadata.
     ///
     /// # Returns
     ///
@@ -2140,65 +2115,6 @@ impl TaskSuccess {
         self
     }
 
-    /// Sets the task execution start timestamp.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `started_at` - The timestamp when the task execution started.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskSuccess` instance with the start timestamp set.
-    pub fn with_started_at(mut self, started_at: SystemTime) -> Self {
-        self.started_at = Some(started_at);
-        self
-    }
-
-    /// Sets the task execution finish timestamp.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `finished_at` - The timestamp when the task execution finished.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskSuccess` instance with the finish timestamp set.
-    pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
-        self.finished_at = Some(finished_at);
-        self
-    }
-
-    /// Sets the task execution duration in milliseconds.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `duration_ms` - The duration of the task execution in milliseconds.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskSuccess` instance with the duration set.
-    pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
-        self.duration_ns = Some(duration_ms.saturating_mul(1_000_000));
-        self.duration_ms = Some(duration_ms);
-        self
-    }
-
-    /// Sets the task execution duration in nanoseconds.
-    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
-        self.duration_ns = Some(duration_ns);
-        self.duration_ms = Some(duration_ns / 1_000_000);
-        self
-    }
-
     /// Returns the structured result data produced by the task, if available.
     ///
     /// # Returns
@@ -2264,57 +2180,6 @@ impl TaskSuccess {
         self.metadata.as_ref()
     }
 
-    /// Returns the task execution start timestamp, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(SystemTime)` if the start timestamp was set, `None` otherwise.
-    pub fn started_at(&self) -> Option<SystemTime> {
-        self.started_at
-    }
-
-    /// Returns the task execution finish timestamp, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(SystemTime)` if the finish timestamp was set, `None` otherwise.
-    pub fn finished_at(&self) -> Option<SystemTime> {
-        self.finished_at
-    }
-
-    /// Returns the task execution duration in milliseconds, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(u128)` if the duration was set, `None` otherwise.
-    pub fn duration_ms(&self) -> Option<u128> {
-        self.duration_ns
-            .map(|duration_ns| duration_ns / 1_000_000)
-            .or(self.duration_ms)
-    }
-
-    /// Returns the task execution duration in nanoseconds, if available.
-    pub fn duration_ns(&self) -> Option<u128> {
-        self.duration_ns.or_else(|| {
-            self.duration_ms
-                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
-        })
-    }
-
-    /// Returns the task execution start timestamp in RFC 3339 format, if available.
-    pub fn started_at_display(&self) -> Option<String> {
-        self.started_at.map(format_timestamp_display)
-    }
-
-    /// Returns the task execution finish timestamp in RFC 3339 format, if available.
-    pub fn finished_at_display(&self) -> Option<String> {
-        self.finished_at.map(format_timestamp_display)
-    }
-
-    /// Returns the task execution duration in a human-readable format, if available.
-    pub fn duration_display(&self) -> Option<String> {
-        self.duration_ns().map(format_duration_display)
-    }
 }
 
 /// Represents a failed task execution with comprehensive error information and context.
@@ -2324,7 +2189,7 @@ impl TaskSuccess {
 /// execution before the failure occurred. This structure provides rich context for error handling,
 /// logging, and determining whether a failed task should be retried.
 ///
-/// The failure information includes timing data, structured details about the error, and the
+/// The failure information includes structured details about the error, and the
 /// ability to downcast to specific error types for specialized error handling.
 ///
 /// # Fields
@@ -2352,13 +2217,6 @@ impl TaskSuccess {
 ///
 /// * `messages` - Structured messages with levels (Info, Warning, Error, Debug) that were
 ///   collected during execution, providing a detailed execution trace up to the point of failure.
-///
-/// * `started_at` - The timestamp when the task execution started, if available.
-///
-/// * `finished_at` - The timestamp when the task execution failed, if available.
-///
-/// * `duration_ms` - The duration of the task execution in milliseconds before it failed,
-///   if available.
 ///
 /// # Example
 ///
@@ -2391,10 +2249,6 @@ pub struct TaskFailure {
     details: Option<Value>,
     warnings: Vec<String>,
     messages: Vec<TaskMessage>,
-    started_at: Option<SystemTime>,
-    finished_at: Option<SystemTime>,
-    duration_ns: Option<u128>,
-    duration_ms: Option<u128>,
 }
 
 impl TaskFailure {
@@ -2403,7 +2257,7 @@ impl TaskFailure {
     /// This constructor wraps any error type that implements the standard `Error` trait
     /// in a `TaskFailure`, capturing the error message and type information. The failure
     /// is initialized with default values: classified as `Internal`, not retryable, with
-    /// no additional details, warnings, or messages, and no timing information.
+    /// no additional details, warnings, or messages.
     ///
     /// The error is stored as a thread-safe, reference-counted pointer (`Arc<dyn Error>`),
     /// allowing it to be cloned and shared across threads while preserving the ability
@@ -2440,10 +2294,6 @@ impl TaskFailure {
             details: None,
             warnings: Vec::new(),
             messages: Vec::new(),
-            started_at: None,
-            finished_at: None,
-            duration_ns: None,
-            duration_ms: None,
         }
     }
 
@@ -2477,10 +2327,6 @@ impl TaskFailure {
             details: None,
             warnings: Vec::new(),
             messages: Vec::new(),
-            started_at: None,
-            finished_at: None,
-            duration_ns: None,
-            duration_ms: None,
         }
     }
 
@@ -2500,10 +2346,6 @@ impl TaskFailure {
             details: None,
             warnings: Vec::new(),
             messages: Vec::new(),
-            started_at: None,
-            finished_at: None,
-            duration_ns: None,
-            duration_ms: None,
         }
     }
 
@@ -2600,65 +2442,6 @@ impl TaskFailure {
     /// The modified `TaskFailure` instance with the message added to the messages list.
     pub fn with_message(mut self, message: TaskMessage) -> Self {
         self.messages.push(message);
-        self
-    }
-
-    /// Sets the task execution start timestamp.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `started_at` - The timestamp when the task execution started.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskFailure` instance with the start timestamp set.
-    pub fn with_started_at(mut self, started_at: SystemTime) -> Self {
-        self.started_at = Some(started_at);
-        self
-    }
-
-    /// Sets the task execution finish timestamp.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `finished_at` - The timestamp when the task execution failed.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskFailure` instance with the finish timestamp set.
-    pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
-        self.finished_at = Some(finished_at);
-        self
-    }
-
-    /// Sets the task execution duration in milliseconds.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `duration_ms` - The duration of the task execution in milliseconds before it failed.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskFailure` instance with the duration set.
-    pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
-        self.duration_ns = Some(duration_ms.saturating_mul(1_000_000));
-        self.duration_ms = Some(duration_ms);
-        self
-    }
-
-    /// Sets the task execution duration in nanoseconds.
-    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
-        self.duration_ns = Some(duration_ns);
-        self.duration_ms = Some(duration_ns / 1_000_000);
         self
     }
 
@@ -2770,57 +2553,6 @@ impl TaskFailure {
         &self.messages
     }
 
-    /// Returns the task execution start timestamp, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(SystemTime)` if the start timestamp was set, `None` otherwise.
-    pub fn started_at(&self) -> Option<SystemTime> {
-        self.started_at
-    }
-
-    /// Returns the task execution finish timestamp, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(SystemTime)` if the finish timestamp was set, `None` otherwise.
-    pub fn finished_at(&self) -> Option<SystemTime> {
-        self.finished_at
-    }
-
-    /// Returns the task execution duration in milliseconds, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(u128)` if the duration was set, `None` otherwise.
-    pub fn duration_ms(&self) -> Option<u128> {
-        self.duration_ns
-            .map(|duration_ns| duration_ns / 1_000_000)
-            .or(self.duration_ms)
-    }
-
-    /// Returns the task execution duration in nanoseconds, if available.
-    pub fn duration_ns(&self) -> Option<u128> {
-        self.duration_ns.or_else(|| {
-            self.duration_ms
-                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
-        })
-    }
-
-    /// Returns the task execution start timestamp in RFC 3339 format, if available.
-    pub fn started_at_display(&self) -> Option<String> {
-        self.started_at.map(format_timestamp_display)
-    }
-
-    /// Returns the task execution finish timestamp in RFC 3339 format, if available.
-    pub fn finished_at_display(&self) -> Option<String> {
-        self.finished_at.map(format_timestamp_display)
-    }
-
-    /// Returns the task execution duration in a human-readable format, if available.
-    pub fn duration_display(&self) -> Option<String> {
-        self.duration_ns().map(format_duration_display)
-    }
 }
 
 /// Represents information about a skipped task execution.
@@ -3960,11 +3692,7 @@ impl TaskDefinition {
             );
             results.record_execution_timing(started_at, finished_at);
             let mut host_result = HostTaskResult::failed(
-                TaskFailure::new(error)
-                    .with_kind(TaskFailureKind::Internal)
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(0),
+                TaskFailure::new(error).with_kind(TaskFailureKind::Internal),
             )
             .with_execution_timing(started_at, finished_at, 0);
             *host_result.execution_metadata_mut() = host_result
@@ -4015,11 +3743,7 @@ impl TaskDefinition {
                     );
 
                     let mut host_result = HostTaskResult::failed(
-                        TaskFailure::new(error)
-                        .with_kind(TaskFailureKind::Connection)
-                        .with_started_at(started_at)
-                        .with_finished_at(finished_at)
-                        .with_duration_ns(duration_ns),
+                        TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
                     );
                     host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
                     *host_result.execution_metadata_mut() = host_result
@@ -4135,15 +3859,10 @@ impl TaskDefinition {
             .with_attempts(attempts)
             .with_retried(attempts > 1)
             .with_retry_exhausted(retry_exhausted);
-        let duration_display = match host_result.outcome() {
-            HostTaskOutcome::Passed(success) => success
-                .duration_display()
-                .unwrap_or_else(|| format_duration_display(duration_ns)),
-            HostTaskOutcome::Failed(failure) => failure
-                .duration_display()
-                .unwrap_or_else(|| format_duration_display(duration_ns)),
-            HostTaskOutcome::Skipped(_) => format_duration_display(duration_ns),
-        };
+        let duration_display = host_result
+            .execution_metadata()
+            .duration_display()
+            .unwrap_or_else(|| format_duration_display(duration_ns));
 
         info!(
             "finished task '{}' for host '{}' with status={} duration_ms={} duration={}",
@@ -4795,15 +4514,20 @@ mod tests {
             .sub_task("leaf")
             .expect("leaf task should capture failure");
 
-        let failure = level_five
+        let host_result = level_five
             .host_result("router1")
-            .and_then(HostTaskResult::failure)
+            .expect("depth overflow host result should exist");
+        let failure = host_result
+            .failure()
             .expect("depth overflow should be recorded as a host failure");
         assert!(failure.message().contains("max task depth exceeded"));
         assert!(matches!(failure.kind(), TaskFailureKind::Internal));
-        assert!(failure.started_at().is_some());
-        assert!(failure.finished_at().is_some());
-        assert_eq!(failure.duration_ns(), Some(0));
+        assert!(host_result.execution_metadata().started_at().is_some());
+        assert_eq!(
+            host_result.execution_metadata().started_at(),
+            host_result.execution_metadata().finished_at()
+        );
+        assert_eq!(host_result.execution_metadata().duration_ns(), Some(0));
     }
 
     #[test]
@@ -4819,14 +4543,14 @@ mod tests {
 
         run_async(task.start("router1", &host, &mut results, 0)).expect("start should succeed");
 
-        let success = results
+        let host_result = results
             .host_result("router1")
-            .and_then(HostTaskResult::success)
-            .expect("host result should be passed");
-        assert!(success.started_at().is_some());
-        assert!(success.finished_at().is_some());
-        assert!(success.duration_ns().is_some());
-        assert!(success.duration_display().is_some());
+            .expect("host result should exist");
+        assert!(host_result.is_passed());
+        assert!(host_result.execution_metadata().started_at().is_some());
+        assert!(host_result.execution_metadata().finished_at().is_some());
+        assert!(host_result.execution_metadata().duration_ns().is_some());
+        assert!(host_result.execution_metadata().duration_display().is_some());
     }
 
     #[test]
@@ -4838,14 +4562,14 @@ mod tests {
         run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should record a failed result");
 
-        let failure = results
+        let host_result = results
             .host_result("router1")
-            .and_then(HostTaskResult::failure)
-            .expect("host result should be failed");
-        assert!(failure.started_at().is_some());
-        assert!(failure.finished_at().is_some());
-        assert!(failure.duration_ns().is_some());
-        assert!(failure.duration_display().is_some());
+            .expect("host result should exist");
+        assert!(host_result.is_failed());
+        assert!(host_result.execution_metadata().started_at().is_some());
+        assert!(host_result.execution_metadata().finished_at().is_some());
+        assert!(host_result.execution_metadata().duration_ns().is_some());
+        assert!(host_result.execution_metadata().duration_display().is_some());
     }
 
     #[test]
@@ -5150,10 +4874,6 @@ mod tests {
 
     #[test]
     fn task_success_builders_expose_extended_metadata() {
-        let started_at = SystemTime::UNIX_EPOCH;
-        let finished_at = SystemTime::UNIX_EPOCH
-            .checked_add(std::time::Duration::from_secs(2))
-            .expect("valid timestamp");
         let success = TaskSuccess::new()
             .with_result(json!({"ok": true}))
             .with_changed(true)
@@ -5163,10 +4883,7 @@ mod tests {
             .with_message(
                 TaskMessage::new(MessageLevel::Info, "commit complete").with_code("commit_ok"),
             )
-            .with_metadata(json!({"version": 1}))
-            .with_started_at(started_at)
-            .with_finished_at(finished_at)
-            .with_duration_ms(2000);
+            .with_metadata(json!({"version": 1}));
 
         assert_eq!(success.result(), Some(&json!({"ok": true})));
         assert!(success.changed());
@@ -5177,9 +4894,6 @@ mod tests {
         assert_eq!(success.messages()[0].code(), Some("commit_ok"));
         assert!(matches!(success.messages()[0].level(), MessageLevel::Info));
         assert_eq!(success.metadata(), Some(&json!({"version": 1})));
-        assert_eq!(success.started_at(), Some(started_at));
-        assert_eq!(success.finished_at(), Some(finished_at));
-        assert_eq!(success.duration_ms(), Some(2000));
     }
 
     #[test]
