@@ -15,7 +15,8 @@ automation workflows.
 - Run single tasks or ordered task lists across selected hosts
 - Execute hierarchical task trees with bounded recursion depth
 - Load Genja-compatible inventory, runner, connection, and processor plugins
-- Track per-host task results, sub-task results, summaries, timing, and status
+- Track per-host task outcomes plus execution metadata, nested sub-task results,
+  summaries, timing, and status
 
 ## Installation
 
@@ -165,7 +166,10 @@ let genja = Genja::builder(inventory).build()?;
 
 let results = genja.run_task(CheckConfig, 1)?;
 
-assert!(results.host_result("router1").unwrap().is_passed());
+let host_result = results.host_result("router1").unwrap();
+assert!(host_result.is_passed());
+assert_eq!(host_result.status(), "passed");
+assert_eq!(host_result.execution_metadata().attempts(), 1);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

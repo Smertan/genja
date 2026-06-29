@@ -252,7 +252,7 @@ Tasks return one result per host.
             .with_kind(TaskFailureKind::Connection),
     );
 
-    let skipped = HostTaskResult::Skipped(
+    let skipped = HostTaskResult::skipped_with_detail(
         TaskSkip::new()
             .with_reason("unsupported_platform")
             .with_message("host platform is not supported"),
@@ -292,6 +292,18 @@ kind, retryability, details, warnings, and messages. Skip results include a
 machine-readable reason and human-readable message. Per-host timing and retry
 data are reported on `HostTaskResult.execution_metadata`, not inside success or
 failure payloads.
+
+For Rust consumers, a good pattern is:
+
+```rust
+if let Some(failure) = host_result.failure() {
+    println!("failed: {}", failure.message());
+}
+
+if let Some(duration) = host_result.execution_metadata().duration_display() {
+    println!("duration: {duration}");
+}
+```
 
 Prefer returning an explicit failure or skip result when the task can classify
 the outcome. Reserve raised errors for unexpected internal errors that should be

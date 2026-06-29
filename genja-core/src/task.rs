@@ -15,11 +15,11 @@
 //!   [`TaskDefinition`] values. Each root task may own its own sub-task tree, so a
 //!   `Tasks` value represents a forest of task trees.
 //! - **Task Execution**: Tasks execute against hosts and return [`HostTaskResult`]
-//!   indicating success, failure, or skip status.
+//!   values with a semantic [`HostTaskOutcome`] and separate [`HostExecutionMetadata`].
 //! - **Result Tracking**: The [`TaskResults`] structure maintains a hierarchical tree
 //!   of execution results for tasks and their sub-tasks across all hosts.
-//! - **Rich Metadata**: Tasks can attach detailed metadata including timing information,
-//!   warnings, messages, diffs, and custom data to their results.
+//! - **Rich Metadata**: Tasks can attach detailed metadata including per-host execution
+//!   timing, retry state, warnings, messages, diffs, and custom data to their results.
 //! - **Summaries and Serialization**: Task results can be aggregated with
 //!   [`TaskResults::host_summary`] and [`TaskResults::task_summary`], then exported in
 //!   either human-readable or raw JSON forms.
@@ -114,12 +114,12 @@
 //!    ┌──────────────────────────────────────────────────────────┐
 //!    │ TaskResults (per task)                                   │
 //!    │                                                          │
-//!    │  ┌─────────────────────────────────────────┐             │
-//!    │  │ Host Results (Map<hostname, result>)    │             │
-//!    │  │  - router1 → HostTaskResult::Passed     │             │
-//!    │  │  - router2 → HostTaskResult::Failed     │             │
-//!    │  │  - router3 → HostTaskResult::Skipped    │             │
-//!    │  └─────────────────────────────────────────┘             │
+//!    │  ┌───────────────────────────────────────────┐           │
+//!    │  │ Host Results (Map<hostname, result>)      │           │
+//!    │  │  - router1 → {outcome: Passed,  metadata} │           │
+//!    │  │  - router2 → {outcome: Failed,  metadata} │           │
+//!    │  │  - router3 → {outcome: Skipped, metadata} │           │
+//!    │  └───────────────────────────────────────────┘           │
 //!    │                                                          │
 //!    │  ┌───────────────────────────────────────────┐           │
 //!    │  │ Sub-task Results (Map<name, TaskResults>) │           │
@@ -168,8 +168,8 @@
 //!    task execution across selected hosts:
 //!    - Optionally resolves a task-scoped connection via [`TaskConnectionResolver`]
 //!    - Calls [`Task::start`] for each host with a [`TaskRuntimeContext`]
-//!    - Records timing information (start, finish, duration)
-//!    - Captures results (success, failure, or skip)
+//!    - Records execution metadata (start, finish, duration, retry state)
+//!    - Captures semantic outcomes (success, failure, or skip)
 //!    - Recursively processes sub-tasks up to `max_depth`
 //!
 //! 4. **Result Collection**: Each host produces a `HostTaskResult` that is stored in
@@ -328,8 +328,9 @@
 //! - Sub-task results are grouped by sub-task name. The `TaskResults` node for a
 //!   given sub-task contains per-host results accumulated across all hosts.
 //! - The framework does not automatically skip sub-tasks when a parent fails or is
-//!   skipped. If you want that behavior, return an explicit [`HostTaskResult::Skipped`]
-//!   from the sub-task or encode the condition in the task itself.
+//!   skipped. If you want that behavior, return a [`HostTaskResult`] with
+//!   [`HostTaskOutcome::Skipped`] from the sub-task or encode the condition in the task
+//!   itself.
 //! - Processor hooks run only for tasks that selected processor names. The root
 //!   task can also be given processor names through [`TaskDefinition::with_processor`]
 //!   or [`TaskDefinition::with_processors`].
@@ -342,34 +343,40 @@
 //!   stops and propagates that error.
 //! - `max_depth` is checked using `depth > max_depth`. This means `max_depth = 0`
 //!   still allows the root task at depth `0`, but rejects all sub-tasks at depth `1`.
-//! - Exceeding `max_depth` records an internal [`HostTaskResult::Failed`] for the host
-//!   at that task node instead of returning an outer execution error.
+//! - Exceeding `max_depth` records a failed [`HostTaskResult`] with
+//!   [`HostTaskOutcome::Failed`] for the host at that task node instead of returning an
+//!   outer execution error.
 //! - If [`Task::start`] returns [`TaskError`], the framework captures it as a
-//!   [`TaskFailure`] with timing metadata and stores it in the host results tree.
+//!   [`TaskFailure`] and stores it inside a [`HostTaskResult`] together with host-level
+//!   execution metadata.
 //!
 //! # Task Results
 //!
 //! ## [`HostTaskResult`]
 //!
-//! Represents the outcome of executing a task on a single host. It can be:
+//! Represents the result of executing a task on a single host.
 //!
-//! - **Passed**: Task completed successfully with optional metadata in [`TaskSuccess`]
-//! - **Failed**: Task encountered an error with details in [`TaskFailure`]
-//! - **Skipped**: Task was not executed with reason in [`TaskSkip`]
+//! [`HostTaskResult`] combines:
+//!
+//! - A semantic [`HostTaskOutcome`] of passed, failed, or skipped
+//! - Host-level [`HostExecutionMetadata`] for timing and retry state
 //!
 //! ```rust
-//! use genja_core::task::{HostTaskResult, TaskSuccess, TaskFailure, TaskFailureKind};
+//! use genja_core::task::{
+//!     HostTaskOutcome, HostTaskResult, TaskFailure, TaskFailureKind, TaskSuccess,
+//! };
 //! use serde_json::json;
 //!
-//! // Success with metadata
+//! // Success with semantic task data.
 //! let success = HostTaskResult::passed(
 //!     TaskSuccess::new()
 //!         .with_result(json!({"status": "deployed"}))
 //!         .with_changed(true)
 //!         .with_diff("+ new_config_line")
 //! );
+//! assert!(matches!(success.outcome(), HostTaskOutcome::Passed(_)));
 //!
-//! // Failure with classification
+//! // Failure with classification and retry hint.
 //! let failure = HostTaskResult::failed(
 //!     TaskFailure::new(std::io::Error::new(
 //!         std::io::ErrorKind::ConnectionRefused,
@@ -378,9 +385,14 @@
 //!     .with_kind(TaskFailureKind::Connection)
 //!     .with_retryable(true)
 //! );
+//! assert!(matches!(failure.outcome(), HostTaskOutcome::Failed(_)));
 //!
-//! // Skipped with reason
+//! // Skipped with reason.
 //! let skipped = HostTaskResult::skipped_with_reason("parent_failed");
+//! assert!(matches!(skipped.outcome(), HostTaskOutcome::Skipped(_)));
+//!
+//! // Execution timing and retry counts live outside the outcome payload.
+//! assert_eq!(success.execution_metadata().attempts(), 1);
 //! ```
 //!
 //! ## [`TaskResults`]
@@ -1541,31 +1553,21 @@ impl TaskResults {
     }
 }
 
-/// Represents the execution outcome of a task on a single host.
+/// Represents the result of executing a task on a single host.
 ///
-/// `HostTaskResult` captures one of three possible states for a task execution:
-/// - **Passed**: The task completed successfully, potentially with changes, warnings, or metadata.
-/// - **Failed**: The task encountered an error and could not complete successfully.
-/// - **Skipped**: The task was not executed, typically due to conditional logic or dependencies.
+/// `HostTaskResult` separates the semantic task outcome from transport-style execution
+/// details:
+/// - [`HostTaskOutcome`] stores whether the task passed, failed, or was skipped, along with
+///   the corresponding payload.
+/// - [`HostExecutionMetadata`] stores execution timing and retry attempt data for that host.
 ///
-/// This enum provides a type-safe way to represent task outcomes and includes helper methods
-/// to query the result state and extract the underlying success, failure, or skip details.
-///
-/// # Variants
-///
-/// * `Passed(TaskSuccess)` - The task executed successfully. Contains detailed information about
-///   the execution including any results, changes made, warnings, and timing information.
-///
-/// * `Failed(TaskFailure)` - The task failed during execution. Contains error information,
-///   failure classification, retry hints, and any warnings or messages collected before failure.
-///
-/// * `Skipped(TaskSkip)` - The task was skipped and not executed. Contains optional reason
-///   and message explaining why the task was skipped.
+/// This keeps success and failure payloads focused on task semantics, while the surrounding
+/// host result carries cross-cutting execution metadata.
 ///
 /// # Example
 ///
 /// ```rust
-/// use genja_core::task::{HostTaskResult, TaskSuccess, TaskFailure};
+/// use genja_core::task::{HostTaskOutcome, HostTaskResult, TaskSuccess};
 ///
 /// // Create a successful result
 /// let success = HostTaskResult::passed(
@@ -1582,6 +1584,7 @@ impl TaskResults {
 /// if let Some(details) = success.success() {
 ///     assert!(details.changed());
 /// }
+/// assert!(matches!(success.outcome(), HostTaskOutcome::Passed(_)));
 ///
 /// // Create a skipped result
 /// let skipped = HostTaskResult::skipped_with_reason("Host in maintenance mode");
@@ -1715,12 +1718,12 @@ impl HostTaskResult {
     ///
     /// # Parameters
     ///
-    /// * `result` - The `TaskSuccess` containing details about the successful execution,
-    ///   including any results, changes made, warnings, and timing information.
+    /// * `result` - The `TaskSuccess` containing semantic success details such as result
+    ///   data, change state, warnings, and task-specific metadata.
     ///
     /// # Returns
     ///
-    /// A `HostTaskResult::Passed` variant containing the provided success details.
+    /// A `HostTaskResult` containing a passed outcome with the provided success details.
     pub fn passed(result: TaskSuccess) -> Self {
         Self {
             outcome: HostTaskOutcome::Passed(result),
@@ -1735,12 +1738,12 @@ impl HostTaskResult {
     ///
     /// # Parameters
     ///
-    /// * `failure` - The `TaskFailure` containing error information, failure classification,
-    ///   retry hints, and any warnings or messages collected before failure.
+    /// * `failure` - The `TaskFailure` containing semantic failure information,
+    ///   classification, retry hints, and any warnings or messages collected before failure.
     ///
     /// # Returns
     ///
-    /// A `HostTaskResult::Failed` variant containing the provided failure details.
+    /// A `HostTaskResult` containing a failed outcome with the provided failure details.
     pub fn failed(failure: TaskFailure) -> Self {
         Self {
             outcome: HostTaskOutcome::Failed(failure),
@@ -1755,7 +1758,7 @@ impl HostTaskResult {
     ///
     /// # Returns
     ///
-    /// A `HostTaskResult::Skipped` variant with default skip information (no reason or message).
+    /// A `HostTaskResult` containing a skipped outcome with default skip information.
     pub fn skipped() -> Self {
         Self {
             outcome: HostTaskOutcome::Skipped(TaskSkip::default()),
@@ -1776,7 +1779,7 @@ impl HostTaskResult {
     ///
     /// # Returns
     ///
-    /// A `HostTaskResult::Skipped` variant with the specified reason set.
+    /// A `HostTaskResult` containing a skipped outcome with the specified reason set.
     pub fn skipped_with_reason(reason: impl Into<String>) -> Self {
         Self {
             outcome: HostTaskOutcome::Skipped(TaskSkip::new().with_reason(reason)),
@@ -1822,18 +1825,31 @@ impl HostTaskResult {
         matches!(self.outcome, HostTaskOutcome::Skipped(_))
     }
 
+    /// Returns the semantic host outcome payload.
+    ///
+    /// Use this when you need to pattern match on the canonical passed/failed/skipped
+    /// variants directly.
     pub fn outcome(&self) -> &HostTaskOutcome {
         &self.outcome
     }
 
+    /// Returns execution metadata such as timing and retry attempt information.
+    ///
+    /// Host-level duration, timestamps, and retry counters live here rather than on
+    /// [`TaskSuccess`] or [`TaskFailure`].
     pub fn execution_metadata(&self) -> &HostExecutionMetadata {
         &self.execution_metadata
     }
 
+    /// Returns mutable access to the execution metadata.
     pub fn execution_metadata_mut(&mut self) -> &mut HostExecutionMetadata {
         &mut self.execution_metadata
     }
 
+    /// Returns a lowercase convenience status string.
+    ///
+    /// This compatibility accessor is useful for lightweight status checks where callers
+    /// do not need to pattern match on [`HostTaskOutcome`].
     pub fn status(&self) -> &'static str {
         match self.outcome() {
             HostTaskOutcome::Passed(_) => "passed",
