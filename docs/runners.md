@@ -50,6 +50,9 @@ execution helpers.
 execution. Tasks may override these defaults through task metadata.
 Retries are only attempted when the effective policy allows them and the task
 returns a failed host result marked as retryable.
+Genja does not infer task mutability or idempotency when applying retries; the
+decision is driven entirely by configured policy and the task's returned
+failure result.
 
 ## Threaded Runner
 

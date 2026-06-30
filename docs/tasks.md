@@ -312,6 +312,9 @@ treated as task execution failures by the runtime.
 When task retries are enabled by runner settings or task metadata, Genja only
 retries failures explicitly marked as retryable. Return a failed host result
 with `retryable=true` when the failure is transient and safe to retry.
+Genja does not infer whether a task is mutable, safe to repeat, or idempotent;
+retry behavior is always controlled by explicit policy plus the returned
+failure classification.
 
 ## Failure Kinds
 
