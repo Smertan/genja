@@ -195,6 +195,11 @@
 //! `connection_plugin_name()` directly, import [`TaskInfo`] so those trait methods
 //! are in scope.
 //!
+//! Static task metadata can also include retry overrides such as
+//! `allow_retries = true` and `max_task_attempts = 3`. These settings control
+//! retry policy only. A retry still requires the task to return a failed
+//! [`HostTaskResult`] whose [`TaskFailure`] is explicitly marked retryable.
+//!
 //! ```rust
 //! use genja_core::inventory::Host;
 //! use genja_core::task::{
@@ -208,7 +213,12 @@
 //!     config_file: String,
 //! }
 //!
-//! #[genja_task(name = "deploy", connection_plugin_name = "ssh")]
+//! #[genja_task(
+//!     name = "deploy",
+//!     connection_plugin_name = "ssh",
+//!     allow_retries = true,
+//!     max_task_attempts = 3
+//! )]
 //! impl DeployTask {
 //!     async fn start_async(
 //!         &self,
@@ -235,11 +245,12 @@
 //! ## [`TaskInfo`]
 //!
 //! Provides metadata about a task including its name, associated plugin, connection
-//! requirements, and optional configuration. This trait is typically
+//! requirements, retry overrides, and optional configuration. This trait is typically
 //! auto-implemented by the [`genja_task`](crate::genja_task) attribute macro.
 //! Static metadata comes from macro arguments such as `name`,
-//! `connection_plugin_name`, and `processors`, while dynamic metadata can be
-//! provided through helper methods such as `options()`.
+//! `connection_plugin_name`, `processors`, `allow_retries`, and
+//! `max_task_attempts`, while dynamic metadata can be provided through helper
+//! methods such as `options()`.
 //!
 //! ## Task Processors
 //!

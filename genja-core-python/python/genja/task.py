@@ -108,6 +108,14 @@ Task metadata comes from ``@task(...)``:
 - ``allow_retries``: optional explicit retry authorization override
 - ``max_task_attempts``: optional explicit total-attempt override
 - ``options``: optional JSON-serializable task options payload
+
+Retry metadata only controls policy. A task is retried only when both of these
+conditions are true:
+
+- the effective retry policy allows another attempt
+- the task returns ``TaskFailureResult(..., retryable=True)``
+
+Genja does not infer whether a task is safe to repeat, mutable, or idempotent.
 """
 
 from __future__ import annotations
@@ -474,9 +482,12 @@ def task(
             non-empty strings. If None, no processors will be applied.
         allow_retries (bool | None): Optional explicit override for whether
             retries are allowed for this task. If None, runtime defaults apply.
+            This setting does not force retries by itself; the task must still
+            return ``TaskFailureResult(..., retryable=True)``.
         max_task_attempts (int | None): Optional explicit override for the
             total number of attempts allowed for this task. Must be positive
-            when provided.
+            when provided. This bounds total attempts but does not override the
+            requirement that failures be marked retryable.
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure. If None, no options are provided to the task.

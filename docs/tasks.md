@@ -143,6 +143,8 @@ The common macro options are:
 - `name`: task name shown in results and task trees
 - `connection_plugin_name`: connection plugin to open before task execution
 - `processors`: processor plugin names to run around task execution
+- `allow_retries`: optional task-level override for whether retries are allowed
+- `max_task_attempts`: optional task-level override for total task attempts
 
 Define exactly one task entrypoint in the macro `impl` block:
 
@@ -152,6 +154,89 @@ Define exactly one task entrypoint in the macro `impl` block:
 The macro can also read optional helper methods from the same `impl` block, such
 as `options(...)` and `sub_tasks(...)`. Use those helpers when a task needs
 dynamic JSON options or child tasks in a task tree.
+
+### Rust Retry Overrides
+
+Use task metadata when a Rust task should opt into retries or override the
+runner defaults for retry count:
+
+```rust
+use genja::genja_core::inventory::Host;
+use genja::genja_core::task::{
+    HostTaskResult, TaskError, TaskFailure, TaskFailureKind, TaskRuntimeContext,
+};
+use genja::genja_task;
+
+struct RetryableBackup;
+
+#[genja_task(
+    name = "retryable_backup",
+    connection_plugin_name = "ssh",
+    allow_retries = true,
+    max_task_attempts = 3
+)]
+impl RetryableBackup {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        Ok(HostTaskResult::failed(
+            TaskFailure::new(std::io::Error::other("temporary rate limit"))
+                .with_kind(TaskFailureKind::External)
+                .with_retryable(true),
+        ))
+    }
+}
+```
+
+These values override runner defaults for that task only. Retries still happen
+only when the returned failure is explicitly marked `retryable`.
+
+## Python Task Decorator
+
+Python tasks use the `@task(...)` decorator for static task metadata.
+
+Common decorator options:
+
+- `name`: task name shown in results and task trees
+- `connection_plugin_name`: connection plugin to open before task execution
+- `processors`: processor plugin names to run around task execution
+- `sub_tasks`: child tasks to execute beneath the current task
+- `allow_retries`: optional task-level override for whether retries are allowed
+- `max_task_attempts`: optional task-level override for total task attempts
+
+### Python Retry Overrides
+
+Use decorator fields when a Python task should opt into retries or override the
+runner defaults for retry count:
+
+```python
+from genja.task import Host, TaskFailureResult, TaskInfo, TaskRuntimeContext, task
+
+
+@task(
+    name="retryable_backup",
+    connection_plugin_name="ssh",
+    allow_retries=True,
+    max_task_attempts=3,
+)
+class RetryableBackup:
+    def start(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskFailureResult:
+        return TaskFailureResult(
+            message=f"temporary rate limit on {host.hostname}",
+            kind="external",
+            retryable=True,
+        )
+```
+
+These values override runner defaults for that task only. Retries still happen
+only when the returned failure result is explicitly marked `retryable`.
 
 ## Task Inputs
 

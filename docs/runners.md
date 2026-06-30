@@ -54,6 +54,15 @@ Genja does not infer task mutability or idempotency when applying retries; the
 decision is driven entirely by configured policy and the task's returned
 failure result.
 
+Precedence for retry settings is:
+
+1. task-level retry metadata such as `allow_retries` and `max_task_attempts`
+2. runner-level retry defaults
+3. built-in fallback defaults
+
+See [Tasks](tasks.md) for Rust `#[genja_task(...)]` and Python `@task(...)`
+examples showing how to set task-level retry overrides.
+
 ## Threaded Runner
 
 The `threaded` runner executes a task across multiple hosts concurrently. It is
