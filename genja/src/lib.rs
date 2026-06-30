@@ -2296,7 +2296,12 @@ mod tests {
             .expect("router1 should have a failed result");
         assert!(host_result.is_failed());
         assert!(host_result.execution_metadata().duration_ns().is_some());
-        assert!(host_result.execution_metadata().duration_display().is_some());
+        assert!(
+            host_result
+                .execution_metadata()
+                .duration_display()
+                .is_some()
+        );
         assert!(results.duration_ns().is_some());
     }
 

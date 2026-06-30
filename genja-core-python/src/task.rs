@@ -1792,9 +1792,7 @@ mod tests {
                 .host_result("router1")
                 .expect("router1 result should exist");
             assert!(host_result.is_passed());
-            let success = host_result
-                .success()
-                .expect("host result should be passed");
+            let success = host_result.success().expect("host result should be passed");
             assert!(success.changed());
             assert_eq!(success.summary(), Some("async handled router1"));
             assert_eq!(success.metadata().unwrap()["has_connection"], json!(false));

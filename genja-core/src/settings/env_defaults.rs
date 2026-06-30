@@ -103,9 +103,7 @@ pub(super) fn raise_on_error() -> bool {
         Ok(s) => match parse_bool_loose(s.as_str()) {
             Some(value) => value,
             None => {
-                log::warn!(
-                    "Invalid {ENV_RAISE_ON_ERROR} value {s:?}; using default false"
-                );
+                log::warn!("Invalid {ENV_RAISE_ON_ERROR} value {s:?}; using default false");
                 false
             }
         },
@@ -183,9 +181,7 @@ pub(super) fn get_log_to_console_default() -> bool {
         Ok(val) => match parse_bool_loose(val.as_str()) {
             Some(value) => value,
             None => {
-                log::warn!(
-                    "Invalid {ENV_LOG_TO_CONSOLE} value {val:?}; using default false"
-                );
+                log::warn!("Invalid {ENV_LOG_TO_CONSOLE} value {val:?}; using default false");
                 false
             }
         },

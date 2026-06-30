@@ -63,8 +63,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    DeriveInput, Expr, ExprArray, ExprLit, FnArg, GenericArgument, ImplItem, ItemImpl, Lit, LitStr,
-    LitBool, LitInt, PathArguments, ReturnType, Token, Type, TypePath,
+    DeriveInput, Expr, ExprArray, ExprLit, FnArg, GenericArgument, ImplItem, ItemImpl, Lit,
+    LitBool, LitInt, LitStr, PathArguments, ReturnType, Token, Type, TypePath,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };

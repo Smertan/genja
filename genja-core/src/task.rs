@@ -647,7 +647,11 @@ impl EffectiveTaskRetryPolicy {
             .max(1);
 
         Self {
-            max_task_attempts: if allow_retries { configured_attempts } else { 1 },
+            max_task_attempts: if allow_retries {
+                configured_attempts
+            } else {
+                1
+            },
         }
     }
 
@@ -2195,7 +2199,6 @@ impl TaskSuccess {
     pub fn metadata(&self) -> Option<&Value> {
         self.metadata.as_ref()
     }
-
 }
 
 /// Represents a failed task execution with comprehensive error information and context.
@@ -2568,7 +2571,6 @@ impl TaskFailure {
     pub fn messages(&self) -> &[TaskMessage] {
         &self.messages
     }
-
 }
 
 /// Represents information about a skipped task execution.
@@ -3694,8 +3696,7 @@ impl TaskDefinition {
         if depth > max_depth {
             let started_at = SystemTime::now();
             let finished_at = started_at;
-            let error =
-                crate::GenjaError::Message(format!("max task depth exceeded: {max_depth}"));
+            let error = crate::GenjaError::Message(format!("max task depth exceeded: {max_depth}"));
             warn!(
                 "max task depth exceeded for task '{}' at depth {} with max_depth {}",
                 task.name(),
@@ -3757,7 +3758,8 @@ impl TaskDefinition {
                     let mut host_result = HostTaskResult::failed(
                         TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
                     );
-                    host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
+                    host_result =
+                        host_result.with_execution_timing(started_at, finished_at, duration_ns);
                     *host_result.execution_metadata_mut() = host_result
                         .execution_metadata()
                         .clone()
@@ -3864,7 +3866,8 @@ impl TaskDefinition {
         };
 
         let retry_exhausted = retry_policy.retry_exhausted(&host_result, attempts);
-        let mut host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
+        let mut host_result =
+            host_result.with_execution_timing(started_at, finished_at, duration_ns);
         *host_result.execution_metadata_mut() = host_result
             .execution_metadata()
             .clone()
@@ -4562,7 +4565,12 @@ mod tests {
         assert!(host_result.execution_metadata().started_at().is_some());
         assert!(host_result.execution_metadata().finished_at().is_some());
         assert!(host_result.execution_metadata().duration_ns().is_some());
-        assert!(host_result.execution_metadata().duration_display().is_some());
+        assert!(
+            host_result
+                .execution_metadata()
+                .duration_display()
+                .is_some()
+        );
     }
 
     #[test]
@@ -4581,7 +4589,12 @@ mod tests {
         assert!(host_result.execution_metadata().started_at().is_some());
         assert!(host_result.execution_metadata().finished_at().is_some());
         assert!(host_result.execution_metadata().duration_ns().is_some());
-        assert!(host_result.execution_metadata().duration_display().is_some());
+        assert!(
+            host_result
+                .execution_metadata()
+                .duration_display()
+                .is_some()
+        );
     }
 
     #[test]
@@ -5089,10 +5102,7 @@ mod tests {
             .with_finished_at(finished_at)
             .with_duration_ns(250_000);
         results.insert_host_result("router2", failed);
-        results.insert_host_result(
-            "router3",
-            HostTaskResult::skipped_with_reason("filtered"),
-        );
+        results.insert_host_result("router3", HostTaskResult::skipped_with_reason("filtered"));
 
         let json = results
             .to_json_string()
