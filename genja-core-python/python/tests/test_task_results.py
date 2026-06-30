@@ -37,7 +37,7 @@ def test_host_task_result_from_python_success_result_round_trips():
     assert data["outcome"]["Passed"]["changed"] is True
     assert data["outcome"]["Passed"]["summary"] == "backup complete"
     assert data["outcome"]["Passed"]["warnings"] == ["using fallback path"]
-    assert data["outcome"]["Passed"]["messages"][0]["level"] == "info"
+    assert data["outcome"]["Passed"]["messages"][0]["level"] == "Info"
     assert data["outcome"]["Passed"]["messages"][0]["text"] == "backup complete"
     assert data["outcome"]["Passed"]["messages"][0]["code"] == "BACKUP_DONE"
     assert data["outcome"]["Passed"]["metadata"]["backup_file"] == "/tmp/router1.cfg"
@@ -58,7 +58,7 @@ def test_host_task_result_from_python_failure_result_round_trips():
     data = host_result.to_dict()
 
     assert host_result.status == "failed"
-    assert data["outcome"]["Failed"]["kind"] == "timeout"
+    assert data["outcome"]["Failed"]["kind"] == "Timeout"
     assert data["outcome"]["Failed"]["message"] == "connection timeout"
     assert data["outcome"]["Failed"]["retryable"] is True
     assert data["outcome"]["Failed"]["details"]["timeout_seconds"] == 30

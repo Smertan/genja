@@ -51,7 +51,7 @@ def test_plugin_manager_loads_python_processors_from_pyproject(tmp_path):
             class AuditProcessor(BaseAuditProcessor):
                 def on_instance_finish(self, context, result):
                     data = super().on_instance_finish(context, result)
-                    data["metadata"]["loaded_from"] = "pyproject"
+                    data["outcome"]["Passed"]["metadata"]["loaded_from"] = "pyproject"
                     return data
             """
         )
