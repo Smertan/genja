@@ -26,6 +26,8 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
+  allow_retries: false
+  max_task_attempts: 1
 ```
 
 Runner settings:
@@ -35,12 +37,31 @@ Runner settings:
 - `worker_count`: optional concurrency limit for runners that support it.
 - `max_task_depth`: maximum nested task depth. Defaults to `10`.
 - `max_connection_attempts`: maximum connection attempts. Defaults to `3`.
+- `allow_retries`: whether task retries are allowed by default. Defaults to `false`.
+- `max_task_attempts`: total number of task attempts allowed by default. Defaults to `1`.
 
 `max_connection_attempts` is part of the shared runner configuration. The
 built-in runners pass the task connection resolver into task execution; the
 connection layer is responsible for interpreting connection retry behavior.
 Custom runners should pass the resolver through when they delegate to task
 execution helpers.
+
+`allow_retries` and `max_task_attempts` define default retry policy for task
+execution. Tasks may override these defaults through task metadata.
+Retries are only attempted when the effective policy allows them and the task
+returns a failed host result marked as retryable.
+Genja does not infer task mutability or idempotency when applying retries; the
+decision is driven entirely by configured policy and the task's returned
+failure result.
+
+Precedence for retry settings is:
+
+1. task-level retry metadata such as `allow_retries` and `max_task_attempts`
+2. runner-level retry defaults
+3. built-in fallback defaults
+
+See [Tasks](tasks.md) for Rust `#[genja_task(...)]` and Python `@task(...)`
+examples showing how to set task-level retry overrides.
 
 ## Threaded Runner
 

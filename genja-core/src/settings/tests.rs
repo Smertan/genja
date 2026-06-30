@@ -212,6 +212,8 @@ fn runner_config_default_values() {
     assert_eq!(runner.worker_count(), None);
     assert_eq!(runner.max_task_depth(), 10);
     assert_eq!(runner.max_connection_attempts(), 3);
+    assert!(!runner.allow_retries());
+    assert_eq!(runner.max_task_attempts(), 1);
 }
 
 #[test]
@@ -222,6 +224,8 @@ fn runner_config_deserializes_empty_object_to_defaults() {
     assert_eq!(runner.worker_count(), None);
     assert_eq!(runner.max_task_depth(), 10);
     assert_eq!(runner.max_connection_attempts(), 3);
+    assert!(!runner.allow_retries());
+    assert_eq!(runner.max_task_attempts(), 1);
 }
 
 #[test]
@@ -231,7 +235,9 @@ fn runner_config_deserializes_with_values() {
         "options": {"queue": "fast", "strategy": "burst"},
         "worker_count": 6,
         "max_task_depth": 5,
-        "max_connection_attempts": 7
+        "max_connection_attempts": 7,
+        "allow_retries": true,
+        "max_task_attempts": 4
     }"#;
     let runner: RunnerConfig = serde_json::from_str(json).unwrap();
     assert_eq!(runner.plugin(), "custom");
@@ -242,6 +248,8 @@ fn runner_config_deserializes_with_values() {
     assert_eq!(runner.worker_count(), Some(6));
     assert_eq!(runner.max_task_depth(), 5);
     assert_eq!(runner.max_connection_attempts(), 7);
+    assert!(runner.allow_retries());
+    assert_eq!(runner.max_task_attempts(), 4);
 }
 
 #[test]
@@ -249,6 +257,17 @@ fn runner_config_builder_sets_max_connection_attempts() {
     let runner = RunnerConfig::builder().max_connection_attempts(9).build();
 
     assert_eq!(runner.max_connection_attempts(), 9);
+}
+
+#[test]
+fn runner_config_builder_sets_retry_controls() {
+    let runner = RunnerConfig::builder()
+        .allow_retries(true)
+        .max_task_attempts(5)
+        .build();
+
+    assert!(runner.allow_retries());
+    assert_eq!(runner.max_task_attempts(), 5);
 }
 
 #[test]
@@ -472,6 +491,8 @@ runner:
   worker_count: 6
   max_task_depth: 5
   max_connection_attempts: 7
+  allow_retries: true
+  max_task_attempts: 4
 logging:
   enabled: "no"
   level: "debug"
@@ -529,6 +550,8 @@ logging:
     assert_eq!(settings.runner().worker_count(), Some(6));
     assert_eq!(settings.runner().max_task_depth(), 5);
     assert_eq!(settings.runner().max_connection_attempts(), 7);
+    assert!(settings.runner().allow_retries());
+    assert_eq!(settings.runner().max_task_attempts(), 4);
     assert!(!settings.logging().enabled());
     assert_eq!(settings.logging().level(), "debug");
     assert_eq!(settings.logging().log_file(), "./custom.log");

@@ -21,8 +21,12 @@ class AuditProcessor:
     def on_instance_finish(self, context, result):
         self.events.append(("instance_finish", context.task_name, context.hostname))
         data = result.to_dict()
-        data["metadata"] = {
-            **(data.get("metadata") or {}),
+        outcome = data.get("outcome", {})
+        passed = outcome.get("Passed")
+        if passed is None:
+            return data
+        passed["metadata"] = {
+            **(passed.get("metadata") or {}),
             "processor": "audit",
             "hostname": context.hostname,
         }

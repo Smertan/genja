@@ -105,7 +105,17 @@ Task metadata comes from ``@task(...)``:
 - ``connection_plugin_name``: optional; when provided it must be non-empty
 - ``sub_tasks``: optional list of decorated task classes
 - ``processors``: optional list of processor plugin names
+- ``allow_retries``: optional explicit retry authorization override
+- ``max_task_attempts``: optional explicit total-attempt override
 - ``options``: optional JSON-serializable task options payload
+
+Retry metadata only controls policy. A task is retried only when both of these
+conditions are true:
+
+- the effective retry policy allows another attempt
+- the task returns ``TaskFailureResult(..., retryable=True)``
+
+Genja does not infer whether a task is safe to repeat, mutable, or idempotent.
 """
 
 from __future__ import annotations
@@ -220,6 +230,11 @@ class TaskInfo(_GenjaModel):
             that can observe or modify task execution before and after task or
             host-level result handling. Defaults to an empty list if no
             processors are specified.
+        allow_retries (bool | None): Optional explicit override for whether
+            retries are allowed for this task. If None, runtime defaults apply.
+        max_task_attempts (int | None): Optional explicit override for the
+            total number of attempts allowed for this task. If None, runtime
+            defaults apply.
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure or None if no options are provided.
@@ -238,6 +253,14 @@ class TaskInfo(_GenjaModel):
     processors: list[str] = Field(
         default_factory=list,
         description="Processor plugin names applied to this task.",
+    )
+    allow_retries: bool | None = Field(
+        default=None,
+        description="Optional explicit retry authorization override.",
+    )
+    max_task_attempts: int | None = Field(
+        default=None,
+        description="Optional explicit total-attempt override.",
     )
     options: Any | None = Field(
         default=None,
@@ -431,6 +454,8 @@ def task(
     connection_plugin_name: str | None = None,
     sub_tasks: list[type[GenjaTaskProtocol]] | None = None,
     processors: list[str] | None = None,
+    allow_retries: bool | None = None,
+    max_task_attempts: int | None = None,
     options: Any | None = None,
 ):
     """Attach Genja task metadata to a Python task class.
@@ -455,6 +480,14 @@ def task(
         processors (list[str] | None): Optional list of processor plugin names
             to apply to this task's execution. If provided, must be a list of
             non-empty strings. If None, no processors will be applied.
+        allow_retries (bool | None): Optional explicit override for whether
+            retries are allowed for this task. If None, runtime defaults apply.
+            This setting does not force retries by itself; the task must still
+            return ``TaskFailureResult(..., retryable=True)``.
+        max_task_attempts (int | None): Optional explicit override for the
+            total number of attempts allowed for this task. Must be positive
+            when provided. This bounds total attempts but does not override the
+            requirement that failures be marked retryable.
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure. If None, no options are provided to the task.
@@ -470,7 +503,9 @@ def task(
             if the name is not a non-empty string, if connection_plugin_name is
             not a non-empty string or None, if sub_tasks is not a list of
             @task-decorated classes or None, if processors is not a list of
-            non-empty strings or None, or if options is not JSON-serializable.
+            non-empty strings or None, if allow_retries is not bool or None,
+            if max_task_attempts is not a positive integer or None, or if
+            options is not JSON-serializable.
     """
 
     def wrap(cls: _TaskClassT) -> _TaskClassT:
@@ -518,6 +553,16 @@ def task(
                     raise TypeError(
                         f"@task-decorated class '{cls.__name__}' processors must contain non-empty strings"
                     )
+        if allow_retries is not None and not isinstance(allow_retries, bool):
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' allow_retries must be bool or None"
+            )
+        if max_task_attempts is not None and (
+            not isinstance(max_task_attempts, int) or max_task_attempts < 1
+        ):
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' max_task_attempts must be a positive integer or None"
+            )
         _ensure_json_serializable(options, "options")
 
         task_cls = cast(type[GenjaTaskProtocol], cls)
@@ -525,6 +570,8 @@ def task(
             "name": name,
             "connection_plugin_name": connection_plugin_name,
             "processors": list(processors or []),
+            "allow_retries": allow_retries,
+            "max_task_attempts": max_task_attempts,
             "options": options,
             "sub_tasks": validated_sub_tasks,
         }

@@ -103,11 +103,7 @@ pub(super) fn raise_on_error() -> bool {
         Ok(s) => match parse_bool_loose(s.as_str()) {
             Some(value) => value,
             None => {
-                log::warn!(
-                    "Invalid {} value {:?}; using default false",
-                    ENV_RAISE_ON_ERROR,
-                    s
-                );
+                log::warn!("Invalid {ENV_RAISE_ON_ERROR} value {s:?}; using default false");
                 false
             }
         },
@@ -160,6 +156,16 @@ pub(super) fn get_runner_max_connection_attempts_default() -> usize {
     3
 }
 
+/// Returns the default task retry authorization for runner execution.
+pub(super) fn get_runner_allow_retries_default() -> bool {
+    false
+}
+
+/// Returns the default maximum number of task attempts for runner execution.
+pub(super) fn get_runner_max_task_attempts_default() -> usize {
+    1
+}
+
 /// Returns the default log level from `GENJA_LOGGING_LEVEL`, or "info".
 ///
 /// See tests in this module for behavioral verification.
@@ -175,11 +181,7 @@ pub(super) fn get_log_to_console_default() -> bool {
         Ok(val) => match parse_bool_loose(val.as_str()) {
             Some(value) => value,
             None => {
-                log::warn!(
-                    "Invalid {} value {:?}; using default false",
-                    ENV_LOG_TO_CONSOLE,
-                    val
-                );
+                log::warn!("Invalid {ENV_LOG_TO_CONSOLE} value {val:?}; using default false");
                 false
             }
         },

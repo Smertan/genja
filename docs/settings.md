@@ -66,6 +66,8 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
+  allow_retries: false
+  max_task_attempts: 1
 
 logging:
   enabled: true
@@ -229,6 +231,8 @@ runner:
 | `worker_count` | number or null | `null` | none |
 | `max_task_depth` | number | `10` | none |
 | `max_connection_attempts` | number | `3` | none |
+| `allow_retries` | boolean | `false` | none |
+| `max_task_attempts` | number | `1` | none |
 
 Common `plugin` values are `threaded` and `serial`.
 
@@ -243,6 +247,11 @@ use this setting.
 
 `max_connection_attempts` is part of shared runner configuration. Connection
 plugins or connection layers are responsible for interpreting retry behavior.
+
+`allow_retries` controls whether retries are allowed by default for task
+execution. `max_task_attempts` controls the default total attempt count for a
+task. Tasks may override either setting through task metadata. Retries are only
+attempted for failures explicitly marked as retryable.
 
 See [Runners](runners.md) for execution behavior and ordering details.
 

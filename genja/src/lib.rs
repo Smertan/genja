@@ -1119,7 +1119,7 @@ impl Genja {
             let host = inventory
                 .hosts()
                 .get(host_id)
-                .ok_or_else(|| GenjaError::Message(format!("host '{}' not found", host_id)))?;
+                .ok_or_else(|| GenjaError::Message(format!("host '{host_id}' not found")))?;
             hosts.add_host(host_id.as_str(), host.clone());
         }
 
@@ -1145,14 +1145,14 @@ mod tests {
     use genja_core::settings::{InventoryConfig, RunnerConfig};
     use genja_core::task::{
         BlockingTaskRuntimeContext, HostTaskResult, Task, TaskDefinition, TaskError,
-        TaskExecutionMode, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
+        TaskExecutionMode, TaskFailure, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
     };
     use genja_plugin_manager::PluginManager;
     use genja_plugin_manager::plugin_types::{
         AsyncPluginInventory, Plugin, PluginConnection, Plugins,
     };
     use serde_json::{Value, json};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -1249,6 +1249,11 @@ mod tests {
 
     struct SkippedTask;
 
+    struct FlakyRetryTask {
+        attempts: Arc<AtomicUsize>,
+        succeed_on_attempt: usize,
+    }
+
     impl TaskInfo for SkippedTask {
         fn name(&self) -> &str {
             "skipped-task"
@@ -1271,6 +1276,45 @@ mod tests {
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::skipped_with_reason("filtered"))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    impl TaskInfo for FlakyRetryTask {
+        fn name(&self) -> &str {
+            "flaky-retry-task"
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            None
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    #[async_trait]
+    impl Task for FlakyRetryTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt < self.succeed_on_attempt {
+                return Ok(HostTaskResult::failed(
+                    TaskFailure::new(std::io::Error::other("temporary failure"))
+                        .with_retryable(true),
+                ));
+            }
+
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary("recovered after retry"),
+            ))
         }
 
         fn execution_mode(&self) -> TaskExecutionMode {
@@ -1990,6 +2034,51 @@ mod tests {
         assert!(results.duration_ns().is_some());
     }
 
+    #[test]
+    fn run_preserves_retry_behavior_across_serial_and_threaded_runners() {
+        for runner_plugin in ["serial", "threaded"] {
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let settings = Settings::builder()
+                .runner(
+                    RunnerConfig::builder()
+                        .plugin(runner_plugin)
+                        .worker_count(2)
+                        .allow_retries(true)
+                        .max_task_attempts(3)
+                        .build(),
+                )
+                .build();
+
+            let genja = Genja::builder(single_host_inventory())
+                .with_settings(settings)
+                .build()
+                .expect("genja should build with retry settings");
+
+            let results = genja
+                .run_task(
+                    FlakyRetryTask {
+                        attempts: Arc::clone(&attempts),
+                        succeed_on_attempt: 2,
+                    },
+                    0,
+                )
+                .expect("runner should retry and succeed");
+
+            assert_eq!(
+                attempts.load(Ordering::SeqCst),
+                2,
+                "{runner_plugin} runner should execute exactly two attempts"
+            );
+            let host_result = results
+                .host_result("router1")
+                .expect("router1 should have a host result");
+            assert!(host_result.is_passed());
+            assert_eq!(host_result.execution_metadata().attempts(), 2);
+            assert!(host_result.execution_metadata().retried());
+            assert!(!host_result.execution_metadata().retry_exhausted());
+        }
+    }
+
     #[tokio::test]
     async fn run_task_async_executes_task_inside_existing_tokio_runtime() {
         let genja = Genja::from_inventory(test_inventory());
@@ -2202,12 +2291,17 @@ mod tests {
         let results = genja.run_task(FailedTask, 0).expect("run should succeed");
 
         assert_eq!(results.failed_hosts().len(), 2);
-        let failure = results
+        let host_result = results
             .host_result("router1")
-            .and_then(genja_core::task::HostTaskResult::failure)
             .expect("router1 should have a failed result");
-        assert!(failure.duration_ns().is_some());
-        assert!(failure.duration_display().is_some());
+        assert!(host_result.is_failed());
+        assert!(host_result.execution_metadata().duration_ns().is_some());
+        assert!(
+            host_result
+                .execution_metadata()
+                .duration_display()
+                .is_some()
+        );
         assert!(results.duration_ns().is_some());
     }
 

@@ -105,10 +105,13 @@ def test_genja_runtime_runs_python_task_definition():
     assert results.skipped_hosts == []
     assert summary == {"passed": 2, "failed": 0, "skipped": 0, "total": 2}
     assert data["task_name"] == "runtime_backup"
-    assert data["hosts"]["router1"]["status"] == "passed"
-    assert data["hosts"]["router1"]["summary"] == "runtime handled 10.0.0.1"
-    assert data["hosts"]["router2"]["status"] == "passed"
-    assert data["hosts"]["router2"]["metadata"]["platform"] == "ios"
+    assert (
+        data["hosts"]["router1"]["outcome"]["Passed"]["summary"]
+        == "runtime handled 10.0.0.1"
+    )
+    assert (
+        data["hosts"]["router2"]["outcome"]["Passed"]["metadata"]["platform"] == "ios"
+    )
 
 
 def test_genja_runtime_run_task_async_awaits_async_python_task():
@@ -126,7 +129,10 @@ def test_genja_runtime_run_task_async_awaits_async_python_task():
     assert results.failed_hosts == []
     assert results.skipped_hosts == []
     data = results.to_dict()
-    assert data["hosts"]["router1"]["summary"] == "async runtime handled 10.0.0.1"
+    assert (
+        data["hosts"]["router1"]["outcome"]["Passed"]["summary"]
+        == "async runtime handled 10.0.0.1"
+    )
 
 
 def test_genja_runtime_run_tasks_async_preserves_order():
@@ -197,9 +203,9 @@ def test_genja_runtime_runs_ordered_task_list_with_nested_subtasks():
 
     parent_data = results[1].to_dict(raw=True)
     assert "runtime_child" in parent_data["sub_tasks"]
-    assert parent_data["sub_tasks"]["runtime_child"]["hosts"]["router1"]["Passed"][
-        "metadata"
-    ] == {"has_connection": False}
+    assert parent_data["sub_tasks"]["runtime_child"]["hosts"]["router1"]["outcome"][
+        "Passed"
+    ]["metadata"] == {"has_connection": False}
 
 
 def test_genja_runtime_run_tasks_rejects_plain_task_iterable():
@@ -224,12 +230,14 @@ def test_task_results_to_dict_normalizes_non_raw_and_preserves_raw_shape():
     normalized = results.to_dict()
     raw = results.to_dict(raw=True)
 
-    assert normalized["hosts"]["router1"]["status"] == "passed"
-    assert normalized["hosts"]["router1"]["summary"] == "runtime handled 10.0.0.1"
-    assert "Passed" not in normalized["hosts"]["router1"]
-
-    assert raw["hosts"]["router1"]["Passed"]["summary"] == "runtime handled 10.0.0.1"
-    assert "status" not in raw["hosts"]["router1"]
+    assert (
+        normalized["hosts"]["router1"]["outcome"]["Passed"]["summary"]
+        == "runtime handled 10.0.0.1"
+    )
+    assert (
+        raw["hosts"]["router1"]["outcome"]["Passed"]["summary"]
+        == "runtime handled 10.0.0.1"
+    )
 
 
 def test_genja_inventory_accessors_expose_host_payloads():
@@ -339,10 +347,12 @@ def test_genja_runtime_hides_depth_from_python_task_context():
     results = runtime.run_task(RuntimeParentTask, max_depth=1)
     data = results.to_dict(raw=True)
 
-    assert data["hosts"]["router1"]["Passed"]["metadata"] == {"has_connection": False}
+    assert data["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
+        "has_connection": False
+    }
 
     child_results = data["sub_tasks"]["runtime_child"]
-    assert child_results["hosts"]["router1"]["Passed"]["metadata"] == {
+    assert child_results["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
         "has_connection": False
     }
 
@@ -366,8 +376,7 @@ def test_genja_runtime_passes_python_connection_into_runtime_context():
     results = runtime.run_task(RuntimeConnectionTask)
     data = results.to_dict()
 
-    assert data["hosts"]["router1"]["status"] == "passed"
-    assert data["hosts"]["router1"]["metadata"] == {
+    assert data["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
         "connection_alive": True,
         "connection_hostname": "router1",
         "opened_with": {

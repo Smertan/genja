@@ -6,7 +6,6 @@ use ::genja_core::task::{
     TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
 };
 use async_trait::async_trait;
-use humantime::format_rfc3339;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
@@ -42,11 +41,7 @@ impl PyHostTaskResult {
 
     #[getter]
     fn status(&self) -> &'static str {
-        match self.inner {
-            HostTaskResult::Passed(_) => "passed",
-            HostTaskResult::Failed(_) => "failed",
-            HostTaskResult::Skipped(_) => "skipped",
-        }
+        self.inner.status()
     }
 
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -64,6 +59,8 @@ struct PythonTaskSpec {
     name: String,
     connection_plugin_name: Option<String>,
     processor_names: Vec<String>,
+    allow_retries: Option<bool>,
+    max_task_attempts: Option<usize>,
     options: Option<Value>,
     py_task_class: Arc<Py<PyAny>>,
     execution_mode: PythonTaskExecutionMode,
@@ -99,6 +96,14 @@ impl TaskInfo for PythonBackedTask {
 
     fn options(&self) -> Option<&Value> {
         self.spec.options.as_ref()
+    }
+
+    fn allow_retries(&self) -> Option<bool> {
+        self.spec.allow_retries
+    }
+
+    fn max_task_attempts(&self) -> Option<usize> {
+        self.spec.max_task_attempts
     }
 }
 
@@ -305,6 +310,16 @@ impl PyTaskDefinition {
                 spec: None,
             })
             .collect()
+    }
+
+    #[getter]
+    fn allow_retries(&self) -> Option<bool> {
+        self.inner.allow_retries()
+    }
+
+    #[getter]
+    fn max_task_attempts(&self) -> Option<usize> {
+        self.inner.max_task_attempts()
     }
 
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -677,6 +692,10 @@ pub(crate) fn python_result_to_task_results(obj: Bound<'_, PyAny>) -> PyResult<T
 }
 
 fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
+    if let Some(outcome) = value.get("outcome") {
+        return host_task_result_from_payload(outcome);
+    }
+
     let result_value = if let Some(passed) = value.get("Passed") {
         let mut tagged = passed.clone();
         tagged["status"] = Value::String("passed".to_string());
@@ -701,7 +720,9 @@ fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
     match status {
         "passed" => Ok(HostTaskResult::passed(json_to_task_success(&result_value)?)),
         "failed" => Ok(HostTaskResult::failed(json_to_task_failure(&result_value)?)),
-        "skipped" => Ok(HostTaskResult::Skipped(json_to_task_skip(&result_value))),
+        "skipped" => Ok(HostTaskResult::skipped_with_detail(json_to_task_skip(
+            &result_value,
+        ))),
         other => Err(PyValueError::new_err(format!(
             "unsupported python task result status '{other}'"
         ))),
@@ -843,32 +864,7 @@ fn parse_failure_kind(kind: &str) -> PyResult<TaskFailureKind> {
 }
 
 fn host_task_result_to_json(result: &HostTaskResult) -> Value {
-    match result {
-        HostTaskResult::Passed(success) => json!({
-            "status": "passed",
-            "result": success.result(),
-            "changed": success.changed(),
-            "diff": success.diff(),
-            "summary": success.summary(),
-            "warnings": success.warnings(),
-            "messages": success.messages().iter().map(task_message_to_json).collect::<Vec<_>>(),
-            "metadata": success.metadata(),
-        }),
-        HostTaskResult::Failed(failure) => json!({
-            "status": "failed",
-            "kind": failure_kind_to_str(failure.kind()),
-            "message": failure.message(),
-            "retryable": failure.retryable(),
-            "details": failure.details(),
-            "warnings": failure.warnings(),
-            "messages": failure.messages().iter().map(task_message_to_json).collect::<Vec<_>>(),
-        }),
-        HostTaskResult::Skipped(skip) => json!({
-            "status": "skipped",
-            "reason": skip.reason(),
-            "message": skip.message(),
-        }),
-    }
+    serde_json::to_value(result).expect("host task result should serialize")
 }
 
 fn normalize_task_results_json(value: &Value) -> Value {
@@ -932,41 +928,6 @@ fn task_results_summary_to_json(summary: &TaskResultsSummary) -> Value {
     })
 }
 
-pub(crate) fn task_message_to_json(message: &TaskMessage) -> Value {
-    json!({
-        "level": message_level_to_str(message.level()),
-        "text": message.text(),
-        "code": message.code(),
-        "timestamp": message.timestamp().map(format_timestamp),
-    })
-}
-
-fn message_level_to_str(level: &MessageLevel) -> &'static str {
-    match level {
-        MessageLevel::Info => "info",
-        MessageLevel::Warning => "warning",
-        MessageLevel::Error => "error",
-        MessageLevel::Debug => "debug",
-    }
-}
-
-fn failure_kind_to_str(kind: &TaskFailureKind) -> &'static str {
-    match kind {
-        TaskFailureKind::Connection => "connection",
-        TaskFailureKind::Authentication => "authentication",
-        TaskFailureKind::Validation => "validation",
-        TaskFailureKind::Timeout => "timeout",
-        TaskFailureKind::Command => "command",
-        TaskFailureKind::Unsupported => "unsupported",
-        TaskFailureKind::Internal => "internal",
-        TaskFailureKind::External => "external",
-    }
-}
-
-fn format_timestamp(timestamp: SystemTime) -> String {
-    format_rfc3339(timestamp).to_string()
-}
-
 fn task_definition_to_json(task_definition: &TaskDefinition) -> Value {
     task_to_json(task_definition.as_task())
 }
@@ -976,6 +937,8 @@ fn task_to_json(task: &dyn Task) -> Value {
         "name": task.name(),
         "connection_plugin_name": task.connection_plugin_name(),
         "processors": task.processor_names(),
+        "allow_retries": task.allow_retries(),
+        "max_task_attempts": task.max_task_attempts(),
         "options": task.options(),
         "sub_tasks": task.sub_tasks().into_iter().map(|sub_task| task_to_json(sub_task.as_ref())).collect::<Vec<_>>(),
     })
@@ -1081,6 +1044,30 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     } else {
         Vec::new()
     };
+    let allow_retries = if let Some(value) = info.get_item("allow_retries")? {
+        if value.is_none() {
+            None
+        } else {
+            Some(value.extract::<bool>()?)
+        }
+    } else {
+        None
+    };
+    let max_task_attempts = if let Some(value) = info.get_item("max_task_attempts")? {
+        if value.is_none() {
+            None
+        } else {
+            let max_task_attempts = value.extract::<usize>()?;
+            if max_task_attempts < 1 {
+                return Err(PyValueError::new_err(
+                    "python task metadata field 'max_task_attempts' must be at least 1",
+                ));
+            }
+            Some(max_task_attempts)
+        }
+    } else {
+        None
+    };
 
     let options = if let Some(options) = info.get_item("options")? {
         if options.is_none() {
@@ -1105,6 +1092,8 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         name,
         connection_plugin_name,
         processor_names,
+        allow_retries,
+        max_task_attempts,
         options,
         py_task_class: Arc::new(py_task_class.unbind()),
         execution_mode,
@@ -1132,6 +1121,8 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
         "name": spec.name,
         "connection_plugin_name": spec.connection_plugin_name,
         "processors": spec.processor_names,
+        "allow_retries": spec.allow_retries,
+        "max_task_attempts": spec.max_task_attempts,
         "options": spec.options,
         "sub_tasks": spec.sub_tasks.iter().map(python_task_spec_to_json).collect::<Vec<_>>(),
     })
@@ -1150,6 +1141,14 @@ fn python_task_spec_to_py_dict<'py>(
         None => task.set_item("connection_plugin_name", py.None())?,
     }
     task.set_item("processors", &spec.processor_names)?;
+    match spec.allow_retries {
+        Some(allow_retries) => task.set_item("allow_retries", allow_retries)?,
+        None => task.set_item("allow_retries", py.None())?,
+    }
+    match spec.max_task_attempts {
+        Some(max_task_attempts) => task.set_item("max_task_attempts", max_task_attempts)?,
+        None => task.set_item("max_task_attempts", py.None())?,
+    }
     if let Some(options) = spec.options.as_ref() {
         task.set_item("options", json_value_to_py(py, options)?)?;
     } else {
@@ -1284,6 +1283,14 @@ impl TaskInfo for RuntimeTaskWrapper {
 
     fn options(&self) -> Option<&Value> {
         self.inner.options()
+    }
+
+    fn allow_retries(&self) -> Option<bool> {
+        self.inner.allow_retries()
+    }
+
+    fn max_task_attempts(&self) -> Option<usize> {
+        self.inner.max_task_attempts()
     }
 }
 
@@ -1531,13 +1538,22 @@ mod tests {
                 .expect("success result should convert");
             let data = host_task_result_to_json(&host_result);
 
-            assert!(matches!(host_result, HostTaskResult::Passed(_)));
-            assert_eq!(data["status"], "passed");
-            assert_eq!(data["changed"], true);
-            assert_eq!(data["summary"], "backup complete");
-            assert_eq!(data["warnings"], json!(["using fallback path"]));
-            assert_eq!(data["messages"][0]["code"], "BACKUP_DONE");
-            assert_eq!(data["metadata"]["backup_file"], "/tmp/router1.cfg");
+            assert!(host_result.is_passed());
+            assert!(data["outcome"]["Passed"].is_object());
+            assert_eq!(data["outcome"]["Passed"]["changed"], true);
+            assert_eq!(data["outcome"]["Passed"]["summary"], "backup complete");
+            assert_eq!(
+                data["outcome"]["Passed"]["warnings"],
+                json!(["using fallback path"])
+            );
+            assert_eq!(
+                data["outcome"]["Passed"]["messages"][0]["code"],
+                "BACKUP_DONE"
+            );
+            assert_eq!(
+                data["outcome"]["Passed"]["metadata"]["backup_file"],
+                "/tmp/router1.cfg"
+            );
         });
     }
 
@@ -1613,6 +1629,8 @@ mod tests {
 
             assert_eq!(spec.name, "backup_config");
             assert_eq!(spec.connection_plugin_name.as_deref(), Some("ssh"));
+            assert_eq!(spec.allow_retries, None);
+            assert_eq!(spec.max_task_attempts, None);
             assert_eq!(spec.options, None);
             assert_eq!(spec.sub_tasks.len(), 1);
             assert_eq!(spec.sub_tasks[0].name, "verify_backup");
@@ -1655,6 +1673,38 @@ mod tests {
                 spec.options,
                 Some(json!({"backup_path": "/tmp/configs", "compress": true}))
             );
+        });
+    }
+
+    #[test]
+    fn extract_python_task_spec_extracts_retry_overrides() {
+        init_python();
+        Python::attach(|py| {
+            let task = make_task_class(
+                py,
+                "backup_config",
+                Some("ssh"),
+                &[],
+                PythonTaskExecutionMode::Blocking,
+            )
+            .expect("task class should be created");
+            task.getattr("__genja_task_info__")
+                .expect("task metadata should exist")
+                .cast::<PyDict>()
+                .expect("task metadata should be a dict")
+                .set_item("allow_retries", true)
+                .unwrap();
+            task.getattr("__genja_task_info__")
+                .expect("task metadata should exist")
+                .cast::<PyDict>()
+                .expect("task metadata should be a dict")
+                .set_item("max_task_attempts", 3)
+                .unwrap();
+
+            let spec = extract_python_task_spec(task).expect("task spec should extract");
+
+            assert_eq!(spec.allow_retries, Some(true));
+            assert_eq!(spec.max_task_attempts, Some(3));
         });
     }
 
@@ -1742,10 +1792,7 @@ mod tests {
                 .host_result("router1")
                 .expect("router1 result should exist");
             assert!(host_result.is_passed());
-            let success = match host_result {
-                HostTaskResult::Passed(success) => success,
-                _ => unreachable!("host result should be passed"),
-            };
+            let success = host_result.success().expect("host result should be passed");
             assert!(success.changed());
             assert_eq!(success.summary(), Some("async handled router1"));
             assert_eq!(success.metadata().unwrap()["has_connection"], json!(false));

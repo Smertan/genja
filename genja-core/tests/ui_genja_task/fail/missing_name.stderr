@@ -12,7 +12,7 @@ warning: unused import: `genja_core::inventory::Host`
 2 | use genja_core::inventory::Host;
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+  = note: `#[warn(unused_imports)]` on by default
 
 warning: unused imports: `HostTaskResult`, `TaskRuntimeContext`, and `TaskSuccess`
  --> tests/ui_genja_task/fail/missing_name.rs:3:24
