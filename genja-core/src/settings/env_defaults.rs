@@ -104,9 +104,7 @@ pub(super) fn raise_on_error() -> bool {
             Some(value) => value,
             None => {
                 log::warn!(
-                    "Invalid {} value {:?}; using default false",
-                    ENV_RAISE_ON_ERROR,
-                    s
+                    "Invalid {ENV_RAISE_ON_ERROR} value {s:?}; using default false"
                 );
                 false
             }
@@ -186,9 +184,7 @@ pub(super) fn get_log_to_console_default() -> bool {
             Some(value) => value,
             None => {
                 log::warn!(
-                    "Invalid {} value {:?}; using default false",
-                    ENV_LOG_TO_CONSOLE,
-                    val
+                    "Invalid {ENV_LOG_TO_CONSOLE} value {val:?}; using default false"
                 );
                 false
             }

@@ -1119,7 +1119,7 @@ impl Genja {
             let host = inventory
                 .hosts()
                 .get(host_id)
-                .ok_or_else(|| GenjaError::Message(format!("host '{}' not found", host_id)))?;
+                .ok_or_else(|| GenjaError::Message(format!("host '{host_id}' not found")))?;
             hosts.add_host(host_id.as_str(), host.clone());
         }
 

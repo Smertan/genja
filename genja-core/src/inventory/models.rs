@@ -422,7 +422,7 @@ impl<'de> Deserialize<'de> for ParentGroups {
         match deserializer.deserialize_seq(ParentGroupsVisitor) {
             Ok(parent) => Ok(parent),
             Err(err) => {
-                log::error!("{}", err);
+                log::error!("{err}");
                 let err_msg = "Groups should be an array of strings for use with `ParentGroups`";
                 log::error!("{err_msg}");
                 Err(D::Error::custom(err_msg))

@@ -344,8 +344,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
                         err
                     );
                     return Err(GenjaError::Message(format!(
-                        "threaded runner worker task failed: {}",
-                        err
+                        "threaded runner worker task failed: {err}"
                     )));
                 }
             }

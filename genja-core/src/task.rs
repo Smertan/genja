@@ -3535,7 +3535,6 @@ impl TaskDefinition {
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
         self.start_with_retry_defaults(
-            Arc::clone(&self.inner),
             hostname,
             host,
             results,
@@ -3556,7 +3555,6 @@ impl TaskDefinition {
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
         self.start_with_retry_defaults(
-            Arc::clone(&self.inner),
             hostname,
             host,
             results,
@@ -3578,7 +3576,6 @@ impl TaskDefinition {
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
         self.start_with_retry_defaults(
-            Arc::clone(&self.inner),
             hostname,
             host,
             results,
@@ -3591,7 +3588,6 @@ impl TaskDefinition {
 
     async fn start_with_retry_defaults(
         &self,
-        task: Arc<dyn Task>,
         hostname: &str,
         host: &Host,
         results: &mut TaskResults,
@@ -3600,7 +3596,7 @@ impl TaskDefinition {
         retry_defaults: TaskRetryDefaults,
     ) -> Result<(), crate::GenjaError> {
         Self::start_with_depth(
-            task,
+            Arc::clone(&self.inner),
             hostname,
             host,
             results,
@@ -3699,7 +3695,7 @@ impl TaskDefinition {
             let started_at = SystemTime::now();
             let finished_at = started_at;
             let error =
-                crate::GenjaError::Message(format!("max task depth exceeded: {}", max_depth));
+                crate::GenjaError::Message(format!("max task depth exceeded: {max_depth}"));
             warn!(
                 "max task depth exceeded for task '{}' at depth {} with max_depth {}",
                 task.name(),
