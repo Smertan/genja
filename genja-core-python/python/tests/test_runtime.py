@@ -110,8 +110,7 @@ def test_genja_runtime_runs_python_task_definition():
         == "runtime handled 10.0.0.1"
     )
     assert (
-        data["hosts"]["router2"]["outcome"]["Passed"]["metadata"]["platform"]
-        == "ios"
+        data["hosts"]["router2"]["outcome"]["Passed"]["metadata"]["platform"] == "ios"
     )
 
 

@@ -115,7 +115,9 @@ def test_task_definition_run_on_host_executes_python_body():
     data = result.to_dict()
 
     assert result.passed_hosts == ["router1"]
-    assert data["hosts"]["router1"]["outcome"]["Passed"]["summary"] == "backed up router1"
+    assert (
+        data["hosts"]["router1"]["outcome"]["Passed"]["summary"] == "backed up router1"
+    )
     assert (
         data["hosts"]["router1"]["outcome"]["Passed"]["metadata"]["sub_task_name"]
         == "verify_backup_plain"
