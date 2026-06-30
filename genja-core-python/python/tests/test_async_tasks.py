@@ -99,7 +99,9 @@ def test_runtime_run_task_async_handles_failures():
     assert results.failed_hosts == ["router1"]
 
     data = results.to_dict()
-    assert "async task failed" in data["hosts"]["router1"]["outcome"]["Failed"]["message"]
+    assert (
+        "async task failed" in data["hosts"]["router1"]["outcome"]["Failed"]["message"]
+    )
 
 
 def test_runtime_run_task_async_with_connection():
@@ -230,7 +232,10 @@ def test_runtime_run_task_async_handles_exception_in_task():
 
     assert results.failed_hosts == ["router1"]
     data = results.to_dict()
-    assert "something went wrong" in data["hosts"]["router1"]["outcome"]["Failed"]["message"]
+    assert (
+        "something went wrong"
+        in data["hosts"]["router1"]["outcome"]["Failed"]["message"]
+    )
 
 
 def test_runtime_run_task_async_with_timeout():

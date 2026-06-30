@@ -203,12 +203,9 @@ def test_genja_runtime_runs_ordered_task_list_with_nested_subtasks():
 
     parent_data = results[1].to_dict(raw=True)
     assert "runtime_child" in parent_data["sub_tasks"]
-    assert (
-        parent_data["sub_tasks"]["runtime_child"]["hosts"]["router1"]["outcome"]["Passed"][
-            "metadata"
-        ]
-        == {"has_connection": False}
-    )
+    assert parent_data["sub_tasks"]["runtime_child"]["hosts"]["router1"]["outcome"][
+        "Passed"
+    ]["metadata"] == {"has_connection": False}
 
 
 def test_genja_runtime_run_tasks_rejects_plain_task_iterable():
