@@ -227,4 +227,4 @@ cargo run -p genja --example async_inventory_plugin
 
 ## License
 
-Genja is licensed under AGPL-3.0-only.
+Genja is licensed under MPL-2.0.

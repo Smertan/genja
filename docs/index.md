@@ -66,5 +66,5 @@ the quickstart to load inventory and run your first task.
 
 ## Licensing
 
-Genja is licensed under `AGPL-3.0-only`. See [License](license.md) for package
+Genja is licensed under `MPL-2.0`. See [License](license.md) for package
 license details.
