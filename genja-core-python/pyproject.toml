@@ -6,13 +6,13 @@ authors = [
     {name = "Andre Bowen-Brown", email = "contact@genja.co.uk"},
 ]
 readme = "README.md"
-license = {text = "AGPL-3.0-only"}
+license = {text = "MPL-2.0"}
 requires-python = ">=3.10"
 keywords = ["automation", "tasks", "inventory", "orchestration", "rust"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
