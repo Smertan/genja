@@ -1,8 +1,8 @@
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
-    HostTaskResult, MessageLevel, Task, TaskConnectionResolver, TaskDefinition, TaskError,
-    TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
+    HostTaskResult, MessageLevel, RetryConfig, Task, TaskConnectionResolver, TaskDefinition,
+    TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
     TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
 };
 use async_trait::async_trait;
@@ -59,8 +59,7 @@ struct PythonTaskSpec {
     name: String,
     connection_plugin_name: Option<String>,
     processor_names: Vec<String>,
-    allow_retries: Option<bool>,
-    max_task_attempts: Option<usize>,
+    retry_config: Option<RetryConfig>,
     options: Option<Value>,
     py_task_class: Arc<Py<PyAny>>,
     execution_mode: PythonTaskExecutionMode,
@@ -98,12 +97,8 @@ impl TaskInfo for PythonBackedTask {
         self.spec.options.as_ref()
     }
 
-    fn allow_retries(&self) -> Option<bool> {
-        self.spec.allow_retries
-    }
-
-    fn max_task_attempts(&self) -> Option<usize> {
-        self.spec.max_task_attempts
+    fn retry_config(&self) -> Option<&RetryConfig> {
+        self.spec.retry_config.as_ref()
     }
 }
 
@@ -314,12 +309,14 @@ impl PyTaskDefinition {
 
     #[getter]
     fn allow_retries(&self) -> Option<bool> {
-        self.inner.allow_retries()
+        self.inner.retry_config().and_then(RetryConfig::allow)
     }
 
     #[getter]
     fn max_task_attempts(&self) -> Option<usize> {
-        self.inner.max_task_attempts()
+        self.inner
+            .retry_config()
+            .and_then(RetryConfig::max_attempts)
     }
 
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -933,12 +930,13 @@ fn task_definition_to_json(task_definition: &TaskDefinition) -> Value {
 }
 
 fn task_to_json(task: &dyn Task) -> Value {
+    let retry_config = task.retry_config();
     json!({
         "name": task.name(),
         "connection_plugin_name": task.connection_plugin_name(),
         "processors": task.processor_names(),
-        "allow_retries": task.allow_retries(),
-        "max_task_attempts": task.max_task_attempts(),
+        "allow_retries": retry_config.and_then(RetryConfig::allow),
+        "max_task_attempts": retry_config.and_then(RetryConfig::max_attempts),
         "options": task.options(),
         "sub_tasks": task.sub_tasks().into_iter().map(|sub_task| task_to_json(sub_task.as_ref())).collect::<Vec<_>>(),
     })
@@ -1088,12 +1086,17 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         }
     }
 
+    let retry_config = if allow_retries.is_some() || max_task_attempts.is_some() {
+        Some(RetryConfig::new(allow_retries, max_task_attempts, None))
+    } else {
+        None
+    };
+
     Ok(PythonTaskSpec {
         name,
         connection_plugin_name,
         processor_names,
-        allow_retries,
-        max_task_attempts,
+        retry_config,
         options,
         py_task_class: Arc::new(py_task_class.unbind()),
         execution_mode,
@@ -1121,8 +1124,8 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
         "name": spec.name,
         "connection_plugin_name": spec.connection_plugin_name,
         "processors": spec.processor_names,
-        "allow_retries": spec.allow_retries,
-        "max_task_attempts": spec.max_task_attempts,
+        "allow_retries": spec.retry_config.as_ref().and_then(RetryConfig::allow),
+        "max_task_attempts": spec.retry_config.as_ref().and_then(RetryConfig::max_attempts),
         "options": spec.options,
         "sub_tasks": spec.sub_tasks.iter().map(python_task_spec_to_json).collect::<Vec<_>>(),
     })
@@ -1141,11 +1144,15 @@ fn python_task_spec_to_py_dict<'py>(
         None => task.set_item("connection_plugin_name", py.None())?,
     }
     task.set_item("processors", &spec.processor_names)?;
-    match spec.allow_retries {
+    match spec.retry_config.as_ref().and_then(RetryConfig::allow) {
         Some(allow_retries) => task.set_item("allow_retries", allow_retries)?,
         None => task.set_item("allow_retries", py.None())?,
     }
-    match spec.max_task_attempts {
+    match spec
+        .retry_config
+        .as_ref()
+        .and_then(RetryConfig::max_attempts)
+    {
         Some(max_task_attempts) => task.set_item("max_task_attempts", max_task_attempts)?,
         None => task.set_item("max_task_attempts", py.None())?,
     }
@@ -1285,12 +1292,8 @@ impl TaskInfo for RuntimeTaskWrapper {
         self.inner.options()
     }
 
-    fn allow_retries(&self) -> Option<bool> {
-        self.inner.allow_retries()
-    }
-
-    fn max_task_attempts(&self) -> Option<usize> {
-        self.inner.max_task_attempts()
+    fn retry_config(&self) -> Option<&RetryConfig> {
+        self.inner.retry_config()
     }
 }
 
@@ -1629,8 +1632,7 @@ mod tests {
 
             assert_eq!(spec.name, "backup_config");
             assert_eq!(spec.connection_plugin_name.as_deref(), Some("ssh"));
-            assert_eq!(spec.allow_retries, None);
-            assert_eq!(spec.max_task_attempts, None);
+            assert_eq!(spec.retry_config, None);
             assert_eq!(spec.options, None);
             assert_eq!(spec.sub_tasks.len(), 1);
             assert_eq!(spec.sub_tasks[0].name, "verify_backup");
@@ -1703,8 +1705,10 @@ mod tests {
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 
-            assert_eq!(spec.allow_retries, Some(true));
-            assert_eq!(spec.max_task_attempts, Some(3));
+            let retry_config = spec.retry_config.expect("retry config should be extracted");
+            assert_eq!(retry_config.allow(), Some(true));
+            assert_eq!(retry_config.max_attempts(), Some(3));
+            assert_eq!(retry_config.delay_ms(), None);
         });
     }
 

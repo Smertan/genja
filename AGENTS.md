@@ -24,7 +24,8 @@ Repository-specific instructions for AI coding agents working in this workspace.
 ### Content
 
 - Include migration guidance for breaking changes.
-- Use `Refs: #<issue>` for linked work items when an issue exists.
+- Add `Refs: #<issue>` inline at the end of each changelog bullet when the bullet is associated with a work item.
+- Use `Fixes: #<issue>` only when the change fully resolves the issue and should close it.
 
 ### Timing
 
@@ -71,3 +72,10 @@ Repository-specific instructions for AI coding agents working in this workspace.
 
 - Update relevant docs when public behavior, APIs, settings, or result shapes change.
 - Do not leave user-visible behavior changes undocumented.
+
+### Code Documentation
+
+- Document newly added or changed public structs, enums, traits, functions, methods, modules, and trait methods.
+- Update module-level documentation when a change alters the module's public concepts, vocabulary, behavior, or examples.
+- Keep rustdoc and doc examples aligned with the current public API during the same branch as the code change.
+- For Python public API changes, update affected module docstrings, class/function docstrings, type annotations, exported symbols, and stub/typecheck fixtures when applicable.

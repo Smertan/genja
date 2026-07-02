@@ -91,8 +91,12 @@ fn genja_task_generates_task_info_from_metadata() {
     assert_eq!(task.name(), "async_task");
     assert_eq!(task.connection_plugin_name(), Some("ssh"));
     assert_eq!(task.processor_names(), vec!["audit", "metrics"]);
-    assert_eq!(task.allow_retries(), Some(true));
-    assert_eq!(task.max_task_attempts(), Some(3));
+    let retry_config = task
+        .retry_config()
+        .expect("retry config should be generated");
+    assert_eq!(retry_config.allow(), Some(true));
+    assert_eq!(retry_config.max_attempts(), Some(3));
+    assert_eq!(retry_config.delay_ms(), None);
     assert_eq!(task.options(), Some(&json!({"changed": false})));
     assert!(task.helper());
 }

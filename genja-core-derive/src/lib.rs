@@ -339,22 +339,24 @@ fn expand_genja_task(
         }
     };
 
-    let allow_retries_impl = match allow_retries {
-        Some(allow_retries) => quote! {
-            fn allow_retries(&self) -> Option<bool> {
-                Some(#allow_retries)
+    let retry_config_impl = if allow_retries.is_some() || max_task_attempts.is_some() {
+        let allow_retries = match allow_retries {
+            Some(allow_retries) => quote! { Some(#allow_retries) },
+            None => quote! { None },
+        };
+        let max_task_attempts = match max_task_attempts {
+            Some(max_task_attempts) => quote! { Some(#max_task_attempts) },
+            None => quote! { None },
+        };
+        quote! {
+            fn retry_config(&self) -> Option<&genja_core::task::RetryConfig> {
+                static RETRY_CONFIG: genja_core::task::RetryConfig =
+                    genja_core::task::RetryConfig::new(#allow_retries, #max_task_attempts, None);
+                Some(&RETRY_CONFIG)
             }
-        },
-        None => quote! {},
-    };
-
-    let max_task_attempts_impl = match max_task_attempts {
-        Some(max_task_attempts) => quote! {
-            fn max_task_attempts(&self) -> Option<usize> {
-                Some(#max_task_attempts)
-            }
-        },
-        None => quote! {},
+        }
+    } else {
+        quote! {}
     };
 
     let task_impl = if has_start {
@@ -413,9 +415,7 @@ fn expand_genja_task(
 
             #processor_names_impl
 
-            #allow_retries_impl
-
-            #max_task_attempts_impl
+            #retry_config_impl
         }
 
         #task_impl
