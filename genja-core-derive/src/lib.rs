@@ -19,6 +19,11 @@
 //!     name = "collect_facts",
 //!     connection_plugin_name = "ssh",
 //!     processors = ["audit"],
+//!     retry(
+//!         allow = true,
+//!         max_attempts = 3,
+//!         delay_ms = 500
+//!     ),
 //! )]
 //! impl CollectFacts {
 //!     async fn start_async(
@@ -64,7 +69,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     DeriveInput, Expr, ExprArray, ExprLit, FnArg, GenericArgument, ImplItem, ItemImpl, Lit,
-    LitBool, LitInt, LitStr, PathArguments, ReturnType, Token, Type, TypePath,
+    LitBool, LitInt, LitStr, PathArguments, ReturnType, Token, Type, TypePath, parenthesized,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
@@ -161,8 +166,14 @@ struct GenjaTaskArgs {
     name: Option<LitStr>,
     connection_plugin_name: Option<LitStr>,
     processors: Vec<LitStr>,
-    allow_retries: Option<LitBool>,
-    max_task_attempts: Option<LitInt>,
+    retry: Option<RetryArgs>,
+}
+
+#[derive(Default)]
+struct RetryArgs {
+    allow: Option<LitBool>,
+    max_attempts: Option<LitInt>,
+    delay_ms: Option<LitInt>,
 }
 
 impl Parse for GenjaTaskArgs {
@@ -171,16 +182,17 @@ impl Parse for GenjaTaskArgs {
 
         while !input.is_empty() {
             let key: syn::Ident = input.parse()?;
-            input.parse::<Token![=]>()?;
 
             match key.to_string().as_str() {
                 "name" => {
+                    input.parse::<Token![=]>()?;
                     if args.name.is_some() {
                         return Err(syn::Error::new_spanned(key, "duplicate `name`"));
                     }
                     args.name = Some(input.parse()?);
                 }
                 "connection_plugin_name" => {
+                    input.parse::<Token![=]>()?;
                     if args.connection_plugin_name.is_some() {
                         return Err(syn::Error::new_spanned(
                             key,
@@ -190,6 +202,7 @@ impl Parse for GenjaTaskArgs {
                     args.connection_plugin_name = Some(input.parse()?);
                 }
                 "processors" => {
+                    input.parse::<Token![=]>()?;
                     if !args.processors.is_empty() {
                         return Err(syn::Error::new_spanned(key, "duplicate `processors`"));
                     }
@@ -197,24 +210,29 @@ impl Parse for GenjaTaskArgs {
                     args.processors = parse_processor_exprs(&array)?;
                 }
                 "allow_retries" => {
-                    if args.allow_retries.is_some() {
-                        return Err(syn::Error::new_spanned(key, "duplicate `allow_retries`"));
-                    }
-                    args.allow_retries = Some(input.parse()?);
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "unsupported key `allow_retries`; did you mean `retry(allow = ...)`?",
+                    ));
                 }
                 "max_task_attempts" => {
-                    if args.max_task_attempts.is_some() {
-                        return Err(syn::Error::new_spanned(
-                            key,
-                            "duplicate `max_task_attempts`",
-                        ));
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "unsupported key `max_task_attempts`; did you mean `retry(max_attempts = ...)`?",
+                    ));
+                }
+                "retry" => {
+                    if args.retry.is_some() {
+                        return Err(syn::Error::new_spanned(key, "duplicate `retry`"));
                     }
-                    args.max_task_attempts = Some(input.parse()?);
+                    let content;
+                    parenthesized!(content in input);
+                    args.retry = Some(content.parse()?);
                 }
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "unsupported key; expected `name`, `connection_plugin_name`, `processors`, `allow_retries`, or `max_task_attempts`",
+                        "unsupported key; expected `name`, `connection_plugin_name`, `processors`, or `retry(...)`",
                     ));
                 }
             }
@@ -235,6 +253,90 @@ impl Parse for GenjaTaskArgs {
 
         Ok(args)
     }
+}
+
+impl Parse for RetryArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut args = Self::default();
+
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+
+            match key.to_string().as_str() {
+                "allow" => {
+                    if args.allow.is_some() {
+                        return Err(syn::Error::new_spanned(key, "duplicate retry key `allow`"));
+                    }
+                    args.allow = Some(input.parse()?);
+                }
+                "max_attempts" => {
+                    if args.max_attempts.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate retry key `max_attempts`",
+                        ));
+                    }
+                    let max_attempts: LitInt = input.parse()?;
+                    let value = parse_usize_literal(
+                        &max_attempts,
+                        "`max_attempts` must be a positive integer literal",
+                    )?;
+                    if value == 0 {
+                        return Err(syn::Error::new_spanned(
+                            max_attempts,
+                            "`max_attempts` must be a positive integer literal",
+                        ));
+                    }
+                    args.max_attempts = Some(max_attempts);
+                }
+                "delay_ms" => {
+                    if args.delay_ms.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate retry key `delay_ms`",
+                        ));
+                    }
+                    let delay_ms: LitInt = input.parse()?;
+                    parse_non_negative_u64_literal(
+                        &delay_ms,
+                        "`delay_ms` must be a non-negative integer literal",
+                    )?;
+                    args.delay_ms = Some(delay_ms);
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "unsupported retry key; expected `allow`, `max_attempts`, or `delay_ms`",
+                    ));
+                }
+            }
+
+            if input.is_empty() {
+                break;
+            }
+
+            input.parse::<Token![,]>()?;
+        }
+
+        Ok(args)
+    }
+}
+
+fn parse_usize_literal(lit: &LitInt, message: &str) -> syn::Result<usize> {
+    if lit.to_string().starts_with('-') {
+        return Err(syn::Error::new_spanned(lit, message));
+    }
+    lit.base10_parse::<usize>()
+        .map_err(|_err| syn::Error::new_spanned(lit, message))
+}
+
+fn parse_non_negative_u64_literal(lit: &LitInt, message: &str) -> syn::Result<u64> {
+    if lit.to_string().starts_with('-') {
+        return Err(syn::Error::new_spanned(lit, message));
+    }
+    lit.base10_parse::<u64>()
+        .map_err(|_err| syn::Error::new_spanned(lit, message))
 }
 
 fn expand_genja_task(
@@ -301,8 +403,7 @@ fn expand_genja_task(
     let name = args.name.expect("validated above");
     let connection_plugin_name = args.connection_plugin_name;
     let processors = args.processors;
-    let allow_retries = args.allow_retries;
-    let max_task_attempts = args.max_task_attempts;
+    let retry = args.retry;
 
     let connection_impl = match connection_plugin_name {
         Some(plugin_name) => quote! { Some(#plugin_name) },
@@ -339,19 +440,23 @@ fn expand_genja_task(
         }
     };
 
-    let retry_config_impl = if allow_retries.is_some() || max_task_attempts.is_some() {
-        let allow_retries = match allow_retries {
-            Some(allow_retries) => quote! { Some(#allow_retries) },
+    let retry_config_impl = if let Some(retry) = retry {
+        let allow = match retry.allow {
+            Some(allow) => quote! { Some(#allow) },
             None => quote! { None },
         };
-        let max_task_attempts = match max_task_attempts {
-            Some(max_task_attempts) => quote! { Some(#max_task_attempts) },
+        let max_attempts = match retry.max_attempts {
+            Some(max_attempts) => quote! { Some(#max_attempts) },
+            None => quote! { None },
+        };
+        let delay_ms = match retry.delay_ms {
+            Some(delay_ms) => quote! { Some(#delay_ms) },
             None => quote! { None },
         };
         quote! {
             fn retry_config(&self) -> Option<&genja_core::task::RetryConfig> {
                 static RETRY_CONFIG: genja_core::task::RetryConfig =
-                    genja_core::task::RetryConfig::new(#allow_retries, #max_task_attempts, None);
+                    genja_core::task::RetryConfig::new(#allow, #max_attempts, #delay_ms);
                 Some(&RETRY_CONFIG)
             }
         }

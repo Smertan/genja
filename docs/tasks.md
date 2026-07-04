@@ -143,8 +143,9 @@ The common macro options are:
 - `name`: task name shown in results and task trees
 - `connection_plugin_name`: connection plugin to open before task execution
 - `processors`: processor plugin names to run around task execution
-- `allow_retries`: optional task-level override for whether retries are allowed
-- `max_task_attempts`: optional task-level override for total task attempts
+- `retry.allow`: optional task-level override for whether retries are allowed
+- `retry.max_attempts`: optional task-level override for total task attempts
+- `retry.delay_ms`: optional fixed in-process delay in milliseconds between retry attempts
 
 Define exactly one task entrypoint in the macro `impl` block:
 
@@ -172,8 +173,11 @@ struct RetryableBackup;
 #[genja_task(
     name = "retryable_backup",
     connection_plugin_name = "ssh",
-    allow_retries = true,
-    max_task_attempts = 3
+    retry(
+        allow = true,
+        max_attempts = 3,
+        delay_ms = 500
+    )
 )]
 impl RetryableBackup {
     async fn start_async(

@@ -29,8 +29,11 @@ struct AsyncTask {
     name = "async_task",
     connection_plugin_name = "ssh",
     processors = ["audit", "metrics"],
-    allow_retries = true,
-    max_task_attempts = 3
+    retry(
+        allow = true,
+        max_attempts = 3,
+        delay_ms = 500
+    )
 )]
 impl AsyncTask {
     async fn start_async(
@@ -96,7 +99,7 @@ fn genja_task_generates_task_info_from_metadata() {
         .expect("retry config should be generated");
     assert_eq!(retry_config.allow(), Some(true));
     assert_eq!(retry_config.max_attempts(), Some(3));
-    assert_eq!(retry_config.delay_ms(), None);
+    assert_eq!(retry_config.delay_ms(), Some(500));
     assert_eq!(task.options(), Some(&json!({"changed": false})));
     assert!(task.helper());
 }

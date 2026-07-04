@@ -196,8 +196,8 @@
 //! are in scope.
 //!
 //! Static task metadata can also include retry overrides. The
-//! [`genja_task`](crate::genja_task) macro currently accepts flat retry metadata
-//! such as `allow_retries = true` and `max_task_attempts = 3`, then exposes it
+//! [`genja_task`](crate::genja_task) macro accepts grouped retry metadata with
+//! `retry(allow = true, max_attempts = 3, delay_ms = 500)`, then exposes it
 //! through [`TaskInfo::retry_config`] as a [`RetryConfig`]. These settings
 //! control retry policy only. A retry still requires the task to return a
 //! failed [`HostTaskResult`] whose [`TaskFailure`] is explicitly marked
@@ -219,8 +219,11 @@
 //! #[genja_task(
 //!     name = "deploy",
 //!     connection_plugin_name = "ssh",
-//!     allow_retries = true,
-//!     max_task_attempts = 3
+//!     retry(
+//!         allow = true,
+//!         max_attempts = 3,
+//!         delay_ms = 500
+//!     )
 //! )]
 //! impl DeployTask {
 //!     async fn start_async(
@@ -251,9 +254,9 @@
 //! requirements, retry overrides, and optional configuration. This trait is typically
 //! auto-implemented by the [`genja_task`](crate::genja_task) attribute macro.
 //! Static metadata comes from macro arguments such as `name`,
-//! `connection_plugin_name`, `processors`, `allow_retries`, and
-//! `max_task_attempts`, while dynamic metadata can be provided through helper
-//! methods such as `options()`. Task retry metadata is exposed as
+//! `connection_plugin_name`, `processors`, and `retry(...)`, while dynamic
+//! metadata can be provided through helper methods such as `options()`.
+//! Task retry metadata is exposed as
 //! [`RetryConfig`] through [`TaskInfo::retry_config`].
 //!
 //! ## [`RetryConfig`]

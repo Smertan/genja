@@ -1,0 +1,19 @@
+error: unsupported key `max_task_attempts`; did you mean `retry(max_attempts = ...)`?
+ --> tests/ui_genja_task/fail/old_max_task_attempts_key.rs:9:5
+  |
+9 |     max_task_attempts = 3
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `genja_core::inventory::Host`
+ --> tests/ui_genja_task/fail/old_max_task_attempts_key.rs:2:5
+  |
+2 | use genja_core::inventory::Host;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `HostTaskResult`, `TaskRuntimeContext`, and `TaskSuccess`
+ --> tests/ui_genja_task/fail/old_max_task_attempts_key.rs:3:24
+  |
+3 | use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+  |                        ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^
