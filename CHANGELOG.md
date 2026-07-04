@@ -11,9 +11,10 @@ All notable changes to this workspace should be documented in this file.
 - **Breaking:** Removed execution timing fields and accessors from `TaskSuccess` and `TaskFailure`. Rust consumers should read per-host timing from `HostTaskResult.execution_metadata()` and aggregate task timing from `TaskResults`. Refs: #63
 - Python `HostTaskResult.to_dict()` now returns the new structured shape. Refs: #63
 - `HostTaskResult.status` remains available as a convenience accessor. Refs: #63
-- **Breaking:** Replaced the task retry metadata hooks `TaskInfo::allow_retries()` and `TaskInfo::max_task_attempts()` with `TaskInfo::retry_config()`. Manual Rust task implementations should return `RetryConfig` from `retry_config()` for task-level retry overrides. Refs: #67
-- **Breaking:** Replaced flat runner retry settings with nested `runner.retry.allow`, `runner.retry.max_attempts`, and `runner.retry.delay_ms`. Migrate `runner.allow_retries` to `runner.retry.allow` and `runner.max_task_attempts` to `runner.retry.max_attempts`; set `runner.retry.delay_ms` only when a fixed retry delay is needed. Refs: #67
-- **Breaking:** Replaced Rust task macro retry keys `allow_retries` and `max_task_attempts` with `retry(allow = ..., max_attempts = ..., delay_ms = ...)`. Migrate flat `#[genja_task(...)]` retry keys into the grouped `retry(...)` block; omit `delay_ms` to keep the default fixed delay. Refs: #67
+- Added grouped retry metadata with `RetryConfig` and the public fields `retry.allow`, `retry.max_attempts`, and `retry.delay_ms` for task-level retry overrides. Refs: #67
+- Added nested runner retry settings under `runner.retry.allow`, `runner.retry.max_attempts`, and `runner.retry.delay_ms`. Refs: #67
+- Added Rust task macro retry metadata with `#[genja_task(retry(allow = ..., max_attempts = ..., delay_ms = ...))]`. Refs: #67
+- Added Python task retry metadata with `retry=RetryConfig(allow=..., max_attempts=..., delay_ms=...)`. Refs: #67
 - Added runner-level retry defaults in shared settings, plus task-level overrides in Rust and Python task metadata. Refs: #63
 - Built-in task execution now applies retry policy from runner settings and task metadata. Retries only occur for failures explicitly marked `retryable`, and host execution metadata now records attempts, whether a retry occurred, and whether retries were exhausted. Refs: #63
 - The workspace Rust toolchain is now pinned to `1.88.0` to align local diagnostics and trybuild snapshots with CI. Refs: #63

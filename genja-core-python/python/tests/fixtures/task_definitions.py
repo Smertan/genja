@@ -3,6 +3,7 @@ class AsyncRuntimeTask:
         "name": "async_runtime_task",
         "connection_plugin_name": None,
         "processors": [],
+        "retry": None,
         "options": None,
         "sub_tasks": [],
     }

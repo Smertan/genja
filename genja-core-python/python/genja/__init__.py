@@ -42,6 +42,7 @@ from .settings import Settings
 from .task import (
     GenjaTaskProtocol,
     Host,
+    RetryConfig,
     TaskFailureKind,
     TaskRuntimeContext,
     TaskFailureResult,
@@ -90,6 +91,7 @@ __all__ = [
     "RunnerRetryConfig",
     "LoggingConfig",
     "GenjaTaskProtocol",
+    "RetryConfig",
     "TaskInfo",
     "Host",
     "TaskRuntimeContext",

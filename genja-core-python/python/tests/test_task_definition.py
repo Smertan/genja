@@ -3,6 +3,7 @@ import pytest
 from genja.task import (
     Host,
     GenjaTaskProtocol,
+    RetryConfig,
     TaskRuntimeContext,
     TaskMessageLevel,
     TaskInfo,
@@ -10,6 +11,7 @@ from genja.task import (
     TaskSuccessResult,
     task,
 )
+from pydantic import ValidationError
 from typing import cast
 
 
@@ -147,6 +149,93 @@ def test_task_definition_from_python_class_allows_missing_connection_plugin_name
 
     assert task_definition.connection_plugin_name is None
     assert task_definition.to_dict()["connection_plugin_name"] is None
+
+
+def test_retry_config_accepts_valid_values():
+    retry = RetryConfig(allow=True, max_attempts=3, delay_ms=500)
+
+    assert retry.to_dict() == {
+        "allow": True,
+        "max_attempts": 3,
+        "delay_ms": 500,
+    }
+
+
+def test_retry_config_rejects_invalid_values():
+    with pytest.raises(ValidationError, match="max_attempts"):
+        RetryConfig(max_attempts=0)
+
+    with pytest.raises(ValidationError, match="delay_ms"):
+        RetryConfig(delay_ms=-1)
+
+
+def test_task_decorator_stores_nested_retry_metadata():
+    @task(
+        name="retryable_backup",
+        connection_plugin_name="ssh",
+        retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
+    )
+    class RetryableTask:
+        def start(self, task, host, context):
+            assert task.retry == RetryConfig(allow=True, max_attempts=3, delay_ms=500)
+            return TaskSuccessResult(summary="noop")
+
+    metadata = cast(type[GenjaTaskProtocol], RetryableTask).__genja_task_info__
+    assert metadata["retry"] == {
+        "allow": True,
+        "max_attempts": 3,
+        "delay_ms": 500,
+    }
+
+    task_definition = genja.TaskDefinition.from_python_class(RetryableTask)
+    assert task_definition.retry == {
+        "allow": True,
+        "max_attempts": 3,
+        "delay_ms": 500,
+    }
+    assert task_definition.to_dict()["retry"] == {
+        "allow": True,
+        "max_attempts": 3,
+        "delay_ms": 500,
+    }
+
+
+def test_task_decorator_rejects_flat_retry_kwargs():
+    with pytest.raises(TypeError, match=r"did you mean retry=RetryConfig\(allow="):
+
+        @task(name="backup_config", allow_retries=True)
+        class InvalidAllowTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+    with pytest.raises(
+        TypeError, match=r"did you mean retry=RetryConfig\(max_attempts="
+    ):
+
+        @task(name="backup_config", max_task_attempts=3)
+        class InvalidMaxAttemptsTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+    with pytest.raises(TypeError, match=r"did you mean retry=RetryConfig\(delay_ms="):
+
+        @task(name="backup_config", delay_ms=500)
+        class InvalidDelayTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
+def test_task_definition_rejects_invalid_retry_metadata():
+    @task(name="backup_config", connection_plugin_name="ssh")
+    class InvalidTask:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="noop")
+
+    metadata = cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__
+    metadata["retry"] = {"max_attempts": 0}
+
+    with pytest.raises(ValueError, match=r"retry\.max_attempts.*at least 1"):
+        genja.TaskDefinition.from_python_class(InvalidTask)
 
 
 def test_task_decorator_rejects_empty_connection_plugin_name():

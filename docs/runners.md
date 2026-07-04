@@ -59,7 +59,7 @@ failure result.
 
 Precedence for retry settings is:
 
-1. task-level retry metadata such as `allow_retries` and `max_task_attempts`
+1. task-level retry metadata such as `retry.allow`, `retry.max_attempts`, and `retry.delay_ms`
 2. runner-level `retry` defaults
 3. built-in fallback defaults
 

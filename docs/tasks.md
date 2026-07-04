@@ -207,23 +207,32 @@ Common decorator options:
 - `connection_plugin_name`: connection plugin to open before task execution
 - `processors`: processor plugin names to run around task execution
 - `sub_tasks`: child tasks to execute beneath the current task
-- `allow_retries`: optional task-level override for whether retries are allowed
-- `max_task_attempts`: optional task-level override for total task attempts
+- `retry`: optional grouped task-level retry overrides
 
 ### Python Retry Overrides
 
-Use decorator fields when a Python task should opt into retries or override the
-runner defaults for retry count:
+Use `RetryConfig` when a Python task should opt into retries or override the
+runner defaults for retry count or fixed retry delay:
 
 ```python
-from genja.task import Host, TaskFailureResult, TaskInfo, TaskRuntimeContext, task
+from genja.task import (
+    Host,
+    RetryConfig,
+    TaskFailureResult,
+    TaskInfo,
+    TaskRuntimeContext,
+    task,
+)
 
 
 @task(
     name="retryable_backup",
     connection_plugin_name="ssh",
-    allow_retries=True,
-    max_task_attempts=3,
+    retry=RetryConfig(
+        allow=True,
+        max_attempts=3,
+        delay_ms=500,
+    ),
 )
 class RetryableBackup:
     def start(
@@ -239,8 +248,10 @@ class RetryableBackup:
         )
 ```
 
-These values override runner defaults for that task only. Retries still happen
-only when the returned failure result is explicitly marked `retryable`.
+These values override runner defaults for that task only, field by field.
+Retries still happen only when the returned failure result is explicitly marked
+`retryable`. `delay_ms` is a fixed in-process delay before retry attempts; it is
+not deferred scheduling, backoff, jitter, or persisted retry orchestration.
 
 ## Task Inputs
 
