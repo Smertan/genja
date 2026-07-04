@@ -22,6 +22,7 @@ from .settings import (
     LoggingConfig,
     OptionsConfig,
     RunnerConfig,
+    RunnerRetryConfig,
     SSHConfig,
     Settings,
 )
@@ -184,6 +185,7 @@ __all__ = [
     "OptionsConfig",
     "SSHConfig",
     "RunnerConfig",
+    "RunnerRetryConfig",
     "LoggingConfig",
     "GenjaTaskProtocol",
     "TaskInfo",

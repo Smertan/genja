@@ -1143,6 +1143,7 @@ mod tests {
         ResolvedConnectionParams,
     };
     use genja_core::settings::{InventoryConfig, RunnerConfig};
+    use genja_core::task::RetryConfig;
     use genja_core::task::{
         BlockingTaskRuntimeContext, HostTaskResult, Task, TaskDefinition, TaskError,
         TaskExecutionMode, TaskFailure, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
@@ -2043,8 +2044,7 @@ mod tests {
                     RunnerConfig::builder()
                         .plugin(runner_plugin)
                         .worker_count(2)
-                        .allow_retries(true)
-                        .max_task_attempts(3)
+                        .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
                         .build(),
                 )
                 .build();

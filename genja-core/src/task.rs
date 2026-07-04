@@ -624,7 +624,7 @@ use crate::types::{CustomTreeMap, NatString};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use log::{debug, info, warn};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::any::{Any, type_name};
 use std::error::Error;
@@ -642,7 +642,7 @@ use tokio::task;
 /// field by field. Policy resolution treats missing fields as built-in or
 /// runner-supplied defaults: `allow = false`, `max_attempts = 1`, and
 /// `delay_ms = 0`. Resolved `max_attempts` is clamped to at least `1`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RetryConfig {
     allow: Option<bool>,
     max_attempts: Option<usize>,
@@ -766,9 +766,9 @@ impl Default for TaskRetryDefaults {
 impl From<&RunnerConfig> for TaskRetryDefaults {
     fn from(runner_config: &RunnerConfig) -> Self {
         Self {
-            allow_retries: runner_config.allow_retries(),
-            max_task_attempts: runner_config.max_task_attempts().max(1),
-            delay_ms: 0,
+            allow_retries: runner_config.retry_allow(),
+            max_task_attempts: runner_config.retry_max_attempts(),
+            delay_ms: runner_config.retry_delay_ms(),
         }
     }
 }
@@ -4791,8 +4791,7 @@ mod tests {
             succeed_on_attempt: 2,
         });
         let runner_config = RunnerConfig::builder()
-            .allow_retries(true)
-            .max_task_attempts(3)
+            .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
             .build();
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("flaky");
@@ -4869,8 +4868,7 @@ mod tests {
             succeed_on_attempt: usize::MAX,
         });
         let runner_config = RunnerConfig::builder()
-            .allow_retries(true)
-            .max_task_attempts(3)
+            .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
             .build();
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("always_fails");
