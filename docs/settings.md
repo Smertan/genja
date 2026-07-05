@@ -258,9 +258,9 @@ plugins or connection layers are responsible for interpreting retry behavior.
 `retry.allow` controls whether retries are allowed by default for task
 execution. `retry.max_attempts` controls the default total attempt count for a
 task, including the first attempt. `retry.delay_ms` is a fixed in-process delay
-between retry attempts. Tasks may override runner retry defaults through task
-metadata. Retries are only attempted for failures explicitly marked as
-retryable.
+before retry attempts. Tasks may override runner retry defaults field by field
+through task metadata. Retries are only attempted for failures explicitly marked
+as retryable.
 
 See [Runners](runners.md) for execution behavior and ordering details.
 

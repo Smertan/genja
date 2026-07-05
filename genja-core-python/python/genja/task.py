@@ -118,6 +118,7 @@ conditions are true:
 - the task returns ``TaskFailureResult(..., retryable=True)``
 
 Genja does not infer whether a task is safe to repeat, mutable, or idempotent.
+``delay_ms`` is a fixed local delay before retry attempts.
 """
 
 from __future__ import annotations
@@ -203,7 +204,8 @@ class RetryConfig(_GenjaModel):
 
     ``RetryConfig`` groups task-level retry overrides used by ``@task(...)`` and
     ``TaskInfo``. Every field is optional; omitted fields fall back to runner
-    retry defaults before built-in defaults are applied by the runtime.
+    retry defaults before built-in defaults are applied by the runtime. The
+    runtime applies omitted fields field by field.
 
     Attributes:
         allow (bool | None): Optional explicit override for whether retries are
@@ -528,7 +530,8 @@ def task(
             non-empty strings. If None, no processors will be applied.
         retry (RetryConfig | None): Optional grouped task-level retry
             overrides. This setting does not force retries by itself; the task
-            must still return ``TaskFailureResult(..., retryable=True)``.
+            must still return ``TaskFailureResult(..., retryable=True)``. Omitted
+            retry fields fall back to runner defaults field by field.
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure. If None, no options are provided to the task.

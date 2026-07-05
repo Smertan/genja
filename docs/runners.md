@@ -55,13 +55,16 @@ metadata. Retries are only attempted when the effective policy allows them and
 the task returns a failed host result marked as retryable.
 Genja does not infer task mutability or idempotency when applying retries; the
 decision is driven entirely by configured policy and the task's returned
-failure result.
+failure result. `retry.delay_ms` is a fixed local delay before retry attempts.
 
 Precedence for retry settings is:
 
 1. task-level retry metadata such as `retry.allow`, `retry.max_attempts`, and `retry.delay_ms`
 2. runner-level `retry` defaults
 3. built-in fallback defaults
+
+Overrides are resolved field by field, so a task can set `retry.allow` while
+still inheriting `retry.max_attempts` and `retry.delay_ms` from the runner.
 
 See [Tasks](tasks.md) for Rust `#[genja_task(...)]` and Python `@task(...)`
 examples showing how to set task-level retry overrides.

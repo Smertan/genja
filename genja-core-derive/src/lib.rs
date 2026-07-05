@@ -6,6 +6,8 @@
 //! `genja_task` is the public task-authoring macro. It generates both
 //! `TaskInfo` and `Task` implementations from an inherent `impl` block and
 //! infers execution mode from `fn start(...)` versus `async fn start_async(...)`.
+//! The optional `retry(...)` block emits static `genja_core::task::RetryConfig`
+//! metadata for task-level retry overrides.
 //!
 //! # Task Authoring Example
 //! ```ignore

@@ -250,8 +250,7 @@ class RetryableBackup:
 
 These values override runner defaults for that task only, field by field.
 Retries still happen only when the returned failure result is explicitly marked
-`retryable`. `delay_ms` is a fixed in-process delay before retry attempts; it is
-not deferred scheduling, backoff, jitter, or persisted retry orchestration.
+`retryable`. `delay_ms` is a fixed local delay before retry attempts.
 
 ## Task Inputs
 

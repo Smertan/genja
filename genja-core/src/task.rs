@@ -201,7 +201,7 @@
 //! through [`TaskInfo::retry_config`] as a [`RetryConfig`]. These settings
 //! control retry policy only. A retry still requires the task to return a
 //! failed [`HostTaskResult`] whose [`TaskFailure`] is explicitly marked
-//! retryable.
+//! retryable. `delay_ms` is a fixed local delay before retry attempts.
 //!
 //! ```rust
 //! use genja_core::inventory::Host;
@@ -269,7 +269,8 @@
 //!
 //! Missing fields are resolved by the runner policy. Built-in defaults are
 //! `allow = false`, `max_attempts = 1`, and `delay_ms = 0`; `max_attempts`
-//! resolves to at least `1`.
+//! resolves to at least `1`. Task retry metadata overrides runner retry
+//! defaults field by field.
 //!
 //! ## Task Processors
 //!
@@ -646,6 +647,7 @@ use tokio::time::{Duration, sleep};
 /// field by field. Policy resolution treats missing fields as built-in or
 /// runner-supplied defaults: `allow = false`, `max_attempts = 1`, and
 /// `delay_ms = 0`. Resolved `max_attempts` is clamped to at least `1`.
+/// `delay_ms` is a fixed local delay before retry attempts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RetryConfig {
     allow: Option<bool>,
