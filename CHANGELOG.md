@@ -15,6 +15,7 @@ All notable changes to this workspace should be documented in this file.
 - Added nested runner retry settings under `runner.retry.allow`, `runner.retry.max_attempts`, and `runner.retry.delay_ms`. Refs: #67
 - Added Rust task macro retry metadata with `#[genja_task(retry(allow = ..., max_attempts = ..., delay_ms = ...))]`. Refs: #67
 - Added Python task retry metadata with `retry=RetryConfig(allow=..., max_attempts=..., delay_ms=...)`. Refs: #67
+- Task retry execution now applies `retry.delay_ms` as a fixed in-process delay before retry attempts only. Refs: #67
 - Added runner-level retry defaults in shared settings, plus task-level overrides in Rust and Python task metadata. Refs: #63
 - Built-in task execution now applies retry policy from runner settings and task metadata. Retries only occur for failures explicitly marked `retryable`, and host execution metadata now records attempts, whether a retry occurred, and whether retries were exhausted. Refs: #63
 - The workspace Rust toolchain is now pinned to `1.88.0` to align local diagnostics and trybuild snapshots with CI. Refs: #63

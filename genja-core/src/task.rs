@@ -638,6 +638,7 @@ use std::time::SystemTime;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::task;
+use tokio::time::{Duration, sleep};
 
 /// Optional retry metadata for a task or runner.
 ///
@@ -751,16 +752,16 @@ impl RetryConfigBuilder {
 
 #[derive(Debug, Clone, Copy)]
 struct TaskRetryDefaults {
-    allow_retries: bool,
-    max_task_attempts: usize,
+    allow: bool,
+    max_attempts: usize,
     delay_ms: u64,
 }
 
 impl Default for TaskRetryDefaults {
     fn default() -> Self {
         Self {
-            allow_retries: false,
-            max_task_attempts: 1,
+            allow: false,
+            max_attempts: 1,
             delay_ms: 0,
         }
     }
@@ -769,8 +770,8 @@ impl Default for TaskRetryDefaults {
 impl From<&RunnerConfig> for TaskRetryDefaults {
     fn from(runner_config: &RunnerConfig) -> Self {
         Self {
-            allow_retries: runner_config.retry_allow(),
-            max_task_attempts: runner_config.retry_max_attempts(),
+            allow: runner_config.retry_allow(),
+            max_attempts: runner_config.retry_max_attempts(),
             delay_ms: runner_config.retry_delay_ms(),
         }
     }
@@ -778,37 +779,43 @@ impl From<&RunnerConfig> for TaskRetryDefaults {
 
 #[derive(Debug, Clone, Copy)]
 struct EffectiveTaskRetryPolicy {
-    max_task_attempts: usize,
+    allow: bool,
+    max_attempts: usize,
+    delay_ms: u64,
 }
 
 impl EffectiveTaskRetryPolicy {
     fn for_task(task: &dyn Task, defaults: TaskRetryDefaults) -> Self {
         let retry_config = task.retry_config().copied().unwrap_or_default();
-        let allow_retries = retry_config.resolved_allow(defaults.allow_retries);
-        let configured_attempts = retry_config.resolved_max_attempts(defaults.max_task_attempts);
-        let _delay_ms = retry_config.resolved_delay_ms(defaults.delay_ms);
+        let allow = retry_config.resolved_allow(defaults.allow);
+        let configured_attempts = retry_config.resolved_max_attempts(defaults.max_attempts);
+        let delay_ms = retry_config.resolved_delay_ms(defaults.delay_ms);
 
         Self {
-            max_task_attempts: if allow_retries {
-                configured_attempts
-            } else {
-                1
-            },
+            allow,
+            max_attempts: configured_attempts,
+            delay_ms,
         }
     }
 
-    fn max_task_attempts(&self) -> usize {
-        self.max_task_attempts
+    fn max_attempts(&self) -> usize {
+        self.max_attempts
+    }
+
+    fn delay_ms(&self) -> u64 {
+        self.delay_ms
     }
 
     fn should_retry(&self, result: &HostTaskResult, attempts: usize) -> bool {
-        attempts < self.max_task_attempts
+        self.allow
+            && attempts < self.max_attempts
             && matches!(result.failure(), Some(failure) if failure.retryable())
     }
 
     fn retry_exhausted(&self, result: &HostTaskResult, attempts: usize) -> bool {
-        attempts >= self.max_task_attempts
-            && self.max_task_attempts > 1
+        self.allow
+            && attempts >= self.max_attempts
+            && self.max_attempts > 1
             && matches!(result.failure(), Some(failure) if failure.retryable())
     }
 }
@@ -3957,9 +3964,12 @@ impl TaskDefinition {
                         task.name(),
                         hostname,
                         attempts,
-                        retry_policy.max_task_attempts(),
+                        retry_policy.max_attempts(),
                         failure.message()
                     );
+                }
+                if retry_policy.delay_ms() > 0 {
+                    sleep(Duration::from_millis(retry_policy.delay_ms())).await;
                 }
                 continue;
             }
@@ -4227,6 +4237,7 @@ mod tests {
     use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::Instant;
     use tokio::runtime::Builder;
 
     fn run_async<F: Future>(future: F) -> F::Output {
@@ -4291,6 +4302,13 @@ mod tests {
     struct RetryConfiguredFlakyTask {
         inner: FlakyTask,
         retry_config: RetryConfig,
+    }
+
+    struct RecordingFlakyTask {
+        name: &'static str,
+        attempts: Arc<AtomicUsize>,
+        attempt_times: Arc<Mutex<Vec<Instant>>>,
+        succeed_on_attempt: usize,
     }
 
     #[derive(Debug)]
@@ -4525,6 +4543,20 @@ mod tests {
         }
     }
 
+    impl TaskInfo for RecordingFlakyTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
     #[async_trait]
     impl Task for RetryConfiguredFlakyTask {
         async fn start_async(
@@ -4533,6 +4565,34 @@ mod tests {
             context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             self.inner.start_async(host, context).await
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for RecordingFlakyTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.attempt_times
+                .lock()
+                .expect("attempt times lock should not be poisoned")
+                .push(Instant::now());
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt >= self.succeed_on_attempt {
+                Ok(HostTaskResult::passed(TaskSuccess::new()))
+            } else {
+                Ok(HostTaskResult::failed(
+                    TaskFailure::new(TestTaskFailureError)
+                        .with_kind(TaskFailureKind::External)
+                        .with_retryable(true),
+                ))
+            }
         }
 
         fn execution_mode(&self) -> TaskExecutionMode {
@@ -4863,6 +4923,83 @@ mod tests {
     }
 
     #[test]
+    fn start_merges_task_retry_config_over_runner_retry_config_field_by_field() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(RetryConfiguredFlakyTask {
+            inner: FlakyTask {
+                name: "field_by_field_retry",
+                attempts: Arc::clone(&attempts),
+                succeed_on_attempt: 3,
+            },
+            retry_config: RetryConfig::builder().allow(true).build(),
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(RetryConfig::builder().max_attempts(3).build())
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("field_by_field_retry");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should merge task retry config over runner retry config");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_passed());
+        assert_eq!(host_result.execution_metadata().attempts(), 3);
+        assert!(host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_delays_before_retry_attempts() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempt_times = Arc::new(Mutex::new(Vec::new()));
+        let task = TaskDefinition::new(RecordingFlakyTask {
+            name: "delayed_retry",
+            attempts: Arc::clone(&attempts),
+            attempt_times: Arc::clone(&attempt_times),
+            succeed_on_attempt: 2,
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(
+                RetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(2)
+                    .delay_ms(20)
+                    .build(),
+            )
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("delayed_retry");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should delay before the retry attempt");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let attempt_times = attempt_times
+            .lock()
+            .expect("attempt times lock should not be poisoned");
+        assert_eq!(attempt_times.len(), 2);
+        assert!(attempt_times[1].duration_since(attempt_times[0]) >= Duration::from_millis(20));
+    }
+
+    #[test]
     fn start_marks_retry_exhausted_after_final_retryable_failure() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let task = TaskDefinition::new(FlakyTask {
@@ -4915,6 +5052,114 @@ mod tests {
             .host_result("router1")
             .expect("host result should exist");
         assert!(host_result.is_failed());
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_does_not_retry_or_delay_when_max_attempts_is_one() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(FlakyTask {
+            name: "single_attempt",
+            attempts: Arc::clone(&attempts),
+            succeed_on_attempt: 2,
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(
+                RetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(1)
+                    .delay_ms(20)
+                    .build(),
+            )
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("single_attempt");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should record first failure without retry");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_failed());
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_does_not_retry_or_delay_non_retryable_failures() {
+        let task = TaskDefinition::new(FailingTask);
+        let runner_config = RunnerConfig::builder()
+            .retry(
+                RetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(3)
+                    .delay_ms(20)
+                    .build(),
+            )
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("failing");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should record non-retryable failure without retry");
+
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_failed());
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_does_not_retry_or_delay_skipped_results() {
+        let task = TaskDefinition::new(SkippingTask);
+        let runner_config = RunnerConfig::builder()
+            .retry(
+                RetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(3)
+                    .delay_ms(20)
+                    .build(),
+            )
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("skipping");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should record skipped result without retry");
+
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_skipped());
         assert_eq!(host_result.execution_metadata().attempts(), 1);
         assert!(!host_result.execution_metadata().retried());
         assert!(!host_result.execution_metadata().retry_exhausted());
