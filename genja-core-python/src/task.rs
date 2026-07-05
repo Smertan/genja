@@ -868,8 +868,16 @@ fn normalize_task_results_json(value: &Value) -> Value {
         let normalized_hosts = hosts
             .iter()
             .map(|(hostname, result)| {
-                let normalized_result = host_task_result_from_payload(result)
-                    .map(|result| host_task_result_to_json(&result));
+                let normalized_result = host_task_result_from_payload(result).map(|host_result| {
+                    let mut normalized_result = host_task_result_to_json(&host_result);
+                    if let Some(execution_metadata) = result
+                        .get("execution_metadata")
+                        .or_else(|| result.get("execution_metadata_raw"))
+                    {
+                        normalized_result["execution_metadata"] = execution_metadata.clone();
+                    }
+                    normalized_result
+                });
                 (
                     hostname.clone(),
                     normalized_result.unwrap_or_else(|_| result.clone()),

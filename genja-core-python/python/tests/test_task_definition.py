@@ -1,9 +1,13 @@
+import time
+from typing import cast
+
 import genja
 import pytest
 from genja.task import (
     Host,
     GenjaTaskProtocol,
     RetryConfig,
+    TaskFailureResult,
     TaskRuntimeContext,
     TaskMessageLevel,
     TaskInfo,
@@ -12,7 +16,6 @@ from genja.task import (
     task,
 )
 from pydantic import ValidationError
-from typing import cast
 
 
 @task(
@@ -128,6 +131,35 @@ def test_task_definition_run_on_host_executes_python_body():
         data["hosts"]["router1"]["outcome"]["Passed"]["metadata"]["backup_path"]
         == "/tmp/configs"
     )
+
+
+def test_python_backed_task_applies_retry_delay():
+    attempts: list[float] = []
+
+    @task(
+        name="delayed_retry",
+        retry=RetryConfig(allow=True, max_attempts=2, delay_ms=50),
+    )
+    class DelayedRetryTask:
+        def start(self, task, host, context):
+            attempts.append(time.monotonic())
+            if len(attempts) == 1:
+                return TaskFailureResult(
+                    message=f"temporary failure on {host.hostname}",
+                    kind="external",
+                    retryable=True,
+                )
+            return TaskSuccessResult(summary=f"retried {host.hostname}")
+
+    task_definition = genja.TaskDefinition.from_python_class(DelayedRetryTask)
+    result = task_definition.run_on_host(Host(hostname="router1"))
+
+    assert result.passed_hosts == ["router1"]
+    assert len(attempts) == 2
+    assert attempts[1] - attempts[0] >= 0.04
+    host_result = result.to_dict()["hosts"]["router1"]
+    assert host_result["execution_metadata"]["attempts"] == 2
+    assert host_result["execution_metadata"]["retried"] is True
 
 
 def test_task_definition_from_python_class_requires_decorator_metadata():
