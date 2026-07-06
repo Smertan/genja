@@ -12,7 +12,7 @@ Install the Genja package for the language you are using.
 
     ```toml
     [dependencies]
-    genja = "0.1.0"
+    genja = "0.2.0"
     ```
 
     The `genja` crate pulls in the Rust crates required for the public Genja

@@ -20,14 +20,14 @@ mod tests {
         let mut hosts = Hosts(CustomTreeMap::new());
         // hosts.insert("hosts".to_string(), CustomTreeMap::new());
         for i in 1..=10 {
-            let name = format!("host{}.example.com", i);
+            let name = format!("host{i}.example.com");
             let mut groups = ParentGroups::new();
             groups.push("cisco".to_string());
             let host = Host::builder()
                 .hostname(&name)
                 .port(2200 + i as u16)
-                .username(format!("user{}", i))
-                .password(format!("password{}", i))
+                .username(format!("user{i}"))
+                .password(format!("password{i}"))
                 .platform(if i % 2 == 0 { "linux" } else { "windows" })
                 .data(Data(serde_json::json!(vec![format!(
                     "data for host {}",
@@ -61,12 +61,12 @@ mod tests {
 
         // Add 10 hosts to the hosts map with dummy data
         for i in 1..=10 {
-            let name = format!("host{}.example.com", i);
+            let name = format!("host{i}.example.com");
             let host = Host::builder()
                 .hostname(&name)
                 .port(2200 + i as u16)
-                .username(format!("user{}", i))
-                .password(format!("password{}", i))
+                .username(format!("user{i}"))
+                .password(format!("password{i}"))
                 .platform(if i % 2 == 0 { "linux" } else { "windows" })
                 .data(Data(serde_json::json!(vec![format!(
                     "data for host {}",

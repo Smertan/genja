@@ -13,6 +13,7 @@ results, connection state, or processor behavior.
 - Inventory types for hosts, groups, host variables, and connection metadata
 - Settings models and file loading for JSON, YAML, and TOML configuration
 - Task traits, task metadata, task runtime context, and structured task results
+  with semantic outcomes plus host execution metadata
 - Connection state and task connection resolver traits for runtime integrations
 - Processor result handling used by task execution
 - Re-exported task authoring macros from `genja-core-derive`
@@ -21,7 +22,7 @@ results, connection state, or processor behavior.
 
 ```toml
 [dependencies]
-genja-core = "0.1.0"
+genja-core = "0.2.0"
 ```
 
 ## Example
@@ -77,3 +78,7 @@ impl CheckTask {
 For complete application examples, see the
 [quickstart guide](https://docs.genja.co.uk/quickstart/) and the top-level
 `genja` crate.
+
+Per-host task results are represented by `HostTaskResult`, which separates the
+semantic task outcome from host-level execution metadata such as timing and
+retry attempt state.

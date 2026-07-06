@@ -5,6 +5,7 @@ use super::env_defaults::{
     raise_on_error,
 };
 use super::{OptionsConfig, RunnerConfig, SSHConfig};
+use crate::task::RetryConfig;
 use regex::Regex;
 use serde_json::json;
 use std::env;
@@ -212,6 +213,9 @@ fn runner_config_default_values() {
     assert_eq!(runner.worker_count(), None);
     assert_eq!(runner.max_task_depth(), 10);
     assert_eq!(runner.max_connection_attempts(), 3);
+    assert_eq!(runner.retry().allow(), Some(false));
+    assert_eq!(runner.retry().max_attempts(), Some(1));
+    assert_eq!(runner.retry().delay_ms(), Some(0));
 }
 
 #[test]
@@ -222,6 +226,9 @@ fn runner_config_deserializes_empty_object_to_defaults() {
     assert_eq!(runner.worker_count(), None);
     assert_eq!(runner.max_task_depth(), 10);
     assert_eq!(runner.max_connection_attempts(), 3);
+    assert_eq!(runner.retry().allow(), Some(false));
+    assert_eq!(runner.retry().max_attempts(), Some(1));
+    assert_eq!(runner.retry().delay_ms(), Some(0));
 }
 
 #[test]
@@ -231,7 +238,12 @@ fn runner_config_deserializes_with_values() {
         "options": {"queue": "fast", "strategy": "burst"},
         "worker_count": 6,
         "max_task_depth": 5,
-        "max_connection_attempts": 7
+        "max_connection_attempts": 7,
+        "retry": {
+            "allow": true,
+            "max_attempts": 4,
+            "delay_ms": 250
+        }
     }"#;
     let runner: RunnerConfig = serde_json::from_str(json).unwrap();
     assert_eq!(runner.plugin(), "custom");
@@ -242,6 +254,23 @@ fn runner_config_deserializes_with_values() {
     assert_eq!(runner.worker_count(), Some(6));
     assert_eq!(runner.max_task_depth(), 5);
     assert_eq!(runner.max_connection_attempts(), 7);
+    assert_eq!(runner.retry().allow(), Some(true));
+    assert_eq!(runner.retry().max_attempts(), Some(4));
+    assert_eq!(runner.retry().delay_ms(), Some(250));
+}
+
+#[test]
+fn runner_config_deserializes_partial_retry_to_defaults() {
+    let json = r#"{
+        "retry": {
+            "max_attempts": 4
+        }
+    }"#;
+    let runner: RunnerConfig = serde_json::from_str(json).unwrap();
+
+    assert_eq!(runner.retry().allow(), Some(false));
+    assert_eq!(runner.retry().max_attempts(), Some(4));
+    assert_eq!(runner.retry().delay_ms(), Some(0));
 }
 
 #[test]
@@ -249,6 +278,23 @@ fn runner_config_builder_sets_max_connection_attempts() {
     let runner = RunnerConfig::builder().max_connection_attempts(9).build();
 
     assert_eq!(runner.max_connection_attempts(), 9);
+}
+
+#[test]
+fn runner_config_builder_sets_retry_controls() {
+    let runner = RunnerConfig::builder()
+        .retry(
+            RetryConfig::builder()
+                .allow(true)
+                .max_attempts(5)
+                .delay_ms(250)
+                .build(),
+        )
+        .build();
+
+    assert_eq!(runner.retry().allow(), Some(true));
+    assert_eq!(runner.retry().max_attempts(), Some(5));
+    assert_eq!(runner.retry().delay_ms(), Some(250));
 }
 
 #[test]
@@ -472,6 +518,10 @@ runner:
   worker_count: 6
   max_task_depth: 5
   max_connection_attempts: 7
+  retry:
+    allow: true
+    max_attempts: 4
+    delay_ms: 250
 logging:
   enabled: "no"
   level: "debug"
@@ -529,6 +579,9 @@ logging:
     assert_eq!(settings.runner().worker_count(), Some(6));
     assert_eq!(settings.runner().max_task_depth(), 5);
     assert_eq!(settings.runner().max_connection_attempts(), 7);
+    assert_eq!(settings.runner().retry().allow(), Some(true));
+    assert_eq!(settings.runner().retry().max_attempts(), Some(4));
+    assert_eq!(settings.runner().retry().delay_ms(), Some(250));
     assert!(!settings.logging().enabled());
     assert_eq!(settings.logging().level(), "debug");
     assert_eq!(settings.logging().log_file(), "./custom.log");

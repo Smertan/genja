@@ -26,6 +26,10 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
+  retry:
+    allow: false
+    max_attempts: 1
+    delay_ms: 0
 ```
 
 Runner settings:
@@ -35,12 +39,35 @@ Runner settings:
 - `worker_count`: optional concurrency limit for runners that support it.
 - `max_task_depth`: maximum nested task depth. Defaults to `10`.
 - `max_connection_attempts`: maximum connection attempts. Defaults to `3`.
+- `retry.allow`: whether task retries are allowed by default. Defaults to `false`.
+- `retry.max_attempts`: total number of task attempts allowed by default. Defaults to `1`.
+- `retry.delay_ms`: fixed in-process delay in milliseconds between retry attempts. Defaults to `0`.
 
 `max_connection_attempts` is part of the shared runner configuration. The
 built-in runners pass the task connection resolver into task execution; the
 connection layer is responsible for interpreting connection retry behavior.
 Custom runners should pass the resolver through when they delegate to task
 execution helpers.
+
+`retry.allow`, `retry.max_attempts`, and `retry.delay_ms` define default retry
+policy for task execution. Tasks may override these defaults through task
+metadata. Retries are only attempted when the effective policy allows them and
+the task returns a failed host result marked as retryable.
+Genja does not infer task mutability or idempotency when applying retries; the
+decision is driven entirely by configured policy and the task's returned
+failure result. `retry.delay_ms` is a fixed local delay before retry attempts.
+
+Precedence for retry settings is:
+
+1. task-level retry metadata such as `retry.allow`, `retry.max_attempts`, and `retry.delay_ms`
+2. runner-level `retry` defaults
+3. built-in fallback defaults
+
+Overrides are resolved field by field, so a task can set `retry.allow` while
+still inheriting `retry.max_attempts` and `retry.delay_ms` from the runner.
+
+See [Tasks](tasks.md) for Rust `#[genja_task(...)]` and Python `@task(...)`
+examples showing how to set task-level retry overrides.
 
 ## Threaded Runner
 

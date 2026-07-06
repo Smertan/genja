@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "genja"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "genja-core",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "genja-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -449,7 +449,7 @@ dependencies = [
 
 [[package]]
 name = "genja-core-derive"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "genja-core-python"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "genja",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "genja-plugin-manager"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "genja-core",

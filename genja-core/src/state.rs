@@ -336,7 +336,7 @@ impl State {
         K: Into<NatString>,
     {
         let name = name.into();
-        warn!("host '{}' marked as failed", name);
+        warn!("host '{name}' marked as failed");
         self.host_status.insert(name, HostStatus::Failed);
     }
 

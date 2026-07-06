@@ -208,6 +208,10 @@ let genja = Genja::builder(inventory).build()?;
 let results = genja.run_task(CheckConfigTask, 10)?;
 
 assert!(results.host_result("router1").unwrap().is_passed());
+
+let host_result = results.host_result("router1").unwrap();
+assert_eq!(host_result.status(), "passed");
+assert_eq!(host_result.execution_metadata().attempts(), 1);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -240,7 +244,9 @@ Notes:
 - `max_depth` limits recursive sub-task execution. A task with no sub-tasks can use a small value like `1`.
 - `#[genja_task(...)]` owns static task metadata like name, processors, and connection plugin selection.
 - `connection_plugin_name` is optional, but usually needed for real task execution.
-- Rich task output lives in `TaskSuccess`, `TaskFailure`, `TaskSkip`, and `TaskResults`.
+- Rich task output is split between semantic outcome payloads
+  (`TaskSuccess`, `TaskFailure`, `TaskSkip`) and host-level execution metadata on
+  `HostTaskResult`.
 - The lower-level task API is documented in `genja-core/src/task.rs`.
 
 ### Task Processor Plugins

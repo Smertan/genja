@@ -14,6 +14,9 @@ def test_settings_from_file_loads_yaml():
     assert settings.ssh.config_file is None
     assert settings.runner.plugin == "threaded"
     assert settings.runner.worker_count == 10
+    assert settings.runner.retry.allow is True
+    assert settings.runner.retry.max_attempts == 4
+    assert settings.runner.retry.delay_ms == 250
     assert settings.logging.level == "info"
     assert settings.logging.max_file_count == 10
 

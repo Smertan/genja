@@ -21,16 +21,16 @@ See [API Surface](api-surface.md) for which package to depend on.
 The Rust crates in this repository currently share the same version:
 
 ```text
-genja = 0.1.0
-genja-core = 0.1.0
-genja-core-derive = 0.1.0
-genja-plugin-manager = 0.1.0
+genja = 0.2.0
+genja-core = 0.2.0
+genja-core-derive = 0.2.0
+genja-plugin-manager = 0.2.0
 ```
 
 The Python distribution is also currently versioned as:
 
 ```text
-genja-py = 0.1.0
+genja-py = 0.2.0
 ```
 
 Until a more formal compatibility policy is published, treat matching minor
@@ -43,7 +43,7 @@ Rust applications should usually depend on `genja`:
 
 ```toml
 [dependencies]
-genja = "0.1.0"
+genja = "0.2.0"
 ```
 
 The `genja` crate depends on and re-exports core pieces from the workspace, so
@@ -55,8 +55,8 @@ standalone plugin crates:
 
 ```toml
 [dependencies]
-genja-plugin-manager = "0.1.0"
-genja-core = "0.1.0"
+genja-plugin-manager = "0.2.0"
+genja-core = "0.2.0"
 ```
 
 When depending on multiple Genja crates directly, keep their versions aligned.
@@ -88,7 +88,7 @@ state. For release-specific behavior, use the docs or source for the matching
 release tag, such as:
 
 ```bash
-git checkout v0.1.0
+git checkout rs-v0.2.0
 ```
 
 When running repository examples for a specific release, check out the matching

@@ -10,6 +10,7 @@ directly. The top-level package re-exports these names for compatibility, but
 - ``OptionsConfig``
 - ``SSHConfig``
 - ``RunnerConfig``
+- ``RunnerRetryConfig``
 - ``LoggingConfig``
 """
 
@@ -19,6 +20,7 @@ from .genja import (
     LoggingConfig,
     OptionsConfig,
     RunnerConfig,
+    RunnerRetryConfig,
     SSHConfig,
     Settings,
 )
@@ -31,5 +33,6 @@ __all__ = [
     "OptionsConfig",
     "SSHConfig",
     "RunnerConfig",
+    "RunnerRetryConfig",
     "LoggingConfig",
 ]

@@ -312,8 +312,17 @@ impl PluginRunner for ThreadedRunnerPlugin {
             };
             let task = task.clone();
             let connection_resolver = connection_resolver.clone();
+            let runner_config = runner_config.clone();
             join_set.spawn(async move {
-                TaskExecutor::run_host(&task, &host_id, &host, connection_resolver, max_depth).await
+                TaskExecutor::run_host(
+                    &task,
+                    &host_id,
+                    &host,
+                    connection_resolver,
+                    &runner_config,
+                    max_depth,
+                )
+                .await
             });
         }
 
@@ -335,8 +344,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
                         err
                     );
                     return Err(GenjaError::Message(format!(
-                        "threaded runner worker task failed: {}",
-                        err
+                        "threaded runner worker task failed: {err}"
                     )));
                 }
             }
@@ -344,9 +352,17 @@ impl PluginRunner for ThreadedRunnerPlugin {
             if let Some((host_id, host)) = jobs_iter.next() {
                 let task = task.clone();
                 let connection_resolver = connection_resolver.clone();
+                let runner_config = runner_config.clone();
                 join_set.spawn(async move {
-                    TaskExecutor::run_host(&task, &host_id, &host, connection_resolver, max_depth)
-                        .await
+                    TaskExecutor::run_host(
+                        &task,
+                        &host_id,
+                        &host,
+                        connection_resolver,
+                        &runner_config,
+                        max_depth,
+                    )
+                    .await
                 });
             }
         }

@@ -20,6 +20,7 @@ use std::time::SystemTime;
 pub(crate) struct TaskExecutor<'a> {
     hosts: &'a Hosts,
     connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+    runner_config: &'a genja_core::settings::RunnerConfig,
     max_depth: usize,
 }
 
@@ -43,11 +44,13 @@ impl<'a> TaskExecutor<'a> {
     pub(crate) fn new(
         hosts: &'a Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+        runner_config: &'a genja_core::settings::RunnerConfig,
         max_depth: usize,
     ) -> Self {
         Self {
             hosts,
             connection_resolver,
+            runner_config,
             max_depth,
         }
     }
@@ -93,6 +96,7 @@ impl<'a> TaskExecutor<'a> {
                     host_id,
                     host,
                     self.connection_resolver.clone(),
+                    self.runner_config,
                     self.max_depth,
                 )
                 .await?,
@@ -146,15 +150,17 @@ impl<'a> TaskExecutor<'a> {
         host_id: &NatString,
         host: &Host,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+        runner_config: &genja_core::settings::RunnerConfig,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
         let mut results = TaskResults::new(task_definition.name());
         task_definition
-            .start_with_connection_resolver(
+            .start_with_connection_resolver_and_runner_config(
                 host_id.as_str(),
                 host,
                 &mut results,
                 connection_resolver.as_deref(),
+                runner_config,
                 max_depth,
             )
             .await?;

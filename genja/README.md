@@ -15,13 +15,14 @@ automation workflows.
 - Run single tasks or ordered task lists across selected hosts
 - Execute hierarchical task trees with bounded recursion depth
 - Load Genja-compatible inventory, runner, connection, and processor plugins
-- Track per-host task results, sub-task results, summaries, timing, and status
+- Track per-host task outcomes plus execution metadata, nested sub-task results,
+  summaries, timing, and status
 
 ## Installation
 
 ```toml
 [dependencies]
-genja = "0.1.0"
+genja = "0.2.0"
 ```
 
 The `genja` crate re-exports the common task authoring pieces so most users do
@@ -165,7 +166,10 @@ let genja = Genja::builder(inventory).build()?;
 
 let results = genja.run_task(CheckConfig, 1)?;
 
-assert!(results.host_result("router1").unwrap().is_passed());
+let host_result = results.host_result("router1").unwrap();
+assert!(host_result.is_passed());
+assert_eq!(host_result.status(), "passed");
+assert_eq!(host_result.execution_metadata().attempts(), 1);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -212,7 +216,7 @@ application; clone the repository to run them.
 Run a crate example from a repository checkout:
 
 The command below uses the repository default branch. For release-specific
-examples, check out the matching version tag, such as `v0.1.0`.
+examples, check out the matching version tag, such as `v0.2.0`.
 
 ```bash
 git clone https://github.com/Smertan/genja.git
@@ -223,4 +227,4 @@ cargo run -p genja --example async_inventory_plugin
 
 ## License
 
-Genja is licensed under AGPL-3.0-only.
+Genja is licensed under MPL-2.0.

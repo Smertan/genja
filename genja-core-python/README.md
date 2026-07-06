@@ -69,6 +69,9 @@ all_results = genja.run_tasks(tasks)
 print([result.task_name for result in all_results])
 ```
 
+`results.to_dict()` returns per-host task results with an `outcome` payload and
+separate `execution_metadata` for host timing and retry attempt information.
+
 `TaskRuntimeContext` exposes the resolved connection through
 `context.connection()` and `context.has_connection()`. Execution depth remains
 internal to the runtime.

@@ -576,7 +576,7 @@ impl PluginManager {
     /// updated `PluginManager` on success.
     pub fn activate_plugins(mut self) -> Result<PluginManager, Box<dyn std::error::Error>> {
         let meta_data = self.get_plugin_metadata();
-        log::debug!("Plugin metadata: {:?}", meta_data);
+        log::debug!("Plugin metadata: {meta_data:?}");
         let mut registrations = Vec::new();
         if let Some(plugin_config) = meta_data.plugins {
             for (group_or_name, plugin_entry) in plugin_config {
@@ -617,7 +617,7 @@ impl PluginManager {
         let manifest = match file_string {
             Ok(manifest) => manifest,
             Err(msg) => {
-                eprintln!("Error reading manifest file {}", msg);
+                eprintln!("Error reading manifest file {msg}");
                 return Metadata { plugins: None };
             }
         };
@@ -683,11 +683,11 @@ impl PluginManager {
         let path = Path::new(filename);
 
         if !path.exists() {
-            let msg = format!("Plugin file does not exist: {}", filename);
+            let msg = format!("Plugin file does not exist: {filename}");
             log::error!("{msg}");
             return Err(msg.into());
         } else {
-            log::debug!("Attempting to load plugin: {}", filename);
+            log::debug!("Attempting to load plugin: {filename}");
         }
 
         let library = unsafe { Library::new(path)? };
@@ -753,7 +753,7 @@ impl PluginManager {
     /// Panics if a plugin with the same name is already registered.
     pub fn register_plugin(&mut self, plugin: Plugins) {
         let name = plugin.name();
-        log::info!("Registering plugin: {:?}", name);
+        log::info!("Registering plugin: {name:?}");
 
         if let hash_map::Entry::Vacant(entry) = self.plugins.entry(name.clone()) {
             entry.insert(plugin);
@@ -886,7 +886,7 @@ impl PluginManager {
     /// Deregisters the plugin with the given name.
     pub fn deregister_plugin(&mut self, name: &str) -> Option<String> {
         if let Some(plugin) = self.plugins.remove(name) {
-            log::info!("De-registering plugin: {}", name);
+            log::info!("De-registering plugin: {name}");
             Some(plugin.name())
         } else {
             None
@@ -897,7 +897,7 @@ impl PluginManager {
     pub fn deregister_all_plugins(&mut self) -> Vec<String> {
         let mut deregistered_plugins = Vec::new();
         for (name, plugin) in self.plugins.drain() {
-            log::info!("De-registering plugin: {}", name);
+            log::info!("De-registering plugin: {name}");
             deregistered_plugins.push(plugin.name());
         }
         deregistered_plugins
@@ -914,9 +914,9 @@ impl PluginManager {
 
         for (name, plugin) in other.plugins {
             if self.plugins.insert(name.clone(), plugin).is_some() {
-                log::info!("Overriding plugin: {}", name);
+                log::info!("Overriding plugin: {name}");
             } else {
-                log::info!("Registering merged plugin: {}", name);
+                log::info!("Registering merged plugin: {name}");
             }
         }
     }
@@ -1042,7 +1042,7 @@ mod tests {
             "macos" => "Cargo-macos.toml",
             _ => "Cargo.toml",
         };
-        let file = format!("../genja-plugin-manager/tests/plugin_mods/{}", file_name);
+        let file = format!("../genja-plugin-manager/tests/plugin_mods/{file_name}");
         unsafe {
             std::env::set_var("CARGO_MANIFEST_PATH", file);
         }
@@ -1383,7 +1383,7 @@ inventory_a = "../this/path/does/not/exist.so"
 
         // Verify the debug output format for base plugins
         for (name, plugin) in connection_plugins {
-            let debug_output = format!("{:?}", plugin);
+            let debug_output = format!("{plugin:?}");
             assert!(debug_output.contains("ConnectionPlugin"));
             assert!(debug_output.contains(name));
         }

@@ -15,11 +15,11 @@
 //!   [`TaskDefinition`] values. Each root task may own its own sub-task tree, so a
 //!   `Tasks` value represents a forest of task trees.
 //! - **Task Execution**: Tasks execute against hosts and return [`HostTaskResult`]
-//!   indicating success, failure, or skip status.
+//!   values with a semantic [`HostTaskOutcome`] and separate [`HostExecutionMetadata`].
 //! - **Result Tracking**: The [`TaskResults`] structure maintains a hierarchical tree
 //!   of execution results for tasks and their sub-tasks across all hosts.
-//! - **Rich Metadata**: Tasks can attach detailed metadata including timing information,
-//!   warnings, messages, diffs, and custom data to their results.
+//! - **Rich Metadata**: Tasks can attach detailed metadata including per-host execution
+//!   timing, retry state, warnings, messages, diffs, and custom data to their results.
 //! - **Summaries and Serialization**: Task results can be aggregated with
 //!   [`TaskResults::host_summary`] and [`TaskResults::task_summary`], then exported in
 //!   either human-readable or raw JSON forms.
@@ -114,12 +114,12 @@
 //!    ┌──────────────────────────────────────────────────────────┐
 //!    │ TaskResults (per task)                                   │
 //!    │                                                          │
-//!    │  ┌─────────────────────────────────────────┐             │
-//!    │  │ Host Results (Map<hostname, result>)    │             │
-//!    │  │  - router1 → HostTaskResult::Passed     │             │
-//!    │  │  - router2 → HostTaskResult::Failed     │             │
-//!    │  │  - router3 → HostTaskResult::Skipped    │             │
-//!    │  └─────────────────────────────────────────┘             │
+//!    │  ┌───────────────────────────────────────────┐           │
+//!    │  │ Host Results (Map<hostname, result>)      │           │
+//!    │  │  - router1 → {outcome: Passed,  metadata} │           │
+//!    │  │  - router2 → {outcome: Failed,  metadata} │           │
+//!    │  │  - router3 → {outcome: Skipped, metadata} │           │
+//!    │  └───────────────────────────────────────────┘           │
 //!    │                                                          │
 //!    │  ┌───────────────────────────────────────────┐           │
 //!    │  │ Sub-task Results (Map<name, TaskResults>) │           │
@@ -168,8 +168,8 @@
 //!    task execution across selected hosts:
 //!    - Optionally resolves a task-scoped connection via [`TaskConnectionResolver`]
 //!    - Calls [`Task::start`] for each host with a [`TaskRuntimeContext`]
-//!    - Records timing information (start, finish, duration)
-//!    - Captures results (success, failure, or skip)
+//!    - Records execution metadata (start, finish, duration, retry state)
+//!    - Captures semantic outcomes (success, failure, or skip)
 //!    - Recursively processes sub-tasks up to `max_depth`
 //!
 //! 4. **Result Collection**: Each host produces a `HostTaskResult` that is stored in
@@ -195,6 +195,14 @@
 //! `connection_plugin_name()` directly, import [`TaskInfo`] so those trait methods
 //! are in scope.
 //!
+//! Static task metadata can also include retry overrides. The
+//! [`genja_task`](crate::genja_task) macro accepts grouped retry metadata with
+//! `retry(allow = true, max_attempts = 3, delay_ms = 500)`, then exposes it
+//! through [`TaskInfo::retry_config`] as a [`RetryConfig`]. These settings
+//! control retry policy only. A retry still requires the task to return a
+//! failed [`HostTaskResult`] whose [`TaskFailure`] is explicitly marked
+//! retryable. `delay_ms` is a fixed local delay before retry attempts.
+//!
 //! ```rust
 //! use genja_core::inventory::Host;
 //! use genja_core::task::{
@@ -208,7 +216,15 @@
 //!     config_file: String,
 //! }
 //!
-//! #[genja_task(name = "deploy", connection_plugin_name = "ssh")]
+//! #[genja_task(
+//!     name = "deploy",
+//!     connection_plugin_name = "ssh",
+//!     retry(
+//!         allow = true,
+//!         max_attempts = 3,
+//!         delay_ms = 500
+//!     )
+//! )]
 //! impl DeployTask {
 //!     async fn start_async(
 //!         &self,
@@ -235,11 +251,26 @@
 //! ## [`TaskInfo`]
 //!
 //! Provides metadata about a task including its name, associated plugin, connection
-//! requirements, and optional configuration. This trait is typically
+//! requirements, retry overrides, and optional configuration. This trait is typically
 //! auto-implemented by the [`genja_task`](crate::genja_task) attribute macro.
 //! Static metadata comes from macro arguments such as `name`,
-//! `connection_plugin_name`, and `processors`, while dynamic metadata can be
-//! provided through helper methods such as `options()`.
+//! `connection_plugin_name`, `processors`, and `retry(...)`, while dynamic
+//! metadata can be provided through helper methods such as `options()`.
+//! Task retry metadata is exposed as
+//! [`RetryConfig`] through [`TaskInfo::retry_config`].
+//!
+//! ## [`RetryConfig`]
+//!
+//! [`RetryConfig`] groups task retry metadata fields:
+//!
+//! - `allow`: optional explicit retry authorization.
+//! - `max_attempts`: optional total attempt count, including the first attempt.
+//! - `delay_ms`: optional fixed delay in milliseconds between retry attempts.
+//!
+//! Missing fields are resolved by the runner policy. Built-in defaults are
+//! `allow = false`, `max_attempts = 1`, and `delay_ms = 0`; `max_attempts`
+//! resolves to at least `1`. Task retry metadata overrides runner retry
+//! defaults field by field.
 //!
 //! ## Task Processors
 //!
@@ -328,8 +359,9 @@
 //! - Sub-task results are grouped by sub-task name. The `TaskResults` node for a
 //!   given sub-task contains per-host results accumulated across all hosts.
 //! - The framework does not automatically skip sub-tasks when a parent fails or is
-//!   skipped. If you want that behavior, return an explicit [`HostTaskResult::Skipped`]
-//!   from the sub-task or encode the condition in the task itself.
+//!   skipped. If you want that behavior, return a [`HostTaskResult`] with
+//!   [`HostTaskOutcome::Skipped`] from the sub-task or encode the condition in the task
+//!   itself.
 //! - Processor hooks run only for tasks that selected processor names. The root
 //!   task can also be given processor names through [`TaskDefinition::with_processor`]
 //!   or [`TaskDefinition::with_processors`].
@@ -342,34 +374,40 @@
 //!   stops and propagates that error.
 //! - `max_depth` is checked using `depth > max_depth`. This means `max_depth = 0`
 //!   still allows the root task at depth `0`, but rejects all sub-tasks at depth `1`.
-//! - Exceeding `max_depth` records an internal [`HostTaskResult::Failed`] for the host
-//!   at that task node instead of returning an outer execution error.
+//! - Exceeding `max_depth` records a failed [`HostTaskResult`] with
+//!   [`HostTaskOutcome::Failed`] for the host at that task node instead of returning an
+//!   outer execution error.
 //! - If [`Task::start`] returns [`TaskError`], the framework captures it as a
-//!   [`TaskFailure`] with timing metadata and stores it in the host results tree.
+//!   [`TaskFailure`] and stores it inside a [`HostTaskResult`] together with host-level
+//!   execution metadata.
 //!
 //! # Task Results
 //!
 //! ## [`HostTaskResult`]
 //!
-//! Represents the outcome of executing a task on a single host. It can be:
+//! Represents the result of executing a task on a single host.
 //!
-//! - **Passed**: Task completed successfully with optional metadata in [`TaskSuccess`]
-//! - **Failed**: Task encountered an error with details in [`TaskFailure`]
-//! - **Skipped**: Task was not executed with reason in [`TaskSkip`]
+//! [`HostTaskResult`] combines:
+//!
+//! - A semantic [`HostTaskOutcome`] of passed, failed, or skipped
+//! - Host-level [`HostExecutionMetadata`] for timing and retry state
 //!
 //! ```rust
-//! use genja_core::task::{HostTaskResult, TaskSuccess, TaskFailure, TaskFailureKind};
+//! use genja_core::task::{
+//!     HostTaskOutcome, HostTaskResult, TaskFailure, TaskFailureKind, TaskSuccess,
+//! };
 //! use serde_json::json;
 //!
-//! // Success with metadata
+//! // Success with semantic task data.
 //! let success = HostTaskResult::passed(
 //!     TaskSuccess::new()
 //!         .with_result(json!({"status": "deployed"}))
 //!         .with_changed(true)
 //!         .with_diff("+ new_config_line")
 //! );
+//! assert!(matches!(success.outcome(), HostTaskOutcome::Passed(_)));
 //!
-//! // Failure with classification
+//! // Failure with classification and retry hint.
 //! let failure = HostTaskResult::failed(
 //!     TaskFailure::new(std::io::Error::new(
 //!         std::io::ErrorKind::ConnectionRefused,
@@ -378,9 +416,14 @@
 //!     .with_kind(TaskFailureKind::Connection)
 //!     .with_retryable(true)
 //! );
+//! assert!(matches!(failure.outcome(), HostTaskOutcome::Failed(_)));
 //!
-//! // Skipped with reason
+//! // Skipped with reason.
 //! let skipped = HostTaskResult::skipped_with_reason("parent_failed");
+//! assert!(matches!(skipped.outcome(), HostTaskOutcome::Skipped(_)));
+//!
+//! // Execution timing and retry counts live outside the outcome payload.
+//! assert_eq!(success.execution_metadata().attempts(), 1);
 //! ```
 //!
 //! ## [`TaskResults`]
@@ -580,11 +623,12 @@
 //! Tasks can define sub-tasks that execute after the parent task completes. This
 //!
 use crate::inventory::{Connection, Host};
+use crate::settings::RunnerConfig;
 use crate::types::{CustomTreeMap, NatString};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use log::{debug, info, warn};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::any::{Any, type_name};
 use std::error::Error;
@@ -595,6 +639,188 @@ use std::time::SystemTime;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::task;
+use tokio::time::{Duration, sleep};
+
+/// Optional retry metadata for a task or runner.
+///
+/// Each field is optional so task-level metadata can override runner defaults
+/// field by field. Policy resolution treats missing fields as built-in or
+/// runner-supplied defaults: `allow = false`, `max_attempts = 1`, and
+/// `delay_ms = 0`. Resolved `max_attempts` is clamped to at least `1`.
+/// `delay_ms` is a fixed local delay before retry attempts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct RetryConfig {
+    allow: Option<bool>,
+    max_attempts: Option<usize>,
+    delay_ms: Option<u64>,
+}
+
+impl RetryConfig {
+    /// Create a retry config from optional field values.
+    ///
+    /// Prefer [`RetryConfig::builder`] when constructing values from regular
+    /// application code. This constructor is also usable from generated code
+    /// where optional field values are already available.
+    pub const fn new(
+        allow: Option<bool>,
+        max_attempts: Option<usize>,
+        delay_ms: Option<u64>,
+    ) -> Self {
+        Self {
+            allow,
+            max_attempts,
+            delay_ms,
+        }
+    }
+
+    /// Return a builder for retry config metadata.
+    pub fn builder() -> RetryConfigBuilder {
+        RetryConfigBuilder::default()
+    }
+
+    /// Returns whether retries are explicitly allowed.
+    ///
+    /// `None` means the effective policy should fall back to a runner or
+    /// built-in default.
+    pub fn allow(&self) -> Option<bool> {
+        self.allow
+    }
+
+    /// Returns the explicitly configured maximum total attempts.
+    ///
+    /// The total includes the first attempt. `None` means the effective policy
+    /// should fall back to a runner or built-in default.
+    pub fn max_attempts(&self) -> Option<usize> {
+        self.max_attempts
+    }
+
+    /// Returns the explicitly configured fixed delay between retry attempts.
+    ///
+    /// The value is expressed in milliseconds. `None` means the effective
+    /// policy should fall back to a runner or built-in default.
+    pub fn delay_ms(&self) -> Option<u64> {
+        self.delay_ms
+    }
+
+    fn resolved_allow(&self, default: bool) -> bool {
+        self.allow.unwrap_or(default)
+    }
+
+    fn resolved_max_attempts(&self, default: usize) -> usize {
+        self.max_attempts.unwrap_or(default).max(1)
+    }
+
+    fn resolved_delay_ms(&self, default: u64) -> u64 {
+        self.delay_ms.unwrap_or(default)
+    }
+}
+
+/// Builder for [`RetryConfig`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RetryConfigBuilder {
+    allow: Option<bool>,
+    max_attempts: Option<usize>,
+    delay_ms: Option<u64>,
+}
+
+impl RetryConfigBuilder {
+    /// Set whether retries are allowed.
+    pub fn allow(mut self, allow: bool) -> Self {
+        self.allow = Some(allow);
+        self
+    }
+
+    /// Set the maximum total attempts. Values below 1 are stored as 1.
+    pub fn max_attempts(mut self, max_attempts: usize) -> Self {
+        self.max_attempts = Some(max_attempts.max(1));
+        self
+    }
+
+    /// Set the fixed delay between retry attempts in milliseconds.
+    pub fn delay_ms(mut self, delay_ms: u64) -> Self {
+        self.delay_ms = Some(delay_ms);
+        self
+    }
+
+    /// Build the retry config.
+    pub fn build(self) -> RetryConfig {
+        RetryConfig {
+            allow: self.allow,
+            max_attempts: self.max_attempts,
+            delay_ms: self.delay_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TaskRetryDefaults {
+    allow: bool,
+    max_attempts: usize,
+    delay_ms: u64,
+}
+
+impl Default for TaskRetryDefaults {
+    fn default() -> Self {
+        Self {
+            allow: false,
+            max_attempts: 1,
+            delay_ms: 0,
+        }
+    }
+}
+
+impl From<&RunnerConfig> for TaskRetryDefaults {
+    fn from(runner_config: &RunnerConfig) -> Self {
+        Self {
+            allow: runner_config.retry_allow(),
+            max_attempts: runner_config.retry_max_attempts(),
+            delay_ms: runner_config.retry_delay_ms(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EffectiveTaskRetryPolicy {
+    allow: bool,
+    max_attempts: usize,
+    delay_ms: u64,
+}
+
+impl EffectiveTaskRetryPolicy {
+    fn for_task(task: &dyn Task, defaults: TaskRetryDefaults) -> Self {
+        let retry_config = task.retry_config().copied().unwrap_or_default();
+        let allow = retry_config.resolved_allow(defaults.allow);
+        let configured_attempts = retry_config.resolved_max_attempts(defaults.max_attempts);
+        let delay_ms = retry_config.resolved_delay_ms(defaults.delay_ms);
+
+        Self {
+            allow,
+            max_attempts: configured_attempts,
+            delay_ms,
+        }
+    }
+
+    fn max_attempts(&self) -> usize {
+        self.max_attempts
+    }
+
+    fn delay_ms(&self) -> u64 {
+        self.delay_ms
+    }
+
+    fn should_retry(&self, result: &HostTaskResult, attempts: usize) -> bool {
+        self.allow
+            && attempts < self.max_attempts
+            && matches!(result.failure(), Some(failure) if failure.retryable())
+    }
+
+    fn retry_exhausted(&self, result: &HostTaskResult, attempts: usize) -> bool {
+        self.allow
+            && attempts >= self.max_attempts
+            && self.max_attempts > 1
+            && matches!(result.failure(), Some(failure) if failure.retryable())
+    }
+}
 
 /// Represents an error that occurred during task execution.
 ///
@@ -842,10 +1068,26 @@ struct TaskResultsHumanJson<'a> {
 }
 
 #[derive(Serialize)]
-enum HostTaskResultHumanJson<'a> {
+struct HostTaskResultHumanJson<'a> {
+    outcome: HostTaskOutcomeHumanJson<'a>,
+    execution_metadata: HostExecutionMetadataHumanJson,
+}
+
+#[derive(Serialize)]
+enum HostTaskOutcomeHumanJson<'a> {
     Passed(TaskSuccessHumanJson<'a>),
     Failed(TaskFailureHumanJson<'a>),
     Skipped(TaskSkipHumanJson<'a>),
+}
+
+#[derive(Serialize)]
+struct HostExecutionMetadataHumanJson {
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    duration: Option<String>,
+    attempts: usize,
+    retried: bool,
+    retry_exhausted: bool,
 }
 
 #[derive(Serialize)]
@@ -857,9 +1099,6 @@ struct TaskSuccessHumanJson<'a> {
     warnings: &'a [String],
     messages: &'a [TaskMessage],
     metadata: Option<&'a Value>,
-    started_at: Option<String>,
-    finished_at: Option<String>,
-    duration: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -871,9 +1110,6 @@ struct TaskFailureHumanJson<'a> {
     details: Option<&'a Value>,
     warnings: &'a [String],
     messages: &'a [TaskMessage],
-    started_at: Option<String>,
-    finished_at: Option<String>,
-    duration: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -959,10 +1195,32 @@ impl TaskResultsSummary {
 
 impl<'a> From<&'a HostTaskResult> for HostTaskResultHumanJson<'a> {
     fn from(result: &'a HostTaskResult) -> Self {
+        Self {
+            outcome: HostTaskOutcomeHumanJson::from(result.outcome()),
+            execution_metadata: HostExecutionMetadataHumanJson::from(result.execution_metadata()),
+        }
+    }
+}
+
+impl<'a> From<&'a HostTaskOutcome> for HostTaskOutcomeHumanJson<'a> {
+    fn from(result: &'a HostTaskOutcome) -> Self {
         match result {
-            HostTaskResult::Passed(success) => Self::Passed(TaskSuccessHumanJson::from(success)),
-            HostTaskResult::Failed(failure) => Self::Failed(TaskFailureHumanJson::from(failure)),
-            HostTaskResult::Skipped(skip) => Self::Skipped(TaskSkipHumanJson::from(skip)),
+            HostTaskOutcome::Passed(success) => Self::Passed(TaskSuccessHumanJson::from(success)),
+            HostTaskOutcome::Failed(failure) => Self::Failed(TaskFailureHumanJson::from(failure)),
+            HostTaskOutcome::Skipped(skip) => Self::Skipped(TaskSkipHumanJson::from(skip)),
+        }
+    }
+}
+
+impl From<&HostExecutionMetadata> for HostExecutionMetadataHumanJson {
+    fn from(metadata: &HostExecutionMetadata) -> Self {
+        Self {
+            started_at: metadata.started_at_display(),
+            finished_at: metadata.finished_at_display(),
+            duration: metadata.duration_display(),
+            attempts: metadata.attempts(),
+            retried: metadata.retried(),
+            retry_exhausted: metadata.retry_exhausted(),
         }
     }
 }
@@ -977,9 +1235,6 @@ impl<'a> From<&'a TaskSuccess> for TaskSuccessHumanJson<'a> {
             warnings: success.warnings(),
             messages: success.messages(),
             metadata: success.metadata(),
-            started_at: success.started_at_display(),
-            finished_at: success.finished_at_display(),
-            duration: success.duration_display(),
         }
     }
 }
@@ -994,9 +1249,6 @@ impl<'a> From<&'a TaskFailure> for TaskFailureHumanJson<'a> {
             details: failure.details(),
             warnings: failure.warnings(),
             messages: failure.messages(),
-            started_at: failure.started_at_display(),
-            finished_at: failure.finished_at_display(),
-            duration: failure.duration_display(),
         }
     }
 }
@@ -1456,31 +1708,21 @@ impl TaskResults {
     }
 }
 
-/// Represents the execution outcome of a task on a single host.
+/// Represents the result of executing a task on a single host.
 ///
-/// `HostTaskResult` captures one of three possible states for a task execution:
-/// - **Passed**: The task completed successfully, potentially with changes, warnings, or metadata.
-/// - **Failed**: The task encountered an error and could not complete successfully.
-/// - **Skipped**: The task was not executed, typically due to conditional logic or dependencies.
+/// `HostTaskResult` separates the semantic task outcome from transport-style execution
+/// details:
+/// - [`HostTaskOutcome`] stores whether the task passed, failed, or was skipped, along with
+///   the corresponding payload.
+/// - [`HostExecutionMetadata`] stores execution timing and retry attempt data for that host.
 ///
-/// This enum provides a type-safe way to represent task outcomes and includes helper methods
-/// to query the result state and extract the underlying success, failure, or skip details.
-///
-/// # Variants
-///
-/// * `Passed(TaskSuccess)` - The task executed successfully. Contains detailed information about
-///   the execution including any results, changes made, warnings, and timing information.
-///
-/// * `Failed(TaskFailure)` - The task failed during execution. Contains error information,
-///   failure classification, retry hints, and any warnings or messages collected before failure.
-///
-/// * `Skipped(TaskSkip)` - The task was skipped and not executed. Contains optional reason
-///   and message explaining why the task was skipped.
+/// This keeps success and failure payloads focused on task semantics, while the surrounding
+/// host result carries cross-cutting execution metadata.
 ///
 /// # Example
 ///
 /// ```rust
-/// use genja_core::task::{HostTaskResult, TaskSuccess, TaskFailure};
+/// use genja_core::task::{HostTaskOutcome, HostTaskResult, TaskSuccess};
 ///
 /// // Create a successful result
 /// let success = HostTaskResult::passed(
@@ -1497,16 +1739,130 @@ impl TaskResults {
 /// if let Some(details) = success.success() {
 ///     assert!(details.changed());
 /// }
+/// assert!(matches!(success.outcome(), HostTaskOutcome::Passed(_)));
 ///
 /// // Create a skipped result
 /// let skipped = HostTaskResult::skipped_with_reason("Host in maintenance mode");
 /// assert!(skipped.is_skipped());
 /// ```
 #[derive(Debug, Clone, Serialize)]
-pub enum HostTaskResult {
+pub struct HostTaskResult {
+    outcome: HostTaskOutcome,
+    execution_metadata: HostExecutionMetadata,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum HostTaskOutcome {
     Passed(TaskSuccess),
     Failed(TaskFailure),
     Skipped(TaskSkip),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HostExecutionMetadata {
+    started_at: Option<SystemTime>,
+    finished_at: Option<SystemTime>,
+    duration_ns: Option<u128>,
+    duration_ms: Option<u128>,
+    attempts: usize,
+    retried: bool,
+    retry_exhausted: bool,
+}
+
+impl Default for HostExecutionMetadata {
+    fn default() -> Self {
+        Self {
+            started_at: None,
+            finished_at: None,
+            duration_ns: None,
+            duration_ms: None,
+            attempts: 1,
+            retried: false,
+            retry_exhausted: false,
+        }
+    }
+}
+
+impl HostExecutionMetadata {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_started_at(mut self, started_at: SystemTime) -> Self {
+        self.started_at = Some(started_at);
+        self
+    }
+
+    pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
+        self.finished_at = Some(finished_at);
+        self
+    }
+
+    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
+        self.duration_ns = Some(duration_ns);
+        self.duration_ms = Some(duration_ns / 1_000_000);
+        self
+    }
+
+    pub fn with_attempts(mut self, attempts: usize) -> Self {
+        self.attempts = attempts;
+        self
+    }
+
+    pub fn with_retried(mut self, retried: bool) -> Self {
+        self.retried = retried;
+        self
+    }
+
+    pub fn with_retry_exhausted(mut self, retry_exhausted: bool) -> Self {
+        self.retry_exhausted = retry_exhausted;
+        self
+    }
+
+    pub fn started_at(&self) -> Option<SystemTime> {
+        self.started_at
+    }
+
+    pub fn finished_at(&self) -> Option<SystemTime> {
+        self.finished_at
+    }
+
+    pub fn duration_ns(&self) -> Option<u128> {
+        self.duration_ns.or_else(|| {
+            self.duration_ms
+                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
+        })
+    }
+
+    pub fn duration_ms(&self) -> Option<u128> {
+        self.duration_ns
+            .map(|duration_ns| duration_ns / 1_000_000)
+            .or(self.duration_ms)
+    }
+
+    pub fn attempts(&self) -> usize {
+        self.attempts
+    }
+
+    pub fn retried(&self) -> bool {
+        self.retried
+    }
+
+    pub fn retry_exhausted(&self) -> bool {
+        self.retry_exhausted
+    }
+
+    pub fn started_at_display(&self) -> Option<String> {
+        self.started_at.map(format_timestamp_display)
+    }
+
+    pub fn finished_at_display(&self) -> Option<String> {
+        self.finished_at.map(format_timestamp_display)
+    }
+
+    pub fn duration_display(&self) -> Option<String> {
+        self.duration_ns().map(format_duration_display)
+    }
 }
 
 impl HostTaskResult {
@@ -1517,14 +1873,17 @@ impl HostTaskResult {
     ///
     /// # Parameters
     ///
-    /// * `result` - The `TaskSuccess` containing details about the successful execution,
-    ///   including any results, changes made, warnings, and timing information.
+    /// * `result` - The `TaskSuccess` containing semantic success details such as result
+    ///   data, change state, warnings, and task-specific metadata.
     ///
     /// # Returns
     ///
-    /// A `HostTaskResult::Passed` variant containing the provided success details.
+    /// A `HostTaskResult` containing a passed outcome with the provided success details.
     pub fn passed(result: TaskSuccess) -> Self {
-        Self::Passed(result)
+        Self {
+            outcome: HostTaskOutcome::Passed(result),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
     }
 
     /// Creates a new `HostTaskResult` representing a failed task execution.
@@ -1534,14 +1893,17 @@ impl HostTaskResult {
     ///
     /// # Parameters
     ///
-    /// * `failure` - The `TaskFailure` containing error information, failure classification,
-    ///   retry hints, and any warnings or messages collected before failure.
+    /// * `failure` - The `TaskFailure` containing semantic failure information,
+    ///   classification, retry hints, and any warnings or messages collected before failure.
     ///
     /// # Returns
     ///
-    /// A `HostTaskResult::Failed` variant containing the provided failure details.
+    /// A `HostTaskResult` containing a failed outcome with the provided failure details.
     pub fn failed(failure: TaskFailure) -> Self {
-        Self::Failed(failure)
+        Self {
+            outcome: HostTaskOutcome::Failed(failure),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
     }
 
     /// Creates a new `HostTaskResult` representing a skipped task execution.
@@ -1551,9 +1913,12 @@ impl HostTaskResult {
     ///
     /// # Returns
     ///
-    /// A `HostTaskResult::Skipped` variant with default skip information (no reason or message).
+    /// A `HostTaskResult` containing a skipped outcome with default skip information.
     pub fn skipped() -> Self {
-        Self::Skipped(TaskSkip::default())
+        Self {
+            outcome: HostTaskOutcome::Skipped(TaskSkip::default()),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
     }
 
     /// Creates a new `HostTaskResult` representing a skipped task execution with a reason.
@@ -1569,9 +1934,20 @@ impl HostTaskResult {
     ///
     /// # Returns
     ///
-    /// A `HostTaskResult::Skipped` variant with the specified reason set.
+    /// A `HostTaskResult` containing a skipped outcome with the specified reason set.
     pub fn skipped_with_reason(reason: impl Into<String>) -> Self {
-        Self::Skipped(TaskSkip::new().with_reason(reason))
+        Self {
+            outcome: HostTaskOutcome::Skipped(TaskSkip::new().with_reason(reason)),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
+    }
+
+    /// Creates a skipped host result from an explicit skip payload.
+    pub fn skipped_with_detail(skip: TaskSkip) -> Self {
+        Self {
+            outcome: HostTaskOutcome::Skipped(skip),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
     }
 
     /// Checks if the task execution passed (completed successfully).
@@ -1581,7 +1957,7 @@ impl HostTaskResult {
     /// `true` if this result represents a successful task execution (`Passed` variant),
     /// `false` otherwise.
     pub fn is_passed(&self) -> bool {
-        matches!(self, Self::Passed(_))
+        matches!(self.outcome, HostTaskOutcome::Passed(_))
     }
 
     /// Checks if the task execution failed.
@@ -1591,7 +1967,7 @@ impl HostTaskResult {
     /// `true` if this result represents a failed task execution (`Failed` variant),
     /// `false` otherwise.
     pub fn is_failed(&self) -> bool {
-        matches!(self, Self::Failed(_))
+        matches!(self.outcome, HostTaskOutcome::Failed(_))
     }
 
     /// Checks if the task execution was skipped.
@@ -1601,7 +1977,40 @@ impl HostTaskResult {
     /// `true` if this result represents a skipped task execution (`Skipped` variant),
     /// `false` otherwise.
     pub fn is_skipped(&self) -> bool {
-        matches!(self, Self::Skipped(_))
+        matches!(self.outcome, HostTaskOutcome::Skipped(_))
+    }
+
+    /// Returns the semantic host outcome payload.
+    ///
+    /// Use this when you need to pattern match on the canonical passed/failed/skipped
+    /// variants directly.
+    pub fn outcome(&self) -> &HostTaskOutcome {
+        &self.outcome
+    }
+
+    /// Returns execution metadata such as timing and retry attempt information.
+    ///
+    /// Host-level duration, timestamps, and retry counters live here rather than on
+    /// [`TaskSuccess`] or [`TaskFailure`].
+    pub fn execution_metadata(&self) -> &HostExecutionMetadata {
+        &self.execution_metadata
+    }
+
+    /// Returns mutable access to the execution metadata.
+    pub fn execution_metadata_mut(&mut self) -> &mut HostExecutionMetadata {
+        &mut self.execution_metadata
+    }
+
+    /// Returns a lowercase convenience status string.
+    ///
+    /// This compatibility accessor is useful for lightweight status checks where callers
+    /// do not need to pattern match on [`HostTaskOutcome`].
+    pub fn status(&self) -> &'static str {
+        match self.outcome() {
+            HostTaskOutcome::Passed(_) => "passed",
+            HostTaskOutcome::Failed(_) => "failed",
+            HostTaskOutcome::Skipped(_) => "skipped",
+        }
     }
 
     /// Retrieves the success details if the task passed.
@@ -1614,9 +2023,9 @@ impl HostTaskResult {
     /// `Some(&TaskSuccess)` if this is a `Passed` result, `None` if the task failed
     /// or was skipped.
     pub fn success(&self) -> Option<&TaskSuccess> {
-        match self {
-            Self::Passed(success) => Some(success),
-            Self::Failed(_) | Self::Skipped(_) => None,
+        match self.outcome() {
+            HostTaskOutcome::Passed(success) => Some(success),
+            HostTaskOutcome::Failed(_) | HostTaskOutcome::Skipped(_) => None,
         }
     }
 
@@ -1630,9 +2039,9 @@ impl HostTaskResult {
     /// `Some(&TaskFailure)` if this is a `Failed` result, `None` if the task passed
     /// or was skipped.
     pub fn failure(&self) -> Option<&TaskFailure> {
-        match self {
-            Self::Failed(failure) => Some(failure),
-            Self::Passed(_) | Self::Skipped(_) => None,
+        match self.outcome() {
+            HostTaskOutcome::Failed(failure) => Some(failure),
+            HostTaskOutcome::Passed(_) | HostTaskOutcome::Skipped(_) => None,
         }
     }
 
@@ -1646,9 +2055,9 @@ impl HostTaskResult {
     /// `Some(&TaskSkip)` if this is a `Skipped` result, `None` if the task passed
     /// or failed.
     pub fn skipped_detail(&self) -> Option<&TaskSkip> {
-        match self {
-            Self::Skipped(skip) => Some(skip),
-            Self::Passed(_) | Self::Failed(_) => None,
+        match self.outcome() {
+            HostTaskOutcome::Skipped(skip) => Some(skip),
+            HostTaskOutcome::Passed(_) | HostTaskOutcome::Failed(_) => None,
         }
     }
 
@@ -1658,20 +2067,15 @@ impl HostTaskResult {
         finished_at: SystemTime,
         duration_ns: u128,
     ) -> Self {
-        match self {
-            Self::Passed(success) => Self::Passed(
-                success
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(duration_ns),
-            ),
-            Self::Failed(failure) => Self::Failed(
-                failure
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(duration_ns),
-            ),
-            Self::Skipped(skip) => Self::Skipped(skip),
+        let execution_metadata = self
+            .execution_metadata
+            .clone()
+            .with_started_at(started_at)
+            .with_finished_at(finished_at)
+            .with_duration_ns(duration_ns);
+        Self {
+            outcome: self.outcome,
+            execution_metadata,
         }
     }
 }
@@ -1679,7 +2083,7 @@ impl HostTaskResult {
 /// Represents the successful execution of a task on a host.
 ///
 /// `TaskSuccess` captures detailed information about a task that completed successfully,
-/// including the execution result, whether changes were made, timing information, and any
+/// including the execution result, whether changes were made, and any
 /// warnings or messages generated during execution. This structure provides a comprehensive
 /// view of what happened during task execution, even when the task succeeded.
 ///
@@ -1704,12 +2108,6 @@ impl HostTaskResult {
 ///
 /// * `metadata` - Additional structured metadata about the execution, such as version information,
 ///   configuration details, or other contextual data.
-///
-/// * `started_at` - The timestamp when the task execution started, if available.
-///
-/// * `finished_at` - The timestamp when the task execution finished, if available.
-///
-/// * `duration_ms` - The duration of the task execution in milliseconds, if available.
 ///
 /// # Example
 ///
@@ -1736,10 +2134,6 @@ pub struct TaskSuccess {
     warnings: Vec<String>,
     messages: Vec<TaskMessage>,
     metadata: Option<Value>,
-    started_at: Option<SystemTime>,
-    finished_at: Option<SystemTime>,
-    duration_ns: Option<u128>,
-    duration_ms: Option<u128>,
 }
 
 impl TaskSuccess {
@@ -1747,7 +2141,7 @@ impl TaskSuccess {
     ///
     /// This constructor initializes a `TaskSuccess` with all fields set to their default values:
     /// no result data, no changes made, no diff, no summary, empty warnings and messages lists,
-    /// no metadata, and no timing information.
+    /// no metadata.
     ///
     /// # Returns
     ///
@@ -1892,65 +2286,6 @@ impl TaskSuccess {
         self
     }
 
-    /// Sets the task execution start timestamp.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `started_at` - The timestamp when the task execution started.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskSuccess` instance with the start timestamp set.
-    pub fn with_started_at(mut self, started_at: SystemTime) -> Self {
-        self.started_at = Some(started_at);
-        self
-    }
-
-    /// Sets the task execution finish timestamp.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `finished_at` - The timestamp when the task execution finished.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskSuccess` instance with the finish timestamp set.
-    pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
-        self.finished_at = Some(finished_at);
-        self
-    }
-
-    /// Sets the task execution duration in milliseconds.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `duration_ms` - The duration of the task execution in milliseconds.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskSuccess` instance with the duration set.
-    pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
-        self.duration_ns = Some(duration_ms.saturating_mul(1_000_000));
-        self.duration_ms = Some(duration_ms);
-        self
-    }
-
-    /// Sets the task execution duration in nanoseconds.
-    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
-        self.duration_ns = Some(duration_ns);
-        self.duration_ms = Some(duration_ns / 1_000_000);
-        self
-    }
-
     /// Returns the structured result data produced by the task, if available.
     ///
     /// # Returns
@@ -2015,58 +2350,6 @@ impl TaskSuccess {
     pub fn metadata(&self) -> Option<&Value> {
         self.metadata.as_ref()
     }
-
-    /// Returns the task execution start timestamp, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(SystemTime)` if the start timestamp was set, `None` otherwise.
-    pub fn started_at(&self) -> Option<SystemTime> {
-        self.started_at
-    }
-
-    /// Returns the task execution finish timestamp, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(SystemTime)` if the finish timestamp was set, `None` otherwise.
-    pub fn finished_at(&self) -> Option<SystemTime> {
-        self.finished_at
-    }
-
-    /// Returns the task execution duration in milliseconds, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(u128)` if the duration was set, `None` otherwise.
-    pub fn duration_ms(&self) -> Option<u128> {
-        self.duration_ns
-            .map(|duration_ns| duration_ns / 1_000_000)
-            .or(self.duration_ms)
-    }
-
-    /// Returns the task execution duration in nanoseconds, if available.
-    pub fn duration_ns(&self) -> Option<u128> {
-        self.duration_ns.or_else(|| {
-            self.duration_ms
-                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
-        })
-    }
-
-    /// Returns the task execution start timestamp in RFC 3339 format, if available.
-    pub fn started_at_display(&self) -> Option<String> {
-        self.started_at.map(format_timestamp_display)
-    }
-
-    /// Returns the task execution finish timestamp in RFC 3339 format, if available.
-    pub fn finished_at_display(&self) -> Option<String> {
-        self.finished_at.map(format_timestamp_display)
-    }
-
-    /// Returns the task execution duration in a human-readable format, if available.
-    pub fn duration_display(&self) -> Option<String> {
-        self.duration_ns().map(format_duration_display)
-    }
 }
 
 /// Represents a failed task execution with comprehensive error information and context.
@@ -2076,7 +2359,7 @@ impl TaskSuccess {
 /// execution before the failure occurred. This structure provides rich context for error handling,
 /// logging, and determining whether a failed task should be retried.
 ///
-/// The failure information includes timing data, structured details about the error, and the
+/// The failure information includes structured details about the error, and the
 /// ability to downcast to specific error types for specialized error handling.
 ///
 /// # Fields
@@ -2104,13 +2387,6 @@ impl TaskSuccess {
 ///
 /// * `messages` - Structured messages with levels (Info, Warning, Error, Debug) that were
 ///   collected during execution, providing a detailed execution trace up to the point of failure.
-///
-/// * `started_at` - The timestamp when the task execution started, if available.
-///
-/// * `finished_at` - The timestamp when the task execution failed, if available.
-///
-/// * `duration_ms` - The duration of the task execution in milliseconds before it failed,
-///   if available.
 ///
 /// # Example
 ///
@@ -2143,10 +2419,6 @@ pub struct TaskFailure {
     details: Option<Value>,
     warnings: Vec<String>,
     messages: Vec<TaskMessage>,
-    started_at: Option<SystemTime>,
-    finished_at: Option<SystemTime>,
-    duration_ns: Option<u128>,
-    duration_ms: Option<u128>,
 }
 
 impl TaskFailure {
@@ -2155,7 +2427,7 @@ impl TaskFailure {
     /// This constructor wraps any error type that implements the standard `Error` trait
     /// in a `TaskFailure`, capturing the error message and type information. The failure
     /// is initialized with default values: classified as `Internal`, not retryable, with
-    /// no additional details, warnings, or messages, and no timing information.
+    /// no additional details, warnings, or messages.
     ///
     /// The error is stored as a thread-safe, reference-counted pointer (`Arc<dyn Error>`),
     /// allowing it to be cloned and shared across threads while preserving the ability
@@ -2192,10 +2464,6 @@ impl TaskFailure {
             details: None,
             warnings: Vec::new(),
             messages: Vec::new(),
-            started_at: None,
-            finished_at: None,
-            duration_ns: None,
-            duration_ms: None,
         }
     }
 
@@ -2229,10 +2497,6 @@ impl TaskFailure {
             details: None,
             warnings: Vec::new(),
             messages: Vec::new(),
-            started_at: None,
-            finished_at: None,
-            duration_ns: None,
-            duration_ms: None,
         }
     }
 
@@ -2252,10 +2516,6 @@ impl TaskFailure {
             details: None,
             warnings: Vec::new(),
             messages: Vec::new(),
-            started_at: None,
-            finished_at: None,
-            duration_ns: None,
-            duration_ms: None,
         }
     }
 
@@ -2352,65 +2612,6 @@ impl TaskFailure {
     /// The modified `TaskFailure` instance with the message added to the messages list.
     pub fn with_message(mut self, message: TaskMessage) -> Self {
         self.messages.push(message);
-        self
-    }
-
-    /// Sets the task execution start timestamp.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `started_at` - The timestamp when the task execution started.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskFailure` instance with the start timestamp set.
-    pub fn with_started_at(mut self, started_at: SystemTime) -> Self {
-        self.started_at = Some(started_at);
-        self
-    }
-
-    /// Sets the task execution finish timestamp.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `finished_at` - The timestamp when the task execution failed.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskFailure` instance with the finish timestamp set.
-    pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
-        self.finished_at = Some(finished_at);
-        self
-    }
-
-    /// Sets the task execution duration in milliseconds.
-    ///
-    /// This is a builder method that consumes `self` and returns the modified instance,
-    /// allowing for method chaining.
-    ///
-    /// # Parameters
-    ///
-    /// * `duration_ms` - The duration of the task execution in milliseconds before it failed.
-    ///
-    /// # Returns
-    ///
-    /// The modified `TaskFailure` instance with the duration set.
-    pub fn with_duration_ms(mut self, duration_ms: u128) -> Self {
-        self.duration_ns = Some(duration_ms.saturating_mul(1_000_000));
-        self.duration_ms = Some(duration_ms);
-        self
-    }
-
-    /// Sets the task execution duration in nanoseconds.
-    pub fn with_duration_ns(mut self, duration_ns: u128) -> Self {
-        self.duration_ns = Some(duration_ns);
-        self.duration_ms = Some(duration_ns / 1_000_000);
         self
     }
 
@@ -2520,58 +2721,6 @@ impl TaskFailure {
     /// messages were generated.
     pub fn messages(&self) -> &[TaskMessage] {
         &self.messages
-    }
-
-    /// Returns the task execution start timestamp, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(SystemTime)` if the start timestamp was set, `None` otherwise.
-    pub fn started_at(&self) -> Option<SystemTime> {
-        self.started_at
-    }
-
-    /// Returns the task execution finish timestamp, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(SystemTime)` if the finish timestamp was set, `None` otherwise.
-    pub fn finished_at(&self) -> Option<SystemTime> {
-        self.finished_at
-    }
-
-    /// Returns the task execution duration in milliseconds, if available.
-    ///
-    /// # Returns
-    ///
-    /// `Some(u128)` if the duration was set, `None` otherwise.
-    pub fn duration_ms(&self) -> Option<u128> {
-        self.duration_ns
-            .map(|duration_ns| duration_ns / 1_000_000)
-            .or(self.duration_ms)
-    }
-
-    /// Returns the task execution duration in nanoseconds, if available.
-    pub fn duration_ns(&self) -> Option<u128> {
-        self.duration_ns.or_else(|| {
-            self.duration_ms
-                .map(|duration_ms| duration_ms.saturating_mul(1_000_000))
-        })
-    }
-
-    /// Returns the task execution start timestamp in RFC 3339 format, if available.
-    pub fn started_at_display(&self) -> Option<String> {
-        self.started_at.map(format_timestamp_display)
-    }
-
-    /// Returns the task execution finish timestamp in RFC 3339 format, if available.
-    pub fn finished_at_display(&self) -> Option<String> {
-        self.finished_at.map(format_timestamp_display)
-    }
-
-    /// Returns the task execution duration in a human-readable format, if available.
-    pub fn duration_display(&self) -> Option<String> {
-        self.duration_ns().map(format_duration_display)
     }
 }
 
@@ -2964,6 +3113,11 @@ pub trait TaskInfo {
     /// Return processor plugin names selected for this task.
     fn processor_names(&self) -> Vec<&str> {
         Vec::new()
+    }
+
+    /// Return task-specific retry metadata, if set.
+    fn retry_config(&self) -> Option<&RetryConfig> {
+        None
     }
 }
 
@@ -3528,17 +3682,13 @@ impl TaskDefinition {
         results: &mut TaskResults,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
-        Self::start_with_depth(
-            Arc::clone(&self.inner),
+        self.start_with_retry_defaults(
             hostname,
             host,
             results,
             None,
-            self.processor_resolver.as_deref(),
-            self.processor_names(),
-            None,
-            0,
             max_depth,
+            TaskRetryDefaults::default(),
         )
         .await
     }
@@ -3552,6 +3702,47 @@ impl TaskDefinition {
         connection_resolver: Option<&dyn TaskConnectionResolver>,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
+        self.start_with_retry_defaults(
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            max_depth,
+            TaskRetryDefaults::default(),
+        )
+        .await
+    }
+
+    /// Executes this task definition with runner-supplied retry defaults.
+    pub async fn start_with_connection_resolver_and_runner_config(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        runner_config: &RunnerConfig,
+        max_depth: usize,
+    ) -> Result<(), crate::GenjaError> {
+        self.start_with_retry_defaults(
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            max_depth,
+            TaskRetryDefaults::from(runner_config),
+        )
+        .await
+    }
+
+    async fn start_with_retry_defaults(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        max_depth: usize,
+        retry_defaults: TaskRetryDefaults,
+    ) -> Result<(), crate::GenjaError> {
         Self::start_with_depth(
             Arc::clone(&self.inner),
             hostname,
@@ -3563,6 +3754,7 @@ impl TaskDefinition {
             None,
             0,
             max_depth,
+            retry_defaults,
         )
         .await
     }
@@ -3645,12 +3837,12 @@ impl TaskDefinition {
         parent_task_name: Option<&str>,
         depth: usize,
         max_depth: usize,
+        retry_defaults: TaskRetryDefaults,
     ) -> Result<(), crate::GenjaError> {
         if depth > max_depth {
             let started_at = SystemTime::now();
             let finished_at = started_at;
-            let error =
-                crate::GenjaError::Message(format!("max task depth exceeded: {}", max_depth));
+            let error = crate::GenjaError::Message(format!("max task depth exceeded: {max_depth}"));
             warn!(
                 "max task depth exceeded for task '{}' at depth {} with max_depth {}",
                 task.name(),
@@ -3658,16 +3850,17 @@ impl TaskDefinition {
                 max_depth
             );
             results.record_execution_timing(started_at, finished_at);
-            results.insert_host_result(
-                hostname,
-                HostTaskResult::failed(
-                    TaskFailure::new(error)
-                        .with_kind(TaskFailureKind::Internal)
-                        .with_started_at(started_at)
-                        .with_finished_at(finished_at)
-                        .with_duration_ns(0),
-                ),
-            );
+            let mut host_result = HostTaskResult::failed(
+                TaskFailure::new(error).with_kind(TaskFailureKind::Internal),
+            )
+            .with_execution_timing(started_at, finished_at, 0);
+            *host_result.execution_metadata_mut() = host_result
+                .execution_metadata()
+                .clone()
+                .with_attempts(1)
+                .with_retried(false)
+                .with_retry_exhausted(false);
+            results.insert_host_result(hostname, host_result);
             return Ok(());
         }
 
@@ -3682,12 +3875,10 @@ impl TaskDefinition {
             max_depth,
             connection_resolver.is_some()
         );
+        let retry_policy = EffectiveTaskRetryPolicy::for_task(task.as_ref(), retry_defaults);
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
-        for processor in &processors {
-            processor.on_instance_start(&processor_context)?;
-        }
 
         let connection = if let Some(connection_resolver) = connection_resolver {
             match connection_resolver
@@ -3711,12 +3902,16 @@ impl TaskDefinition {
                     );
 
                     let mut host_result = HostTaskResult::failed(
-                        TaskFailure::new(error)
-                            .with_kind(TaskFailureKind::Connection)
-                            .with_started_at(started_at)
-                            .with_finished_at(finished_at)
-                            .with_duration_ns(duration_ns),
+                        TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
                     );
+                    host_result =
+                        host_result.with_execution_timing(started_at, finished_at, duration_ns);
+                    *host_result.execution_metadata_mut() = host_result
+                        .execution_metadata()
+                        .clone()
+                        .with_attempts(1)
+                        .with_retried(false)
+                        .with_retry_exhausted(false);
                     for processor in &processors {
                         processor.on_instance_finish(&processor_context, &mut host_result)?;
                     }
@@ -3728,29 +3923,62 @@ impl TaskDefinition {
             None
         };
 
-        let execution_context = TaskExecutionContext::new(depth, max_depth);
-        let host_result = match task.execution_mode() {
-            TaskExecutionMode::Async => {
-                let runtime_context =
-                    TaskRuntimeContext::new(execution_context, connection.clone());
-                task.start_async(host, &runtime_context).await
+        let mut attempts = 0;
+        let host_result = loop {
+            attempts += 1;
+            for processor in &processors {
+                processor.on_instance_start(&processor_context)?;
             }
-            TaskExecutionMode::Blocking => {
-                let blocking_context = BlockingTaskRuntimeContext::new(
-                    execution_context,
-                    connection.clone(),
-                    Handle::current(),
-                );
-                let task = Arc::clone(&task);
-                let host = host.clone();
-                match task::spawn_blocking(move || task.start(&host, &blocking_context)).await {
-                    Ok(result) => result,
-                    Err(err) => Err(TaskError::new(std::io::Error::other(format!(
-                        "blocking task join error: {err}"
-                    )))),
+
+            let execution_context = TaskExecutionContext::new(depth, max_depth);
+            let host_result = match task.execution_mode() {
+                TaskExecutionMode::Async => {
+                    let runtime_context =
+                        TaskRuntimeContext::new(execution_context, connection.clone());
+                    task.start_async(host, &runtime_context).await
                 }
+                TaskExecutionMode::Blocking => {
+                    let blocking_context = BlockingTaskRuntimeContext::new(
+                        execution_context,
+                        connection.clone(),
+                        Handle::current(),
+                    );
+                    let task = Arc::clone(&task);
+                    let host = host.clone();
+                    match task::spawn_blocking(move || task.start(&host, &blocking_context)).await {
+                        Ok(result) => result,
+                        Err(err) => Err(TaskError::new(std::io::Error::other(format!(
+                            "blocking task join error: {err}"
+                        )))),
+                    }
+                }
+            };
+
+            let host_result = match host_result {
+                Ok(host_result) => host_result,
+                Err(error) => HostTaskResult::failed(TaskFailure::from_task_error(error)),
+            };
+
+            if retry_policy.should_retry(&host_result, attempts) {
+                if let Some(failure) = host_result.failure() {
+                    warn!(
+                        "retrying task '{}' for host '{}' after attempt {}/{}: {}",
+                        task.name(),
+                        hostname,
+                        attempts,
+                        retry_policy.max_attempts(),
+                        failure.message()
+                    );
+                }
+                if retry_policy.delay_ms() > 0 {
+                    sleep(Duration::from_millis(retry_policy.delay_ms())).await;
+                }
+                continue;
             }
+
+            break host_result;
         };
+
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
             .duration_since(started_at)
@@ -3758,38 +3986,6 @@ impl TaskDefinition {
             .unwrap_or(0);
 
         results.record_execution_timing(started_at, finished_at);
-
-        let host_result = match host_result {
-            Ok(host_result) => host_result,
-            Err(error) => {
-                let failure = TaskFailure::from_task_error(error)
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(duration_ns);
-                warn!(
-                    "task '{}' failed for host '{}': {}",
-                    task.name(),
-                    hostname,
-                    failure.message()
-                );
-                let duration_display = failure
-                    .duration_display()
-                    .unwrap_or_else(|| format_duration_display(duration_ns));
-                info!(
-                    "finished task '{}' for host '{}' with status=failed duration_ms={} duration={}",
-                    task.name(),
-                    hostname,
-                    duration_ns / 1_000_000,
-                    duration_display
-                );
-                let mut host_result = HostTaskResult::failed(failure);
-                for processor in &processors {
-                    processor.on_instance_finish(&processor_context, &mut host_result)?;
-                }
-                results.insert_host_result(hostname, host_result);
-                return Ok(());
-            }
-        };
 
         if let Some(failure) = host_result.failure() {
             warn!(
@@ -3818,17 +4014,19 @@ impl TaskDefinition {
             "skipped"
         };
 
+        let retry_exhausted = retry_policy.retry_exhausted(&host_result, attempts);
         let mut host_result =
             host_result.with_execution_timing(started_at, finished_at, duration_ns);
-        let duration_display = match &host_result {
-            HostTaskResult::Passed(success) => success
-                .duration_display()
-                .unwrap_or_else(|| format_duration_display(duration_ns)),
-            HostTaskResult::Failed(failure) => failure
-                .duration_display()
-                .unwrap_or_else(|| format_duration_display(duration_ns)),
-            HostTaskResult::Skipped(_) => format_duration_display(duration_ns),
-        };
+        *host_result.execution_metadata_mut() = host_result
+            .execution_metadata()
+            .clone()
+            .with_attempts(attempts)
+            .with_retried(attempts > 1)
+            .with_retry_exhausted(retry_exhausted);
+        let duration_display = host_result
+            .execution_metadata()
+            .duration_display()
+            .unwrap_or_else(|| format_duration_display(duration_ns));
 
         info!(
             "finished task '{}' for host '{}' with status={} duration_ms={} duration={}",
@@ -3882,6 +4080,7 @@ impl TaskDefinition {
                 Some(task.name()),
                 depth + 1,
                 max_depth,
+                retry_defaults,
             )
             .await?;
             if sub_task_started {
@@ -3958,6 +4157,10 @@ impl TaskInfo for TaskDefinition {
 
     fn processor_names(&self) -> Vec<&str> {
         self.processor_names()
+    }
+
+    fn retry_config(&self) -> Option<&RetryConfig> {
+        self.inner.retry_config()
     }
 }
 
@@ -4036,6 +4239,7 @@ mod tests {
     use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::Instant;
     use tokio::runtime::Builder;
 
     fn run_async<F: Future>(future: F) -> F::Output {
@@ -4090,6 +4294,24 @@ mod tests {
     struct FailingTask;
 
     struct SkippingTask;
+
+    struct FlakyTask {
+        name: &'static str,
+        attempts: Arc<AtomicUsize>,
+        succeed_on_attempt: usize,
+    }
+
+    struct RetryConfiguredFlakyTask {
+        inner: FlakyTask,
+        retry_config: RetryConfig,
+    }
+
+    struct RecordingFlakyTask {
+        name: &'static str,
+        attempts: Arc<AtomicUsize>,
+        attempt_times: Arc<Mutex<Vec<Instant>>>,
+        succeed_on_attempt: usize,
+    }
 
     #[derive(Debug)]
     struct TestConnection {
@@ -4283,9 +4505,126 @@ mod tests {
             _host: &Host,
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
-            Ok(HostTaskResult::Skipped(
-                TaskSkip::new().with_reason("filtered"),
-            ))
+            Ok(HostTaskResult::skipped_with_reason("filtered"))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    impl TaskInfo for FlakyTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    impl TaskInfo for RetryConfiguredFlakyTask {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            self.inner.connection_plugin_name()
+        }
+
+        fn options(&self) -> Option<&Value> {
+            self.inner.options()
+        }
+
+        fn retry_config(&self) -> Option<&RetryConfig> {
+            Some(&self.retry_config)
+        }
+    }
+
+    impl TaskInfo for RecordingFlakyTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    #[async_trait]
+    impl Task for RetryConfiguredFlakyTask {
+        async fn start_async(
+            &self,
+            host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.inner.start_async(host, context).await
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for RecordingFlakyTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.attempt_times
+                .lock()
+                .expect("attempt times lock should not be poisoned")
+                .push(Instant::now());
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt >= self.succeed_on_attempt {
+                Ok(HostTaskResult::passed(TaskSuccess::new()))
+            } else {
+                Ok(HostTaskResult::failed(
+                    TaskFailure::new(TestTaskFailureError)
+                        .with_kind(TaskFailureKind::External)
+                        .with_retryable(true),
+                ))
+            }
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for FlakyTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt >= self.succeed_on_attempt {
+                Ok(HostTaskResult::passed(
+                    TaskSuccess::new().with_summary(format!("passed on attempt {attempt}")),
+                ))
+            } else {
+                Ok(HostTaskResult::failed(
+                    TaskFailure::new(TestTaskFailureError)
+                        .with_kind(TaskFailureKind::Connection)
+                        .with_retryable(true)
+                        .with_message(TaskMessage::new(
+                            MessageLevel::Warning,
+                            format!("attempt {attempt} failed"),
+                        )),
+                ))
+            }
         }
 
         fn execution_mode(&self) -> TaskExecutionMode {
@@ -4423,15 +4762,20 @@ mod tests {
             .sub_task("leaf")
             .expect("leaf task should capture failure");
 
-        let failure = level_five
+        let host_result = level_five
             .host_result("router1")
-            .and_then(HostTaskResult::failure)
+            .expect("depth overflow host result should exist");
+        let failure = host_result
+            .failure()
             .expect("depth overflow should be recorded as a host failure");
         assert!(failure.message().contains("max task depth exceeded"));
         assert!(matches!(failure.kind(), TaskFailureKind::Internal));
-        assert!(failure.started_at().is_some());
-        assert!(failure.finished_at().is_some());
-        assert_eq!(failure.duration_ns(), Some(0));
+        assert!(host_result.execution_metadata().started_at().is_some());
+        assert_eq!(
+            host_result.execution_metadata().started_at(),
+            host_result.execution_metadata().finished_at()
+        );
+        assert_eq!(host_result.execution_metadata().duration_ns(), Some(0));
     }
 
     #[test]
@@ -4447,14 +4791,19 @@ mod tests {
 
         run_async(task.start("router1", &host, &mut results, 0)).expect("start should succeed");
 
-        let success = results
+        let host_result = results
             .host_result("router1")
-            .and_then(HostTaskResult::success)
-            .expect("host result should be passed");
-        assert!(success.started_at().is_some());
-        assert!(success.finished_at().is_some());
-        assert!(success.duration_ns().is_some());
-        assert!(success.duration_display().is_some());
+            .expect("host result should exist");
+        assert!(host_result.is_passed());
+        assert!(host_result.execution_metadata().started_at().is_some());
+        assert!(host_result.execution_metadata().finished_at().is_some());
+        assert!(host_result.execution_metadata().duration_ns().is_some());
+        assert!(
+            host_result
+                .execution_metadata()
+                .duration_display()
+                .is_some()
+        );
     }
 
     #[test]
@@ -4466,14 +4815,19 @@ mod tests {
         run_async(task.start("router1", &host, &mut results, 0))
             .expect("start should record a failed result");
 
-        let failure = results
+        let host_result = results
             .host_result("router1")
-            .and_then(HostTaskResult::failure)
-            .expect("host result should be failed");
-        assert!(failure.started_at().is_some());
-        assert!(failure.finished_at().is_some());
-        assert!(failure.duration_ns().is_some());
-        assert!(failure.duration_display().is_some());
+            .expect("host result should exist");
+        assert!(host_result.is_failed());
+        assert!(host_result.execution_metadata().started_at().is_some());
+        assert!(host_result.execution_metadata().finished_at().is_some());
+        assert!(host_result.execution_metadata().duration_ns().is_some());
+        assert!(
+            host_result
+                .execution_metadata()
+                .duration_display()
+                .is_some()
+        );
     }
 
     #[test]
@@ -4491,6 +4845,326 @@ mod tests {
             .expect("host result should be skipped");
         assert_eq!(skip.reason(), Some("filtered"));
         assert_eq!(skip.message(), None);
+    }
+
+    #[test]
+    fn start_retries_retryable_failures_when_enabled_by_runner_config() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(FlakyTask {
+            name: "flaky",
+            attempts: Arc::clone(&attempts),
+            succeed_on_attempt: 2,
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("flaky");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should succeed after retry");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_passed());
+        assert_eq!(host_result.execution_metadata().attempts(), 2);
+        assert!(host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn retry_config_builder_sets_optional_task_retry_metadata() {
+        let retry_config = RetryConfig::builder()
+            .allow(true)
+            .max_attempts(3)
+            .delay_ms(250)
+            .build();
+
+        assert_eq!(retry_config.allow(), Some(true));
+        assert_eq!(retry_config.max_attempts(), Some(3));
+        assert_eq!(retry_config.delay_ms(), Some(250));
+
+        let clamped_retry_config = RetryConfig::builder().max_attempts(0).build();
+        assert_eq!(clamped_retry_config.max_attempts(), Some(1));
+    }
+
+    #[test]
+    fn start_uses_task_retry_config_over_default_policy() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(RetryConfiguredFlakyTask {
+            inner: FlakyTask {
+                name: "task_retry_override",
+                attempts: Arc::clone(&attempts),
+                succeed_on_attempt: 2,
+            },
+            retry_config: RetryConfig::builder().allow(true).max_attempts(3).build(),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("task_retry_override");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("start should use task retry config");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_passed());
+        assert_eq!(host_result.execution_metadata().attempts(), 2);
+        assert!(host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_merges_task_retry_config_over_runner_retry_config_field_by_field() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(RetryConfiguredFlakyTask {
+            inner: FlakyTask {
+                name: "field_by_field_retry",
+                attempts: Arc::clone(&attempts),
+                succeed_on_attempt: 3,
+            },
+            retry_config: RetryConfig::builder().allow(true).build(),
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(RetryConfig::builder().max_attempts(3).build())
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("field_by_field_retry");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should merge task retry config over runner retry config");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_passed());
+        assert_eq!(host_result.execution_metadata().attempts(), 3);
+        assert!(host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_delays_before_retry_attempts() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempt_times = Arc::new(Mutex::new(Vec::new()));
+        let task = TaskDefinition::new(RecordingFlakyTask {
+            name: "delayed_retry",
+            attempts: Arc::clone(&attempts),
+            attempt_times: Arc::clone(&attempt_times),
+            succeed_on_attempt: 2,
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(
+                RetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(2)
+                    .delay_ms(20)
+                    .build(),
+            )
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("delayed_retry");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should delay before the retry attempt");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let attempt_times = attempt_times
+            .lock()
+            .expect("attempt times lock should not be poisoned");
+        assert_eq!(attempt_times.len(), 2);
+        assert!(attempt_times[1].duration_since(attempt_times[0]) >= Duration::from_millis(20));
+    }
+
+    #[test]
+    fn start_marks_retry_exhausted_after_final_retryable_failure() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(FlakyTask {
+            name: "always_fails",
+            attempts: Arc::clone(&attempts),
+            succeed_on_attempt: usize::MAX,
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("always_fails");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should capture exhausted retries");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_failed());
+        assert_eq!(host_result.execution_metadata().attempts(), 3);
+        assert!(host_result.execution_metadata().retried());
+        assert!(host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_does_not_retry_without_effective_retry_policy() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(FlakyTask {
+            name: "no_retry",
+            attempts: Arc::clone(&attempts),
+            succeed_on_attempt: 2,
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("no_retry");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("start should record first failure without retry");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_failed());
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_does_not_retry_or_delay_when_max_attempts_is_one() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(FlakyTask {
+            name: "single_attempt",
+            attempts: Arc::clone(&attempts),
+            succeed_on_attempt: 2,
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(
+                RetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(1)
+                    .delay_ms(20)
+                    .build(),
+            )
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("single_attempt");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should record first failure without retry");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_failed());
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_does_not_retry_or_delay_non_retryable_failures() {
+        let task = TaskDefinition::new(FailingTask);
+        let runner_config = RunnerConfig::builder()
+            .retry(
+                RetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(3)
+                    .delay_ms(20)
+                    .build(),
+            )
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("failing");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should record non-retryable failure without retry");
+
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_failed());
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn start_does_not_retry_or_delay_skipped_results() {
+        let task = TaskDefinition::new(SkippingTask);
+        let runner_config = RunnerConfig::builder()
+            .retry(
+                RetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(3)
+                    .delay_ms(20)
+                    .build(),
+            )
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("skipping");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should record skipped result without retry");
+
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_skipped());
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
     }
 
     #[test]
@@ -4684,10 +5358,6 @@ mod tests {
 
     #[test]
     fn task_success_builders_expose_extended_metadata() {
-        let started_at = SystemTime::UNIX_EPOCH;
-        let finished_at = SystemTime::UNIX_EPOCH
-            .checked_add(std::time::Duration::from_secs(2))
-            .expect("valid timestamp");
         let success = TaskSuccess::new()
             .with_result(json!({"ok": true}))
             .with_changed(true)
@@ -4697,10 +5367,7 @@ mod tests {
             .with_message(
                 TaskMessage::new(MessageLevel::Info, "commit complete").with_code("commit_ok"),
             )
-            .with_metadata(json!({"version": 1}))
-            .with_started_at(started_at)
-            .with_finished_at(finished_at)
-            .with_duration_ms(2000);
+            .with_metadata(json!({"version": 1}));
 
         assert_eq!(success.result(), Some(&json!({"ok": true})));
         assert!(success.changed());
@@ -4711,18 +5378,18 @@ mod tests {
         assert_eq!(success.messages()[0].code(), Some("commit_ok"));
         assert!(matches!(success.messages()[0].level(), MessageLevel::Info));
         assert_eq!(success.metadata(), Some(&json!({"version": 1})));
-        assert_eq!(success.started_at(), Some(started_at));
-        assert_eq!(success.finished_at(), Some(finished_at));
-        assert_eq!(success.duration_ms(), Some(2000));
     }
 
     #[test]
     fn task_skip_and_host_task_result_expose_skip_metadata() {
-        let skipped = HostTaskResult::Skipped(
-            TaskSkip::new()
-                .with_reason("filtered")
-                .with_message("host excluded by selector"),
-        );
+        let skipped = HostTaskResult {
+            outcome: HostTaskOutcome::Skipped(
+                TaskSkip::new()
+                    .with_reason("filtered")
+                    .with_message("host excluded by selector"),
+            ),
+            execution_metadata: HostExecutionMetadata::new(),
+        };
 
         assert!(skipped.is_skipped());
         assert_eq!(
@@ -4878,43 +5545,37 @@ mod tests {
             .checked_add(std::time::Duration::from_millis(2))
             .expect("valid timestamp");
         let mut results = TaskResults::new("deploy");
-        results.insert_host_result(
-            "router1",
-            HostTaskResult::passed(
-                TaskSuccess::new()
-                    .with_summary("ok")
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(2_000_000),
-            ),
-        );
-        results.insert_host_result(
-            "router2",
-            HostTaskResult::failed(
-                TaskFailure::new(TestTaskFailureError)
-                    .with_started_at(started_at)
-                    .with_finished_at(finished_at)
-                    .with_duration_ns(250_000),
-            ),
-        );
-        results.insert_host_result(
-            "router3",
-            HostTaskResult::Skipped(TaskSkip::new().with_reason("filtered")),
-        );
+        let mut passed = HostTaskResult::passed(TaskSuccess::new().with_summary("ok"));
+        *passed.execution_metadata_mut() = passed
+            .execution_metadata()
+            .clone()
+            .with_started_at(started_at)
+            .with_finished_at(finished_at)
+            .with_duration_ns(2_000_000);
+        results.insert_host_result("router1", passed);
+        let mut failed = HostTaskResult::failed(TaskFailure::new(TestTaskFailureError));
+        *failed.execution_metadata_mut() = failed
+            .execution_metadata()
+            .clone()
+            .with_started_at(started_at)
+            .with_finished_at(finished_at)
+            .with_duration_ns(250_000);
+        results.insert_host_result("router2", failed);
+        results.insert_host_result("router3", HostTaskResult::skipped_with_reason("filtered"));
 
         let json = results
             .to_json_string()
             .expect("human json should serialize host timing");
 
-        assert!(json.contains("\"router1\":{\"Passed\":{"));
+        assert!(json.contains("\"router1\":{\"outcome\":{\"Passed\":{"));
         assert!(json.contains("\"summary\":\"ok\""));
-        assert!(json.contains("\"started_at\":\"1970-01-01T00:00:00Z\""));
-        assert!(json.contains("\"finished_at\":\"1970-01-01T00:00:00Z\""));
-        assert!(json.contains("\"duration\":\"2ms\""));
-        assert!(json.contains("\"router2\":{\"Failed\":"));
-        assert!(json.contains("\"duration\":\"250us\""));
-        assert!(json.contains("\"router3\":{\"Skipped\":{\"reason\":\"filtered\""));
-        assert!(!json.contains("\"router3\":{\"Skipped\":{\"started_at\""));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"2ms\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}"));
+        assert!(json.contains("\"router2\":{\"outcome\":{\"Failed\":"));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"250us\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}"));
+        assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\""));
+        assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\",\"message\":null}},\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}}"));
+        assert!(!json.contains("\"Passed\":{\"result\":null,\"changed\":false,\"diff\":null,\"summary\":\"ok\",\"warnings\":[],\"messages\":[],\"metadata\":null,\"started_at\""));
+        assert!(!json.contains("\"Failed\":{\"kind\":\"Internal\",\"error_type\":\"genja_core::task::tests::TestTaskFailureError\",\"message\":\"task failure test error\",\"retryable\":false,\"details\":null,\"warnings\":[],\"messages\":[],\"started_at\""));
         assert!(!json.contains("\"duration_ns\""));
         assert!(!json.contains("\"duration_ms\""));
     }
@@ -5006,11 +5667,14 @@ mod tests {
         );
         validate.insert_host_result(
             "router2",
-            HostTaskResult::Skipped(
-                TaskSkip::new()
-                    .with_reason("parent_failed")
-                    .with_message("validation skipped because deploy failed"),
-            ),
+            HostTaskResult {
+                outcome: HostTaskOutcome::Skipped(
+                    TaskSkip::new()
+                        .with_reason("parent_failed")
+                        .with_message("validation skipped because deploy failed"),
+                ),
+                execution_metadata: HostExecutionMetadata::new(),
+            },
         );
 
         let mut collect_logs = TaskResults::new("collect_logs");
