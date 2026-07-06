@@ -22,7 +22,7 @@ automation workflows.
 
 ```toml
 [dependencies]
-genja = "0.1.0"
+genja = "0.2.0"
 ```
 
 The `genja` crate re-exports the common task authoring pieces so most users do
@@ -216,7 +216,7 @@ application; clone the repository to run them.
 Run a crate example from a repository checkout:
 
 The command below uses the repository default branch. For release-specific
-examples, check out the matching version tag, such as `v0.1.0`.
+examples, check out the matching version tag, such as `v0.2.0`.
 
 ```bash
 git clone https://github.com/Smertan/genja.git

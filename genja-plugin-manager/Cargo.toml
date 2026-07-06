@@ -1,6 +1,6 @@
 [package]
 name = "genja-plugin-manager"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Andre Bowen-Brown <contact@genja.co.uk>"]
 description = "Dynamic plugin loading and build support for Genja-compatible Rust applications and shared-library plugins"
@@ -13,7 +13,7 @@ categories = ["development-tools", "rust-patterns"]
 
 [dependencies]
 async-trait = "0.1.89"
-genja-core = { version = "0.1.0", path = "../genja-core" }
+genja-core = { version = "0.2.0", path = "../genja-core" }
 libloading = "0.8.8"
 log = "0.4.28"
 serde_json = "1.0.145"

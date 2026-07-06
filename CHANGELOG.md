@@ -4,6 +4,13 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+## 0.2.0 - 2026-07-06
+
+Released packages:
+
+- Rust crates: `genja`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`
+- Python package: `genja-py`
+
 ### Changed
 
 - **Breaking:** Redesigned `HostTaskResult` from an enum into a structured object with `outcome` and `execution_metadata`. Rust consumers should migrate direct enum variant matching to compatibility accessors or the new structured fields. Refs: #63

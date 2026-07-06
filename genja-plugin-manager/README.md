@@ -34,14 +34,14 @@ Runtime dependency:
 
 ```toml
 [dependencies]
-genja-plugin-manager = "0.1.0"
+genja-plugin-manager = "0.2.0"
 ```
 
 If your application uses manifest-driven plugin copying in `build.rs`, add it as a build dependency too:
 
 ```toml
 [build-dependencies]
-genja-plugin-manager = "0.1.0"
+genja-plugin-manager = "0.2.0"
 ```
 
 ## Creating a Plugin
@@ -105,8 +105,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-genja-plugin-manager = "0.1.0"
-genja-core = "0.1.0"
+genja-plugin-manager = "0.2.0"
+genja-core = "0.2.0"
 
 [lib]
 name = "my_plugin"
@@ -132,11 +132,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-genja = "0.1.0"
-genja-plugin-manager = "0.1.0"
+genja = "0.2.0"
+genja-plugin-manager = "0.2.0"
 
 [build-dependencies]
-genja-plugin-manager = "0.1.0"
+genja-plugin-manager = "0.2.0"
 
 [package.metadata.plugins]
 hostname_ip_transform = "target/{PROFILE}/libhostname_ip_transform.so"
