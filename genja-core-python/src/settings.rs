@@ -8,6 +8,39 @@ use pyo3::types::PyModule;
 
 use crate::task;
 
+#[pyclass(name = "RunnerRetryConfig", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyRunnerRetryConfig {
+    pub(crate) inner: ::genja_core::task::RetryConfig,
+}
+
+#[pymethods]
+impl PyRunnerRetryConfig {
+    #[getter]
+    pub(crate) fn allow(&self) -> Option<bool> {
+        self.inner.allow()
+    }
+
+    #[getter]
+    pub(crate) fn max_attempts(&self) -> Option<usize> {
+        self.inner.max_attempts()
+    }
+
+    #[getter]
+    pub(crate) fn delay_ms(&self) -> Option<u64> {
+        self.inner.delay_ms()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "RunnerRetryConfig(allow={:?}, max_attempts={:?}, delay_ms={:?})",
+            self.allow(),
+            self.max_attempts(),
+            self.delay_ms()
+        )
+    }
+}
+
 #[pyclass(name = "OptionsConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyOptionsConfig {
@@ -149,24 +182,20 @@ impl PyRunnerConfig {
     }
 
     #[getter]
-    pub(crate) fn allow_retries(&self) -> bool {
-        self.inner.allow_retries()
-    }
-
-    #[getter]
-    pub(crate) fn max_task_attempts(&self) -> usize {
-        self.inner.max_task_attempts()
+    pub(crate) fn retry(&self) -> PyRunnerRetryConfig {
+        PyRunnerRetryConfig {
+            inner: *self.inner.retry(),
+        }
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "RunnerConfig(plugin={:?}, worker_count={:?}, max_task_depth={}, max_connection_attempts={}, allow_retries={}, max_task_attempts={})",
+            "RunnerConfig(plugin={:?}, worker_count={:?}, max_task_depth={}, max_connection_attempts={}, retry={})",
             self.plugin(),
             self.worker_count(),
             self.max_task_depth(),
             self.max_connection_attempts(),
-            self.allow_retries(),
-            self.max_task_attempts()
+            self.retry().__repr__()
         )
     }
 }
@@ -299,6 +328,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyInventoryConfig>()?;
     module.add_class::<PySSHConfig>()?;
     module.add_class::<PyRunnerConfig>()?;
+    module.add_class::<PyRunnerRetryConfig>()?;
     module.add_class::<PyLoggingConfig>()?;
     Ok(())
 }
@@ -361,6 +391,7 @@ mod tests {
             assert!(module.getattr("InventoryConfig").is_ok());
             assert!(module.getattr("SSHConfig").is_ok());
             assert!(module.getattr("RunnerConfig").is_ok());
+            assert!(module.getattr("RunnerRetryConfig").is_ok());
             assert!(module.getattr("LoggingConfig").is_ok());
         });
     }

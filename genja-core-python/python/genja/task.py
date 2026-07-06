@@ -10,6 +10,7 @@ directly. The top-level package re-exports these names for compatibility, but
 - ``TaskSuccessResult``
 - ``TaskFailureResult``
 - ``TaskSkipResult``
+- ``RetryConfig``
 - task ``options`` metadata
 
 The canonical authoring shape is:
@@ -21,6 +22,7 @@ The canonical authoring shape is:
         TaskFailureKind,
         TaskFailureResult,
         TaskRuntimeContext,
+        RetryConfig,
         TaskInfo,
         TaskMessage,
         TaskMessageLevel,
@@ -32,6 +34,7 @@ The canonical authoring shape is:
         name="backup_config",
         connection_plugin_name="ssh",
         processors=["audit"],
+        retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
         options={"backup_path": "/tmp/configs", "compress": True},
     )
     class BackupConfigTask:
@@ -105,8 +108,7 @@ Task metadata comes from ``@task(...)``:
 - ``connection_plugin_name``: optional; when provided it must be non-empty
 - ``sub_tasks``: optional list of decorated task classes
 - ``processors``: optional list of processor plugin names
-- ``allow_retries``: optional explicit retry authorization override
-- ``max_task_attempts``: optional explicit total-attempt override
+- ``retry``: optional grouped retry metadata
 - ``options``: optional JSON-serializable task options payload
 
 Retry metadata only controls policy. A task is retried only when both of these
@@ -116,6 +118,7 @@ conditions are true:
 - the task returns ``TaskFailureResult(..., retryable=True)``
 
 Genja does not infer whether a task is safe to repeat, mutable, or idempotent.
+``delay_ms`` is a fixed local delay before retry attempts.
 """
 
 from __future__ import annotations
@@ -196,6 +199,58 @@ class _GenjaModel(BaseModel):
             raise KeyError(key) from err
 
 
+class RetryConfig(_GenjaModel):
+    """Optional task retry metadata.
+
+    ``RetryConfig`` groups task-level retry overrides used by ``@task(...)`` and
+    ``TaskInfo``. Every field is optional; omitted fields fall back to runner
+    retry defaults before built-in defaults are applied by the runtime. The
+    runtime applies omitted fields field by field.
+
+    Attributes:
+        allow (bool | None): Optional explicit override for whether retries are
+            allowed for this task.
+        max_attempts (int | None): Optional total-attempt override. When
+            provided, it must be at least 1. A value of 1 means the initial
+            attempt only.
+        delay_ms (int | None): Optional fixed in-process delay before retry
+            attempts, in milliseconds. When provided, it must be 0 or greater.
+    """
+
+    allow: bool | None = Field(
+        default=None,
+        description="Optional explicit retry authorization override.",
+    )
+    max_attempts: int | None = Field(
+        default=None,
+        description="Optional total-attempt override.",
+    )
+    delay_ms: int | None = Field(
+        default=None,
+        description="Optional fixed delay before retry attempts, in milliseconds.",
+    )
+
+    @field_validator("max_attempts", mode="before")
+    @classmethod
+    def _validate_max_attempts(cls, value: Any) -> Any:
+        """Validate that ``max_attempts`` is either omitted or positive."""
+        if value is None:
+            return value
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("max_attempts must be a positive integer or None")
+        return value
+
+    @field_validator("delay_ms", mode="before")
+    @classmethod
+    def _validate_delay_ms(cls, value: Any) -> Any:
+        """Validate that ``delay_ms`` is either omitted or non-negative."""
+        if value is None:
+            return value
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("delay_ms must be a non-negative integer or None")
+        return value
+
+
 class TaskInfo(_GenjaModel):
     """Task metadata passed into Python task entrypoint methods.
 
@@ -230,11 +285,8 @@ class TaskInfo(_GenjaModel):
             that can observe or modify task execution before and after task or
             host-level result handling. Defaults to an empty list if no
             processors are specified.
-        allow_retries (bool | None): Optional explicit override for whether
-            retries are allowed for this task. If None, runtime defaults apply.
-        max_task_attempts (int | None): Optional explicit override for the
-            total number of attempts allowed for this task. If None, runtime
-            defaults apply.
+        retry (RetryConfig | None): Optional task-level retry overrides. If
+            None, runner defaults apply.
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure or None if no options are provided.
@@ -254,13 +306,9 @@ class TaskInfo(_GenjaModel):
         default_factory=list,
         description="Processor plugin names applied to this task.",
     )
-    allow_retries: bool | None = Field(
+    retry: RetryConfig | None = Field(
         default=None,
-        description="Optional explicit retry authorization override.",
-    )
-    max_task_attempts: int | None = Field(
-        default=None,
-        description="Optional explicit total-attempt override.",
+        description="Optional grouped task retry overrides.",
     )
     options: Any | None = Field(
         default=None,
@@ -454,9 +502,9 @@ def task(
     connection_plugin_name: str | None = None,
     sub_tasks: list[type[GenjaTaskProtocol]] | None = None,
     processors: list[str] | None = None,
-    allow_retries: bool | None = None,
-    max_task_attempts: int | None = None,
+    retry: RetryConfig | None = None,
     options: Any | None = None,
+    **kwargs: Any,
 ):
     """Attach Genja task metadata to a Python task class.
 
@@ -480,14 +528,10 @@ def task(
         processors (list[str] | None): Optional list of processor plugin names
             to apply to this task's execution. If provided, must be a list of
             non-empty strings. If None, no processors will be applied.
-        allow_retries (bool | None): Optional explicit override for whether
-            retries are allowed for this task. If None, runtime defaults apply.
-            This setting does not force retries by itself; the task must still
-            return ``TaskFailureResult(..., retryable=True)``.
-        max_task_attempts (int | None): Optional explicit override for the
-            total number of attempts allowed for this task. Must be positive
-            when provided. This bounds total attempts but does not override the
-            requirement that failures be marked retryable.
+        retry (RetryConfig | None): Optional grouped task-level retry
+            overrides. This setting does not force retries by itself; the task
+            must still return ``TaskFailureResult(..., retryable=True)``. Omitted
+            retry fields fall back to runner defaults field by field.
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure. If None, no options are provided to the task.
@@ -503,10 +547,25 @@ def task(
             if the name is not a non-empty string, if connection_plugin_name is
             not a non-empty string or None, if sub_tasks is not a list of
             @task-decorated classes or None, if processors is not a list of
-            non-empty strings or None, if allow_retries is not bool or None,
-            if max_task_attempts is not a positive integer or None, or if
-            options is not JSON-serializable.
+            non-empty strings or None, if retry is not RetryConfig or None, if
+            retry fields are passed outside RetryConfig, or if options is not
+            JSON-serializable.
     """
+    if "allow_retries" in kwargs:
+        raise TypeError(
+            "@task got keyword argument 'allow_retries'; did you mean retry=RetryConfig(allow=...)?"
+        )
+    if "max_task_attempts" in kwargs:
+        raise TypeError(
+            "@task got keyword argument 'max_task_attempts'; did you mean retry=RetryConfig(max_attempts=...)?"
+        )
+    if "delay_ms" in kwargs:
+        raise TypeError(
+            "@task got keyword argument 'delay_ms'; did you mean retry=RetryConfig(delay_ms=...)?"
+        )
+    if kwargs:
+        unknown = next(iter(kwargs))
+        raise TypeError(f"@task got unexpected keyword argument '{unknown}'")
 
     def wrap(cls: _TaskClassT) -> _TaskClassT:
         if not isinstance(cls, type):
@@ -553,15 +612,9 @@ def task(
                     raise TypeError(
                         f"@task-decorated class '{cls.__name__}' processors must contain non-empty strings"
                     )
-        if allow_retries is not None and not isinstance(allow_retries, bool):
+        if retry is not None and not isinstance(retry, RetryConfig):
             raise TypeError(
-                f"@task-decorated class '{cls.__name__}' allow_retries must be bool or None"
-            )
-        if max_task_attempts is not None and (
-            not isinstance(max_task_attempts, int) or max_task_attempts < 1
-        ):
-            raise TypeError(
-                f"@task-decorated class '{cls.__name__}' max_task_attempts must be a positive integer or None"
+                f"@task-decorated class '{cls.__name__}' retry must be RetryConfig or None"
             )
         _ensure_json_serializable(options, "options")
 
@@ -570,8 +623,7 @@ def task(
             "name": name,
             "connection_plugin_name": connection_plugin_name,
             "processors": list(processors or []),
-            "allow_retries": allow_retries,
-            "max_task_attempts": max_task_attempts,
+            "retry": retry.to_dict() if retry is not None else None,
             "options": options,
             "sub_tasks": validated_sub_tasks,
         }
@@ -997,6 +1049,7 @@ class TaskSkipResult(_GenjaModel):
 __all__ = [
     "task",
     "GenjaTaskProtocol",
+    "RetryConfig",
     "TaskInfo",
     "Host",
     "TaskRuntimeContext",

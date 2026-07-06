@@ -157,13 +157,18 @@ pub(super) fn get_runner_max_connection_attempts_default() -> usize {
 }
 
 /// Returns the default task retry authorization for runner execution.
-pub(super) fn get_runner_allow_retries_default() -> bool {
+pub(super) fn get_runner_retry_allow_default() -> bool {
     false
 }
 
 /// Returns the default maximum number of task attempts for runner execution.
-pub(super) fn get_runner_max_task_attempts_default() -> usize {
+pub(super) fn get_runner_retry_max_attempts_default() -> usize {
     1
+}
+
+/// Returns the default fixed task retry delay in milliseconds for runner execution.
+pub(super) fn get_runner_retry_delay_ms_default() -> u64 {
+    0
 }
 
 /// Returns the default log level from `GENJA_LOGGING_LEVEL`, or "info".

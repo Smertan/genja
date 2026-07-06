@@ -22,12 +22,14 @@ from .settings import (
     LoggingConfig,
     OptionsConfig,
     RunnerConfig,
+    RunnerRetryConfig,
     SSHConfig,
     Settings,
 )
 from .task import (
     GenjaTaskProtocol,
     Host,
+    RetryConfig,
     TaskFailureKind,
     TaskRuntimeContext,
     TaskFailureResult,
@@ -59,6 +61,8 @@ class TaskDefinition:
     def name(self) -> str: ...
     @property
     def connection_plugin_name(self) -> str | None: ...
+    @property
+    def retry(self) -> dict[str, Any] | None: ...
     @property
     def sub_tasks(self) -> list[TaskDefinition]: ...
     def to_dict(self) -> dict[str, Any]: ...
@@ -184,8 +188,10 @@ __all__ = [
     "OptionsConfig",
     "SSHConfig",
     "RunnerConfig",
+    "RunnerRetryConfig",
     "LoggingConfig",
     "GenjaTaskProtocol",
+    "RetryConfig",
     "TaskInfo",
     "Host",
     "TaskRuntimeContext",

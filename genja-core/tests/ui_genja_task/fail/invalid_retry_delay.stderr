@@ -1,0 +1,19 @@
+error: `delay_ms` must be a non-negative integer literal
+  --> tests/ui_genja_task/fail/invalid_retry_delay.rs:10:20
+   |
+10 |         delay_ms = -1
+   |                    ^
+
+warning: unused import: `genja_core::inventory::Host`
+ --> tests/ui_genja_task/fail/invalid_retry_delay.rs:2:5
+  |
+2 | use genja_core::inventory::Host;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `HostTaskResult`, `TaskRuntimeContext`, and `TaskSuccess`
+ --> tests/ui_genja_task/fail/invalid_retry_delay.rs:3:24
+  |
+3 | use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+  |                        ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^

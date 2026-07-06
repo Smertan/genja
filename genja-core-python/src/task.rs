@@ -1,8 +1,8 @@
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
-    HostTaskResult, MessageLevel, Task, TaskConnectionResolver, TaskDefinition, TaskError,
-    TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
+    HostTaskResult, MessageLevel, RetryConfig, Task, TaskConnectionResolver, TaskDefinition,
+    TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
     TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
 };
 use async_trait::async_trait;
@@ -59,8 +59,7 @@ struct PythonTaskSpec {
     name: String,
     connection_plugin_name: Option<String>,
     processor_names: Vec<String>,
-    allow_retries: Option<bool>,
-    max_task_attempts: Option<usize>,
+    retry_config: Option<RetryConfig>,
     options: Option<Value>,
     py_task_class: Arc<Py<PyAny>>,
     execution_mode: PythonTaskExecutionMode,
@@ -98,12 +97,8 @@ impl TaskInfo for PythonBackedTask {
         self.spec.options.as_ref()
     }
 
-    fn allow_retries(&self) -> Option<bool> {
-        self.spec.allow_retries
-    }
-
-    fn max_task_attempts(&self) -> Option<usize> {
-        self.spec.max_task_attempts
+    fn retry_config(&self) -> Option<&RetryConfig> {
+        self.spec.retry_config.as_ref()
     }
 }
 
@@ -313,13 +308,8 @@ impl PyTaskDefinition {
     }
 
     #[getter]
-    fn allow_retries(&self) -> Option<bool> {
-        self.inner.allow_retries()
-    }
-
-    #[getter]
-    fn max_task_attempts(&self) -> Option<usize> {
-        self.inner.max_task_attempts()
+    fn retry(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        retry_config_to_py_object(py, self.inner.retry_config())
     }
 
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -878,8 +868,16 @@ fn normalize_task_results_json(value: &Value) -> Value {
         let normalized_hosts = hosts
             .iter()
             .map(|(hostname, result)| {
-                let normalized_result = host_task_result_from_payload(result)
-                    .map(|result| host_task_result_to_json(&result));
+                let normalized_result = host_task_result_from_payload(result).map(|host_result| {
+                    let mut normalized_result = host_task_result_to_json(&host_result);
+                    if let Some(execution_metadata) = result
+                        .get("execution_metadata")
+                        .or_else(|| result.get("execution_metadata_raw"))
+                    {
+                        normalized_result["execution_metadata"] = execution_metadata.clone();
+                    }
+                    normalized_result
+                });
                 (
                     hostname.clone(),
                     normalized_result.unwrap_or_else(|_| result.clone()),
@@ -937,11 +935,19 @@ fn task_to_json(task: &dyn Task) -> Value {
         "name": task.name(),
         "connection_plugin_name": task.connection_plugin_name(),
         "processors": task.processor_names(),
-        "allow_retries": task.allow_retries(),
-        "max_task_attempts": task.max_task_attempts(),
+        "retry": retry_config_to_json(task.retry_config()),
         "options": task.options(),
         "sub_tasks": task.sub_tasks().into_iter().map(|sub_task| task_to_json(sub_task.as_ref())).collect::<Vec<_>>(),
     })
+}
+
+fn retry_config_to_json(retry_config: Option<&RetryConfig>) -> Value {
+    match retry_config {
+        Some(retry_config) => {
+            serde_json::to_value(retry_config).expect("retry config should serialize")
+        }
+        None => Value::Null,
+    }
 }
 
 fn run_task_definition_on_hosts(
@@ -1044,30 +1050,8 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     } else {
         Vec::new()
     };
-    let allow_retries = if let Some(value) = info.get_item("allow_retries")? {
-        if value.is_none() {
-            None
-        } else {
-            Some(value.extract::<bool>()?)
-        }
-    } else {
-        None
-    };
-    let max_task_attempts = if let Some(value) = info.get_item("max_task_attempts")? {
-        if value.is_none() {
-            None
-        } else {
-            let max_task_attempts = value.extract::<usize>()?;
-            if max_task_attempts < 1 {
-                return Err(PyValueError::new_err(
-                    "python task metadata field 'max_task_attempts' must be at least 1",
-                ));
-            }
-            Some(max_task_attempts)
-        }
-    } else {
-        None
-    };
+    reject_misplaced_retry_metadata(&info)?;
+    let retry_config = extract_retry_config_from_metadata(&info)?;
 
     let options = if let Some(options) = info.get_item("options")? {
         if options.is_none() {
@@ -1092,8 +1076,7 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         name,
         connection_plugin_name,
         processor_names,
-        allow_retries,
-        max_task_attempts,
+        retry_config,
         options,
         py_task_class: Arc::new(py_task_class.unbind()),
         execution_mode,
@@ -1121,8 +1104,7 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
         "name": spec.name,
         "connection_plugin_name": spec.connection_plugin_name,
         "processors": spec.processor_names,
-        "allow_retries": spec.allow_retries,
-        "max_task_attempts": spec.max_task_attempts,
+        "retry": retry_config_to_json(spec.retry_config.as_ref()),
         "options": spec.options,
         "sub_tasks": spec.sub_tasks.iter().map(python_task_spec_to_json).collect::<Vec<_>>(),
     })
@@ -1141,14 +1123,10 @@ fn python_task_spec_to_py_dict<'py>(
         None => task.set_item("connection_plugin_name", py.None())?,
     }
     task.set_item("processors", &spec.processor_names)?;
-    match spec.allow_retries {
-        Some(allow_retries) => task.set_item("allow_retries", allow_retries)?,
-        None => task.set_item("allow_retries", py.None())?,
-    }
-    match spec.max_task_attempts {
-        Some(max_task_attempts) => task.set_item("max_task_attempts", max_task_attempts)?,
-        None => task.set_item("max_task_attempts", py.None())?,
-    }
+    task.set_item(
+        "retry",
+        retry_config_to_py_object(py, spec.retry_config.as_ref())?,
+    )?;
     if let Some(options) = spec.options.as_ref() {
         task.set_item("options", json_value_to_py(py, options)?)?;
     } else {
@@ -1162,6 +1140,101 @@ fn python_task_spec_to_py_dict<'py>(
             .collect::<PyResult<Vec<_>>>()?,
     )?;
     Ok(task)
+}
+
+fn retry_config_to_py_object(
+    py: Python<'_>,
+    retry_config: Option<&RetryConfig>,
+) -> PyResult<Py<PyAny>> {
+    let value = retry_config_to_json(retry_config);
+    json_value_to_py(py, &value)
+}
+
+fn reject_misplaced_retry_metadata(info: &Bound<'_, PyDict>) -> PyResult<()> {
+    if info.contains("allow_retries")? {
+        return Err(PyValueError::new_err(
+            "python task metadata field 'allow_retries'; did you mean retry['allow']?",
+        ));
+    }
+    if info.contains("max_task_attempts")? {
+        return Err(PyValueError::new_err(
+            "python task metadata field 'max_task_attempts'; did you mean retry['max_attempts']?",
+        ));
+    }
+    if info.contains("delay_ms")? {
+        return Err(PyValueError::new_err(
+            "python task metadata field 'delay_ms'; did you mean retry['delay_ms']?",
+        ));
+    }
+    Ok(())
+}
+
+fn extract_retry_config_from_metadata(info: &Bound<'_, PyDict>) -> PyResult<Option<RetryConfig>> {
+    let Some(retry) = info.get_item("retry")? else {
+        return Ok(None);
+    };
+    if retry.is_none() {
+        return Ok(None);
+    }
+    let retry = retry.cast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("python task metadata field 'retry' must be a dict or None")
+    })?;
+
+    let allow = if let Some(value) = retry.get_item("allow")? {
+        if value.is_none() {
+            None
+        } else {
+            Some(value.extract::<bool>()?)
+        }
+    } else {
+        None
+    };
+    let max_attempts = if let Some(value) = retry.get_item("max_attempts")? {
+        if value.is_none() {
+            None
+        } else {
+            if value.is_instance_of::<pyo3::types::PyBool>() {
+                return Err(PyValueError::new_err(
+                    "python task metadata field 'retry.max_attempts' must be an integer",
+                ));
+            }
+            let max_attempts = value.extract::<isize>()?;
+            if max_attempts < 1 {
+                return Err(PyValueError::new_err(
+                    "python task metadata field 'retry.max_attempts' must be at least 1",
+                ));
+            }
+            Some(max_attempts as usize)
+        }
+    } else {
+        None
+    };
+    let delay_ms = if let Some(value) = retry.get_item("delay_ms")? {
+        if value.is_none() {
+            None
+        } else {
+            if value.is_instance_of::<pyo3::types::PyBool>() {
+                return Err(PyValueError::new_err(
+                    "python task metadata field 'retry.delay_ms' must be an integer",
+                ));
+            }
+            let delay_ms = value.extract::<i128>()?;
+            if delay_ms < 0 {
+                return Err(PyValueError::new_err(
+                    "python task metadata field 'retry.delay_ms' must be at least 0",
+                ));
+            }
+            Some(delay_ms as u64)
+        }
+    } else {
+        None
+    };
+
+    if allow.is_some() || max_attempts.is_some() || delay_ms.is_some() {
+        Ok(Some(RetryConfig::new(allow, max_attempts, delay_ms)))
+    } else {
+        Ok(None)
+    }
 }
 
 fn build_python_task_runtime_context(
@@ -1285,12 +1358,8 @@ impl TaskInfo for RuntimeTaskWrapper {
         self.inner.options()
     }
 
-    fn allow_retries(&self) -> Option<bool> {
-        self.inner.allow_retries()
-    }
-
-    fn max_task_attempts(&self) -> Option<usize> {
-        self.inner.max_task_attempts()
+    fn retry_config(&self) -> Option<&RetryConfig> {
+        self.inner.retry_config()
     }
 }
 
@@ -1465,6 +1534,7 @@ mod tests {
             }
             None => info.set_item("connection_plugin_name", py.None())?,
         }
+        info.set_item("retry", py.None())?;
         info.set_item("sub_tasks", sub_tasks)?;
 
         let attrs = PyDict::new(py);
@@ -1629,8 +1699,7 @@ mod tests {
 
             assert_eq!(spec.name, "backup_config");
             assert_eq!(spec.connection_plugin_name.as_deref(), Some("ssh"));
-            assert_eq!(spec.allow_retries, None);
-            assert_eq!(spec.max_task_attempts, None);
+            assert_eq!(spec.retry_config, None);
             assert_eq!(spec.options, None);
             assert_eq!(spec.sub_tasks.len(), 1);
             assert_eq!(spec.sub_tasks[0].name, "verify_backup");
@@ -1692,19 +1761,47 @@ mod tests {
                 .expect("task metadata should exist")
                 .cast::<PyDict>()
                 .expect("task metadata should be a dict")
-                .set_item("allow_retries", true)
-                .unwrap();
-            task.getattr("__genja_task_info__")
-                .expect("task metadata should exist")
-                .cast::<PyDict>()
-                .expect("task metadata should be a dict")
-                .set_item("max_task_attempts", 3)
+                .set_item("retry", {
+                    let retry = PyDict::new(py);
+                    retry.set_item("allow", true).unwrap();
+                    retry.set_item("max_attempts", 3).unwrap();
+                    retry.set_item("delay_ms", 500).unwrap();
+                    retry
+                })
                 .unwrap();
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 
-            assert_eq!(spec.allow_retries, Some(true));
-            assert_eq!(spec.max_task_attempts, Some(3));
+            let retry_config = spec.retry_config.expect("retry config should be extracted");
+            assert_eq!(retry_config.allow(), Some(true));
+            assert_eq!(retry_config.max_attempts(), Some(3));
+            assert_eq!(retry_config.delay_ms(), Some(500));
+        });
+    }
+
+    #[test]
+    fn extract_python_task_spec_rejects_misplaced_retry_fields() {
+        init_python();
+        Python::attach(|py| {
+            let task = make_task_class(
+                py,
+                "backup_config",
+                Some("ssh"),
+                &[],
+                PythonTaskExecutionMode::Blocking,
+            )
+            .expect("task class should be created");
+            task.getattr("__genja_task_info__")
+                .expect("task metadata should exist")
+                .cast::<PyDict>()
+                .expect("task metadata should be a dict")
+                .set_item("delay_ms", 500)
+                .unwrap();
+
+            let err = extract_python_task_spec(task)
+                .err()
+                .expect("misplaced retry field should fail");
+            assert!(err.to_string().contains("did you mean retry['delay_ms']?"));
         });
     }
 
