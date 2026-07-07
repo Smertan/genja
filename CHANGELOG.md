@@ -4,6 +4,10 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Fixed the Python source distribution so the declared `LICENSE` file is included at the package root. Refs: #72
+
 ## 0.2.0 - 2026-07-06
 
 Released packages:
