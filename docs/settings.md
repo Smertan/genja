@@ -285,9 +285,11 @@ logging:
 | `file_size` | number | `10485760` | none |
 | `max_file_count` | number | `10` | none |
 
-Genja parses the `logging` section but does not initialize global logging
-automatically. Applications own logger setup because logging is process-wide in
-Rust and application-specific in Python.
+Genja parses the `logging` section but does not install output handlers,
+formats, colors, or log rotation automatically. Rust applications own global
+logger setup. Python applications receive Rust-side Genja records through
+Python's standard `logging` system and should configure Python handlers and
+levels before running tasks.
 
 A typical application startup flow is:
 
@@ -300,7 +302,9 @@ Because settings must be loaded before `settings.logging()` is available, logs
 emitted during settings loading may occur before a logger is initialized. Genja
 keeps normal default fallbacks silent for this reason. Invalid config file values
 fail settings loading. Invalid environment variable values may fall back to
-defaults and emit a warning only if a logger has already been initialized.
+defaults and emit a warning only if logging has already been initialized. In
+Python, configure logging before loading settings if you need to capture
+warnings emitted during settings loading.
 
 ## Environment Variables
 
