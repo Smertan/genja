@@ -129,6 +129,26 @@ Python task authoring rules:
 - Define exactly one of those methods on a `@task(...)` class.
 - Use `sub_tasks=[ChildTask, ...]` to declare child tasks.
 
+## Logging
+
+Rust-side runtime logs emitted by Genja are forwarded into Python's standard
+`logging` system when the extension module is imported. Configure Python
+logging handlers and levels before running Genja tasks:
+
+```python
+import logging
+
+import genja
+
+logging.basicConfig(level=logging.INFO)
+
+runtime = genja.Genja.from_hosts({
+    "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+}).with_runner("serial")
+```
+
+Tests can capture those records with pytest's `caplog` fixture.
+
 ## Full Inventory
 
 Use `genja.inventory` when you need groups and defaults:

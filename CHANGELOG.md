@@ -4,6 +4,10 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Forwarded Rust-side runtime logs from the Python extension into Python's standard `logging` system, allowing applications and pytest `caplog` to capture Genja logs. Refs: #74
+
 ### Fixed
 
 - Fixed the Python source distribution so the declared `LICENSE` file is included at the package root. Refs: #72
