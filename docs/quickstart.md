@@ -261,7 +261,8 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
     ```
 
     `TaskRuntimeContext` keeps execution depth internal. Python tasks access the
-    resolved connection through `context.connection()` and can guard it with
+    current 1-based retry attempt through `context.current_attempt`, and the
+    resolved connection through `context.connection()` and
     `context.has_connection()`.
 
 The printed JSON includes the task name, per-host statuses, summaries or
