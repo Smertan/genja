@@ -6,6 +6,7 @@ All notable changes to this workspace should be documented in this file.
 
 ### Added
 
+- Exposed the current 1-based task attempt through Rust and Python task runtime contexts. Refs: #73
 - Forwarded Rust-side runtime logs from the Python extension into Python's standard `logging` system, allowing applications and pytest `caplog` to capture Genja logs. Refs: #74
 
 ### Fixed
