@@ -135,6 +135,7 @@ def test_task_definition_run_on_host_executes_python_body():
 
 def test_python_backed_task_applies_retry_delay():
     attempts: list[float] = []
+    current_attempts: list[int] = []
 
     @task(
         name="delayed_retry",
@@ -143,6 +144,7 @@ def test_python_backed_task_applies_retry_delay():
     class DelayedRetryTask:
         def start(self, task, host, context):
             attempts.append(time.monotonic())
+            current_attempts.append(context.current_attempt)
             if len(attempts) == 1:
                 return TaskFailureResult(
                     message=f"temporary failure on {host.hostname}",
@@ -156,6 +158,7 @@ def test_python_backed_task_applies_retry_delay():
 
     assert result.passed_hosts == ["router1"]
     assert len(attempts) == 2
+    assert current_attempts == [1, 2]
     assert attempts[1] - attempts[0] >= 0.04
     host_result = result.to_dict()["hosts"]["router1"]
     assert host_result["execution_metadata"]["attempts"] == 2

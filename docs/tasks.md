@@ -264,7 +264,8 @@ Each task receives:
 
 Use task metadata for values that belong to the task definition. Use host data
 for values that vary by inventory target. Use runtime context for values the
-runner resolves while executing, such as an optional task connection.
+runner resolves while executing, such as the current retry attempt or an
+optional task connection.
 
 ## Sync And Async Execution
 
@@ -295,14 +296,17 @@ runner resolves while executing, such as an optional task connection.
 It describes the current execution state for that specific host run.
 
 The public Python task-facing context surface is intentionally narrow. Use it
-when the task needs access to the resolved host connection.
+when the task needs access to the current retry attempt or resolved host
+connection.
 
 In Python, `TaskRuntimeContext` exposes:
 
+- `current_attempt`: the 1-based attempt currently running
 - `connection()`: returns the resolved connection object or `None`
 - `has_connection()`: returns `True` when a connection was resolved
 
-Depth bookkeeping stays internal to the runtime.
+Depth bookkeeping stays internal to the runtime. The first execution has
+`current_attempt == 1`, the first retry has `current_attempt == 2`, and so on.
 
 === ":fontawesome-brands-rust: Rust"
 
@@ -310,9 +314,13 @@ Depth bookkeeping stays internal to the runtime.
     async fn start(
         &self,
         host: &Host,
-        _context: &TaskRuntimeContext,
+        context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
-        println!("host={:?}", host.hostname());
+        println!(
+            "host={:?} attempt={}",
+            host.hostname(),
+            context.current_attempt()
+        );
         Ok(HostTaskResult::passed(TaskSuccess::new()))
     }
     ```
@@ -327,9 +335,13 @@ Depth bookkeeping stays internal to the runtime.
         self,
         task: TaskInfo,
         host: Host,
-        _context: TaskRuntimeContext,
+        context: TaskRuntimeContext,
     ) -> TaskSuccessResult:
-        print(f"task={task.name} host={host.hostname}")
+        print(
+            f"task={task.name} "
+            f"host={host.hostname} "
+            f"attempt={context.current_attempt}"
+        )
         return TaskSuccessResult()
     ```
 

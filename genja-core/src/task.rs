@@ -3214,6 +3214,7 @@ impl TaskExecutionContext {
 pub struct TaskRuntimeContext {
     execution: TaskExecutionContext,
     connection: Option<Arc<Mutex<dyn Connection>>>,
+    current_attempt: usize,
 }
 
 impl TaskRuntimeContext {
@@ -3224,6 +3225,7 @@ impl TaskRuntimeContext {
         Self {
             execution,
             connection,
+            current_attempt: 1,
         }
     }
 
@@ -3237,6 +3239,16 @@ impl TaskRuntimeContext {
 
     pub fn max_depth(&self) -> usize {
         self.execution.max_depth()
+    }
+
+    /// Returns the 1-based execution attempt currently running for this task.
+    pub fn current_attempt(&self) -> usize {
+        self.current_attempt
+    }
+
+    pub(crate) fn with_current_attempt(mut self, current_attempt: usize) -> Self {
+        self.current_attempt = current_attempt.max(1);
+        self
     }
 
     pub fn connection(&self) -> Option<&Arc<Mutex<dyn Connection>>> {
@@ -3318,6 +3330,7 @@ impl BlockingTaskConnection {
 pub struct BlockingTaskRuntimeContext {
     execution: TaskExecutionContext,
     connection: Option<BlockingTaskConnection>,
+    current_attempt: usize,
 }
 
 impl BlockingTaskRuntimeContext {
@@ -3330,6 +3343,7 @@ impl BlockingTaskRuntimeContext {
             execution,
             connection: connection
                 .map(|connection| BlockingTaskConnection::new(connection, runtime_handle)),
+            current_attempt: 1,
         }
     }
 
@@ -3343,6 +3357,16 @@ impl BlockingTaskRuntimeContext {
 
     pub fn max_depth(&self) -> usize {
         self.execution.max_depth()
+    }
+
+    /// Returns the 1-based execution attempt currently running for this task.
+    pub fn current_attempt(&self) -> usize {
+        self.current_attempt
+    }
+
+    pub(crate) fn with_current_attempt(mut self, current_attempt: usize) -> Self {
+        self.current_attempt = current_attempt.max(1);
+        self
     }
 
     pub fn connection(&self) -> Option<&BlockingTaskConnection> {
@@ -3934,7 +3958,8 @@ impl TaskDefinition {
             let host_result = match task.execution_mode() {
                 TaskExecutionMode::Async => {
                     let runtime_context =
-                        TaskRuntimeContext::new(execution_context, connection.clone());
+                        TaskRuntimeContext::new(execution_context, connection.clone())
+                            .with_current_attempt(attempts);
                     task.start_async(host, &runtime_context).await
                 }
                 TaskExecutionMode::Blocking => {
@@ -3942,7 +3967,8 @@ impl TaskDefinition {
                         execution_context,
                         connection.clone(),
                         Handle::current(),
-                    );
+                    )
+                    .with_current_attempt(attempts);
                     let task = Arc::clone(&task);
                     let host = host.clone();
                     match task::spawn_blocking(move || task.start(&host, &blocking_context)).await {
@@ -4313,6 +4339,13 @@ mod tests {
         succeed_on_attempt: usize,
     }
 
+    struct AttemptRecordingFlakyTask {
+        name: &'static str,
+        attempts: Arc<AtomicUsize>,
+        current_attempts: Arc<Mutex<Vec<usize>>>,
+        succeed_on_attempt: usize,
+    }
+
     #[derive(Debug)]
     struct TestConnection {
         key: ConnectionKey,
@@ -4559,6 +4592,20 @@ mod tests {
         }
     }
 
+    impl TaskInfo for AttemptRecordingFlakyTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
     #[async_trait]
     impl Task for RetryConfiguredFlakyTask {
         async fn start_async(
@@ -4585,6 +4632,34 @@ mod tests {
                 .lock()
                 .expect("attempt times lock should not be poisoned")
                 .push(Instant::now());
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt >= self.succeed_on_attempt {
+                Ok(HostTaskResult::passed(TaskSuccess::new()))
+            } else {
+                Ok(HostTaskResult::failed(
+                    TaskFailure::new(TestTaskFailureError)
+                        .with_kind(TaskFailureKind::External)
+                        .with_retryable(true),
+                ))
+            }
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for AttemptRecordingFlakyTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.current_attempts
+                .lock()
+                .expect("current attempts lock should not be poisoned")
+                .push(context.current_attempt());
             let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
             if attempt >= self.succeed_on_attempt {
                 Ok(HostTaskResult::passed(TaskSuccess::new()))
@@ -4879,6 +4954,46 @@ mod tests {
         assert_eq!(host_result.execution_metadata().attempts(), 2);
         assert!(host_result.execution_metadata().retried());
         assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn task_runtime_context_exposes_current_retry_attempt() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let current_attempts = Arc::new(Mutex::new(Vec::new()));
+        let task = TaskDefinition::new(AttemptRecordingFlakyTask {
+            name: "attempt_recording",
+            attempts: Arc::clone(&attempts),
+            current_attempts: Arc::clone(&current_attempts),
+            succeed_on_attempt: 3,
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("attempt_recording");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("start should expose the current attempt during retries");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            *current_attempts
+                .lock()
+                .expect("current attempts lock should not be poisoned"),
+            vec![1, 2, 3]
+        );
+        let host_result = results
+            .host_result("router1")
+            .expect("host result should exist");
+        assert!(host_result.is_passed());
+        assert_eq!(host_result.execution_metadata().attempts(), 3);
     }
 
     #[test]
@@ -5612,6 +5727,7 @@ mod tests {
         assert_eq!(context.execution(), &execution);
         assert_eq!(context.current_depth(), 2);
         assert_eq!(context.max_depth(), 5);
+        assert_eq!(context.current_attempt(), 1);
         assert!(context.has_connection());
         assert!(context.connection().is_some());
 
