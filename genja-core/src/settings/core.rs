@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// `raise_on_error` defaults from `GENJA_CORE_RAISE_ON_ERROR` and accepts the
 /// same loose boolean forms used elsewhere in the settings module.
 #[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct CoreConfig {
     #[serde(
         default = "raise_on_error",

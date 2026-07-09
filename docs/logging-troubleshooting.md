@@ -119,8 +119,13 @@ Common settings failures:
 
 - unsupported extension: use `.json`, `.yaml`, or `.yml`
 - unreadable file: check the path and permissions
-- deserialize failure: check field names, field types, and YAML/JSON syntax
+- deserialize failure: check field names, unknown fields, field types, and YAML/JSON syntax
 - SSH config failure: `ssh.config_file` exists but cannot be opened or parsed
+
+Settings files are strict. Unknown top-level sections and unknown fields inside
+typed settings sections cause loading to fail. Move plugin-specific arbitrary
+values into explicit option maps such as `runner.options` or
+`inventory.transform_function_options`.
 
 If `ssh.config_file` is set, Genja validates that file during settings load. Set
 the field to `null` or omit it when you do not want SSH config validation.

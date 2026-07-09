@@ -649,6 +649,7 @@ use tokio::time::{Duration, sleep};
 /// `delay_ms = 0`. Resolved `max_attempts` is clamped to at least `1`.
 /// `delay_ms` is a fixed local delay before retry attempts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RetryConfig {
     allow: Option<bool>,
     max_attempts: Option<usize>,

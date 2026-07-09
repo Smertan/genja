@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import genja
+import pytest
 
 
 def test_settings_from_file_loads_yaml():
@@ -44,3 +45,16 @@ def test_inventory_transform_function_options_are_exposed(tmp_path):
         "suffix": "-lab",
         "defaults": {"platform": "linux"},
     }
+
+
+def test_settings_from_file_rejects_unknown_fields(tmp_path):
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(
+        "\n".join([
+            "runner:",
+            "  worker_counts: 10",
+        ])
+    )
+
+    with pytest.raises(ValueError, match="worker_counts"):
+        genja.Settings.from_file(str(settings_file))

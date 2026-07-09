@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// defaults are used for `level`, `log_file`, and `to_console`, and the boolean
 /// fields accept the module's loose boolean forms.
 #[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LoggingConfig {
     #[serde(deserialize_with = "deserialize_bool_loose")]
     enabled: bool,
