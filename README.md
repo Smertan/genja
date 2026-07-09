@@ -415,6 +415,7 @@ Configuration is loaded from two sources in this order:
 Behavior rules:
 
 - If a config field is explicitly provided and is invalid, deserialization fails with an error.
+- Unknown fields in typed settings sections are rejected. Correct misspellings, remove unused keys, or move plugin-specific values into explicit option maps such as `runner.options`.
 - If a config field is missing, a default value is used.
 - For defaults that read environment variables, invalid env values trigger a warning and the default fallback is used.
 - Environment variables do not override explicitly provided config values.

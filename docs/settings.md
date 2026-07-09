@@ -18,6 +18,37 @@ misspelled keys or remove unused keys when `Settings::from_file(...)` reports an
 unknown field. Plugin-specific free-form values remain supported in explicit
 option maps such as `runner.options` and `inventory.transform_function_options`.
 
+For example, this YAML contains a misspelled runner key:
+
+```yaml
+runner:
+  worker_counts: 10
+```
+
+The same mistake in JSON also fails:
+
+```json
+{
+  "runner": {
+    "worker_counts": 10
+  }
+}
+```
+
+Genja reports the section, unknown field, expected fields, and a suggestion when
+there is a close match:
+
+```text
+unknown settings field
+  section: `runner`
+  field: `worker_counts`
+  expected fields: `plugin`, `options`, `worker_count`, `max_task_depth`, `max_connection_attempts`, `retry`
+  suggestion: did you mean `worker_count`?
+```
+
+Change the key to `worker_count`, remove unused keys, or move plugin-specific
+values into a supported free-form object such as `runner.options`.
+
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
