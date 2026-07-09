@@ -9,6 +9,10 @@ All notable changes to this workspace should be documented in this file.
 - Exposed the current 1-based task attempt through Rust and Python task runtime contexts. Refs: #73
 - Forwarded Rust-side runtime logs from the Python extension into Python's standard `logging` system, allowing applications and pytest `caplog` to capture Genja logs. Refs: #74
 
+### Changed
+
+- **Breaking:** Settings files now reject unknown top-level sections and unknown fields inside typed settings sections instead of silently ignoring them. Remove unused keys, correct misspelled keys, or move plugin-specific values into explicit option maps such as `runner.options` or `inventory.transform_function_options`. Refs: #76
+
 ### Fixed
 
 - Fixed the Python source distribution so the declared `LICENSE` file is included at the package root. Refs: #72

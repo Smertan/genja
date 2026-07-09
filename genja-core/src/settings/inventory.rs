@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Optional file paths for hosts, groups, and defaults inventory sources.
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
+#[serde(deny_unknown_fields)]
 pub struct OptionsConfig {
     pub(super) hosts_file: Option<String>,
     pub(super) groups_file: Option<String>,
@@ -68,6 +69,7 @@ impl OptionsConfigBuilder {
 /// inventory files are loaded. The transform itself is then applied lazily
 /// when inventory data is accessed or resolved.
 #[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
 pub struct InventoryConfig {
     #[serde(default = "get_inventory_plugin_config")]
     pub(super) plugin: String,

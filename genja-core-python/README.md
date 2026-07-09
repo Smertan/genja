@@ -219,6 +219,9 @@ import genja
 genja = genja.Genja.from_settings_file("config.yaml")
 ```
 
+Settings files are strict: unknown fields fail loading instead of being ignored.
+Use explicit option maps such as `runner.options` for plugin-specific values.
+
 If you need Python plugins during settings-file loading, provide a plugin manager:
 
 ```python

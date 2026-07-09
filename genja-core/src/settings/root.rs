@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Missing sections deserialize to their defaults.
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Settings {
     core: CoreConfig,
     inventory: InventoryConfig,

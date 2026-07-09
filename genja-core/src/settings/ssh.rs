@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// When `config_file` is set, `Settings::from_file` validates that the referenced
 /// OpenSSH-style config can be opened and parsed.
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SSHConfig {
     pub(super) config_file: Option<String>,
 }
