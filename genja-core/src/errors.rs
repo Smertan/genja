@@ -171,7 +171,7 @@ impl fmt::Display for SshConfigError {
 impl std::error::Error for SshConfigError {}
 
 /// Error returned when loading the top-level settings file fails.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum ConfigLoadError {
     /// The settings file extension is not supported.
     UnsupportedFormat { path: String },
@@ -208,6 +208,12 @@ impl fmt::Display for ConfigLoadError {
 }
 
 impl std::error::Error for ConfigLoadError {}
+
+impl fmt::Debug for ConfigLoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
 
 fn format_settings_deserialize_message(message: &str) -> String {
     let Some(error) = UnknownFieldError::parse(message) else {
@@ -330,7 +336,7 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
 }
 
 /// Generic error type for core Genja operations.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum GenjaError {
     /// Plugins have not been loaded for the runtime.
     PluginsNotLoaded,
@@ -385,6 +391,12 @@ impl fmt::Display for GenjaError {
 
 impl std::error::Error for GenjaError {}
 
+impl fmt::Debug for GenjaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl From<String> for GenjaError {
     fn from(value: String) -> Self {
         GenjaError::Message(value)
@@ -406,5 +418,28 @@ impl From<InventoryLoadError> for GenjaError {
 impl From<ConfigLoadError> for GenjaError {
     fn from(value: ConfigLoadError) -> Self {
         GenjaError::ConfigLoad(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfigLoadError, GenjaError};
+
+    #[test]
+    fn debug_output_for_settings_unknown_field_uses_structured_display() {
+        let error = GenjaError::from(ConfigLoadError::Deserialize {
+            path: "/tmp/config.yml".to_string(),
+            message: "unknown field `named`, expected one of `plugin`, `options`, `transform_function`, `transform_function_options` for key `inventory`".to_string(),
+        });
+
+        let output = format!("{error:?}");
+
+        assert!(output.contains("failed to load settings"));
+        assert!(output.contains("unknown settings field"));
+        assert!(output.contains("section: `inventory`"));
+        assert!(output.contains("field: `named`"));
+        assert!(output.contains("expected fields:"));
+        assert!(output.contains("suggestion: remove this field"));
+        assert!(!output.contains("ConfigLoad(Deserialize"));
     }
 }
