@@ -241,6 +241,10 @@ settings = genja.Settings(
 genja = genja.Genja.from_hosts(hosts, settings=settings)
 ```
 
+Programmatic construction itself does not read files, but runtime creation
+validates supplied settings before building the runtime. To validate explicitly,
+call `settings.validate()` or `settings.ssh.validate()`.
+
 If you need Python plugins during settings-file loading, provide a plugin manager:
 
 ```python

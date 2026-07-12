@@ -127,6 +127,27 @@ def test_programmatic_settings_are_accepted_by_runtime():
     assert runtime.settings().runner.plugin == "serial"
 
 
+def test_programmatic_settings_validate_ssh_config(tmp_path):
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text("not a valid ssh config\n")
+    settings = genja.Settings(ssh=genja.SSHConfig(config_file=str(ssh_config)))
+
+    with pytest.raises(ValueError, match="invalid settings"):
+        settings.validate()
+
+    with pytest.raises(ValueError, match="invalid SSH config"):
+        settings.ssh.validate()
+
+
+def test_runtime_rejects_invalid_programmatic_ssh_config(tmp_path):
+    ssh_config = tmp_path / "ssh_config"
+    ssh_config.write_text("not a valid ssh config\n")
+    settings = genja.Settings(ssh=genja.SSHConfig(config_file=str(ssh_config)))
+
+    with pytest.raises(ValueError, match="failed to validate runtime settings"):
+        genja.Genja.from_hosts({}, settings=settings)
+
+
 def test_inventory_transform_function_options_are_exposed(tmp_path):
     settings_file = tmp_path / "settings.yaml"
     settings_file.write_text(

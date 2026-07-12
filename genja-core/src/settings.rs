@@ -7,6 +7,7 @@
 //! - All configs implement `Default` and can be created with `::default()`.
 //! - Builders allow partial configuration; missing fields are filled with defaults.
 //! - `Settings::from_file` loads JSON or YAML and validates SSH config when present.
+//! - Programmatic settings can be validated explicitly with `Settings::validate`.
 //!
 //! # Configuration Precedence
 //!
@@ -65,7 +66,7 @@
 //!
 //! ## SSH Validation
 //! SSH config is validated automatically when calling `Settings::from_file`.
-//! For manual validation, use `SSHConfig::validate`.
+//! For manual validation, use `Settings::validate` or `SSHConfig::validate`.
 
 mod core;
 mod env_defaults;

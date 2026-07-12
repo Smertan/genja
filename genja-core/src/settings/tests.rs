@@ -750,6 +750,28 @@ ssh:
 }
 
 #[test]
+fn settings_validate_checks_ssh_config() {
+    let ssh_context = write_temp_ssh_config("Contents that are not valid ssh config contents\n");
+    let settings = super::Settings::builder()
+        .ssh(
+            SSHConfig::builder()
+                .config_file(ssh_context.filename.to_string_lossy().as_ref())
+                .build(),
+        )
+        .build();
+
+    let err = settings.validate().unwrap_err();
+    assert!(matches!(err, crate::SshConfigError::ParseFailed { .. }));
+}
+
+#[test]
+fn settings_validate_accepts_missing_ssh_config() {
+    let settings = super::Settings::default();
+
+    assert!(settings.validate().is_ok());
+}
+
+#[test]
 fn inventory_loads_empty_files() {
     let tempdir = tempfile::tempdir().unwrap();
     let hosts_path = tempdir.path().join("hosts.json");

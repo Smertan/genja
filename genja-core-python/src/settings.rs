@@ -236,6 +236,12 @@ impl PySSHConfig {
         self.inner.config_file().map(str::to_owned)
     }
 
+    fn validate(&self) -> PyResult<()> {
+        self.inner
+            .validate()
+            .map_err(|err| PyValueError::new_err(format!("invalid SSH config: {err}")))
+    }
+
     fn __repr__(&self) -> String {
         format!("SSHConfig(config_file={:?})", self.config_file())
     }
@@ -447,6 +453,12 @@ impl PySettings {
             PyValueError::new_err(format!("failed to load settings from {path}: {err}"))
         })?;
         Ok(Self { inner })
+    }
+
+    fn validate(&self) -> PyResult<()> {
+        self.inner
+            .validate()
+            .map_err(|err| PyValueError::new_err(format!("invalid settings: {err}")))
     }
 
     #[getter]

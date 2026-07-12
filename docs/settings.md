@@ -76,7 +76,9 @@ values into a supported free-form object such as `runner.options`.
     ```
 
 Python code can also construct settings directly. Omitted fields keep the same
-defaults used by file-loaded settings.
+defaults used by file-loaded settings. Construction itself does not perform
+filesystem validation, but Python runtime creation validates supplied settings
+before building the runtime.
 
 ```python
 import genja
@@ -93,6 +95,12 @@ settings = genja.Settings(
 )
 
 runtime = genja.Genja.from_hosts(hosts, settings=settings)
+```
+
+To validate programmatic settings explicitly before runtime construction, call:
+
+```python
+settings.validate()
 ```
 
 ## Complete Example
@@ -271,8 +279,11 @@ ssh:
 | `config_file` | string or null | `null` | none |
 
 When `config_file` is set, `Settings::from_file(...)` checks that the file
-exists, can be opened, and parses as strict OpenSSH-style config. If the field
-is omitted or `null`, SSH config validation is skipped.
+exists, can be opened, and parses as strict OpenSSH-style config. Programmatic
+settings can be checked with `Settings::validate()` in Rust, `settings.validate()`
+in Python, or `settings.ssh.validate()` in Python for the SSH section only.
+Python runtime creation also validates supplied settings before building the
+runtime. If the field is omitted or `null`, SSH config validation is skipped.
 
 ## Runner
 
