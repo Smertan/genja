@@ -1,10 +1,11 @@
 use ::genja_core::Settings;
+use ::genja_core::inventory::TransformFunctionOptions;
 use ::genja_core::settings::{
     CoreConfig, InventoryConfig, LoggingConfig, OptionsConfig, RunnerConfig, SSHConfig,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyAny, PyModule};
 
 use crate::task;
 
@@ -16,6 +17,18 @@ pub struct PyRunnerRetryConfig {
 
 #[pymethods]
 impl PyRunnerRetryConfig {
+    #[new]
+    #[pyo3(signature = (allow=None, max_attempts=None, delay_ms=None))]
+    fn new(allow: Option<bool>, max_attempts: Option<usize>, delay_ms: Option<u64>) -> Self {
+        Self {
+            inner: ::genja_core::task::RetryConfig::new(
+                allow,
+                max_attempts.map(|value| value.max(1)),
+                delay_ms,
+            ),
+        }
+    }
+
     #[getter]
     pub(crate) fn allow(&self) -> Option<bool> {
         self.inner.allow()
@@ -49,6 +62,28 @@ pub struct PyOptionsConfig {
 
 #[pymethods]
 impl PyOptionsConfig {
+    #[new]
+    #[pyo3(signature = (hosts_file=None, groups_file=None, defaults_file=None))]
+    fn new(
+        hosts_file: Option<String>,
+        groups_file: Option<String>,
+        defaults_file: Option<String>,
+    ) -> Self {
+        let mut builder = OptionsConfig::builder();
+        if let Some(hosts_file) = hosts_file {
+            builder = builder.hosts_file(hosts_file);
+        }
+        if let Some(groups_file) = groups_file {
+            builder = builder.groups_file(groups_file);
+        }
+        if let Some(defaults_file) = defaults_file {
+            builder = builder.defaults_file(defaults_file);
+        }
+        Self {
+            inner: builder.build(),
+        }
+    }
+
     #[getter]
     pub(crate) fn hosts_file(&self) -> Option<String> {
         self.inner.hosts_file().map(str::to_owned)
@@ -82,6 +117,18 @@ pub struct PyCoreConfig {
 
 #[pymethods]
 impl PyCoreConfig {
+    #[new]
+    #[pyo3(signature = (raise_on_error=None))]
+    fn new(raise_on_error: Option<bool>) -> Self {
+        let mut builder = CoreConfig::builder();
+        if let Some(raise_on_error) = raise_on_error {
+            builder = builder.raise_on_error(raise_on_error);
+        }
+        Self {
+            inner: builder.build(),
+        }
+    }
+
     #[getter]
     pub(crate) fn raise_on_error(&self) -> bool {
         self.inner.raise_on_error()
@@ -100,6 +147,35 @@ pub struct PyInventoryConfig {
 
 #[pymethods]
 impl PyInventoryConfig {
+    #[new]
+    #[pyo3(signature = (plugin=None, options=None, transform_function=None, transform_function_options=None))]
+    fn new(
+        plugin: Option<String>,
+        options: Option<PyRef<'_, PyOptionsConfig>>,
+        transform_function: Option<String>,
+        transform_function_options: Option<Py<PyAny>>,
+    ) -> PyResult<Self> {
+        let mut builder = InventoryConfig::builder();
+        if let Some(plugin) = plugin {
+            builder = builder.plugin(plugin);
+        }
+        if let Some(options) = options {
+            builder = builder.options(options.inner.clone());
+        }
+        if let Some(transform_function) = transform_function {
+            builder = builder.transform_function(transform_function);
+        }
+        if let Some(transform_function_options) = transform_function_options {
+            let value = Python::attach(|py| {
+                task::py_any_to_json_value(transform_function_options.bind(py))
+            })?;
+            builder = builder.transform_function_options(TransformFunctionOptions::new(value));
+        }
+        Ok(Self {
+            inner: builder.build(),
+        })
+    }
+
     #[getter]
     pub(crate) fn plugin(&self) -> String {
         self.inner.plugin().to_owned()
@@ -143,6 +219,18 @@ pub struct PySSHConfig {
 
 #[pymethods]
 impl PySSHConfig {
+    #[new]
+    #[pyo3(signature = (config_file=None))]
+    fn new(config_file: Option<String>) -> Self {
+        let mut builder = SSHConfig::builder();
+        if let Some(config_file) = config_file {
+            builder = builder.config_file(config_file);
+        }
+        Self {
+            inner: builder.build(),
+        }
+    }
+
     #[getter]
     pub(crate) fn config_file(&self) -> Option<String> {
         self.inner.config_file().map(str::to_owned)
@@ -161,6 +249,36 @@ pub struct PyRunnerConfig {
 
 #[pymethods]
 impl PyRunnerConfig {
+    #[new]
+    #[pyo3(signature = (plugin=None, worker_count=None, max_task_depth=None, max_connection_attempts=None, retry=None))]
+    fn new(
+        plugin: Option<String>,
+        worker_count: Option<usize>,
+        max_task_depth: Option<usize>,
+        max_connection_attempts: Option<usize>,
+        retry: Option<PyRef<'_, PyRunnerRetryConfig>>,
+    ) -> Self {
+        let mut builder = RunnerConfig::builder();
+        if let Some(plugin) = plugin {
+            builder = builder.plugin(plugin);
+        }
+        if let Some(worker_count) = worker_count {
+            builder = builder.worker_count(worker_count);
+        }
+        if let Some(max_task_depth) = max_task_depth {
+            builder = builder.max_task_depth(max_task_depth);
+        }
+        if let Some(max_connection_attempts) = max_connection_attempts {
+            builder = builder.max_connection_attempts(max_connection_attempts);
+        }
+        if let Some(retry) = retry {
+            builder = builder.retry(retry.inner);
+        }
+        Self {
+            inner: builder.build(),
+        }
+    }
+
     #[getter]
     pub(crate) fn plugin(&self) -> String {
         self.inner.plugin().to_owned()
@@ -208,6 +326,40 @@ pub struct PyLoggingConfig {
 
 #[pymethods]
 impl PyLoggingConfig {
+    #[new]
+    #[pyo3(signature = (enabled=None, level=None, log_file=None, to_console=None, file_size=None, max_file_count=None))]
+    fn new(
+        enabled: Option<bool>,
+        level: Option<String>,
+        log_file: Option<String>,
+        to_console: Option<bool>,
+        file_size: Option<u64>,
+        max_file_count: Option<usize>,
+    ) -> Self {
+        let mut builder = LoggingConfig::builder();
+        if let Some(enabled) = enabled {
+            builder = builder.enabled(enabled);
+        }
+        if let Some(level) = level {
+            builder = builder.level(level);
+        }
+        if let Some(log_file) = log_file {
+            builder = builder.log_file(log_file);
+        }
+        if let Some(to_console) = to_console {
+            builder = builder.to_console(to_console);
+        }
+        if let Some(file_size) = file_size {
+            builder = builder.file_size(file_size);
+        }
+        if let Some(max_file_count) = max_file_count {
+            builder = builder.max_file_count(max_file_count);
+        }
+        Self {
+            inner: builder.build(),
+        }
+    }
+
     #[getter]
     pub(crate) fn enabled(&self) -> bool {
         self.inner.enabled()
@@ -260,9 +412,32 @@ pub struct PySettings {
 #[pymethods]
 impl PySettings {
     #[new]
-    fn new() -> Self {
+    #[pyo3(signature = (core=None, inventory=None, ssh=None, runner=None, logging=None))]
+    fn new(
+        core: Option<PyRef<'_, PyCoreConfig>>,
+        inventory: Option<PyRef<'_, PyInventoryConfig>>,
+        ssh: Option<PyRef<'_, PySSHConfig>>,
+        runner: Option<PyRef<'_, PyRunnerConfig>>,
+        logging: Option<PyRef<'_, PyLoggingConfig>>,
+    ) -> Self {
+        let mut builder = Settings::builder();
+        if let Some(core) = core {
+            builder = builder.core(core.inner.clone());
+        }
+        if let Some(inventory) = inventory {
+            builder = builder.inventory(inventory.inner.clone());
+        }
+        if let Some(ssh) = ssh {
+            builder = builder.ssh(ssh.inner.clone());
+        }
+        if let Some(runner) = runner {
+            builder = builder.runner(runner.inner.clone());
+        }
+        if let Some(logging) = logging {
+            builder = builder.logging(logging.inner.clone());
+        }
         Self {
-            inner: Settings::default(),
+            inner: builder.build(),
         }
     }
 
@@ -348,7 +523,7 @@ mod tests {
 
     #[test]
     fn py_settings_new_wraps_default_settings() {
-        let settings = PySettings::new();
+        let settings = PySettings::new(None, None, None, None, None);
 
         assert!(!settings.core().raise_on_error());
         assert_eq!(settings.inventory().plugin(), "FileInventoryPlugin");

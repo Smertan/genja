@@ -75,6 +75,26 @@ values into a supported free-form object such as `runner.options`.
     print(f"Log level: {settings.logging.level}")
     ```
 
+Python code can also construct settings directly. Omitted fields keep the same
+defaults used by file-loaded settings.
+
+```python
+import genja
+
+settings = genja.Settings(
+    runner=genja.RunnerConfig(
+        plugin="serial",
+        retry=genja.RunnerRetryConfig(
+            allow=True,
+            max_attempts=3,
+            delay_ms=250,
+        ),
+    ),
+)
+
+runtime = genja.Genja.from_hosts(hosts, settings=settings)
+```
+
 ## Complete Example
 
 ```yaml

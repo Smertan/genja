@@ -8,6 +8,7 @@ All notable changes to this workspace should be documented in this file.
 
 - Exposed the current 1-based task attempt through Rust and Python task runtime contexts. Refs: #73
 - Forwarded Rust-side runtime logs from the Python extension into Python's standard `logging` system, allowing applications and pytest `caplog` to capture Genja logs. Refs: #74
+- Added Python constructors for `Settings` and nested settings config classes so applications can build runtime settings without a settings file. Refs: #68
 
 ### Changed
 
