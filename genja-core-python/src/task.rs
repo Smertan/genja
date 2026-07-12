@@ -1398,7 +1398,7 @@ impl Task for RuntimeTaskWrapper {
     }
 }
 
-fn py_any_to_json_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+pub(crate) fn py_any_to_json_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     normalize_python_json_payload(obj, "invalid json payload")
 }
 

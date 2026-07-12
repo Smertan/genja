@@ -1800,6 +1800,9 @@ fn build_runtime(
 ) -> PyResult<PyGenja> {
     let mut builder = RuntimeGenja::builder(inventory).with_plugin_manager(plugin_manager);
     if let Some(settings) = settings {
+        settings.validate().map_err(|err| {
+            PyValueError::new_err(format!("failed to validate runtime settings: {err}"))
+        })?;
         builder = builder.with_settings(settings);
     }
     let mut inner = builder

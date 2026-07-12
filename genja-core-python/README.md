@@ -222,6 +222,29 @@ genja = genja.Genja.from_settings_file("config.yaml")
 Settings files are strict: unknown fields fail loading instead of being ignored.
 Use explicit option maps such as `runner.options` for plugin-specific values.
 
+Settings can also be built directly in Python:
+
+```python
+import genja
+
+settings = genja.Settings(
+    runner=genja.RunnerConfig(
+        plugin="serial",
+        retry=genja.RunnerRetryConfig(
+            allow=True,
+            max_attempts=3,
+            delay_ms=250,
+        ),
+    ),
+)
+
+genja = genja.Genja.from_hosts(hosts, settings=settings)
+```
+
+Programmatic construction itself does not read files, but runtime creation
+validates supplied settings before building the runtime. To validate explicitly,
+call `settings.validate()` or `settings.ssh.validate()`.
+
 If you need Python plugins during settings-file loading, provide a plugin manager:
 
 ```python
