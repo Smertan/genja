@@ -29,12 +29,23 @@ use genja_core::Settings;
 let settings = Settings::from_file("config.yaml")?;
 ```
 
-Build a `Genja` instance with inventory + settings:
+Build a `Genja` instance from settings and load inventory from
+`settings.inventory`:
 
 ```rust
 use genja::Genja;
 use genja_core::Settings;
-use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+
+let genja = Genja::from_settings(Settings::from_file("config.yaml")?)?;
+```
+
+When you already have host data in memory, pass it explicitly and use settings
+only for runtime options:
+
+```rust
+use genja::Genja;
+use genja_core::Settings;
+use genja_core::inventory::{BaseBuilderHost, Host, Hosts, Inventory};
 
 let mut hosts = Hosts::new();
 hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());

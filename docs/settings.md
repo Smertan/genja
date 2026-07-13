@@ -11,6 +11,8 @@ Example files:
 
 ## Load Settings
 
+### From A Settings File
+
 Supported settings file extensions are `.json`, `.yaml`, and `.yml`.
 Settings files are strict: unknown top-level sections and unknown fields inside
 typed settings sections fail loading instead of being ignored. Correct
@@ -75,10 +77,61 @@ values into a supported free-form object such as `runner.options`.
     print(f"Log level: {settings.logging.level}")
     ```
 
-Python code can also construct settings directly. Omitted fields keep the same
-defaults used by file-loaded settings. Construction itself does not perform
-filesystem validation, but Python runtime creation validates supplied settings
-before building the runtime.
+### From Programmatic Settings
+
+Code can also construct settings directly. Omitted fields keep the same defaults
+used by file-loaded settings. Construction itself does not perform filesystem
+validation, but runtime creation validates supplied settings before building the
+runtime.
+
+Use `Genja::from_settings(...)` or `Genja.from_settings(...)` when the runtime
+should load inventory from `settings.inventory`:
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::Genja;
+    use genja_core::Settings;
+    use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig};
+
+    let settings = Settings::builder()
+        .inventory(
+            InventoryConfig::builder()
+                .options(
+                    OptionsConfig::builder()
+                        .hosts_file("./inventory/hosts.yaml")
+                        .build(),
+                )
+                .build(),
+        )
+        .runner(RunnerConfig::builder().plugin("serial").build())
+        .build();
+
+    let runtime = Genja::from_settings(settings)?;
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja
+
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(
+            options=genja.OptionsConfig(
+                hosts_file="./inventory/hosts.yaml",
+            ),
+        ),
+        runner=genja.RunnerConfig(plugin="serial"),
+    )
+
+    runtime = genja.Genja.from_settings(settings)
+    ```
+
+### With Explicit Inventory
+
+When hosts or a full inventory are supplied explicitly, `from_hosts(...)` and
+`from_inventory(...)` continue to use that explicit inventory instead of loading
+from `settings.inventory`:
 
 ```python
 import genja
@@ -96,6 +149,8 @@ settings = genja.Settings(
 
 runtime = genja.Genja.from_hosts(hosts, settings=settings)
 ```
+
+### Validation Only
 
 To validate programmatic settings explicitly before runtime construction, call:
 

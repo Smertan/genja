@@ -211,6 +211,8 @@ plugins.load_rust_plugins_from_directory("./plugins")
 
 ## Settings Files
 
+### From A Settings File
+
 Build a runtime from a settings file:
 
 ```python
@@ -222,12 +224,20 @@ genja = genja.Genja.from_settings_file("config.yaml")
 Settings files are strict: unknown fields fail loading instead of being ignored.
 Use explicit option maps such as `runner.options` for plugin-specific values.
 
-Settings can also be built directly in Python:
+### From Programmatic Settings
+
+Settings can also be built directly in Python. Use `from_settings(...)` when
+inventory should be loaded from `settings.inventory`:
 
 ```python
 import genja
 
 settings = genja.Settings(
+    inventory=genja.InventoryConfig(
+        options=genja.OptionsConfig(
+            hosts_file="./inventory/hosts.yaml",
+        ),
+    ),
     runner=genja.RunnerConfig(
         plugin="serial",
         retry=genja.RunnerRetryConfig(
@@ -238,12 +248,20 @@ settings = genja.Settings(
     ),
 )
 
-genja = genja.Genja.from_hosts(hosts, settings=settings)
+genja = genja.Genja.from_settings(settings)
 ```
 
 Programmatic construction itself does not read files, but runtime creation
 validates supplied settings before building the runtime. To validate explicitly,
 call `settings.validate()` or `settings.ssh.validate()`.
+
+### With Explicit Inventory
+
+When host data is supplied directly, `from_hosts(...)` and `from_inventory(...)`
+continue to use that explicit inventory instead of loading from
+`settings.inventory`.
+
+### With Python Plugins
 
 If you need Python plugins during settings-file loading, provide a plugin manager:
 
@@ -251,6 +269,9 @@ If you need Python plugins during settings-file loading, provide a plugin manage
 plugins = genja.PluginManager()
 genja = genja.Genja.from_settings_file("config.yaml", plugin_manager=plugins)
 ```
+
+The same `plugin_manager` argument is available on `Genja.from_settings(...)`
+for Python-authored inventory plugins.
 
 ## Development
 
