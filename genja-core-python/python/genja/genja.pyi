@@ -212,6 +212,11 @@ class Genja:
         plugin_manager: PluginManager | None = None,
     ) -> Genja: ...
     @staticmethod
+    def from_settings(
+        settings: Settings,
+        plugin_manager: PluginManager | None = None,
+    ) -> Genja: ...
+    @staticmethod
     def from_settings_file(
         path: str,
         plugin_manager: PluginManager | None = None,
