@@ -12,12 +12,15 @@
 //! use genja::Genja;
 //! use genja_core::Settings;
 //!
-//! // Load from settings file
+//! // Load settings and inventory from a settings file
 //! let genja = Genja::from_settings_file("config.yaml")?;
 //!
-//! // Or build manually
+//! // Or load inventory from programmatic settings
 //! let settings = Settings::from_file("config.yaml")?;
+//! let genja = Genja::from_settings(settings)?;
 //!
+//! // Or provide inventory explicitly and use settings for runtime options
+//! let settings = Settings::from_file("config.yaml")?;
 //! let inventory = genja_core::inventory::Inventory::builder()
 //!     .hosts(genja_core::inventory::Hosts::new())
 //!     .build();

@@ -59,6 +59,22 @@
 //! runtime = Genja.from_settings_file("config.yaml")
 //! ```
 //!
+//! ## From Programmatic Settings
+//!
+//! Load inventory using an already constructed settings object:
+//!
+//! ```python
+//! from genja import Genja, InventoryConfig, OptionsConfig, Settings
+//!
+//! settings = Settings(
+//!     inventory=InventoryConfig(
+//!         options=OptionsConfig(hosts_file="./inventory/hosts.yaml"),
+//!     ),
+//! )
+//!
+//! runtime = Genja.from_settings(settings)
+//! ```
+//!
 //! ## Using the Builder Pattern
 //!
 //! For advanced configuration with plugins:
@@ -389,6 +405,7 @@ use crate::task::{self, PyTaskResults};
 ///
 /// - [`PyGenja::from_hosts`] - Create from a simple hosts dictionary
 /// - [`PyGenja::from_inventory`] - Create from a full inventory structure
+/// - [`PyGenja::from_settings`] - Load inventory from programmatic settings
 /// - [`PyGenja::from_settings_file`] - Load from a YAML/JSON configuration file
 /// - [`PyGenja::builder`] - Use the builder pattern for advanced configuration
 ///
