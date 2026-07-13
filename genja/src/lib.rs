@@ -64,7 +64,7 @@ use genja_core::task::{
     Task, TaskConnectionResolver, TaskDefinition, TaskInfo, TaskProcessorResolver, TaskResults,
     TaskResultsSummary, Tasks,
 };
-use genja_core::{NatString, Settings};
+use genja_core::{ConfigLoadError, NatString, Settings};
 pub use genja_core_derive::genja_task;
 pub use genja_plugin_manager;
 use genja_plugin_manager::PluginManager;
@@ -253,7 +253,43 @@ impl Genja {
     /// ```
     pub fn from_settings_file(settings_file_path: &str) -> Result<Self, GenjaError> {
         let settings = Settings::from_file(settings_file_path).map_err(GenjaError::from)?;
+        Self::from_validated_settings(settings)
+    }
 
+    /// Creates a `Genja` instance from an already constructed settings object.
+    ///
+    /// Validates the supplied settings, initializes plugins, and loads inventory
+    /// using the inventory plugin configured by `settings.inventory()`. This is
+    /// the programmatic equivalent of [`Self::from_settings_file`].
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(GenjaError::ConfigLoad)` if settings validation fails.
+    ///
+    /// Returns `Err(GenjaError::PluginLoad)` if plugin discovery or dynamic plugin
+    /// loading fails.
+    ///
+    /// Returns inventory-related errors from loading the configured inventory plugin,
+    /// including `GenjaError::InventoryLoad`, `GenjaError::PluginNotFound`, and
+    /// `GenjaError::NotInventoryPlugin`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use genja::Genja;
+    /// use genja_core::Settings;
+    ///
+    /// let genja = Genja::from_settings(Settings::default());
+    /// assert!(genja.is_ok());
+    /// ```
+    pub fn from_settings(settings: Settings) -> Result<Self, GenjaError> {
+        settings
+            .validate()
+            .map_err(|err| GenjaError::ConfigLoad(ConfigLoadError::SshConfig(err)))?;
+        Self::from_validated_settings(settings)
+    }
+
+    fn from_validated_settings(settings: Settings) -> Result<Self, GenjaError> {
         let mut genja = Self::new();
         genja.set_settings(settings);
         genja.load_plugins()?;
@@ -267,7 +303,6 @@ impl Genja {
     /// async inventory plugins to participate in runtime construction.
     pub async fn from_settings_file_async(settings_file_path: &str) -> Result<Self, GenjaError> {
         let settings = Settings::from_file(settings_file_path).map_err(GenjaError::from)?;
-
         let mut genja = Self::new();
         genja.set_settings(settings);
         genja.load_plugins()?;
@@ -1142,7 +1177,7 @@ mod tests {
         BaseBuilderHost, Connection, ConnectionKey, Data, Host, Hosts, Inventory,
         ResolvedConnectionParams,
     };
-    use genja_core::settings::{InventoryConfig, RunnerConfig};
+    use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig, SSHConfig};
     use genja_core::task::RetryConfig;
     use genja_core::task::{
         BlockingTaskRuntimeContext, HostTaskResult, Task, TaskDefinition, TaskError,
@@ -1153,9 +1188,10 @@ mod tests {
         AsyncPluginInventory, Plugin, PluginConnection, Plugins,
     };
     use serde_json::{Value, json};
+    use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     struct TestTask {
         name: String,
@@ -1742,6 +1778,19 @@ mod tests {
         Inventory::builder().hosts(hosts).build()
     }
 
+    fn temp_test_dir(name: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "genja-runtime-{name}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("temp test dir should be created");
+        dir
+    }
+
     #[test]
     fn run_executes_task_for_each_selected_host() {
         let genja = Genja::from_inventory(test_inventory());
@@ -1891,6 +1940,63 @@ mod tests {
         assert!(
             matches!(error, GenjaError::Message(message) if message.contains("invalid value regex"))
         );
+    }
+
+    #[test]
+    fn from_settings_loads_file_inventory_from_programmatic_settings() {
+        let temp_dir = temp_test_dir("from-settings-file-inventory");
+        let hosts_path = temp_dir.join("hosts.yaml");
+        fs::write(
+            &hosts_path,
+            "router1:\n  hostname: 10.0.0.1\n  platform: ios\n",
+        )
+        .expect("hosts file should be written");
+
+        let settings = Settings::builder()
+            .inventory(
+                InventoryConfig::builder()
+                    .options(
+                        OptionsConfig::builder()
+                            .hosts_file(hosts_path.to_string_lossy())
+                            .build(),
+                    )
+                    .build(),
+            )
+            .runner(RunnerConfig::builder().plugin("serial").build())
+            .build();
+
+        let genja = Genja::from_settings(settings).expect("runtime should build from settings");
+
+        assert!(genja.plugins_loaded());
+        assert!(genja.inventory_loaded());
+        assert_eq!(genja.host_count(), 1);
+        assert_eq!(genja.host_ids()[0].as_str(), "router1");
+        fs::remove_dir_all(&temp_dir).unwrap_or(());
+    }
+
+    #[test]
+    fn from_settings_uses_omitted_inventory_defaults() {
+        let genja = Genja::from_settings(Settings::default())
+            .expect("default settings should build an empty file inventory");
+
+        assert!(genja.inventory_loaded());
+        assert_eq!(genja.host_count(), 0);
+    }
+
+    #[test]
+    fn from_settings_validates_programmatic_settings() {
+        let settings = Settings::builder()
+            .ssh(
+                SSHConfig::builder()
+                    .config_file("/nonexistent/genja/ssh_config")
+                    .build(),
+            )
+            .build();
+
+        let error = Genja::from_settings(settings)
+            .expect_err("invalid programmatic settings should be rejected");
+
+        assert!(matches!(error, GenjaError::ConfigLoad(_)));
     }
 
     #[test]

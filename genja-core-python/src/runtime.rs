@@ -559,6 +559,40 @@ impl PyGenja {
         builder.build()
     }
 
+    /// Creates a Genja runtime instance from an already constructed settings object.
+    ///
+    /// This method validates the supplied settings, loads inventory using the configured
+    /// inventory plugin, and builds a runtime with the loaded inventory and settings.
+    ///
+    /// # Parameters
+    ///
+    /// * `settings` - Runtime settings containing inventory plugin configuration,
+    ///   runner selection, and other options.
+    /// * `plugin_manager` - Optional plugin manager for loading and managing plugins.
+    ///   If provided, it supports custom Python inventory plugins before loading
+    ///   inventory from settings.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `PyResult<Self>` containing the fully configured runtime instance on
+    /// success, or a `PyValueError` if validation, inventory loading, or runtime
+    /// construction fails.
+    #[staticmethod]
+    #[pyo3(signature = (settings, plugin_manager=None))]
+    fn from_settings(
+        settings: PyRef<'_, PySettings>,
+        plugin_manager: Option<PyRef<'_, PyPluginManager>>,
+    ) -> PyResult<Self> {
+        let settings = settings.inner.clone();
+        let plugin_manager = if let Some(plugin_manager) = plugin_manager {
+            plugin_manager.take_inner()?
+        } else {
+            PyPluginManager::new().take_inner()?
+        };
+
+        build_runtime_from_settings(settings, plugin_manager, None)
+    }
+
     /// Creates a Genja runtime instance from a YAML or JSON settings file.
     ///
     /// This method loads runtime configuration from a file, including inventory plugin
@@ -1852,6 +1886,9 @@ fn build_runtime_from_settings(
     plugin_manager: genja_plugin_manager::PluginManager,
     runner: Option<&str>,
 ) -> PyResult<PyGenja> {
+    settings.validate().map_err(|err| {
+        PyValueError::new_err(format!("failed to validate runtime settings: {err}"))
+    })?;
     let inventory = load_inventory_from_settings(&settings, &plugin_manager)
         .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?;
     build_runtime(inventory, Some(settings), plugin_manager, runner)
