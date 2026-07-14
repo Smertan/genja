@@ -171,7 +171,7 @@ impl fmt::Display for SshConfigError {
 impl std::error::Error for SshConfigError {}
 
 /// Error returned when loading the top-level settings file fails.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum ConfigLoadError {
     /// The settings file extension is not supported.
     UnsupportedFormat { path: String },
@@ -196,7 +196,11 @@ impl fmt::Display for ConfigLoadError {
                 write!(f, "failed to read settings from {path}: {message}")
             }
             ConfigLoadError::Deserialize { path, message } => {
-                write!(f, "failed to deserialize settings from {path}: {message}")
+                write!(
+                    f,
+                    "failed to deserialize settings from {path}: {}",
+                    format_settings_deserialize_message(message)
+                )
             }
             ConfigLoadError::SshConfig(err) => write!(f, "{err}"),
         }
@@ -205,8 +209,134 @@ impl fmt::Display for ConfigLoadError {
 
 impl std::error::Error for ConfigLoadError {}
 
+impl fmt::Debug for ConfigLoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+fn format_settings_deserialize_message(message: &str) -> String {
+    let Some(error) = UnknownFieldError::parse(message) else {
+        return message.to_string();
+    };
+
+    let mut formatted = String::from("unknown settings field");
+    if let Some(section) = &error.section {
+        formatted.push_str(&format!("\n  section: `{section}`"));
+    }
+    formatted.push_str(&format!("\n  field: `{}`", error.field));
+    if !error.expected_fields.is_empty() {
+        formatted.push_str("\n  expected fields: ");
+        formatted.push_str(
+            &error
+                .expected_fields
+                .iter()
+                .map(|field| format!("`{field}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
+    match error.closest_expected_field() {
+        Some(suggestion) => {
+            formatted.push_str(&format!("\n  suggestion: did you mean `{suggestion}`?"));
+        }
+        None => formatted.push_str(
+            "\n  suggestion: remove this field, or move plugin-specific values into an explicit \
+             options map such as `runner.options` or `inventory.transform_function_options`",
+        ),
+    }
+    formatted
+}
+
+struct UnknownFieldError {
+    field: String,
+    expected_fields: Vec<String>,
+    section: Option<String>,
+}
+
+impl UnknownFieldError {
+    fn parse(message: &str) -> Option<Self> {
+        let field = between(message, "unknown field `", "`")?.to_string();
+        let section = message
+            .split_once(" for key `")
+            .and_then(|(_, rest)| rest.split_once('`').map(|(section, _)| section.to_string()));
+
+        let expected = message
+            .split_once(", expected ")
+            .map(|(_, rest)| {
+                rest.split_once(" for key `")
+                    .map(|(expected, _)| expected)
+                    .unwrap_or(rest)
+            })
+            .unwrap_or_default();
+
+        let expected_fields = expected
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_string)
+            .collect();
+
+        Some(Self {
+            field,
+            expected_fields,
+            section,
+        })
+    }
+
+    fn closest_expected_field(&self) -> Option<&str> {
+        self.expected_fields
+            .iter()
+            .map(|expected| {
+                (
+                    expected.as_str(),
+                    levenshtein_distance(&self.field, expected),
+                    common_prefix_len(&self.field, expected),
+                )
+            })
+            .filter(|(expected, distance, prefix_len)| {
+                let max_len = self.field.len().max(expected.len());
+                *distance <= 3 || (*prefix_len >= 4 && *prefix_len * 2 >= max_len)
+            })
+            .min_by_key(|(_, distance, _)| *distance)
+            .map(|(expected, _, _)| expected)
+    }
+}
+
+fn between<'a>(value: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    let (_, rest) = value.split_once(prefix)?;
+    let (matched, _) = rest.split_once(suffix)?;
+    Some(matched)
+}
+
+fn common_prefix_len(left: &str, right: &str) -> usize {
+    left.chars()
+        .zip(right.chars())
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
+fn levenshtein_distance(left: &str, right: &str) -> usize {
+    let right_len = right.chars().count();
+    let mut previous: Vec<usize> = (0..=right_len).collect();
+    let mut current = vec![0; right_len + 1];
+
+    for (left_index, left_char) in left.chars().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right.chars().enumerate() {
+            let insertion = current[right_index] + 1;
+            let deletion = previous[right_index + 1] + 1;
+            let substitution = previous[right_index] + usize::from(left_char != right_char);
+            current[right_index + 1] = insertion.min(deletion).min(substitution);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right_len]
+}
+
 /// Generic error type for core Genja operations.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum GenjaError {
     /// Plugins have not been loaded for the runtime.
     PluginsNotLoaded,
@@ -261,6 +391,12 @@ impl fmt::Display for GenjaError {
 
 impl std::error::Error for GenjaError {}
 
+impl fmt::Debug for GenjaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl From<String> for GenjaError {
     fn from(value: String) -> Self {
         GenjaError::Message(value)
@@ -282,5 +418,28 @@ impl From<InventoryLoadError> for GenjaError {
 impl From<ConfigLoadError> for GenjaError {
     fn from(value: ConfigLoadError) -> Self {
         GenjaError::ConfigLoad(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConfigLoadError, GenjaError};
+
+    #[test]
+    fn debug_output_for_settings_unknown_field_uses_structured_display() {
+        let error = GenjaError::from(ConfigLoadError::Deserialize {
+            path: "/tmp/config.yml".to_string(),
+            message: "unknown field `named`, expected one of `plugin`, `options`, `transform_function`, `transform_function_options` for key `inventory`".to_string(),
+        });
+
+        let output = format!("{error:?}");
+
+        assert!(output.contains("failed to load settings"));
+        assert!(output.contains("unknown settings field"));
+        assert!(output.contains("section: `inventory`"));
+        assert!(output.contains("field: `named`"));
+        assert!(output.contains("expected fields:"));
+        assert!(output.contains("suggestion: remove this field"));
+        assert!(!output.contains("ConfigLoad(Deserialize"));
     }
 }

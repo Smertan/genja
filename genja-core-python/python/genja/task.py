@@ -379,8 +379,9 @@ class TaskRuntimeContext:
     nested task execution, depth limits, and the resolved connection object
     that the task can use to interact with the target host.
 
-    Task code can inspect the resolved connection through ``connection()`` and
-    ``has_connection()``. Depth bookkeeping is retained internally by the
+    Task code can inspect the current retry attempt through
+    ``current_attempt`` and the resolved connection through ``connection()``
+    and ``has_connection()``. Depth bookkeeping is retained internally by the
     runtime and is not part of the public Python task API.
     """
 
@@ -389,11 +390,17 @@ class TaskRuntimeContext:
         *,
         current_depth: int = 0,
         max_depth: int | None = None,
+        current_attempt: int = 1,
         connection: Any | None = None,
     ) -> None:
         self._current_depth = current_depth
         self._max_depth = max_depth
+        self._current_attempt = max(current_attempt, 1)
         self._connection = connection
+
+    @property
+    def current_attempt(self) -> int:
+        return self._current_attempt
 
     def connection(self) -> Any | None:
         return self._connection
@@ -405,6 +412,7 @@ class TaskRuntimeContext:
         return {
             "current_depth": self._current_depth,
             "max_depth": self._max_depth,
+            "current_attempt": self._current_attempt,
             "connection": self._connection,
         }
 

@@ -1,5 +1,5 @@
 use super::{CoreConfig, InventoryConfig, LoggingConfig, RunnerConfig, SSHConfig};
-use crate::ConfigLoadError;
+use crate::{ConfigLoadError, SshConfigError};
 use config::{Config as ConfigBuilder, File, FileFormat};
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Missing sections deserialize to their defaults.
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Settings {
     core: CoreConfig,
     inventory: InventoryConfig,
@@ -47,10 +47,19 @@ impl Settings {
                 })?;
 
         parsed_config
-            .ssh
             .validate()
             .map_err(ConfigLoadError::SshConfig)?;
         Ok(parsed_config)
+    }
+
+    /// Validates settings that require external checks.
+    ///
+    /// Currently this validates `ssh.config_file` when configured. Validation is
+    /// explicit so programmatic settings construction remains pure data
+    /// construction, while callers can run the same checks used by
+    /// [`Settings::from_file`].
+    pub fn validate(&self) -> Result<(), SshConfigError> {
+        self.ssh.validate()
     }
 
     pub fn core(&self) -> &CoreConfig {

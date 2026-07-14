@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// behavior. `retry` carries runner-level task retry defaults and `options`
 /// carries plugin-specific JSON for custom runners.
 #[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct RunnerConfig {
     plugin: String,
     options: serde_json::Value,

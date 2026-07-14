@@ -1,6 +1,7 @@
 import asyncio
 
 import genja
+from tests.fixtures.inventory_plugins import StaticInventoryPlugin
 from genja.inventory import Defaults, Group, Host as InventoryHost, Inventory
 from genja.task import (
     Host,
@@ -31,6 +32,57 @@ def test_genja_from_settings_file_rejects_malformed_content(tmp_path):
         assert "failed to build Genja runtime from settings file" in str(err)
     else:
         raise AssertionError("malformed settings content should fail")
+
+
+def test_genja_from_settings_loads_file_inventory_from_programmatic_settings(tmp_path):
+    hosts_path = tmp_path / "hosts.yaml"
+    hosts_path.write_text("router1:\n  hostname: 10.0.0.1\n  platform: ios\n")
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(
+            options=genja.OptionsConfig(hosts_file=str(hosts_path)),
+        ),
+        runner=genja.RunnerConfig(plugin="serial"),
+    )
+
+    runtime = genja.Genja.from_settings(settings)
+
+    assert runtime.inventory_loaded()
+    assert runtime.host_count() == 1
+    assert runtime.host_ids() == ["router1"]
+
+
+def test_genja_from_settings_uses_omitted_inventory_defaults():
+    runtime = genja.Genja.from_settings(genja.Settings())
+
+    assert runtime.inventory_loaded()
+    assert runtime.host_count() == 0
+
+
+def test_genja_from_settings_validates_programmatic_settings():
+    settings = genja.Settings(
+        ssh=genja.SSHConfig(config_file="/nonexistent/genja/ssh_config"),
+    )
+
+    try:
+        genja.Genja.from_settings(settings)
+    except ValueError as err:
+        assert "failed to validate runtime settings" in str(err)
+    else:
+        raise AssertionError("invalid programmatic settings should fail")
+
+
+def test_genja_from_settings_accepts_python_inventory_plugin_manager():
+    manager = genja.PluginManager()
+    manager.register_plugin(StaticInventoryPlugin())
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="python_inventory"),
+        runner=genja.RunnerConfig(plugin="serial"),
+    )
+
+    runtime = genja.Genja.from_settings(settings, plugin_manager=manager)
+
+    assert runtime.inventory_loaded()
+    assert runtime.host_ids() == ["router1", "router2"]
 
 
 @task(name="runtime_backup")

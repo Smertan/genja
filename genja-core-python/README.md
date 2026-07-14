@@ -72,7 +72,8 @@ print([result.task_name for result in all_results])
 `results.to_dict()` returns per-host task results with an `outcome` payload and
 separate `execution_metadata` for host timing and retry attempt information.
 
-`TaskRuntimeContext` exposes the resolved connection through
+`TaskRuntimeContext` exposes the 1-based retry attempt through
+`context.current_attempt` and the resolved connection through
 `context.connection()` and `context.has_connection()`. Execution depth remains
 internal to the runtime.
 
@@ -128,6 +129,26 @@ Python task authoring rules:
 - Define `async def start_async(...)` for async tasks.
 - Define exactly one of those methods on a `@task(...)` class.
 - Use `sub_tasks=[ChildTask, ...]` to declare child tasks.
+
+## Logging
+
+Rust-side runtime logs emitted by Genja are forwarded into Python's standard
+`logging` system when the extension module is imported. Configure Python
+logging handlers and levels before running Genja tasks:
+
+```python
+import logging
+
+import genja
+
+logging.basicConfig(level=logging.INFO)
+
+runtime = genja.Genja.from_hosts({
+    "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+}).with_runner("serial")
+```
+
+Tests can capture those records with pytest's `caplog` fixture.
 
 ## Full Inventory
 
@@ -190,6 +211,8 @@ plugins.load_rust_plugins_from_directory("./plugins")
 
 ## Settings Files
 
+### From A Settings File
+
 Build a runtime from a settings file:
 
 ```python
@@ -198,12 +221,57 @@ import genja
 genja = genja.Genja.from_settings_file("config.yaml")
 ```
 
+Settings files are strict: unknown fields fail loading instead of being ignored.
+Use explicit option maps such as `runner.options` for plugin-specific values.
+
+### From Programmatic Settings
+
+Settings can also be built directly in Python. Use `from_settings(...)` when
+inventory should be loaded from `settings.inventory`:
+
+```python
+import genja
+
+settings = genja.Settings(
+    inventory=genja.InventoryConfig(
+        options=genja.OptionsConfig(
+            hosts_file="./inventory/hosts.yaml",
+        ),
+    ),
+    runner=genja.RunnerConfig(
+        plugin="serial",
+        retry=genja.RunnerRetryConfig(
+            allow=True,
+            max_attempts=3,
+            delay_ms=250,
+        ),
+    ),
+)
+
+genja = genja.Genja.from_settings(settings)
+```
+
+Programmatic construction itself does not read files, but runtime creation
+validates supplied settings before building the runtime. To validate explicitly,
+call `settings.validate()` or `settings.ssh.validate()`.
+
+### With Explicit Inventory
+
+When host data is supplied directly, `from_hosts(...)` and `from_inventory(...)`
+continue to use that explicit inventory instead of loading from
+`settings.inventory`.
+
+### With Python Plugins
+
 If you need Python plugins during settings-file loading, provide a plugin manager:
 
 ```python
 plugins = genja.PluginManager()
 genja = genja.Genja.from_settings_file("config.yaml", plugin_manager=plugins)
 ```
+
+The same `plugin_manager` argument is available on `Genja.from_settings(...)`
+for Python-authored inventory plugins.
 
 ## Development
 

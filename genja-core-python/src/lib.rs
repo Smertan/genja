@@ -111,6 +111,13 @@
 //!     print(f"Configuration error: {e}")
 //! ```
 //!
+//! # Logging
+//!
+//! Rust-side runtime logs are forwarded into Python's standard `logging` system
+//! when the extension module is loaded. Configure Python logging handlers and
+//! levels before running Genja tasks if you want to capture or display those
+//! records.
+//!
 //! # Performance Considerations
 //!
 //! - **Zero-copy where possible** - Data is shared between Rust and Python when safe
@@ -179,6 +186,8 @@ mod task;
 /// * `Err(PyErr)` if any submodule registration fails
 #[pymodule]
 fn genja(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    let _ = pyo3_log::try_init();
+
     plugin_manager::register(module)?;
     runtime::register(module)?;
     settings::register(module)?;

@@ -27,6 +27,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arraydeque"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -409,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "genja"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "genja-core",
@@ -423,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "genja-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -449,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "genja-core-derive"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -459,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "genja-core-python"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "genja",
@@ -468,6 +477,7 @@ dependencies = [
  "humantime",
  "pyo3",
  "pyo3-async-runtimes",
+ "pyo3-log",
  "serde",
  "serde_json",
  "tokio",
@@ -476,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "genja-plugin-manager"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "genja-core",
@@ -1103,6 +1113,17 @@ checksum = "7f29e10af80b1f7ccaf7f69eace800a03ecd13e883acfacc1e5d0988605f651e"
 dependencies = [
  "libc",
  "pyo3-build-config",
+]
+
+[[package]]
+name = "pyo3-log"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f64083bd3a16a353d9d62335808e8e13d0552d2a2b83fdb084496192dcfa9fcd"
+dependencies = [
+ "arc-swap",
+ "log",
+ "pyo3",
 ]
 
 [[package]]

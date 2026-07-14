@@ -451,6 +451,144 @@ fn settings_from_file_errors_on_invalid_json() {
 }
 
 #[test]
+fn settings_from_file_errors_on_unknown_top_level_field() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let file_path = tempdir.path().join("config.yaml");
+    std::fs::write(
+        &file_path,
+        r#"
+loging:
+  level: debug
+"#,
+    )
+    .unwrap();
+
+    let err = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap_err();
+
+    assert!(matches!(err, crate::ConfigLoadError::Deserialize { .. }));
+    assert!(err.to_string().contains("unknown settings field"));
+    assert!(err.to_string().contains("field: `loging`"));
+    assert!(err.to_string().contains("did you mean `logging`?"));
+    assert!(err.to_string().contains("loging"));
+}
+
+#[test]
+fn settings_from_file_errors_on_unknown_nested_field() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let file_path = tempdir.path().join("config.yaml");
+    std::fs::write(
+        &file_path,
+        r#"
+runner:
+  worker_counts: 4
+"#,
+    )
+    .unwrap();
+
+    let err = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap_err();
+
+    assert!(matches!(err, crate::ConfigLoadError::Deserialize { .. }));
+    assert!(err.to_string().contains("unknown settings field"));
+    assert!(err.to_string().contains("section: `runner`"));
+    assert!(err.to_string().contains("field: `worker_counts`"));
+    assert!(err.to_string().contains("expected fields:"));
+    assert!(err.to_string().contains("did you mean `worker_count`?"));
+    assert!(err.to_string().contains("worker_counts"));
+}
+
+#[test]
+fn settings_from_file_errors_on_unknown_retry_field() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let file_path = tempdir.path().join("config.yaml");
+    std::fs::write(
+        &file_path,
+        r#"
+runner:
+  retry:
+    max_attempt_count: 3
+"#,
+    )
+    .unwrap();
+
+    let err = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap_err();
+
+    assert!(matches!(err, crate::ConfigLoadError::Deserialize { .. }));
+    assert!(err.to_string().contains("unknown settings field"));
+    assert!(err.to_string().contains("section: `runner.retry`"));
+    assert!(err.to_string().contains("field: `max_attempt_count`"));
+    assert!(err.to_string().contains("did you mean `max_attempts`?"));
+    assert!(err.to_string().contains("max_attempt_count"));
+}
+
+#[test]
+fn settings_from_file_unknown_field_message_falls_back_when_no_close_match() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let file_path = tempdir.path().join("config.yaml");
+    std::fs::write(
+        &file_path,
+        r#"
+inventory:
+  named: FileInventoryPlugin
+"#,
+    )
+    .unwrap();
+
+    let err = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap_err();
+
+    assert!(matches!(err, crate::ConfigLoadError::Deserialize { .. }));
+    assert!(err.to_string().contains("unknown settings field"));
+    assert!(err.to_string().contains("section: `inventory`"));
+    assert!(err.to_string().contains("field: `named`"));
+    assert!(err.to_string().contains("suggestion: remove this field"));
+    assert!(!err.to_string().contains("did you mean"));
+}
+
+#[test]
+fn settings_from_file_keeps_plugin_option_maps_free_form() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let file_path = tempdir.path().join("config.yaml");
+    std::fs::write(
+        &file_path,
+        r#"
+inventory:
+  plugin: FileInventoryPlugin
+  options:
+    hosts_file: ./hosts.yaml
+  transform_function_options:
+    custom_flag: true
+    nested:
+      mode: strict
+runner:
+  options:
+    queue: fast
+    nested:
+      priority: 10
+"#,
+    )
+    .unwrap();
+
+    let settings = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap();
+
+    assert_eq!(
+        settings
+            .inventory()
+            .transform_function_options()
+            .and_then(|options| options.get("custom_flag"))
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        settings.runner().options(),
+        &json!({
+            "queue": "fast",
+            "nested": {
+                "priority": 10
+            }
+        })
+    );
+}
+
+#[test]
 fn settings_from_file_uses_defaults_for_empty_file() {
     let _guard = lock_env();
     let keys = [
@@ -609,6 +747,28 @@ ssh:
         err,
         crate::ConfigLoadError::SshConfig(crate::SshConfigError::ParseFailed { .. })
     ));
+}
+
+#[test]
+fn settings_validate_checks_ssh_config() {
+    let ssh_context = write_temp_ssh_config("Contents that are not valid ssh config contents\n");
+    let settings = super::Settings::builder()
+        .ssh(
+            SSHConfig::builder()
+                .config_file(ssh_context.filename.to_string_lossy().as_ref())
+                .build(),
+        )
+        .build();
+
+    let err = settings.validate().unwrap_err();
+    assert!(matches!(err, crate::SshConfigError::ParseFailed { .. }));
+}
+
+#[test]
+fn settings_validate_accepts_missing_ssh_config() {
+    let settings = super::Settings::default();
+
+    assert!(settings.validate().is_ok());
 }
 
 #[test]

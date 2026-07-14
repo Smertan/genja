@@ -14,6 +14,12 @@ class PluginManager:
     def plugin_names_and_groups(self) -> list[tuple[str, str]]: ...
 
 class OptionsConfig:
+    def __init__(
+        self,
+        hosts_file: str | None = None,
+        groups_file: str | None = None,
+        defaults_file: str | None = None,
+    ) -> None: ...
     @property
     def hosts_file(self) -> str | None: ...
     @property
@@ -22,10 +28,18 @@ class OptionsConfig:
     def defaults_file(self) -> str | None: ...
 
 class CoreConfig:
+    def __init__(self, raise_on_error: bool | None = None) -> None: ...
     @property
     def raise_on_error(self) -> bool: ...
 
 class InventoryConfig:
+    def __init__(
+        self,
+        plugin: str | None = None,
+        options: OptionsConfig | None = None,
+        transform_function: str | None = None,
+        transform_function_options: Any | None = None,
+    ) -> None: ...
     @property
     def plugin(self) -> str: ...
     @property
@@ -36,10 +50,20 @@ class InventoryConfig:
     def transform_function_options(self) -> Any | None: ...
 
 class SSHConfig:
+    def __init__(self, config_file: str | None = None) -> None: ...
+    def validate(self) -> None: ...
     @property
     def config_file(self) -> str | None: ...
 
 class RunnerConfig:
+    def __init__(
+        self,
+        plugin: str | None = None,
+        worker_count: int | None = None,
+        max_task_depth: int | None = None,
+        max_connection_attempts: int | None = None,
+        retry: RunnerRetryConfig | None = None,
+    ) -> None: ...
     @property
     def plugin(self) -> str: ...
     @property
@@ -52,6 +76,12 @@ class RunnerConfig:
     def retry(self) -> RunnerRetryConfig: ...
 
 class RunnerRetryConfig:
+    def __init__(
+        self,
+        allow: bool | None = None,
+        max_attempts: int | None = None,
+        delay_ms: int | None = None,
+    ) -> None: ...
     @property
     def allow(self) -> bool | None: ...
     @property
@@ -60,6 +90,15 @@ class RunnerRetryConfig:
     def delay_ms(self) -> int | None: ...
 
 class LoggingConfig:
+    def __init__(
+        self,
+        enabled: bool | None = None,
+        level: str | None = None,
+        log_file: str | None = None,
+        to_console: bool | None = None,
+        file_size: int | None = None,
+        max_file_count: int | None = None,
+    ) -> None: ...
     @property
     def enabled(self) -> bool: ...
     @property
@@ -74,9 +113,17 @@ class LoggingConfig:
     def max_file_count(self) -> int: ...
 
 class Settings:
-    def __init__(self) -> None: ...
+    def __init__(
+        self,
+        core: CoreConfig | None = None,
+        inventory: InventoryConfig | None = None,
+        ssh: SSHConfig | None = None,
+        runner: RunnerConfig | None = None,
+        logging: LoggingConfig | None = None,
+    ) -> None: ...
     @staticmethod
     def from_file(path: str) -> Settings: ...
+    def validate(self) -> None: ...
     @property
     def core(self) -> CoreConfig: ...
     @property
@@ -162,6 +209,11 @@ class Genja:
     def from_inventory(
         inventory: Any,
         settings: Settings | None = None,
+        plugin_manager: PluginManager | None = None,
+    ) -> Genja: ...
+    @staticmethod
+    def from_settings(
+        settings: Settings,
         plugin_manager: PluginManager | None = None,
     ) -> Genja: ...
     @staticmethod

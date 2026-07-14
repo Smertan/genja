@@ -1,6 +1,6 @@
 [project]
 name = "genja-py"
-version = "0.2.0"
+version = "0.3.0"
 description = "Python bindings for the Genja runtime"
 authors = [
     {name = "Andre Bowen-Brown", email = "contact@genja.co.uk"},
@@ -39,6 +39,7 @@ Issues = "https://github.com/Smertan/genja/issues"
 [tool.maturin]
 python-source = "python"
 features = ["pyo3/extension-module"]
+include = [{ path = "LICENSE", format = "sdist" }]
 
 [tool.pdm]
 distribution = false
@@ -67,6 +68,7 @@ dev = [
     "ty>=0.0.34",
     "ruff>=0.15.12",
     "pytest-asyncio>=1.4.0",
+    "twine>=6.2.0",
 ]
 
 [build-system]

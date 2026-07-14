@@ -1,6 +1,6 @@
 [package]
 name = "genja-core-python"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Andre Bowen-Brown <contact@genja.co.uk>"]
 description = "PyO3 extension module backing the genja-py Python bindings for the Genja runtime"
@@ -15,12 +15,13 @@ crate-type = ["cdylib"]
 
 [dependencies]
 async-trait = "0.1.89"
-genja = { version = "0.2.0", path = "../genja" }
-genja-core = { version = "0.2.0", path = "../genja-core" }
-genja-plugin-manager = { version = "0.2.0", path = "../genja-plugin-manager" }
+genja = { version = "0.3.0", path = "../genja" }
+genja-core = { version = "0.3.0", path = "../genja-core" }
+genja-plugin-manager = { version = "0.3.0", path = "../genja-plugin-manager" }
 humantime = "2.2.0"
 pyo3 = "0.28"
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+pyo3-log = "0.13"
 serde = "1.0.219"
 serde_json = "1.0.145"
 toml = "0.9.8"

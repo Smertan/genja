@@ -29,12 +29,23 @@ use genja_core::Settings;
 let settings = Settings::from_file("config.yaml")?;
 ```
 
-Build a `Genja` instance with inventory + settings:
+Build a `Genja` instance from settings and load inventory from
+`settings.inventory`:
 
 ```rust
 use genja::Genja;
 use genja_core::Settings;
-use genja_core::inventory::{Inventory, Hosts, Host, BaseBuilderHost};
+
+let genja = Genja::from_settings(Settings::from_file("config.yaml")?)?;
+```
+
+When you already have host data in memory, pass it explicitly and use settings
+only for runtime options:
+
+```rust
+use genja::Genja;
+use genja_core::Settings;
+use genja_core::inventory::{BaseBuilderHost, Host, Hosts, Inventory};
 
 let mut hosts = Hosts::new();
 hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
@@ -415,6 +426,7 @@ Configuration is loaded from two sources in this order:
 Behavior rules:
 
 - If a config field is explicitly provided and is invalid, deserialization fails with an error.
+- Unknown fields in typed settings sections are rejected. Correct misspellings, remove unused keys, or move plugin-specific values into explicit option maps such as `runner.options`.
 - If a config field is missing, a default value is used.
 - For defaults that read environment variables, invalid env values trigger a warning and the default fallback is used.
 - Environment variables do not override explicitly provided config values.

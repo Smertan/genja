@@ -11,7 +11,45 @@ Example files:
 
 ## Load Settings
 
+### From A Settings File
+
 Supported settings file extensions are `.json`, `.yaml`, and `.yml`.
+Settings files are strict: unknown top-level sections and unknown fields inside
+typed settings sections fail loading instead of being ignored. Correct
+misspelled keys or remove unused keys when `Settings::from_file(...)` reports an
+unknown field. Plugin-specific free-form values remain supported in explicit
+option maps such as `runner.options` and `inventory.transform_function_options`.
+
+For example, this YAML contains a misspelled runner key:
+
+```yaml
+runner:
+  worker_counts: 10
+```
+
+The same mistake in JSON also fails:
+
+```json
+{
+  "runner": {
+    "worker_counts": 10
+  }
+}
+```
+
+Genja reports the section, unknown field, expected fields, and a suggestion when
+there is a close match:
+
+```text
+unknown settings field
+  section: `runner`
+  field: `worker_counts`
+  expected fields: `plugin`, `options`, `worker_count`, `max_task_depth`, `max_connection_attempts`, `retry`
+  suggestion: did you mean `worker_count`?
+```
+
+Change the key to `worker_count`, remove unused keys, or move plugin-specific
+values into a supported free-form object such as `runner.options`.
 
 === ":fontawesome-brands-rust: Rust"
 
@@ -38,6 +76,87 @@ Supported settings file extensions are `.json`, `.yaml`, and `.yml`.
     print(f"Runner plugin: {settings.runner.plugin}")
     print(f"Log level: {settings.logging.level}")
     ```
+
+### From Programmatic Settings
+
+Code can also construct settings directly. Omitted fields keep the same defaults
+used by file-loaded settings. Construction itself does not perform filesystem
+validation, but runtime creation validates supplied settings before building the
+runtime.
+
+Use `Genja::from_settings(...)` or `Genja.from_settings(...)` when the runtime
+should load inventory from `settings.inventory`:
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::Genja;
+    use genja_core::Settings;
+    use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig};
+
+    let settings = Settings::builder()
+        .inventory(
+            InventoryConfig::builder()
+                .options(
+                    OptionsConfig::builder()
+                        .hosts_file("./inventory/hosts.yaml")
+                        .build(),
+                )
+                .build(),
+        )
+        .runner(RunnerConfig::builder().plugin("serial").build())
+        .build();
+
+    let runtime = Genja::from_settings(settings)?;
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja
+
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(
+            options=genja.OptionsConfig(
+                hosts_file="./inventory/hosts.yaml",
+            ),
+        ),
+        runner=genja.RunnerConfig(plugin="serial"),
+    )
+
+    runtime = genja.Genja.from_settings(settings)
+    ```
+
+### With Explicit Inventory
+
+When hosts or a full inventory are supplied explicitly, `from_hosts(...)` and
+`from_inventory(...)` continue to use that explicit inventory instead of loading
+from `settings.inventory`:
+
+```python
+import genja
+
+settings = genja.Settings(
+    runner=genja.RunnerConfig(
+        plugin="serial",
+        retry=genja.RunnerRetryConfig(
+            allow=True,
+            max_attempts=3,
+            delay_ms=250,
+        ),
+    ),
+)
+
+runtime = genja.Genja.from_hosts(hosts, settings=settings)
+```
+
+### Validation Only
+
+To validate programmatic settings explicitly before runtime construction, call:
+
+```python
+settings.validate()
+```
 
 ## Complete Example
 
@@ -107,6 +226,7 @@ These top-level sections are supported:
 | `logging` | object | `LoggingConfig::default()` |
 
 Top-level sections are optional. Nested fields have the defaults listed below.
+Unknown top-level sections are rejected.
 Current implementation note: if the `inventory` section is present, include an
 `options` object; use `options: {}` when the selected inventory plugin does not
 need file paths.
@@ -161,6 +281,8 @@ The built-in `FileInventoryPlugin` reads these options:
 | `defaults_file` | string or null | `null` |
 
 Inventory files must be JSON (`.json`) or YAML (`.yaml`, `.yml`).
+Unknown fields inside `inventory.options` are rejected. Put arbitrary
+transform-specific values under `inventory.transform_function_options`.
 
 Hosts and groups files are maps keyed by name:
 
@@ -212,8 +334,11 @@ ssh:
 | `config_file` | string or null | `null` | none |
 
 When `config_file` is set, `Settings::from_file(...)` checks that the file
-exists, can be opened, and parses as strict OpenSSH-style config. If the field
-is omitted or `null`, SSH config validation is skipped.
+exists, can be opened, and parses as strict OpenSSH-style config. Programmatic
+settings can be checked with `Settings::validate()` in Rust, `settings.validate()`
+in Python, or `settings.ssh.validate()` in Python for the SSH section only.
+Python runtime creation also validates supplied settings before building the
+runtime. If the field is omitted or `null`, SSH config validation is skipped.
 
 ## Runner
 
@@ -242,6 +367,10 @@ runner:
 | `retry.delay_ms` | number | `0` | none |
 
 Common `plugin` values are `threaded` and `serial`.
+
+`runner.options` is a free-form object for runner plugin-specific settings.
+Unknown fields inside typed runner settings, including `runner.retry`, are
+rejected.
 
 `worker_count` is used by runners that support fixed concurrency. The built-in
 `threaded` runner uses it as the maximum number of in-flight host executions.
@@ -285,9 +414,11 @@ logging:
 | `file_size` | number | `10485760` | none |
 | `max_file_count` | number | `10` | none |
 
-Genja parses the `logging` section but does not initialize global logging
-automatically. Applications own logger setup because logging is process-wide in
-Rust and application-specific in Python.
+Genja parses the `logging` section but does not install output handlers,
+formats, colors, or log rotation automatically. Rust applications own global
+logger setup. Python applications receive Rust-side Genja records through
+Python's standard `logging` system and should configure Python handlers and
+levels before running tasks.
 
 A typical application startup flow is:
 
@@ -300,7 +431,9 @@ Because settings must be loaded before `settings.logging()` is available, logs
 emitted during settings loading may occur before a logger is initialized. Genja
 keeps normal default fallbacks silent for this reason. Invalid config file values
 fail settings loading. Invalid environment variable values may fall back to
-defaults and emit a warning only if a logger has already been initialized.
+defaults and emit a warning only if logging has already been initialized. In
+Python, configure logging before loading settings if you need to capture
+warnings emitted during settings loading.
 
 ## Environment Variables
 

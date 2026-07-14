@@ -262,11 +262,15 @@ separate cross-platform compatibility workflow runs on pull requests into
 
 Release publishing is separate from CI. Rust crates are published only from
 `rs-vX.Y.Z` tags on commits reachable from `main`, and the release workflow
-publishes the crates in dependency order after validating crate versions and
-internal dependency metadata. Python package releases use matching `py-vX.Y.Z`
-tags, validate `genja-core-python/pyproject.toml`, build wheels plus a source
-distribution, install and test each built wheel, and publish to PyPI with
-trusted publishing.
+publishes the publishable Rust crates in dependency order after validating crate
+versions and internal dependency metadata. Genja currently uses a unified Rust
+release train: when preparing `rs-vX.Y.Z`, bump `genja`, `genja-core`,
+`genja-core-derive`, and `genja-plugin-manager` to `X.Y.Z`, even if one crate
+only changed because the release train moved. Keep internal path dependency
+version requirements aligned to the dependency crate's released version. Python
+package releases use matching `py-vX.Y.Z` tags, validate
+`genja-core-python/pyproject.toml`, build wheels plus a source distribution,
+install and test each built wheel, and publish to PyPI with trusted publishing.
 
 ## Release Flow
 

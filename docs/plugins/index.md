@@ -130,8 +130,9 @@ plugin with the same name panics. Python registration returns an error for
 invalid plugin identity and should be treated as setup-time validation.
 
 In Python, `PluginManager` is consumed when it is passed into
-`Genja.builder(...)`, `Genja.from_hosts(...)`, or `Genja.from_settings_file(...)`.
-Do not reuse that manager afterward; create a new manager for another runtime.
+`Genja.builder(...)`, `Genja.from_hosts(...)`, `Genja.from_settings(...)`, or
+`Genja.from_settings_file(...)`. Do not reuse that manager afterward; create a
+new manager for another runtime.
 
 Inspect registered plugins during setup:
 

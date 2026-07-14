@@ -34,11 +34,31 @@ Repository-specific instructions for AI coding agents working in this workspace.
 
 ## Testing
 
+### Workspace Rust Tests
+
+- When running the workspace Rust test suite, exclude `genja-core-python` because it requires the Python-backed test environment.
+- Use:
+  - `cargo test --workspace --exclude genja-core-python`
+
+### Lint And Type Checks
+
+- Run Rust formatting and clippy checks from the workspace root.
+- Use:
+  - `cargo fmt --all --check`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+- Full workspace clippy may include `genja-core-python`; it does not need the `genja-core-python` test exclusion.
+- For Python linting and type checks, run from the `genja-core-python` directory.
+- Use:
+  - `pdm run lint`
+  - `pdm run typecheck`
+
 ### Python Rust-Backed Tests
 
-- For `genja-core-python`, run Rust-backed tests from the `genja-core-python` directory.
-- Use:
+- For `genja-core-python`, run Python and Rust-backed tests from the `genja-core-python` directory.
+- Ask the user to run:
+  - `pdm run test`
   - `pdm run test-rust`
+- Do not run `pdm run test` or `pdm run test-rust` from the agent harness; they can fail or hang there.
 - Use `pdm run test-rust` instead of invoking `cargo test -p genja-core-python` directly. The PDM wrapper runs Cargo through the project Python environment, sets the correct `PYO3_PYTHON` interpreter, and ensures PyO3-backed tests can access the installed Python packages.
 - Avoid launching multiple `genja-core-python` Rust-backed test commands concurrently from separate tool calls. Each run is already single-threaded internally, and concurrent invocations may hang or fail to return output reliably in this workspace.
 - Prefer repo-documented test commands over ad hoc commands.
@@ -53,6 +73,17 @@ Repository-specific instructions for AI coding agents working in this workspace.
   - the Rust toolchain changed and the emitted diagnostics legitimately drifted.
 - If trybuild fixtures changed, mention in the commit or PR that the snapshot refresh was due to diagnostic output drift or intentional diagnostic changes.
 - When adding new trybuild compile-fail fixtures, minimize unrelated warnings in the test case so snapshots are less brittle across toolchain updates.
+
+## Release Versioning
+
+- Rust releases use a unified release train for publishable Rust crates.
+- When preparing `rs-vX.Y.Z`, bump all publishable Rust crates to `X.Y.Z` and keep their internal path dependency version requirements aligned:
+  - `genja`
+  - `genja-core`
+  - `genja-core-derive`
+  - `genja-plugin-manager`
+- Do not leave an unchanged publishable Rust crate on the previous version during a Rust release.
+- Python package releases use the matching `py-vX.Y.Z` tag and bump `genja-py` / `genja-core-python` to `X.Y.Z`.
 
 ## Commit Conventions
 

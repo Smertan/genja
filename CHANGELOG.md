@@ -4,6 +4,30 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+## 0.3.0 - 2026-07-14
+
+Released packages:
+
+- Rust crates: `genja`, `genja-core`, `genja-plugin-manager`
+- Python package: `genja-py`
+
+### Added
+
+- Added Rust `Genja::from_settings(...)` and Python `Genja.from_settings(...)` constructors that validate programmatic settings and load inventory from `settings.inventory`. Refs: #81
+- Exposed the current 1-based task attempt through Rust and Python task runtime contexts. Refs: #73
+- Forwarded Rust-side runtime logs from the Python extension into Python's standard `logging` system, allowing applications and pytest `caplog` to capture Genja logs. Refs: #74
+- Added Python constructors for `Settings` and nested settings config classes so applications can build runtime settings without a settings file. Refs: #68
+- Added explicit settings validation with Rust `Settings::validate()` and Python `Settings.validate()` / `SSHConfig.validate()`. Refs: #68
+
+### Changed
+
+- **Breaking:** Settings files now reject unknown top-level sections and unknown fields inside typed settings sections instead of silently ignoring them. Remove unused keys, correct misspelled keys, or move plugin-specific values into explicit option maps such as `runner.options` or `inventory.transform_function_options`. Refs: #76
+- Python runtime construction now validates supplied programmatic settings before building a runtime. Refs: #68
+
+### Fixed
+
+- Fixed the Python source distribution so the declared `LICENSE` file is included at the package root. Refs: #72
+
 ## 0.2.0 - 2026-07-06
 
 Released packages:

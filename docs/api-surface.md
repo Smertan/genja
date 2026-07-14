@@ -10,7 +10,7 @@ lower-level crates when building extensions.
 
     ```toml
     [dependencies]
-    genja = "0.2.0"
+    genja = "0.3.0"
     ```
 
     Use the `genja` crate for applications. It provides the runtime,

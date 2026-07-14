@@ -11,7 +11,7 @@ results, connection state, or processor behavior.
 ## Features
 
 - Inventory types for hosts, groups, host variables, and connection metadata
-- Settings models and file loading for JSON, YAML, and TOML configuration
+- Settings models and file loading for JSON and YAML configuration
 - Task traits, task metadata, task runtime context, and structured task results
   with semantic outcomes plus host execution metadata
 - Connection state and task connection resolver traits for runtime integrations
@@ -22,7 +22,7 @@ results, connection state, or processor behavior.
 
 ```toml
 [dependencies]
-genja-core = "0.2.0"
+genja-core = "0.3.0"
 ```
 
 ## Example
@@ -35,6 +35,10 @@ use genja_core::Settings;
 let settings = Settings::from_file("config.yaml")?;
 # Ok::<(), genja_core::SettingsError>(())
 ```
+
+Settings files are strict: unknown fields in typed settings sections fail
+loading instead of being ignored. Use explicit option maps such as
+`runner.options` for plugin-specific values.
 
 Build inventory data in code:
 

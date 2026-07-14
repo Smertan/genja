@@ -120,6 +120,7 @@ impl Task for PythonBackedTask {
             host,
             context.current_depth(),
             Some(context.max_depth()),
+            context.current_attempt(),
             python_connection,
         )
     }
@@ -139,6 +140,7 @@ impl Task for PythonBackedTask {
             host,
             context.current_depth(),
             Some(context.max_depth()),
+            context.current_attempt(),
             python_connection,
         )
         .await
@@ -162,6 +164,7 @@ impl PythonBackedTask {
         host: &Host,
         current_depth: usize,
         max_depth: Option<usize>,
+        current_attempt: usize,
         connection: Option<Py<PyAny>>,
     ) -> Result<HostTaskResult, TaskError> {
         let result = Python::attach(|py| {
@@ -179,9 +182,14 @@ impl PythonBackedTask {
                 host_to_py_dict(py, host).map_err(python_task_error)?,
             )
             .map_err(python_task_error)?;
-            let context_payload =
-                build_python_task_runtime_context(py, current_depth, max_depth, connection)
-                    .map_err(python_task_error)?;
+            let context_payload = build_python_task_runtime_context(
+                py,
+                current_depth,
+                max_depth,
+                current_attempt,
+                connection,
+            )
+            .map_err(python_task_error)?;
             let result = instance
                 .call_method1("start", (task_payload, host_payload, context_payload))
                 .map_err(python_task_error)?;
@@ -207,6 +215,7 @@ impl PythonBackedTask {
         host: &Host,
         current_depth: usize,
         max_depth: Option<usize>,
+        current_attempt: usize,
         connection: Option<Py<PyAny>>,
     ) -> Result<HostTaskResult, TaskError> {
         let result = Python::attach(|py| {
@@ -224,9 +233,14 @@ impl PythonBackedTask {
                 host_to_py_dict(py, host).map_err(python_task_error)?,
             )
             .map_err(python_task_error)?;
-            let context_payload =
-                build_python_task_runtime_context(py, current_depth, max_depth, connection)
-                    .map_err(python_task_error)?;
+            let context_payload = build_python_task_runtime_context(
+                py,
+                current_depth,
+                max_depth,
+                current_attempt,
+                connection,
+            )
+            .map_err(python_task_error)?;
 
             instance
                 .call_method1("start_async", (task_payload, host_payload, context_payload))
@@ -1241,10 +1255,12 @@ fn build_python_task_runtime_context(
     py: Python<'_>,
     current_depth: usize,
     max_depth: Option<usize>,
+    current_attempt: usize,
     connection: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let context = PyDict::new(py);
     context.set_item("current_depth", current_depth)?;
+    context.set_item("current_attempt", current_attempt)?;
     if let Some(max_depth) = max_depth {
         context.set_item("max_depth", max_depth)?;
     } else {
@@ -1382,7 +1398,7 @@ impl Task for RuntimeTaskWrapper {
     }
 }
 
-fn py_any_to_json_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+pub(crate) fn py_any_to_json_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     normalize_python_json_payload(obj, "invalid json payload")
 }
 
