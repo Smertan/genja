@@ -23,7 +23,7 @@ The Rust runtime crates in this release currently use:
 ```text
 genja = 0.3.0
 genja-core = 0.3.0
-genja-core-derive = 0.2.0
+genja-core-derive = 0.3.0
 genja-plugin-manager = 0.3.0
 ```
 

@@ -74,6 +74,17 @@ Repository-specific instructions for AI coding agents working in this workspace.
 - If trybuild fixtures changed, mention in the commit or PR that the snapshot refresh was due to diagnostic output drift or intentional diagnostic changes.
 - When adding new trybuild compile-fail fixtures, minimize unrelated warnings in the test case so snapshots are less brittle across toolchain updates.
 
+## Release Versioning
+
+- Rust releases use a unified release train for publishable Rust crates.
+- When preparing `rs-vX.Y.Z`, bump all publishable Rust crates to `X.Y.Z` and keep their internal path dependency version requirements aligned:
+  - `genja`
+  - `genja-core`
+  - `genja-core-derive`
+  - `genja-plugin-manager`
+- Do not leave an unchanged publishable Rust crate on the previous version during a Rust release.
+- Python package releases use the matching `py-vX.Y.Z` tag and bump `genja-py` / `genja-core-python` to `X.Y.Z`.
+
 ## Commit Conventions
 
 ### Format

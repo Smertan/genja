@@ -14,7 +14,7 @@ categories = ["development-tools", "asynchronous", "network-programming"]
 [dependencies]
 async-trait = "0.1.89"
 genja-core = { version = "0.3.0", path = "../genja-core" }
-genja-core-derive = { version = "0.2.0", path = "../genja-core-derive" }
+genja-core-derive = { version = "0.3.0", path = "../genja-core-derive" }
 genja-plugin-manager = { version = "0.3.0", path = "../genja-plugin-manager" }
 log = "0.4.27"
 regex = "1.12.2"
