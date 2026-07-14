@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "genja"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "genja-core",
@@ -432,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "genja-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "genja-core-python"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "genja",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "genja-plugin-manager"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "genja-core",

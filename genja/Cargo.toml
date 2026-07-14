@@ -1,6 +1,6 @@
 [package]
 name = "genja"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Andre Bowen-Brown <contact@genja.co.uk>"]
 description = "A plugin-based Rust framework for executing tasks across multiple hosts with inventory filtering, hierarchical task execution, dynamic plugin loading, and result tracking"
@@ -13,9 +13,9 @@ categories = ["development-tools", "asynchronous", "network-programming"]
 
 [dependencies]
 async-trait = "0.1.89"
-genja-core = { version = "0.2.0", path = "../genja-core" }
+genja-core = { version = "0.3.0", path = "../genja-core" }
 genja-core-derive = { version = "0.2.0", path = "../genja-core-derive" }
-genja-plugin-manager = { version = "0.2.0", path = "../genja-plugin-manager" }
+genja-plugin-manager = { version = "0.3.0", path = "../genja-plugin-manager" }
 log = "0.4.27"
 regex = "1.12.2"
 serde_json = "1.0.142"

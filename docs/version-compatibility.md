@@ -18,24 +18,25 @@ See [API Surface](api-surface.md) for which package to depend on.
 
 ## Current Versioning
 
-The Rust crates in this repository currently share the same version:
+The Rust runtime crates in this release currently use:
 
 ```text
-genja = 0.2.0
-genja-core = 0.2.0
+genja = 0.3.0
+genja-core = 0.3.0
 genja-core-derive = 0.2.0
-genja-plugin-manager = 0.2.0
+genja-plugin-manager = 0.3.0
 ```
 
 The Python distribution is also currently versioned as:
 
 ```text
-genja-py = 0.2.0
+genja-py = 0.3.0
 ```
 
 Until a more formal compatibility policy is published, treat matching minor
-versions as the supported combination. For example, use `genja-py 0.1.x` with
-the Rust crates from the `0.1.x` line.
+versions of `genja`, `genja-core`, `genja-plugin-manager`, and `genja-py` as
+the supported combination. For example, use `genja-py 0.1.x` with the Rust
+runtime crates from the `0.1.x` line.
 
 ## Rust Compatibility
 
@@ -43,7 +44,7 @@ Rust applications should usually depend on `genja`:
 
 ```toml
 [dependencies]
-genja = "0.2.0"
+genja = "0.3.0"
 ```
 
 The `genja` crate depends on and re-exports core pieces from the workspace, so
@@ -55,8 +56,8 @@ standalone plugin crates:
 
 ```toml
 [dependencies]
-genja-plugin-manager = "0.2.0"
-genja-core = "0.2.0"
+genja-plugin-manager = "0.3.0"
+genja-core = "0.3.0"
 ```
 
 When depending on multiple Genja crates directly, keep their versions aligned.
@@ -88,7 +89,7 @@ state. For release-specific behavior, use the docs or source for the matching
 release tag, such as:
 
 ```bash
-git checkout rs-v0.2.0
+git checkout rs-v0.3.0
 ```
 
 When running repository examples for a specific release, check out the matching

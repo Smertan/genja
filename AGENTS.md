@@ -34,11 +34,31 @@ Repository-specific instructions for AI coding agents working in this workspace.
 
 ## Testing
 
+### Workspace Rust Tests
+
+- When running the workspace Rust test suite, exclude `genja-core-python` because it requires the Python-backed test environment.
+- Use:
+  - `cargo test --workspace --exclude genja-core-python`
+
+### Lint And Type Checks
+
+- Run Rust formatting and clippy checks from the workspace root.
+- Use:
+  - `cargo fmt --all --check`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+- Full workspace clippy may include `genja-core-python`; it does not need the `genja-core-python` test exclusion.
+- For Python linting and type checks, run from the `genja-core-python` directory.
+- Use:
+  - `pdm run lint`
+  - `pdm run typecheck`
+
 ### Python Rust-Backed Tests
 
-- For `genja-core-python`, run Rust-backed tests from the `genja-core-python` directory.
-- Use:
+- For `genja-core-python`, run Python and Rust-backed tests from the `genja-core-python` directory.
+- Ask the user to run:
+  - `pdm run test`
   - `pdm run test-rust`
+- Do not run `pdm run test` or `pdm run test-rust` from the agent harness; they can fail or hang there.
 - Use `pdm run test-rust` instead of invoking `cargo test -p genja-core-python` directly. The PDM wrapper runs Cargo through the project Python environment, sets the correct `PYO3_PYTHON` interpreter, and ensures PyO3-backed tests can access the installed Python packages.
 - Avoid launching multiple `genja-core-python` Rust-backed test commands concurrently from separate tool calls. Each run is already single-threaded internally, and concurrent invocations may hang or fail to return output reliably in this workspace.
 - Prefer repo-documented test commands over ad hoc commands.

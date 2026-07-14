@@ -22,7 +22,7 @@ results, connection state, or processor behavior.
 
 ```toml
 [dependencies]
-genja-core = "0.2.0"
+genja-core = "0.3.0"
 ```
 
 ## Example

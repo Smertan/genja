@@ -4,6 +4,13 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+## 0.3.0 - 2026-07-14
+
+Released packages:
+
+- Rust crates: `genja`, `genja-core`, `genja-plugin-manager`
+- Python package: `genja-py`
+
 ### Added
 
 - Added Rust `Genja::from_settings(...)` and Python `Genja.from_settings(...)` constructors that validate programmatic settings and load inventory from `settings.inventory`. Refs: #81

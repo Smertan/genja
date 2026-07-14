@@ -1,6 +1,6 @@
 [package]
 name = "genja-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Andre Bowen-Brown <contact@genja.co.uk>"]
 description = "Core Genja primitives for task execution, inventory modeling, settings loading, connection state, and structured task results"
