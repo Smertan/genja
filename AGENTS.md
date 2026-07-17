@@ -110,3 +110,11 @@ Repository-specific instructions for AI coding agents working in this workspace.
 - Update module-level documentation when a change alters the module's public concepts, vocabulary, behavior, or examples.
 - Keep rustdoc and doc examples aligned with the current public API during the same branch as the code change.
 - For Python public API changes, update affected module docstrings, class/function docstrings, type annotations, exported symbols, and stub/typecheck fixtures when applicable.
+
+### Python Typing And Stubs
+
+- For Rust/PyO3-exposed Python APIs, keep the corresponding `.pyi` stubs aligned with the exported runtime API.
+- Public user-facing classes, functions, methods, and properties in `.pyi` stubs should include useful docstrings.
+- For pure Python modules, prefer inline type annotations and docstrings in the `.py` source file instead of creating a new `.pyi` file.
+- Do not create new `.pyi` files for pure Python modules unless there is a specific reason to separate implementation from typing.
+- Keep `genja/__init__.pyi` aligned with public re-exports from `genja/__init__.py`.
