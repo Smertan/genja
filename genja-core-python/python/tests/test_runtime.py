@@ -455,7 +455,8 @@ def test_genja_filter_hosts_chains_with_existing_filters_and_truthiness():
     })
 
     filtered = (
-        runtime.filter_by_key("platform")
+        runtime
+        .filter_by_key("platform")
         .filter_by_key_value("platform", "^ios$")
         .filter_hosts(lambda host: host["data"]["role"] == "edge")
     )

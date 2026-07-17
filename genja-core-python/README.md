@@ -52,12 +52,10 @@ class BackupTask:
         )
 
 
-genja = genja.Genja.from_hosts(
-    {
-        "router1": {"hostname": "10.0.0.1", "platform": "ios"},
-        "router2": {"hostname": "10.0.0.2", "platform": "nxos"},
-    }
-).with_runner("serial")
+genja = genja.Genja.from_hosts({
+    "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+    "router2": {"hostname": "10.0.0.2", "platform": "nxos"},
+}).with_runner("serial")
 
 results = genja.run_task(BackupTask)
 print(results.to_dict())
@@ -105,11 +103,9 @@ class BackupTaskAsync:
 
 
 async def main() -> None:
-    runtime = genja.Genja.from_hosts(
-        {
-            "router1": {"hostname": "10.0.0.1", "platform": "ios"},
-        }
-    ).with_runner("serial")
+    runtime = genja.Genja.from_hosts({
+        "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+    }).with_runner("serial")
 
     results = await runtime.run_task_async(BackupTaskAsync)
     print(results.to_dict())
