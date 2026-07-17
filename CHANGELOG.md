@@ -4,6 +4,10 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
+
 ## 0.3.0 - 2026-07-14
 
 Released packages:

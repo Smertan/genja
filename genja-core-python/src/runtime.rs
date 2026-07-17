@@ -121,6 +121,11 @@
 //! core_routers = runtime.filter_by_key_value("groups", "core")
 //! ios_routers = runtime.filter_by_key_value("platform", "^ios")
 //!
+//! # Filter with a Python predicate over transformed host dictionaries
+//! lab_ios = runtime.filter_hosts(
+//!     lambda host: host["platform"] == "ios" and host["data"]["site"] == "lab-a"
+//! )
+//!
 //! # Filters are chainable and immutable
 //! filtered = (runtime
 //!     .filter_by_key("platform")
@@ -385,10 +390,11 @@
 use genja::Genja as RuntimeGenja;
 use genja_core::inventory::{Defaults, Groups, Hosts, Inventory};
 use genja_core::{GenjaError, Settings};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 use serde::de::DeserializeOwned;
+use std::cell::{Cell, RefCell};
 use std::sync::Mutex;
 
 use crate::plugin_manager::{PyPluginManager, register_python_plugin_on_manager};
@@ -799,6 +805,90 @@ impl PyGenja {
                 ))
             })
             .collect()
+    }
+
+    /// Filters the runtime using a Python predicate over each selected host payload.
+    ///
+    /// This method creates a new runtime instance containing only hosts for which
+    /// `predicate(host)` returns a truthy value. The predicate receives the same transformed
+    /// host dictionary shape returned by [`PyGenja::iter_selected_hosts`]. Filtering is applied
+    /// to the current selection, so this method can be chained with `filter_by_key` and
+    /// `filter_by_key_value`. The original runtime instance remains unchanged.
+    ///
+    /// # Parameters
+    ///
+    /// * `predicate` - A Python callable that receives one host dictionary and returns a
+    ///   truthy value to keep the host or a falsy value to exclude it.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `PyResult<Self>` containing a new runtime instance with the filtered host
+    /// selection on success.
+    ///
+    /// # Errors
+    ///
+    /// This method will return an error if:
+    /// - `predicate` is not callable
+    /// - The inventory is not loaded or accessible
+    /// - A selected host payload cannot be converted to Python
+    /// - The predicate raises an exception or its return value cannot be evaluated as truthy
+    fn filter_hosts(&self, py: Python<'_>, predicate: Bound<'_, PyAny>) -> PyResult<Self> {
+        if !predicate.is_callable() {
+            return Err(PyTypeError::new_err(
+                "filter_hosts predicate must be callable",
+            ));
+        }
+
+        let selected_host_ids = self.host_ids();
+        let current_index = Cell::new(0usize);
+        let predicate_error: RefCell<Option<PyErr>> = RefCell::new(None);
+
+        let inner = self.inner.filter_hosts(|host| {
+            let index = current_index.get();
+            current_index.set(index.saturating_add(1));
+
+            if predicate_error.borrow().is_some() {
+                return false;
+            }
+
+            let host_id = selected_host_ids
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or("<unknown>");
+
+            let host_payload =
+                match entity_to_py_dict(py, host, "failed to convert selected host payload") {
+                    Ok(host_payload) => host_payload,
+                    Err(err) => {
+                        *predicate_error.borrow_mut() = Some(PyValueError::new_err(format!(
+                            "filter_hosts failed for host {host_id}: {err}"
+                        )));
+                        return false;
+                    }
+                };
+
+            match predicate
+                .call1((host_payload.bind(py),))
+                .and_then(|result| result.is_truthy())
+            {
+                Ok(keep) => keep,
+                Err(err) => {
+                    *predicate_error.borrow_mut() = Some(PyValueError::new_err(format!(
+                        "filter_hosts predicate failed for host {host_id}: {err}"
+                    )));
+                    false
+                }
+            }
+        });
+
+        if let Some(err) = predicate_error.into_inner() {
+            return Err(err);
+        }
+
+        let inner = inner.map_err(|err| {
+            PyValueError::new_err(format!("failed to filter hosts with predicate: {err}"))
+        })?;
+        Ok(Self { inner })
     }
 
     /// Filters the runtime to include only hosts that have a specific key in their payload.

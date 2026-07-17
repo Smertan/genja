@@ -1,6 +1,7 @@
 import asyncio
 
 import genja
+import pytest
 from tests.fixtures.inventory_plugins import StaticInventoryPlugin
 from genja.inventory import Defaults, Group, Host as InventoryHost, Inventory
 from genja.task import (
@@ -390,6 +391,101 @@ def test_genja_filter_accessors_and_execution_respect_selected_hosts():
     assert results.passed_hosts == ["router1"]
     assert filtered.inventory()["router2"]["hostname"] == "10.0.0.2"
     assert filtered.hosts_raw()["router1"]["platform"] == "ios"
+
+
+def test_genja_filter_hosts_accepts_simple_predicate_and_preserves_original():
+    runtime = genja.Genja.from_hosts({
+        "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+        "router2": {"hostname": "10.0.0.2", "platform": "nxos"},
+    })
+
+    filtered = runtime.filter_hosts(lambda host: host["platform"] == "ios")
+
+    assert filtered.host_ids() == ["router1"]
+    assert runtime.host_ids() == ["router1", "router2"]
+
+
+def test_genja_filter_hosts_supports_multi_field_and_nested_predicates():
+    runtime = genja.Genja.from_hosts({
+        "router1": {
+            "hostname": "10.0.0.1",
+            "platform": "ios",
+            "data": {"site": {"name": "lab-a"}, "priority": 10},
+        },
+        "router2": {
+            "hostname": "10.0.0.2",
+            "platform": "ios",
+            "data": {"site": {"name": "lab-b"}, "priority": 20},
+        },
+        "router3": {
+            "hostname": "10.0.0.3",
+            "platform": "nxos",
+            "data": {"site": {"name": "lab-a"}, "priority": 30},
+        },
+    })
+
+    filtered = runtime.filter_hosts(
+        lambda host: (
+            host["platform"] == "ios"
+            and host["data"]["site"]["name"] == "lab-b"
+            and host["data"]["priority"] >= 20
+        )
+    )
+
+    assert filtered.host_ids() == ["router2"]
+
+
+def test_genja_filter_hosts_chains_with_existing_filters_and_truthiness():
+    runtime = genja.Genja.from_hosts({
+        "router1": {
+            "hostname": "10.0.0.1",
+            "platform": "ios",
+            "data": {"role": "core"},
+        },
+        "router2": {
+            "hostname": "10.0.0.2",
+            "platform": "ios",
+            "data": {"role": "edge"},
+        },
+        "router3": {
+            "hostname": "10.0.0.3",
+            "platform": "nxos",
+            "data": {"role": "core"},
+        },
+    })
+
+    filtered = (
+        runtime
+        .filter_by_key("platform")
+        .filter_by_key_value("platform", "^ios$")
+        .filter_hosts(lambda host: host["data"]["role"] == "edge")
+    )
+
+    assert filtered.host_ids() == ["router2"]
+
+
+def test_genja_filter_hosts_rejects_non_callable_predicate():
+    runtime = genja.Genja.from_hosts({
+        "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+    })
+
+    with pytest.raises(TypeError, match="predicate must be callable"):
+        runtime.filter_hosts("not callable")
+
+
+def test_genja_filter_hosts_predicate_exceptions_include_host_context():
+    runtime = genja.Genja.from_hosts({
+        "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+        "router2": {"hostname": "10.0.0.2", "platform": "nxos"},
+    })
+
+    def predicate(host):
+        if host["platform"] == "nxos":
+            raise RuntimeError("unsupported platform")
+        return False
+
+    with pytest.raises(ValueError, match="router2.*unsupported platform"):
+        runtime.filter_hosts(predicate)
 
 
 def test_genja_runtime_hides_depth_from_python_task_context():
