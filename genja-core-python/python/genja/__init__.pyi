@@ -103,75 +103,161 @@ class TaskResults:
     def to_json(self, *, raw: bool = False, pretty: bool = False) -> str: ...
 
 class Genja:
+    """Genja runtime for loading inventory, filtering hosts, and running tasks."""
+
     @staticmethod
     def builder(
         hosts: dict[str, Any],
         settings: Settings | None = None,
         plugin_manager: PluginManager | None = None,
-    ) -> GenjaBuilder: ...
+    ) -> GenjaBuilder:
+        """Create a builder from hosts data plus optional settings and plugins."""
+        ...
+
     @staticmethod
     def from_hosts(
         hosts: dict[str, Any],
         settings: Settings | None = None,
         plugin_manager: PluginManager | None = None,
-    ) -> Genja: ...
+    ) -> Genja:
+        """Create a runtime directly from a mapping of host IDs to host payloads."""
+        ...
+
     @staticmethod
     def from_inventory(
         inventory: Any,
         settings: Settings | None = None,
         plugin_manager: PluginManager | None = None,
-    ) -> Genja: ...
+    ) -> Genja:
+        """Create a runtime from a full inventory structure."""
+        ...
+
     @staticmethod
     def from_settings(
         settings: Settings,
         plugin_manager: PluginManager | None = None,
-    ) -> Genja: ...
+    ) -> Genja:
+        """Validate settings, load configured inventory, and build a runtime."""
+        ...
+
     @staticmethod
     def from_settings_file(
         path: str,
         plugin_manager: PluginManager | None = None,
-    ) -> Genja: ...
-    def with_runner(self, runner: str) -> Genja: ...
-    def plugins_loaded(self) -> bool: ...
-    def inventory_loaded(self) -> bool: ...
-    def settings(self) -> Settings: ...
-    def host_count(self) -> int: ...
-    def host_ids(self) -> list[str]: ...
-    def iter_selected_hosts(self) -> list[tuple[str, dict[str, Any]]]: ...
-    def filter_hosts(self, predicate: Callable[[dict[str, Any]], Any]) -> Genja: ...
-    def filter_by_key(self, key: str) -> Genja: ...
-    def filter_by_key_value(self, key: str, value_pattern: str) -> Genja: ...
-    def inventory(self) -> dict[str, dict[str, Any]]: ...
-    def inventory_full(self) -> dict[str, Any]: ...
-    def inventory_raw(self) -> dict[str, Any]: ...
-    def iter_inventory_hosts(self) -> list[tuple[str, dict[str, Any]]]: ...
-    def hosts_raw(self) -> dict[str, dict[str, Any]]: ...
+    ) -> Genja:
+        """Load settings from a file, load inventory, and build a runtime."""
+        ...
+
+    def with_runner(self, runner: str) -> Genja:
+        """Return a new runtime configured to use the named runner plugin."""
+        ...
+
+    def plugins_loaded(self) -> bool:
+        """Return whether plugins are loaded for this runtime."""
+        ...
+
+    def inventory_loaded(self) -> bool:
+        """Return whether inventory is loaded for this runtime."""
+        ...
+
+    def settings(self) -> Settings:
+        """Return a copy of the runtime settings."""
+        ...
+
+    def host_count(self) -> int:
+        """Return the number of currently selected hosts."""
+        ...
+
+    def host_ids(self) -> list[str]:
+        """Return IDs for currently selected hosts."""
+        ...
+
+    def iter_selected_hosts(self) -> list[tuple[str, dict[str, Any]]]:
+        """Return selected host IDs paired with transformed host payloads."""
+        ...
+
+    def filter_hosts(self, predicate: Callable[[dict[str, Any]], Any]) -> Genja:
+        """Return a new runtime containing hosts kept by a Python predicate."""
+        ...
+
+    def filter_by_key(self, key: str) -> Genja:
+        """Return a new runtime containing hosts where a key or dot path exists."""
+        ...
+
+    def filter_by_key_value(self, key: str, value_pattern: str) -> Genja:
+        """Return a new runtime containing hosts where a value matches a regex."""
+        ...
+
+    def inventory(self) -> dict[str, dict[str, Any]]:
+        """Return transformed inventory hosts, ignoring the current host filter."""
+        ...
+
+    def inventory_full(self) -> dict[str, Any]:
+        """Return the full transformed inventory structure."""
+        ...
+
+    def inventory_raw(self) -> dict[str, Any]:
+        """Return the raw inventory structure before transforms."""
+        ...
+
+    def iter_inventory_hosts(self) -> list[tuple[str, dict[str, Any]]]:
+        """Return all transformed inventory host IDs and payloads."""
+        ...
+
+    def hosts_raw(self) -> dict[str, dict[str, Any]]:
+        """Return raw inventory hosts before transforms."""
+        ...
+
     def run_task(
         self,
         task_class: type[GenjaTaskProtocol],
         max_depth: int | None = None,
-    ) -> TaskResults: ...
+    ) -> TaskResults:
+        """Execute one decorated task class against currently selected hosts."""
+        ...
+
     def run_task_async(
         self,
         task_class: type[GenjaTaskProtocol],
         max_depth: int | None = None,
-    ) -> Awaitable[TaskResults]: ...
+    ) -> Awaitable[TaskResults]:
+        """Asynchronously execute one decorated task class against selected hosts."""
+        ...
+
     def run_tasks(
         self,
         tasks: Tasks,
         max_depth: int | None = None,
-    ) -> list[TaskResults]: ...
+    ) -> list[TaskResults]:
+        """Execute an ordered task collection against currently selected hosts."""
+        ...
+
     def run_tasks_async(
         self,
         tasks: Tasks,
         max_depth: int | None = None,
-    ) -> Awaitable[list[TaskResults]]: ...
+    ) -> Awaitable[list[TaskResults]]:
+        """Asynchronously execute an ordered task collection against selected hosts."""
+        ...
 
 class GenjaBuilder:
-    def with_plugin(self, plugin: Any) -> GenjaBuilder: ...
-    def with_plugin_manager(self, plugin_manager: PluginManager) -> GenjaBuilder: ...
-    def with_runner(self, runner: str) -> GenjaBuilder: ...
-    def build(self) -> Genja: ...
+    """Builder for constructing a Genja runtime."""
+
+    def with_plugin(self, plugin: Any) -> GenjaBuilder:
+        """Return a new builder with a Python plugin registered."""
+        ...
+
+    def with_plugin_manager(self, plugin_manager: PluginManager) -> GenjaBuilder:
+        """Return a new builder using the provided plugin manager."""
+        ...
+
+    def with_runner(self, runner: str) -> GenjaBuilder:
+        """Return a new builder configured with the named runner plugin."""
+        ...
+
+    def build(self) -> Genja:
+        """Build and return the configured Genja runtime."""
+        ...
 
 __all__ = [
     "HostTaskResult",
