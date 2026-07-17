@@ -566,6 +566,19 @@ Use `filter_by_key_value` to match values with a regular expression:
     core_site = genja.filter_by_key_value("data.site.name", "^core$")
     ```
 
+Use Python `filter_hosts` when host selection is easier to express as code:
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    lab_ios = genja.filter_hosts(
+        lambda host: (
+            host["platform"] == "ios"
+            and host["data"]["site"]["name"] == "lab-a"
+        )
+    )
+    ```
+
 Plain keys can match nested objects recursively. Dot paths such as
 `data.site.name` match from the host root or a nested object.
 
