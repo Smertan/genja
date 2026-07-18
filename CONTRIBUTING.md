@@ -17,6 +17,7 @@ cd genja-core-python
 pdm install -d
 pdm run lint
 pdm run typecheck
+pdm run check-stubs
 pdm run test
 pdm run test-rust
 ```

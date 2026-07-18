@@ -313,3 +313,12 @@ Run Ruff:
 ```bash
 pdm run lint
 ```
+
+Check Python API stubs and PyO3 documentation coverage:
+
+```bash
+pdm run check-stubs
+```
+
+Run this when changing Rust/PyO3-exposed Python APIs, `.pyi` stubs, Python API
+docstrings, or top-level Python re-exports.

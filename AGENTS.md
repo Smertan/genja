@@ -51,6 +51,8 @@ Repository-specific instructions for AI coding agents working in this workspace.
 - Use:
   - `pdm run lint`
   - `pdm run typecheck`
+  - `pdm run check-stubs`
+- Run `pdm run check-stubs` when changing Rust/PyO3-exposed Python APIs, `.pyi` stubs, Python API docstrings, or top-level Python re-exports.
 
 ### Python Rust-Backed Tests
 

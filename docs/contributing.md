@@ -154,6 +154,17 @@ Run type checks for the Python examples and tests:
 pdm run typecheck
 ```
 
+Check Python API stub and PyO3 documentation coverage:
+
+```bash
+pdm run check-stubs
+```
+
+Run this check when changing Rust/PyO3-exposed Python APIs, `.pyi` stubs,
+Python API docstrings, or top-level Python re-exports. It verifies that the
+hardened stubs have public docstrings, duplicated top-level stubs stay aligned
+with `genja.pyi`, and documented PyO3 settings bindings do not regress.
+
 Run Python lint and formatting checks:
 
 ```bash
