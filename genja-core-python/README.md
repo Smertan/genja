@@ -322,3 +322,8 @@ pdm run check-stubs
 
 Run this when changing Rust/PyO3-exposed Python APIs, `.pyi` stubs, Python API
 docstrings, or top-level Python re-exports.
+
+The check is scoped to documented API surfaces. When bringing another stub file
+up to standard, add it to `STUBS_REQUIRING_DOCSTRINGS` in
+`scripts/check_python_api_docs.py`; add duplicated top-level re-export classes to
+`DUPLICATED_TOP_LEVEL_CLASSES` so `genja.pyi` and `__init__.pyi` stay aligned.

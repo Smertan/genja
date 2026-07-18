@@ -1,3 +1,22 @@
+"""Check documented Python API stubs and selected Rust/PyO3 bindings.
+
+This script enforces documentation coverage for Python API surfaces that have
+already been brought up to the repository's stub/docstring standard. It is
+intentionally scoped: add files/classes to the constants below as more stubs and
+Rust/PyO3 binding modules are audited.
+
+The checks currently cover:
+
+- public class and method docstrings in selected `.pyi` files;
+- structural parity for Rust-backed classes duplicated between `genja.pyi` and
+  the top-level `__init__.pyi` re-export surface;
+- Rust doc comments on the documented PyO3 settings bindings.
+
+Run locally with:
+
+    pdm run check-stubs
+"""
+
 from __future__ import annotations
 
 import ast
