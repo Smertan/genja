@@ -50,6 +50,7 @@ test-rust = { cmd = "python scripts/test_rust.py" }
 test-rust-debug = { cmd = "python scripts/test_rust.py --nocapture" }
 typecheck = { shell = "maturin develop && ty check python/tests/typecheck" }
 lint = { shell = "ruff check python && ruff format --check python" }
+check-stubs = { cmd = "python scripts/check_python_api_docs.py" }
 
 [tool.ruff]
 line-length = 88

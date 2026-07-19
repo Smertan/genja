@@ -57,12 +57,20 @@ class TaskProcessorContext(_GenjaModel):
     """Execution context passed into Python processor callbacks."""
 
     task_name: str
+    """Name of the task currently being processed."""
+
     parent_task_name: str | None = None
+    """Name of the parent task when processing a sub-task."""
+
     depth: int = 0
+    """Task nesting depth, where top-level tasks have depth zero."""
+
     hostname: str | None = None
+    """Hostname for per-host callbacks, if the callback is host-specific."""
 
     @property
     def is_sub_task(self) -> bool:
+        """Return whether the current task is running as a sub-task."""
         return self.parent_task_name is not None
 
 
@@ -70,20 +78,39 @@ class ProcessorPluginBase(PluginBase):
     """Base class for Python-authored processor plugins."""
 
     group_name = "ProcessorPlugin"
+    """Plugin group name used by Genja's plugin registry."""
+
     _locked_group_name = "ProcessorPlugin"
+    """Internal locked plugin group name."""
 
     def on_task_start(self, context: TaskProcessorContext, results: Any) -> Any | None:
+        """Handle the start of a task-level result collection.
+
+        Return a replacement value to modify the results object, or ``None`` to
+        leave it unchanged.
+        """
         return None
 
     def on_task_finish(self, context: TaskProcessorContext, results: Any) -> Any | None:
+        """Handle the completed task-level result collection.
+
+        Return a replacement value to modify the results object, or ``None`` to
+        leave it unchanged.
+        """
         return None
 
     def on_instance_start(self, context: TaskProcessorContext) -> None:
+        """Handle the start of a host task instance."""
         return None
 
     def on_instance_finish(
         self, context: TaskProcessorContext, result: Any
     ) -> Any | None:
+        """Handle a completed host task instance result.
+
+        Return a replacement value to modify the instance result, or ``None`` to
+        leave it unchanged.
+        """
         return None
 
 

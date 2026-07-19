@@ -154,6 +154,31 @@ Run type checks for the Python examples and tests:
 pdm run typecheck
 ```
 
+Check Python API stub and PyO3 documentation coverage:
+
+```bash
+pdm run check-stubs
+```
+
+Run this check when changing Rust/PyO3-exposed Python APIs, `.pyi` stubs,
+Python API docstrings, or top-level Python re-exports. It verifies that the
+top-level `python/genja/*.pyi` stubs are listed for docstring checks, public
+stub APIs have docstrings, duplicated top-level stubs stay aligned with
+`genja.pyi`, and documented PyO3 bindings do not regress.
+
+When adding a top-level `python/genja/*.pyi` stub, document its public API and
+add it to `STUBS_REQUIRING_DOCSTRINGS` in
+`genja-core-python/scripts/check_python_api_docs.py` during the same change. When
+adding Rust/PyO3 doc comments for another binding source file, extend the same
+script so CI prevents future regressions for that file too.
+
+For Rust/PyO3 classes re-exported from `genja/__init__.py`, keep the class shape
+aligned between `genja.pyi` and `__init__.pyi`. If another duplicated top-level
+class is brought under the documentation standard, add its name to
+`DUPLICATED_TOP_LEVEL_CLASSES` in `check_python_api_docs.py`. The check compares
+public methods and properties so the top-level import surface does not drift from
+the extension-module stub.
+
 Run Python lint and formatting checks:
 
 ```bash

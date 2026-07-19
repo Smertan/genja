@@ -1,3 +1,17 @@
+"""Python plugin-manager API for Genja.
+
+Import plugin-manager helpers from this module instead of from ``genja``
+directly. The top-level package re-exports these names for compatibility, but
+``genja.plugin_manager`` is the primary public surface for:
+
+- ``PluginManager``
+
+``PluginManager`` collects plugins from Rust shared libraries, Python plugin
+instances, and ``pyproject.toml`` entries. Passing it into a ``Genja`` runtime
+constructor transfers its owned plugin registry into the runtime, so the same
+manager instance should not be reused afterward.
+"""
+
 from __future__ import annotations
 
 from typing import Any
