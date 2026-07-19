@@ -30,6 +30,7 @@ STUBS_REQUIRING_DOCSTRINGS = [
     PACKAGE / "__init__.pyi",
     PACKAGE / "connection.pyi",
     PACKAGE / "genja.pyi",
+    PACKAGE / "plugin.pyi",
     PACKAGE / "plugin_manager.pyi",
     PACKAGE / "settings.pyi",
 ]
