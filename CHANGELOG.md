@@ -8,6 +8,10 @@ All notable changes to this workspace should be documented in this file.
 
 - Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
 
+### Changed
+
+- Improved Python type stubs and editor-facing API documentation for Genja runtime, settings, plugin manager, connection, plugin, and processor APIs. Refs: #94
+
 ## 0.3.0 - 2026-07-14
 
 Released packages:
