@@ -28,6 +28,7 @@ PACKAGE = ROOT / "python" / "genja"
 
 STUBS_REQUIRING_DOCSTRINGS = [
     PACKAGE / "__init__.pyi",
+    PACKAGE / "connection.pyi",
     PACKAGE / "genja.pyi",
     PACKAGE / "plugin_manager.pyi",
     PACKAGE / "settings.pyi",
@@ -89,7 +90,9 @@ def check_stub_docstrings(path: Path) -> list[str]:
 
     for class_node in public_stub_members(tree).values():
         if ast.get_docstring(class_node) is None:
-            errors.append(f"{path}:{class_node.lineno}: class {class_node.name} missing docstring")
+            errors.append(
+                f"{path}:{class_node.lineno}: class {class_node.name} missing docstring"
+            )
 
         for child in class_node.body:
             if not isinstance(child, ast.FunctionDef):
@@ -189,7 +192,9 @@ def check_rust_pyo3_docs(path: Path, impl_scope: str | None) -> list[str]:
         if line_is_pyo3_method(stripped):
             previous = previous_non_attribute_line(lines, index)
             if previous is None or not previous.startswith("///"):
-                errors.append(f"{path}:{index + 1}: PyO3 method missing Rust doc comment")
+                errors.append(
+                    f"{path}:{index + 1}: PyO3 method missing Rust doc comment"
+                )
 
     return errors
 
