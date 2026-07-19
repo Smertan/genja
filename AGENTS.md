@@ -120,6 +120,6 @@ Repository-specific instructions for AI coding agents working in this workspace.
 - For pure Python modules, prefer inline type annotations and docstrings in the `.py` source file instead of creating a new `.pyi` file.
 - Do not create new `.pyi` files for pure Python modules unless there is a specific reason to separate implementation from typing.
 - Keep `genja/__init__.pyi` aligned with public re-exports from `genja/__init__.py`.
-- `pdm run check-stubs` is intentionally scoped to API surfaces already brought up to the documentation standard. When improving another stub file, add it to `STUBS_REQUIRING_DOCSTRINGS` in `genja-core-python/scripts/check_python_api_docs.py` during the same change.
+- `pdm run check-stubs` requires every top-level `python/genja/*.pyi` stub to be listed in `STUBS_REQUIRING_DOCSTRINGS` in `genja-core-python/scripts/check_python_api_docs.py`. When adding a stub, document its public API and add it to that list during the same change.
 - For Rust/PyO3 classes re-exported from `genja/__init__.py`, keep the class shape aligned between `genja.pyi` and `__init__.pyi`. When another duplicated top-level class is brought under the documentation standard, add it to `DUPLICATED_TOP_LEVEL_CLASSES` in `check_python_api_docs.py`.
 - When adding Rust/PyO3 doc comments for another binding source file, extend `genja-core-python/scripts/check_python_api_docs.py` so `pdm run check-stubs` prevents regressions for that file or scoped impl block.

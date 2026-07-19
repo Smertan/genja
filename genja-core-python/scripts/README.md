@@ -12,19 +12,20 @@ Run through PDM from `genja-core-python`:
 pdm run check-stubs
 ```
 
-The check is intentionally scoped to API surfaces that have already been brought
-up to the repository's stub/docstring standard. It currently verifies:
+The check verifies:
 
+- classification of every top-level `python/genja/*.pyi` stub;
 - public class and method docstrings in selected `.pyi` files;
 - structural parity for Rust-backed classes duplicated between `genja.pyi` and
   the top-level `__init__.pyi` re-export surface;
-- Rust doc comments on documented PyO3 settings bindings.
+- Rust doc comments on selected documented PyO3 bindings.
 
-When improving another stub file, add it to `STUBS_REQUIRING_DOCSTRINGS` in
-`check_python_api_docs.py`. When bringing another duplicated top-level
-Rust-backed class under the standard, add it to `DUPLICATED_TOP_LEVEL_CLASSES`.
-When documenting another Rust/PyO3 binding source file, extend the script so CI
-prevents regressions for that file too.
+Every top-level `python/genja/*.pyi` stub must be listed in
+`STUBS_REQUIRING_DOCSTRINGS` in `check_python_api_docs.py`. When adding a stub,
+document its public API and add it to that list during the same change. When
+bringing another duplicated top-level Rust-backed class under the standard, add
+it to `DUPLICATED_TOP_LEVEL_CLASSES`. When documenting another Rust/PyO3 binding
+source file, extend the script so CI prevents regressions for that file too.
 
 ## `test_rust.py`
 

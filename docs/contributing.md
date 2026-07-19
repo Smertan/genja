@@ -162,12 +162,12 @@ pdm run check-stubs
 
 Run this check when changing Rust/PyO3-exposed Python APIs, `.pyi` stubs,
 Python API docstrings, or top-level Python re-exports. It verifies that the
-hardened stubs have public docstrings, duplicated top-level stubs stay aligned
-with `genja.pyi`, and documented PyO3 settings bindings do not regress.
+top-level `python/genja/*.pyi` stubs are listed for docstring checks, public
+stub APIs have docstrings, duplicated top-level stubs stay aligned with
+`genja.pyi`, and documented PyO3 bindings do not regress.
 
-The check is intentionally scoped to API surfaces that have already been brought
-up to the documentation standard. When improving another stub file, add it to
-`STUBS_REQUIRING_DOCSTRINGS` in
+When adding a top-level `python/genja/*.pyi` stub, document its public API and
+add it to `STUBS_REQUIRING_DOCSTRINGS` in
 `genja-core-python/scripts/check_python_api_docs.py` during the same change. When
 adding Rust/PyO3 doc comments for another binding source file, extend the same
 script so CI prevents future regressions for that file too.
