@@ -1,12 +1,11 @@
 """Check documented Python API stubs and selected Rust/PyO3 bindings.
 
 This script enforces documentation coverage for Python API surfaces that have
-already been brought up to the repository's stub/docstring standard. It is
-intentionally scoped: add files/classes to the constants below as more stubs and
-Rust/PyO3 binding modules are audited.
+been brought up to the repository's stub/docstring standard.
 
 The checks currently cover:
 
+- classification of every top-level `python/genja/*.pyi` stub;
 - public class and method docstrings in selected `.pyi` files;
 - structural parity for Rust-backed classes duplicated between `genja.pyi` and
   the top-level `__init__.pyi` re-export surface;
@@ -35,6 +34,18 @@ STUBS_REQUIRING_DOCSTRINGS = [
     PACKAGE / "processor.pyi",
     PACKAGE / "settings.pyi",
 ]
+
+
+def check_all_stubs_require_docstrings() -> list[str]:
+    errors: list[str] = []
+    documented = set(STUBS_REQUIRING_DOCSTRINGS)
+
+    for path in sorted(PACKAGE.glob("*.pyi")):
+        if path not in documented:
+            errors.append(f"{path}: stub is not listed in STUBS_REQUIRING_DOCSTRINGS")
+
+    return errors
+
 
 DUPLICATED_TOP_LEVEL_CLASSES = [
     "HostTaskResult",
@@ -203,6 +214,7 @@ def check_rust_pyo3_docs(path: Path, impl_scope: str | None) -> list[str]:
 
 def main() -> int:
     errors: list[str] = []
+    errors.extend(check_all_stubs_require_docstrings())
     for path in STUBS_REQUIRING_DOCSTRINGS:
         errors.extend(check_stub_docstrings(path))
     errors.extend(check_top_level_stub_parity())
