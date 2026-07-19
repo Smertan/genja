@@ -10,7 +10,7 @@ The checks currently cover:
 - public class and method docstrings in selected `.pyi` files;
 - structural parity for Rust-backed classes duplicated between `genja.pyi` and
   the top-level `__init__.pyi` re-export surface;
-- Rust doc comments on the documented PyO3 settings bindings.
+- Rust doc comments on selected documented PyO3 bindings.
 
 Run locally with:
 
@@ -29,6 +29,7 @@ PACKAGE = ROOT / "python" / "genja"
 STUBS_REQUIRING_DOCSTRINGS = [
     PACKAGE / "__init__.pyi",
     PACKAGE / "genja.pyi",
+    PACKAGE / "plugin_manager.pyi",
     PACKAGE / "settings.pyi",
 ]
 
@@ -43,6 +44,12 @@ DUPLICATED_TOP_LEVEL_CLASSES = [
 ]
 
 SETTINGS_RUST = ROOT / "src" / "settings.rs"
+PLUGIN_MANAGER_RUST = ROOT / "src" / "plugin_manager.rs"
+
+RUST_PYO3_DOC_CHECKS = [
+    (SETTINGS_RUST, None),
+    (PLUGIN_MANAGER_RUST, "impl PyPluginManager"),
+]
 
 
 def public_stub_members(tree: ast.Module) -> dict[str, ast.ClassDef]:
@@ -140,30 +147,49 @@ def previous_non_attribute_line(lines: list[str], index: int) -> str | None:
     return None
 
 
-def check_settings_rust_docs() -> list[str]:
+def line_is_pyo3_method(stripped: str) -> bool:
+    return stripped.startswith("fn ") or stripped.startswith("pub(crate) fn ")
+
+
+def check_rust_pyo3_docs(path: Path, impl_scope: str | None) -> list[str]:
     errors: list[str] = []
-    lines = SETTINGS_RUST.read_text().splitlines()
+    lines = path.read_text().splitlines()
+    in_scope = impl_scope is None
+    scope_depth: int | None = None
 
     for index, line in enumerate(lines):
         stripped = line.strip()
         if stripped == "#[cfg(test)]":
             break
 
+        if impl_scope is not None and stripped.startswith(impl_scope):
+            in_scope = True
+            scope_depth = line.count("{") - line.count("}")
+            continue
+
+        if impl_scope is not None and in_scope and scope_depth is not None:
+            scope_depth += line.count("{") - line.count("}")
+            if scope_depth <= 0:
+                in_scope = False
+                scope_depth = None
+                continue
+
         if stripped.startswith("#[pyclass("):
             previous = previous_non_attribute_line(lines, index)
             if previous is None or not previous.startswith("///"):
-                errors.append(f"{SETTINGS_RUST}:{index + 1}: pyclass missing Rust doc comment")
+                errors.append(f"{path}:{index + 1}: pyclass missing Rust doc comment")
+            continue
+
+        if not in_scope:
             continue
 
         if stripped.startswith("fn __repr__") or stripped.startswith("pub fn register"):
             continue
 
-        if stripped.startswith("fn ") or stripped.startswith("pub(crate) fn "):
+        if line_is_pyo3_method(stripped):
             previous = previous_non_attribute_line(lines, index)
             if previous is None or not previous.startswith("///"):
-                errors.append(
-                    f"{SETTINGS_RUST}:{index + 1}: PyO3 method missing Rust doc comment"
-                )
+                errors.append(f"{path}:{index + 1}: PyO3 method missing Rust doc comment")
 
     return errors
 
@@ -173,7 +199,8 @@ def main() -> int:
     for path in STUBS_REQUIRING_DOCSTRINGS:
         errors.extend(check_stub_docstrings(path))
     errors.extend(check_top_level_stub_parity())
-    errors.extend(check_settings_rust_docs())
+    for path, impl_scope in RUST_PYO3_DOC_CHECKS:
+        errors.extend(check_rust_pyo3_docs(path, impl_scope))
 
     if errors:
         print("Python API documentation checks failed:")

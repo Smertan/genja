@@ -122,3 +122,4 @@ Repository-specific instructions for AI coding agents working in this workspace.
 - Keep `genja/__init__.pyi` aligned with public re-exports from `genja/__init__.py`.
 - `pdm run check-stubs` is intentionally scoped to API surfaces already brought up to the documentation standard. When improving another stub file, add it to `STUBS_REQUIRING_DOCSTRINGS` in `genja-core-python/scripts/check_python_api_docs.py` during the same change.
 - For Rust/PyO3 classes re-exported from `genja/__init__.py`, keep the class shape aligned between `genja.pyi` and `__init__.pyi`. When another duplicated top-level class is brought under the documentation standard, add it to `DUPLICATED_TOP_LEVEL_CLASSES` in `check_python_api_docs.py`.
+- When adding Rust/PyO3 doc comments for another binding source file, extend `genja-core-python/scripts/check_python_api_docs.py` so `pdm run check-stubs` prevents regressions for that file or scoped impl block.
