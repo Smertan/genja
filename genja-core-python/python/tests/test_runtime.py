@@ -2,7 +2,7 @@ import asyncio
 
 import genja
 import pytest
-from tests.fixtures.inventory_plugins import StaticInventoryPlugin
+from tests.fixtures.inventory_plugins import AsyncInventoryPlugin, StaticInventoryPlugin
 from genja.inventory import Defaults, Group, Host as InventoryHost, Inventory
 from genja.task import (
     Host,
@@ -84,6 +84,68 @@ def test_genja_from_settings_accepts_python_inventory_plugin_manager():
 
     assert runtime.inventory_loaded()
     assert runtime.host_ids() == ["router1", "router2"]
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_async_accepts_async_python_inventory_plugin_manager():
+    manager = genja.PluginManager()
+    manager.register_plugin(AsyncInventoryPlugin())
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="python_async_inventory"),
+        runner=genja.RunnerConfig(plugin="serial"),
+    )
+
+    runtime = await genja.Genja.from_settings_async(settings, plugin_manager=manager)
+
+    assert runtime.inventory_loaded()
+    assert runtime.host_ids() == ["router1", "router2"]
+    assert runtime.settings().inventory.plugin == "python_async_inventory"
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_async_rejects_sync_only_inventory_plugin():
+    manager = genja.PluginManager()
+    manager.register_plugin(StaticInventoryPlugin())
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="python_inventory"),
+    )
+
+    with pytest.raises(ValueError, match="sync inventory plugin 'python_inventory'"):
+        await genja.Genja.from_settings_async(settings, plugin_manager=manager)
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_rejects_async_only_inventory_plugin():
+    manager = genja.PluginManager()
+    manager.register_plugin(AsyncInventoryPlugin())
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="python_async_inventory"),
+    )
+
+    with pytest.raises(
+        ValueError, match="async inventory plugin 'python_async_inventory'"
+    ):
+        genja.Genja.from_settings(settings, plugin_manager=manager)
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_async_returns_missing_inventory_plugin_error():
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="missing_inventory"),
+    )
+
+    with pytest.raises(ValueError, match="plugin 'missing_inventory' not found"):
+        await genja.Genja.from_settings_async(settings)
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_async_validates_programmatic_settings():
+    settings = genja.Settings(
+        ssh=genja.SSHConfig(config_file="/nonexistent/genja/ssh_config"),
+    )
+
+    with pytest.raises(ValueError, match="failed to validate runtime settings"):
+        await genja.Genja.from_settings_async(settings)
 
 
 @task(name="runtime_backup")

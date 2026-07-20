@@ -127,10 +127,10 @@ should load inventory from `settings.inventory`:
     runtime = genja.Genja.from_settings(settings)
     ```
 
-Use `Genja::from_settings_async(...)` when programmatic settings select an async
-Rust inventory plugin. Async construction is strict: the selected plugin must
-implement `AsyncPluginInventory`; use `Genja::from_settings(...)` for sync-only
-inventory plugins such as `FileInventoryPlugin`.
+Use `Genja::from_settings_async(...)` or `Genja.from_settings_async(...)` when
+programmatic settings select an async inventory plugin. Async construction is
+strict: the selected plugin must be async-capable; use the sync constructors for
+sync-only inventory plugins such as `FileInventoryPlugin`.
 
 === ":fontawesome-brands-rust: Rust"
 
@@ -148,6 +148,32 @@ inventory plugins such as `FileInventoryPlugin`.
     let runtime = Genja::from_settings_async(settings).await?;
     # Ok(())
     # }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja
+
+    class ApiInventoryPlugin(genja.InventoryPluginBase):
+        name = "api_inventory"
+
+        async def load(self, settings, plugins):
+            return {
+                "router1": {
+                    "hostname": "10.0.0.1",
+                    "platform": "ios",
+                },
+            }
+
+    plugins = genja.PluginManager()
+    plugins.register_plugin(ApiInventoryPlugin())
+
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="api_inventory"),
+    )
+
+    runtime = await genja.Genja.from_settings_async(settings, plugin_manager=plugins)
     ```
 
 ### With Explicit Inventory

@@ -80,8 +80,6 @@ use tokio::runtime::Builder;
 
 // GenjaError is re-exported from genja-core.
 
-const DEFAULT_INVENTORY_PLUGIN: &str = "FileInventoryPlugin";
-
 mod filter;
 
 /// Runtime composition layer for `Genja`.
@@ -159,15 +157,6 @@ impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
             .open_connection(&key, &params)
             .await
             .map_err(GenjaError::Message)
-    }
-}
-
-fn selected_inventory_plugin_name(settings: &Settings) -> &str {
-    let plugin_name = settings.inventory().plugin();
-    if plugin_name.is_empty() {
-        DEFAULT_INVENTORY_PLUGIN
-    } else {
-        plugin_name
     }
 }
 
@@ -399,7 +388,7 @@ impl Genja {
     /// - `GenjaError::InventoryLoad` - Inventory loading failed
     fn load_inventory_from_settings(&mut self) -> Result<(), GenjaError> {
         self.ensure_plugins_loaded()?;
-        let plugin_name = selected_inventory_plugin_name(&self.settings);
+        let plugin_name = self.settings.inventory().plugin();
 
         if let Some(plugin) = self.plugins.get_inventory_plugin(plugin_name) {
             let inventory = plugin
@@ -434,7 +423,7 @@ impl Genja {
     /// falling back to synchronous loading.
     async fn load_inventory_from_settings_async_strict(&mut self) -> Result<(), GenjaError> {
         self.ensure_plugins_loaded()?;
-        let plugin_name = selected_inventory_plugin_name(&self.settings);
+        let plugin_name = self.settings.inventory().plugin();
 
         if let Some(plugin) = self.plugins.get_async_inventory_plugin(plugin_name) {
             let inventory = plugin

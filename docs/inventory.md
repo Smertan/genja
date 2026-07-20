@@ -332,10 +332,11 @@ Python inventory plugins extend `InventoryPluginBase` and implement
 
 ### Async Loaders
 
-Python and Rust both support async inventory loading. Rust async runtime
-construction is strict: `Genja::from_settings_async(...)` and
+Python and Rust both support async inventory loading. Async runtime construction
+is strict: Rust `Genja::from_settings_async(...)` and
 `Genja::from_settings_file_async(...)` require the selected inventory plugin to
-implement `AsyncPluginInventory`. Use the synchronous constructors for
+implement `AsyncPluginInventory`, and Python `Genja.from_settings_async(...)`
+requires an async Python inventory plugin. Use the synchronous constructors for
 sync-only inventory plugins such as `FileInventoryPlugin`.
 
 === ":fontawesome-brands-rust: Rust"
@@ -392,22 +393,20 @@ sync-only inventory plugins such as `FileInventoryPlugin`.
     ```
 
 === ":fontawesome-brands-python: Python"
-    Python async inventory loaders use the same base class and still use
-    `Genja.from_settings_file(...)`. Pass the plugin manager when loading
+    Python async inventory loaders use the same base class and
+    `Genja.from_settings_async(...)`. Pass the plugin manager when loading
     settings so the runtime can resolve the Python plugin by name.
 
     ```python
-    import genja as genja_lib
-    from genja import Settings
-    from genja.inventory import InventoryPluginBase
+    import genja
 
 
-    class ApiInventoryPlugin(InventoryPluginBase):
+    class ApiInventoryPlugin(genja.InventoryPluginBase):
         name = "api_inventory"
 
         async def load(
             self,
-            settings: Settings,
+            settings: genja.Settings,
             plugins: object,
         ) -> dict[str, dict[str, object]]:
             return {
@@ -422,15 +421,19 @@ sync-only inventory plugins such as `FileInventoryPlugin`.
             }
 
 
-    plugins = genja_lib.PluginManager()
+    plugins = genja.PluginManager()
     plugins.register_plugin(ApiInventoryPlugin())
 
-    genja = genja_lib.Genja.from_settings_file(
-        "settings.yaml",
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="api_inventory"),
+    )
+
+    runtime = await genja.Genja.from_settings_async(
+        settings,
         plugin_manager=plugins,
     )
 
-    for host_id in genja.host_ids():
+    for host_id in runtime.host_ids():
         print(host_id)
     ```
 

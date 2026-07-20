@@ -56,7 +56,7 @@ use genja_core::task::{
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::PluginConnectionAdapter;
 use genja_plugin_manager::plugin_types::{
-    Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
+    AsyncPluginInventory, Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
     PluginTransformFunction, Plugins,
 };
 use pyo3::exceptions::PyValueError;
@@ -572,11 +572,28 @@ pub(crate) fn register_python_plugin_on_manager(
             })));
         }
         "InventoryPlugin" => {
-            manager.register_plugin(Plugins::Inventory(Box::new(PyInventoryPlugin {
-                name: declared_name,
-                group: declared_group,
-                plugin: Arc::new(plugin),
-            })));
+            let is_async_inventory = Python::attach(|py| {
+                let inspect = PyModule::import(py, "inspect")?;
+                let load = plugin.bind(py).getattr("load")?;
+                inspect
+                    .call_method1("iscoroutinefunction", (load,))?
+                    .extract::<bool>()
+            })?;
+            if is_async_inventory {
+                manager.register_plugin(Plugins::AsyncInventory(Box::new(
+                    PyAsyncInventoryPlugin {
+                        name: declared_name,
+                        group: declared_group,
+                        plugin: Arc::new(plugin),
+                    },
+                )));
+            } else {
+                manager.register_plugin(Plugins::Inventory(Box::new(PyInventoryPlugin {
+                    name: declared_name,
+                    group: declared_group,
+                    plugin: Arc::new(plugin),
+                })));
+            }
         }
         "RunnerPlugin" => {
             manager.register_plugin(Plugins::Runner(Box::new(PyRunnerPlugin {
@@ -873,6 +890,68 @@ impl PluginInventory for PyInventoryPlugin {
                 .map_err(|err| InventoryLoadError::from(err.to_string()))?;
             let resolved = resolve_python_maybe_awaitable(py, result)
                 .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+            python_inventory_to_rust_inventory(resolved.bind(py).clone())
+                .map_err(|err| InventoryLoadError::from(err.to_string()))
+        })
+    }
+}
+
+struct PyAsyncInventoryPlugin {
+    name: String,
+    group: String,
+    plugin: Arc<Py<PyAny>>,
+}
+
+impl Plugin for PyAsyncInventoryPlugin {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    fn group(&self) -> String {
+        self.group.clone()
+    }
+}
+
+#[async_trait]
+impl AsyncPluginInventory for PyAsyncInventoryPlugin {
+    async fn load_async(
+        &self,
+        settings: &Settings,
+        plugins: &PluginManager,
+    ) -> Result<Inventory, InventoryLoadError> {
+        let result = Python::attach(|py| {
+            let plugin = self.plugin.bind(py);
+            let settings_payload = Py::new(
+                py,
+                PySettings {
+                    inner: settings.clone(),
+                },
+            )
+            .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+            let plugin_registry = Py::new(
+                py,
+                PyLoadedPluginRegistry {
+                    names: plugins
+                        .get_all_plugin_names()
+                        .into_iter()
+                        .map(|name| name.to_string())
+                        .collect(),
+                    names_and_groups: plugins.get_all_plugin_names_and_groups(),
+                },
+            )
+            .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+            plugin
+                .call_method1(
+                    "load",
+                    (settings_payload.bind(py), plugin_registry.bind(py)),
+                )
+                .map(Bound::unbind)
+                .map_err(|err| InventoryLoadError::from(err.to_string()))
+        })?;
+        let resolved = resolve_python_awaitable_async(result)
+            .await
+            .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+        Python::attach(|py| {
             python_inventory_to_rust_inventory(resolved.bind(py).clone())
                 .map_err(|err| InventoryLoadError::from(err.to_string()))
         })
@@ -1435,6 +1514,21 @@ pub(crate) async fn resolve_python_maybe_awaitable_async(value: Py<PyAny>) -> Py
             Ok(asyncio.call_method1("run", (value.bind(py),))?.unbind())
         })
     }
+}
+
+async fn resolve_python_awaitable_async(value: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    let is_awaitable = Python::attach(|py| -> PyResult<bool> {
+        let inspect = PyModule::import(py, "inspect")?;
+        inspect
+            .call_method1("isawaitable", (value.bind(py),))?
+            .extract()
+    })?;
+    if !is_awaitable {
+        return Err(PyValueError::new_err(
+            "async inventory plugin load() must return an awaitable",
+        ));
+    }
+    resolve_python_maybe_awaitable_async(value).await
 }
 
 impl Plugin for PyConnectionInstance {

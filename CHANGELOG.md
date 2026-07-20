@@ -7,7 +7,7 @@ All notable changes to this workspace should be documented in this file.
 ### Added
 
 - Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
-- Added Rust `Genja::from_settings_async(...)` for strict async inventory loading from programmatic settings. Refs: #86
+- Added Rust `Genja::from_settings_async(...)` and Python `Genja.from_settings_async(...)` for strict async inventory loading from programmatic settings. Refs: #86
 
 ### Changed
 
