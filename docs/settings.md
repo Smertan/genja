@@ -127,6 +127,29 @@ should load inventory from `settings.inventory`:
     runtime = genja.Genja.from_settings(settings)
     ```
 
+Use `Genja::from_settings_async(...)` when programmatic settings select an async
+Rust inventory plugin. Async construction is strict: the selected plugin must
+implement `AsyncPluginInventory`; use `Genja::from_settings(...)` for sync-only
+inventory plugins such as `FileInventoryPlugin`.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::Genja;
+    use genja_core::Settings;
+    use genja_core::settings::InventoryConfig;
+
+    # async fn build_runtime() -> Result<(), Box<dyn std::error::Error>> {
+    // Assumes `api_inventory` is available through runtime plugin discovery.
+    let settings = Settings::builder()
+        .inventory(InventoryConfig::builder().plugin("api_inventory").build())
+        .build();
+
+    let runtime = Genja::from_settings_async(settings).await?;
+    # Ok(())
+    # }
+    ```
+
 ### With Explicit Inventory
 
 When hosts or a full inventory are supplied explicitly, `from_hosts(...)` and

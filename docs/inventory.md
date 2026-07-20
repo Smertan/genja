@@ -332,19 +332,21 @@ Python inventory plugins extend `InventoryPluginBase` and implement
 
 ### Async Loaders
 
-Python and Rust both support async inventory loading, but the integration path
-differs today. Python can pass an in-memory plugin manager into
-`Genja.from_settings_file(...)`. Rust currently needs to register the plugin,
-load the inventory explicitly, and then build `Genja` from that inventory.
+Python and Rust both support async inventory loading. Rust async runtime
+construction is strict: `Genja::from_settings_async(...)` and
+`Genja::from_settings_file_async(...)` require the selected inventory plugin to
+implement `AsyncPluginInventory`. Use the synchronous constructors for
+sync-only inventory plugins such as `FileInventoryPlugin`.
 
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
     use genja::Genja;
     use genja::async_trait;
-    use genja::genja_core::inventory::{Host, Hosts, Inventory};
+    use genja::genja_core::inventory::{BaseBuilderHost, Host, Hosts, Inventory};
     use genja::genja_core::{InventoryLoadError, Settings};
-    use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin, Plugins};
+    use genja::genja_core::settings::InventoryConfig;
+    use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
     use genja_plugin_manager::PluginManager;
 
     #[derive(Debug)]
@@ -374,21 +376,12 @@ load the inventory explicitly, and then build `Genja` from that inventory.
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let settings = Settings::from_file("settings.yaml")?;
+        // Assumes `api_inventory` is available through runtime plugin discovery.
+        let settings = Settings::builder()
+            .inventory(InventoryConfig::builder().plugin("api_inventory").build())
+            .build();
 
-        let mut plugins = PluginManager::new();
-        plugins.register_plugin(Plugins::AsyncInventory(Box::new(ApiInventoryPlugin)));
-
-        let inventory = plugins
-            .get_async_inventory_plugin("api_inventory")
-            .ok_or("missing async inventory plugin")?
-            .load_async(&settings, &plugins)
-            .await?;
-
-        let genja = Genja::builder(inventory)
-            .with_settings(settings)
-            .with_plugin_manager(plugins)
-            .build()?;
+        let genja = Genja::from_settings_async(settings).await?;
 
         for host_id in genja.host_ids() {
             println!("{host_id}");

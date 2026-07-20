@@ -7,10 +7,12 @@ All notable changes to this workspace should be documented in this file.
 ### Added
 
 - Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
+- Added Rust `Genja::from_settings_async(...)` for strict async inventory loading from programmatic settings. Refs: #86
 
 ### Changed
 
 - Improved Python type stubs and editor-facing API documentation for Genja runtime, settings, plugin manager, connection, plugin, and processor APIs. Refs: #94
+- **Breaking:** Rust `Genja::from_settings_file_async(...)` now requires the selected inventory plugin to implement `AsyncPluginInventory` and no longer falls back to synchronous inventory plugins. Use `Genja::from_settings_file(...)` for sync inventory plugins such as `FileInventoryPlugin`, or provide/register an async inventory plugin before using async runtime construction. Refs: #86
 
 ## 0.3.0 - 2026-07-14
 
