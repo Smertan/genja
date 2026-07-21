@@ -281,11 +281,9 @@ These top-level sections are supported:
 | `runner` | object | `RunnerConfig::default()` |
 | `logging` | object | `LoggingConfig::default()` |
 
-Top-level sections are optional. Nested fields have the defaults listed below.
-Unknown top-level sections are rejected.
-Current implementation note: if the `inventory` section is present, include an
-`options` object; use `options: {}` when the selected inventory plugin does not
-need file paths.
+Top-level sections are optional. Nested fields have the defaults listed below,
+including when only part of a section is configured. Unknown top-level sections
+are rejected.
 
 ## Core
 

@@ -14,6 +14,10 @@ All notable changes to this workspace should be documented in this file.
 - Improved Python type stubs and editor-facing API documentation for Genja runtime, settings, plugin manager, connection, plugin, and processor APIs. Refs: #94
 - **Breaking:** Rust `Genja::from_settings_file_async(...)` now requires the selected inventory plugin to implement `AsyncPluginInventory` and no longer falls back to synchronous inventory plugins. Python `Genja.from_settings(...)` now rejects async Python inventory plugins; use `await Genja.from_settings_async(...)` instead. Use sync constructors for sync inventory plugins such as `FileInventoryPlugin`, and async constructors for async inventory plugins. Refs: #86
 
+### Fixed
+
+- Settings files now allow partial `inventory` sections, with omitted inventory fields falling back to their defaults. Refs: #86
+
 ## 0.3.0 - 2026-07-14
 
 Released packages:
