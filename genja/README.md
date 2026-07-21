@@ -66,9 +66,11 @@ Rust inventory plugins can be synchronous (`PluginInventory`) or asynchronous
 
 When the inventory plugin is discovered from the runtime plugin directory and
 selected by `settings.yaml`, use `Genja::from_settings_file_async(...)` for the
-async path. When you register inventory plugins in code, load the inventory
-explicitly through the plugin and then build `Genja` from the returned
-`Inventory`.
+async path. For programmatic settings, use `Genja::from_settings_async(...)`.
+Async constructors are strict: the selected inventory plugin must implement
+`AsyncPluginInventory`. Use `Genja::from_settings_file(...)` or
+`Genja::from_settings(...)` for sync-only inventory plugins such as
+`FileInventoryPlugin`.
 
 ```rust
 use genja::Genja;
@@ -80,7 +82,7 @@ use genja::genja_core::inventory::{
     Hosts,
     Inventory,
 };
-use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin, Plugins};
+use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
 use genja_plugin_manager::PluginManager;
 
 #[derive(Debug)]
@@ -107,21 +109,16 @@ impl AsyncPluginInventory for ApiInventoryPlugin {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let settings = Settings::from_file("settings.yaml")?;
+    // Assumes `api_inventory` is available through runtime plugin discovery.
+    let settings = Settings::builder()
+        .inventory(
+            genja::genja_core::settings::InventoryConfig::builder()
+                .plugin("api_inventory")
+                .build(),
+        )
+        .build();
 
-    let mut plugins = PluginManager::new();
-    plugins.register_plugin(Plugins::AsyncInventory(Box::new(ApiInventoryPlugin)));
-
-    let inventory = plugins
-        .get_async_inventory_plugin("api_inventory")
-        .ok_or("missing async inventory plugin")?
-        .load_async(&settings, &plugins)
-        .await?;
-
-    let genja = Genja::builder(inventory)
-        .with_settings(settings)
-        .with_plugin_manager(plugins)
-        .build()?;
+    let genja = Genja::from_settings_async(settings).await?;
 
     assert_eq!(genja.host_ids().len(), 1);
     Ok(())

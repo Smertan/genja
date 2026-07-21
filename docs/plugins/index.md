@@ -131,8 +131,9 @@ invalid plugin identity and should be treated as setup-time validation.
 
 In Python, `PluginManager` is consumed when it is passed into
 `Genja.builder(...)`, `Genja.from_hosts(...)`, `Genja.from_settings(...)`, or
-`Genja.from_settings_file(...)`. Do not reuse that manager afterward; create a
-new manager for another runtime.
+`Genja.from_settings_async(...)`, `Genja.from_settings_file(...)`, or
+`Genja.from_settings_file_async(...)`. Do not reuse that manager afterward;
+create a new manager for another runtime.
 
 Inspect registered plugins during setup:
 
@@ -153,9 +154,14 @@ Inspect registered plugins during setup:
 
 ## Python Async Hooks
 
-Python inventory, connection, runner, task, and transform hooks may be written
-as `def` or `async def`. Genja resolves awaitable return values before handing
-them back to the Rust runtime.
+Python connection, runner, task, and transform hooks may be written as `def` or
+`async def`. Genja resolves awaitable return values before handing them back to
+the Rust runtime.
+
+Inventory plugins use strict constructor matching: use `def load(...)` with
+`Genja.from_settings(...)` for synchronous inventory loading, or
+`async def load(...)` with `await Genja.from_settings_async(...)` or
+`await Genja.from_settings_file_async(...)` for asynchronous inventory loading.
 
 ```python
 from genja.inventory import InventoryPluginBase

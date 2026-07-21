@@ -16,9 +16,11 @@ Inventory plugins are registered on ``PluginManager`` and selected through
 ``Settings`` object plus a read-only plugin-registry view exposing
 ``plugin_names()`` and ``plugin_names_and_groups()``.
 
-Inventory plugins may be implemented as either ``def`` or ``async def``; Genja
-will resolve either form. They may return either a host mapping in the same
-shape accepted by ``Genja.from_hosts(...)`` or a full ``Inventory`` payload:
+Inventory plugins may be implemented as either ``def`` or ``async def``. Use
+``Genja.from_settings(...)`` for synchronous inventory plugins and
+``await Genja.from_settings_async(...)`` for asynchronous inventory plugins.
+They may return either a host mapping in the same shape accepted by
+``Genja.from_hosts(...)`` or a full ``Inventory`` payload:
 
 .. code-block:: python
 

@@ -349,6 +349,43 @@ class Genja:
         ...
 
     @staticmethod
+    def from_settings_async(
+        settings: Settings,
+        plugin_manager: PluginManager | None = None,
+    ) -> Awaitable[Genja]:
+        """Build a runtime from settings using strict async inventory loading.
+
+        The settings are validated, inventory is loaded through the configured
+        async inventory plugin, and the runtime is built with the loaded inventory
+        and settings. Sync-only inventory plugins, including the default
+        `FileInventoryPlugin`, are rejected.
+
+        Args:
+            settings: Runtime settings containing async inventory plugin
+                configuration, runner selection, logging configuration, and other
+                options.
+            plugin_manager: Optional plugin manager. Pass one when custom Python
+                async inventory plugins must be registered before inventory is
+                loaded.
+
+        Returns:
+            An awaitable resolving to a fully configured `Genja` runtime.
+
+        Raises:
+            ValueError: If settings validation, async inventory loading, or runtime
+                construction fails.
+
+        Example:
+            ```python
+            runtime = await Genja.from_settings_async(
+                Settings(inventory=InventoryConfig(plugin="api_inventory")),
+                plugin_manager=plugins,
+            )
+            ```
+        """
+        ...
+
+    @staticmethod
     def from_settings_file(
         path: str,
         plugin_manager: PluginManager | None = None,
@@ -372,6 +409,43 @@ class Genja:
             ValueError: If the settings file cannot be read or parsed, the settings
                 are invalid, inventory loading fails, or the configured runner
                 cannot be initialized.
+        """
+        ...
+
+    @staticmethod
+    def from_settings_file_async(
+        path: str,
+        plugin_manager: PluginManager | None = None,
+    ) -> Awaitable[Genja]:
+        """Load settings from a file and build a runtime using strict async inventory loading.
+
+        The settings file controls runtime configuration, including inventory
+        plugin configuration, runner selection, logging settings, and related
+        options. The configured inventory plugin must be async-capable. Sync-only
+        inventory plugins, including the default `FileInventoryPlugin`, are
+        rejected.
+
+        Args:
+            path: Path to a YAML or JSON settings file.
+            plugin_manager: Optional plugin manager. Pass one when custom Python
+                async inventory plugins must be registered before loading
+                settings/inventory.
+
+        Returns:
+            An awaitable resolving to a fully configured `Genja` runtime.
+
+        Raises:
+            ValueError: If the settings file cannot be read or parsed, settings
+                validation fails, async inventory loading fails, or runtime
+                construction fails.
+
+        Example:
+            ```python
+            runtime = await Genja.from_settings_file_async(
+                "settings.yaml",
+                plugin_manager=plugins,
+            )
+            ```
         """
         ...
 

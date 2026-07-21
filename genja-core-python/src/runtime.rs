@@ -390,9 +390,11 @@
 use genja::Genja as RuntimeGenja;
 use genja_core::inventory::{Defaults, Groups, Hosts, Inventory};
 use genja_core::{GenjaError, Settings};
+use pyo3::PyTypeInfo;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
+use pyo3_async_runtimes::tokio::future_into_py;
 use serde::de::DeserializeOwned;
 use std::cell::{Cell, RefCell};
 use std::sync::Mutex;
@@ -614,6 +616,107 @@ impl PyGenja {
         };
 
         build_runtime_from_settings(settings, plugin_manager, None)
+    }
+
+    /// Creates a Genja runtime instance from settings using strict async inventory loading.
+    ///
+    /// This method validates the supplied settings, requires the configured inventory
+    /// plugin to be async-capable, awaits inventory loading, and builds a runtime with
+    /// the loaded inventory and settings. Sync-only inventory plugins such as the
+    /// default `FileInventoryPlugin` are rejected.
+    ///
+    /// # Parameters
+    ///
+    /// * `settings` - Runtime settings containing async inventory plugin configuration,
+    ///   runner selection, and other options.
+    /// * `plugin_manager` - Optional plugin manager for loading and managing plugins.
+    ///   Pass one when custom Python async inventory plugins must be registered before
+    ///   inventory is loaded.
+    ///
+    /// # Returns
+    ///
+    /// Returns an awaitable that resolves to a fully configured runtime instance on
+    /// success, or raises `ValueError` if validation, async inventory loading, or
+    /// runtime construction fails.
+    #[staticmethod]
+    #[pyo3(signature = (settings, plugin_manager=None))]
+    fn _from_settings_async_native(
+        py: Python<'_>,
+        settings: PyRef<'_, PySettings>,
+        plugin_manager: Option<PyRef<'_, PyPluginManager>>,
+    ) -> PyResult<Py<PyAny>> {
+        let settings = settings.inner.clone();
+        let plugin_manager = if let Some(plugin_manager) = plugin_manager {
+            plugin_manager.take_inner()?
+        } else {
+            PyPluginManager::new().take_inner()?
+        };
+
+        future_into_py(py, async move {
+            build_runtime_from_settings_async(settings, plugin_manager, None).await
+        })
+        .map(Bound::unbind)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (settings, plugin_manager=None))]
+    fn from_settings_async(
+        py: Python<'_>,
+        settings: Bound<'_, PyAny>,
+        plugin_manager: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let async_helpers = PyModule::import(py, "genja._async")?;
+        let helper = async_helpers.getattr("from_settings_async")?;
+        Ok(helper
+            .call1((PyGenja::type_object(py), settings, plugin_manager))?
+            .unbind())
+    }
+
+    /// Creates a Genja runtime instance from a YAML or JSON settings file using strict async inventory loading.
+    ///
+    /// This native helper backs `Genja.from_settings_file_async(...)`. It loads
+    /// settings from the supplied path, requires the configured inventory plugin to
+    /// be async-capable, awaits inventory loading, and builds a runtime with the
+    /// loaded inventory and settings. Sync-only inventory plugins such as the
+    /// default `FileInventoryPlugin` are rejected.
+    #[staticmethod]
+    #[pyo3(signature = (path, plugin_manager=None))]
+    fn _from_settings_file_async_native(
+        py: Python<'_>,
+        path: String,
+        plugin_manager: Option<PyRef<'_, PyPluginManager>>,
+    ) -> PyResult<Py<PyAny>> {
+        let plugin_manager = if let Some(plugin_manager) = plugin_manager {
+            plugin_manager.take_inner()?
+        } else {
+            PyPluginManager::new().take_inner()?
+        };
+
+        future_into_py(py, async move {
+            let settings = Settings::from_file(&path).map_err(|err| {
+                PyValueError::new_err(format!("failed to load settings from {path}: {err}"))
+            })?;
+            build_runtime_from_settings_async(settings, plugin_manager, None).await
+        })
+        .map(Bound::unbind)
+    }
+
+    /// Creates a Genja runtime instance from a YAML or JSON settings file using strict async inventory loading.
+    ///
+    /// This public method returns a normal Python coroutine and delegates to the
+    /// native async helper only when awaited.
+    #[staticmethod]
+    #[pyo3(signature = (path, plugin_manager=None))]
+    fn from_settings_file_async(
+        py: Python<'_>,
+        path: Bound<'_, PyAny>,
+        plugin_manager: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let async_helpers = PyModule::import(py, "genja._async")?;
+        let helper = async_helpers.getattr("from_settings_file_async")?;
+        Ok(helper
+            .call1((PyGenja::type_object(py), path, plugin_manager))?
+            .unbind())
     }
 
     /// Creates a Genja runtime instance from a YAML or JSON settings file.
@@ -1996,18 +2099,57 @@ fn build_runtime_from_settings(
     settings.validate().map_err(|err| {
         PyValueError::new_err(format!("failed to validate runtime settings: {err}"))
     })?;
-    let inventory = load_inventory_from_settings(&settings, &plugin_manager)
-        .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?;
+    let inventory = load_inventory_from_settings(&settings, &plugin_manager).map_err(|err| {
+        PyValueError::new_err(format!(
+            "failed to build Genja runtime: {}",
+            format_python_inventory_error(&err)
+        ))
+    })?;
     build_runtime(inventory, Some(settings), plugin_manager, runner)
+}
+
+async fn build_runtime_from_settings_async(
+    settings: Settings,
+    plugin_manager: genja_plugin_manager::PluginManager,
+    runner: Option<&str>,
+) -> PyResult<PyGenja> {
+    settings.validate().map_err(|err| {
+        PyValueError::new_err(format!("failed to validate runtime settings: {err}"))
+    })?;
+    let inventory = load_inventory_from_settings_async_strict(&settings, &plugin_manager)
+        .await
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "failed to build Genja runtime: {}",
+                format_python_inventory_error(&err)
+            ))
+        })?;
+    build_runtime(inventory, Some(settings), plugin_manager, runner)
+}
+
+fn format_python_inventory_error(err: &GenjaError) -> String {
+    match err {
+        GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(name) => {
+            format!(
+                "async inventory plugin '{name}' requires async runtime construction.\n\nUse one of:\n- `await Genja.from_settings_async(...)`\n- `await Genja.from_settings_file_async(...)`"
+            )
+        }
+        GenjaError::SyncInventoryPluginRequiresSyncConstruction(name) => {
+            format!(
+                "sync inventory plugin '{name}' requires sync runtime construction.\n\nUse one of:\n- `Genja.from_settings(...)`\n- `Genja.from_settings_file(...)`\n\nOr change the inventory plugin to an async implementation before using an async constructor."
+            )
+        }
+        _ => err.to_string(),
+    }
 }
 
 /// Loads inventory from settings using the configured inventory plugin.
 ///
 /// This function loads the inventory by selecting and invoking the appropriate inventory
-/// plugin based on the settings configuration. It first checks if a specific plugin is
-/// configured in the settings. If no plugin is specified, it falls back to the default
-/// "FileInventoryPlugin". The function validates that the selected plugin exists and is
-/// actually an inventory plugin before attempting to load.
+/// plugin based on the settings configuration. Settings construction and deserialization
+/// are responsible for applying default inventory plugin values; this function treats the
+/// configured plugin name literally. The function validates that the selected plugin exists
+/// and is actually an inventory plugin before attempting to load.
 ///
 /// # Parameters
 ///
@@ -2030,7 +2172,7 @@ fn build_runtime_from_settings(
 /// - The configured inventory plugin is not found in the plugin manager
 /// - The configured plugin exists but is not an inventory plugin
 /// - The inventory plugin fails to load the inventory from the settings
-/// - The default "FileInventoryPlugin" cannot be found when no plugin is specified
+/// - The configured inventory plugin name is empty or cannot be found
 fn load_inventory_from_settings(
     settings: &Settings,
     plugin_manager: &genja_plugin_manager::PluginManager,
@@ -2038,32 +2180,52 @@ fn load_inventory_from_settings(
     let inventory_cfg = settings.inventory();
     let plugin_name = inventory_cfg.plugin();
 
-    if !plugin_name.is_empty() {
-        if let Some(plugin) = plugin_manager.get_inventory_plugin(plugin_name) {
-            return plugin
-                .load(settings, plugin_manager)
-                .map_err(GenjaError::from);
-        }
-
-        if plugin_manager.get_plugin(plugin_name).is_some() {
-            return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
-        }
-
-        return Err(GenjaError::PluginNotFound(plugin_name.to_string()));
-    }
-
-    let default_name = "FileInventoryPlugin";
-    if let Some(plugin) = plugin_manager.get_inventory_plugin(default_name) {
+    if let Some(plugin) = plugin_manager.get_inventory_plugin(plugin_name) {
         return plugin
             .load(settings, plugin_manager)
             .map_err(GenjaError::from);
     }
 
-    if plugin_manager.get_plugin(default_name).is_some() {
-        return Err(GenjaError::NotInventoryPlugin(default_name.to_string()));
+    if plugin_manager
+        .get_async_inventory_plugin(plugin_name)
+        .is_some()
+    {
+        return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
+            plugin_name.to_string(),
+        ));
     }
 
-    Err(GenjaError::PluginNotFound(default_name.to_string()))
+    if plugin_manager.get_plugin(plugin_name).is_some() {
+        return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
+    }
+
+    Err(GenjaError::PluginNotFound(plugin_name.to_string()))
+}
+
+async fn load_inventory_from_settings_async_strict(
+    settings: &Settings,
+    plugin_manager: &genja_plugin_manager::PluginManager,
+) -> Result<Inventory, GenjaError> {
+    let plugin_name = settings.inventory().plugin();
+
+    if let Some(plugin) = plugin_manager.get_async_inventory_plugin(plugin_name) {
+        return plugin
+            .load_async(settings, plugin_manager)
+            .await
+            .map_err(GenjaError::from);
+    }
+
+    if plugin_manager.get_inventory_plugin(plugin_name).is_some() {
+        return Err(GenjaError::SyncInventoryPluginRequiresSyncConstruction(
+            plugin_name.to_string(),
+        ));
+    }
+
+    if plugin_manager.get_plugin(plugin_name).is_some() {
+        return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
+    }
+
+    Err(GenjaError::PluginNotFound(plugin_name.to_string()))
 }
 
 #[cfg(test)]

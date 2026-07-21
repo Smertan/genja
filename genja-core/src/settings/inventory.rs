@@ -69,7 +69,7 @@ impl OptionsConfigBuilder {
 /// inventory files are loaded. The transform itself is then applied lazily
 /// when inventory data is accessed or resolved.
 #[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(deny_unknown_fields)]
+#[serde(default, deny_unknown_fields)]
 pub struct InventoryConfig {
     #[serde(default = "get_inventory_plugin_config")]
     pub(super) plugin: String,

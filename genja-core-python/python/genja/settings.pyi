@@ -286,7 +286,8 @@ class Settings:
 
     Settings combine core behavior, inventory loading, SSH, runner, and logging
     configuration. They can be passed to `Genja.from_settings(...)`,
-    `Genja.from_hosts(...)`, or `Genja.from_inventory(...)`.
+    `Genja.from_settings_async(...)`, `Genja.from_hosts(...)`, or
+    `Genja.from_inventory(...)`.
     """
 
     def __init__(

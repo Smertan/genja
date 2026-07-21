@@ -10,8 +10,34 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from .genja import Genja, TaskResults, Tasks
+    from .genja import Genja, PluginManager, Settings, TaskResults, Tasks
     from .task import GenjaTaskProtocol
+
+
+async def from_settings_async(
+    runtime_class: type["Genja"],
+    settings: "Settings",
+    plugin_manager: "PluginManager | None" = None,
+) -> "Genja":
+    """Build a runtime from programmatic settings using async inventory loading."""
+    runtime_class_any = cast(Any, runtime_class)
+    return await runtime_class_any._from_settings_async_native(
+        settings,
+        plugin_manager=plugin_manager,
+    )
+
+
+async def from_settings_file_async(
+    runtime_class: type["Genja"],
+    path: str,
+    plugin_manager: "PluginManager | None" = None,
+) -> "Genja":
+    """Build a runtime from a settings file using async inventory loading."""
+    runtime_class_any = cast(Any, runtime_class)
+    return await runtime_class_any._from_settings_file_async_native(
+        path,
+        plugin_manager=plugin_manager,
+    )
 
 
 async def run_task_async(
