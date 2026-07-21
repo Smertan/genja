@@ -390,10 +390,10 @@
 use genja::Genja as RuntimeGenja;
 use genja_core::inventory::{Defaults, Groups, Hosts, Inventory};
 use genja_core::{GenjaError, Settings};
+use pyo3::PyTypeInfo;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
-use pyo3::PyTypeInfo;
 use pyo3_async_runtimes::tokio::future_into_py;
 use serde::de::DeserializeOwned;
 use std::cell::{Cell, RefCell};
