@@ -19,9 +19,23 @@ async def from_settings_async(
     settings: "Settings",
     plugin_manager: "PluginManager | None" = None,
 ) -> "Genja":
+    """Build a runtime from programmatic settings using async inventory loading."""
     runtime_class_any = cast(Any, runtime_class)
     return await runtime_class_any._from_settings_async_native(
         settings,
+        plugin_manager=plugin_manager,
+    )
+
+
+async def from_settings_file_async(
+    runtime_class: type["Genja"],
+    path: str,
+    plugin_manager: "PluginManager | None" = None,
+) -> "Genja":
+    """Build a runtime from a settings file using async inventory loading."""
+    runtime_class_any = cast(Any, runtime_class)
+    return await runtime_class_any._from_settings_file_async_native(
+        path,
         plugin_manager=plugin_manager,
     )
 

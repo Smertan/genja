@@ -127,10 +127,11 @@ should load inventory from `settings.inventory`:
     runtime = genja.Genja.from_settings(settings)
     ```
 
-Use `Genja::from_settings_async(...)` or `Genja.from_settings_async(...)` when
-programmatic settings select an async inventory plugin. Async construction is
-strict: the selected plugin must be async-capable; use the sync constructors for
-sync-only inventory plugins such as `FileInventoryPlugin`.
+Use `Genja::from_settings_async(...)` / `Genja.from_settings_async(...)` for
+programmatic settings, or `Genja.from_settings_file_async(...)` for Python
+settings files, when the selected inventory plugin is async. Async construction
+is strict: the selected plugin must be async-capable; use the sync constructors
+for sync-only inventory plugins such as `FileInventoryPlugin`.
 
 === ":fontawesome-brands-rust: Rust"
 
@@ -174,6 +175,12 @@ sync-only inventory plugins such as `FileInventoryPlugin`.
     )
 
     runtime = await genja.Genja.from_settings_async(settings, plugin_manager=plugins)
+
+    # Or load settings from a file with the same strict async inventory contract.
+    runtime = await genja.Genja.from_settings_file_async(
+        "settings.yaml",
+        plugin_manager=plugins,
+    )
     ```
 
 ### With Explicit Inventory

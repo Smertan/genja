@@ -103,6 +103,27 @@ async def test_genja_from_settings_async_accepts_async_python_inventory_plugin_m
 
 
 @pytest.mark.asyncio
+async def test_genja_from_settings_file_async_accepts_async_python_inventory_plugin_manager(
+    tmp_path,
+):
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text(
+        "inventory:\n  plugin: python_async_inventory\nrunner:\n  plugin: serial\n"
+    )
+    manager = genja.PluginManager()
+    manager.register_plugin(AsyncInventoryPlugin())
+
+    runtime = await genja.Genja.from_settings_file_async(
+        str(settings_path),
+        plugin_manager=manager,
+    )
+
+    assert runtime.inventory_loaded()
+    assert runtime.host_ids() == ["router1", "router2"]
+    assert runtime.settings().inventory.plugin == "python_async_inventory"
+
+
+@pytest.mark.asyncio
 async def test_genja_from_settings_async_rejects_sync_only_inventory_plugin():
     manager = genja.PluginManager()
     manager.register_plugin(StaticInventoryPlugin())
@@ -112,6 +133,22 @@ async def test_genja_from_settings_async_rejects_sync_only_inventory_plugin():
 
     with pytest.raises(ValueError, match="sync inventory plugin 'python_inventory'"):
         await genja.Genja.from_settings_async(settings, plugin_manager=manager)
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_file_async_rejects_sync_only_inventory_plugin(
+    tmp_path,
+):
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("inventory:\n  plugin: python_inventory\n")
+    manager = genja.PluginManager()
+    manager.register_plugin(StaticInventoryPlugin())
+
+    with pytest.raises(ValueError, match="sync inventory plugin 'python_inventory'"):
+        await genja.Genja.from_settings_file_async(
+            str(settings_path),
+            plugin_manager=manager,
+        )
 
 
 @pytest.mark.asyncio

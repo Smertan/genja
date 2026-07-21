@@ -159,8 +159,8 @@ the Rust runtime.
 
 Inventory plugins use strict constructor matching: use `def load(...)` with
 `Genja.from_settings(...)` for synchronous inventory loading, or
-`async def load(...)` with `await Genja.from_settings_async(...)` for
-asynchronous inventory loading.
+`async def load(...)` with `await Genja.from_settings_async(...)` or
+`await Genja.from_settings_file_async(...)` for asynchronous inventory loading.
 
 ```python
 from genja.inventory import InventoryPluginBase

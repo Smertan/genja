@@ -247,9 +247,10 @@ settings = genja.Settings(
 genja = genja.Genja.from_settings(settings)
 ```
 
-Use `from_settings_async(...)` when programmatic settings select an async
-inventory plugin. Async construction is strict: the selected inventory plugin
-must be async-capable, and sync-only inventory plugins such as the default
+Use `from_settings_async(...)` for programmatic settings or
+`from_settings_file_async(...)` for settings files when the selected inventory
+plugin is async. Async construction is strict: the selected inventory plugin must
+be async-capable, and sync-only inventory plugins such as the default
 `FileInventoryPlugin` are rejected.
 
 ```python
@@ -276,6 +277,12 @@ settings = genja.Settings(
 )
 
 genja = await genja.Genja.from_settings_async(settings, plugin_manager=plugins)
+
+# Or load settings from a file with the same strict async inventory contract.
+genja = await genja.Genja.from_settings_file_async(
+    "config.yaml",
+    plugin_manager=plugins,
+)
 ```
 
 Programmatic construction itself does not read files, but runtime creation
@@ -298,7 +305,7 @@ genja = genja.Genja.from_settings_file("config.yaml", plugin_manager=plugins)
 ```
 
 The same `plugin_manager` argument is available on `Genja.from_settings(...)`
-and `Genja.from_settings_async(...)` for Python-authored inventory plugins.
+and the async settings constructors for Python-authored inventory plugins.
 
 ## Development
 

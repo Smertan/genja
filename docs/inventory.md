@@ -336,8 +336,9 @@ Python and Rust both support async inventory loading. Async runtime construction
 is strict: Rust `Genja::from_settings_async(...)` and
 `Genja::from_settings_file_async(...)` require the selected inventory plugin to
 implement `AsyncPluginInventory`, and Python `Genja.from_settings_async(...)`
-requires an async Python inventory plugin. Use the synchronous constructors for
-sync-only inventory plugins such as `FileInventoryPlugin`.
+or `Genja.from_settings_file_async(...)` requires an async Python inventory
+plugin. Use the synchronous constructors for sync-only inventory plugins such as
+`FileInventoryPlugin`.
 
 === ":fontawesome-brands-rust: Rust"
 
@@ -394,8 +395,9 @@ sync-only inventory plugins such as `FileInventoryPlugin`.
 
 === ":fontawesome-brands-python: Python"
     Python async inventory loaders use the same base class and
-    `Genja.from_settings_async(...)`. Pass the plugin manager when loading
-    settings so the runtime can resolve the Python plugin by name.
+    `Genja.from_settings_async(...)` or `Genja.from_settings_file_async(...)`.
+    Pass the plugin manager when loading settings so the runtime can resolve the
+    Python plugin by name.
 
     ```python
     import genja
@@ -430,6 +432,11 @@ sync-only inventory plugins such as `FileInventoryPlugin`.
 
     runtime = await genja.Genja.from_settings_async(
         settings,
+        plugin_manager=plugins,
+    )
+
+    runtime = await genja.Genja.from_settings_file_async(
+        "settings.yaml",
         plugin_manager=plugins,
     )
 
