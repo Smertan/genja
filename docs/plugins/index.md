@@ -131,8 +131,9 @@ invalid plugin identity and should be treated as setup-time validation.
 
 In Python, `PluginManager` is consumed when it is passed into
 `Genja.builder(...)`, `Genja.from_hosts(...)`, `Genja.from_settings(...)`, or
-`Genja.from_settings_async(...)`, or `Genja.from_settings_file(...)`. Do not
-reuse that manager afterward; create a new manager for another runtime.
+`Genja.from_settings_async(...)`, `Genja.from_settings_file(...)`, or
+`Genja.from_settings_file_async(...)`. Do not reuse that manager afterward;
+create a new manager for another runtime.
 
 Inspect registered plugins during setup:
 

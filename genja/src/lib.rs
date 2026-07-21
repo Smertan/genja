@@ -298,9 +298,8 @@ impl Genja {
     /// using the async inventory plugin configured by `settings.inventory()`. This
     /// is the strict async programmatic equivalent of [`Self::from_settings`].
     ///
-    /// Unlike [`Self::from_settings_file_async`], this constructor does not fall
-    /// back to synchronous inventory plugins. If the configured inventory plugin is
-    /// sync-only, runtime construction fails with
+    /// This constructor does not fall back to synchronous inventory plugins. If
+    /// the configured inventory plugin is sync-only, runtime construction fails with
     /// `GenjaError::SyncInventoryPluginRequiresSyncConstruction`.
     ///
     /// # Errors
