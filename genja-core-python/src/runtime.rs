@@ -2052,8 +2052,12 @@ fn build_runtime_from_settings(
     settings.validate().map_err(|err| {
         PyValueError::new_err(format!("failed to validate runtime settings: {err}"))
     })?;
-    let inventory = load_inventory_from_settings(&settings, &plugin_manager)
-        .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?;
+    let inventory = load_inventory_from_settings(&settings, &plugin_manager).map_err(|err| {
+        PyValueError::new_err(format!(
+            "failed to build Genja runtime: {}",
+            format_python_inventory_error(&err)
+        ))
+    })?;
     build_runtime(inventory, Some(settings), plugin_manager, runner)
 }
 
@@ -2067,8 +2071,29 @@ async fn build_runtime_from_settings_async(
     })?;
     let inventory = load_inventory_from_settings_async_strict(&settings, &plugin_manager)
         .await
-        .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?;
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "failed to build Genja runtime: {}",
+                format_python_inventory_error(&err)
+            ))
+        })?;
     build_runtime(inventory, Some(settings), plugin_manager, runner)
+}
+
+fn format_python_inventory_error(err: &GenjaError) -> String {
+    match err {
+        GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(name) => {
+            format!(
+                "async inventory plugin '{name}' requires async runtime construction.\n\nUse:\n- `await Genja.from_settings_async(...)`"
+            )
+        }
+        GenjaError::SyncInventoryPluginRequiresSyncConstruction(name) => {
+            format!(
+                "sync inventory plugin '{name}' requires sync runtime construction.\n\nUse:\n- `Genja.from_settings(...)`\n\nOr change the inventory plugin to an async implementation before using `Genja.from_settings_async(...)`."
+            )
+        }
+        _ => err.to_string(),
+    }
 }
 
 /// Loads inventory from settings using the configured inventory plugin.
