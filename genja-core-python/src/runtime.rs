@@ -2131,12 +2131,12 @@ fn format_python_inventory_error(err: &GenjaError) -> String {
     match err {
         GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(name) => {
             format!(
-                "async inventory plugin '{name}' requires async runtime construction.\n\nUse:\n- `await Genja.from_settings_async(...)`"
+                "async inventory plugin '{name}' requires async runtime construction.\n\nUse one of:\n- `await Genja.from_settings_async(...)`\n- `await Genja.from_settings_file_async(...)`"
             )
         }
         GenjaError::SyncInventoryPluginRequiresSyncConstruction(name) => {
             format!(
-                "sync inventory plugin '{name}' requires sync runtime construction.\n\nUse:\n- `Genja.from_settings(...)`\n\nOr change the inventory plugin to an async implementation before using `Genja.from_settings_async(...)`."
+                "sync inventory plugin '{name}' requires sync runtime construction.\n\nUse one of:\n- `Genja.from_settings(...)`\n- `Genja.from_settings_file(...)`\n\nOr change the inventory plugin to an async implementation before using an async constructor."
             )
         }
         _ => err.to_string(),
