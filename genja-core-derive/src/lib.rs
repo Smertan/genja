@@ -167,6 +167,7 @@ pub fn genja_task(args: TokenStream, input: TokenStream) -> TokenStream {
 struct GenjaTaskArgs {
     name: Option<LitStr>,
     connection_plugin_name: Option<LitStr>,
+    supports_dry_run: Option<LitBool>,
     processors: Vec<LitStr>,
     retry: Option<RetryArgs>,
 }
@@ -203,6 +204,13 @@ impl Parse for GenjaTaskArgs {
                     }
                     args.connection_plugin_name = Some(input.parse()?);
                 }
+                "supports_dry_run" => {
+                    input.parse::<Token![=]>()?;
+                    if args.supports_dry_run.is_some() {
+                        return Err(syn::Error::new_spanned(key, "duplicate `supports_dry_run`"));
+                    }
+                    args.supports_dry_run = Some(input.parse()?);
+                }
                 "processors" => {
                     input.parse::<Token![=]>()?;
                     if !args.processors.is_empty() {
@@ -234,7 +242,7 @@ impl Parse for GenjaTaskArgs {
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "unsupported key; expected `name`, `connection_plugin_name`, `processors`, or `retry(...)`",
+                        "unsupported key; expected `name`, `connection_plugin_name`, `supports_dry_run`, `processors`, or `retry(...)`",
                     ));
                 }
             }
@@ -362,6 +370,8 @@ fn expand_genja_task(
     let self_ty = &item_impl.self_ty;
     let mut has_start = false;
     let mut has_start_async = false;
+    let mut has_dry_run = false;
+    let mut has_dry_run_async = false;
     let mut has_options = false;
     let mut has_sub_tasks = false;
 
@@ -378,6 +388,14 @@ fn expand_genja_task(
             "start_async" => {
                 validate_start_method(method, true)?;
                 has_start_async = true;
+            }
+            "dry_run" => {
+                validate_dry_run_method(method, false)?;
+                has_dry_run = true;
+            }
+            "dry_run_async" => {
+                validate_dry_run_method(method, true)?;
+                has_dry_run_async = true;
             }
             "options" => {
                 validate_options_method(method)?;
@@ -400,6 +418,49 @@ fn expand_genja_task(
                 "define one of `fn start(...)` or `async fn start_async(...)`"
             },
         ));
+    }
+
+    if has_dry_run && has_dry_run_async {
+        return Err(syn::Error::new_spanned(
+            &item_impl.self_ty,
+            "define at most one of `fn dry_run(...)` or `async fn dry_run_async(...)`",
+        ));
+    }
+
+    let supports_dry_run = args
+        .supports_dry_run
+        .as_ref()
+        .map(|value| value.value())
+        .unwrap_or(false);
+    if supports_dry_run {
+        match (has_start, has_start_async, has_dry_run, has_dry_run_async) {
+            (true, false, true, false) | (false, true, false, true) => {}
+            (true, false, false, false) => {
+                return Err(syn::Error::new_spanned(
+                    &item_impl.self_ty,
+                    "`supports_dry_run = true` requires `fn dry_run(...)` for blocking tasks",
+                ));
+            }
+            (false, true, false, false) => {
+                return Err(syn::Error::new_spanned(
+                    &item_impl.self_ty,
+                    "`supports_dry_run = true` requires `async fn dry_run_async(...)` for async tasks",
+                ));
+            }
+            (true, false, false, true) => {
+                return Err(syn::Error::new_spanned(
+                    &item_impl.self_ty,
+                    "`supports_dry_run = true` requires blocking tasks to define `fn dry_run(...)`, not `dry_run_async(...)`",
+                ));
+            }
+            (false, true, true, false) => {
+                return Err(syn::Error::new_spanned(
+                    &item_impl.self_ty,
+                    "`supports_dry_run = true` requires async tasks to define `async fn dry_run_async(...)`, not `dry_run(...)`",
+                ));
+            }
+            _ => {}
+        }
     }
 
     let name = args.name.expect("validated above");
@@ -466,7 +527,30 @@ fn expand_genja_task(
         quote! {}
     };
 
+    let supports_dry_run_impl = if supports_dry_run {
+        quote! {
+            fn supports_dry_run(&self) -> bool {
+                true
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let task_impl = if has_start {
+        let dry_run_impl = if has_dry_run {
+            quote! {
+                fn dry_run(
+                    &self,
+                    host: &genja_core::inventory::Host,
+                    context: &genja_core::task::BlockingTaskRuntimeContext,
+                ) -> Result<genja_core::task::HostTaskResult, genja_core::task::TaskError> {
+                    #self_ty::dry_run(self, host, context)
+                }
+            }
+        } else {
+            quote! {}
+        };
         quote! {
             #[genja_core::async_trait]
             impl genja_core::task::Task for #self_ty {
@@ -478,6 +562,8 @@ fn expand_genja_task(
                     #self_ty::start(self, host, context)
                 }
 
+                #dry_run_impl
+
                 #sub_tasks_impl
 
                 fn execution_mode(&self) -> genja_core::task::TaskExecutionMode {
@@ -486,6 +572,19 @@ fn expand_genja_task(
             }
         }
     } else {
+        let dry_run_impl = if has_dry_run_async {
+            quote! {
+                async fn dry_run_async(
+                    &self,
+                    host: &genja_core::inventory::Host,
+                    context: &genja_core::task::TaskRuntimeContext,
+                ) -> Result<genja_core::task::HostTaskResult, genja_core::task::TaskError> {
+                    #self_ty::dry_run_async(self, host, context).await
+                }
+            }
+        } else {
+            quote! {}
+        };
         quote! {
             #[genja_core::async_trait]
             impl genja_core::task::Task for #self_ty {
@@ -496,6 +595,8 @@ fn expand_genja_task(
                 ) -> Result<genja_core::task::HostTaskResult, genja_core::task::TaskError> {
                     #self_ty::start_async(self, host, context).await
                 }
+
+                #dry_run_impl
 
                 #sub_tasks_impl
 
@@ -523,6 +624,8 @@ fn expand_genja_task(
             #processor_names_impl
 
             #retry_config_impl
+
+            #supports_dry_run_impl
         }
 
         #task_impl
@@ -604,6 +707,57 @@ fn validate_start_method(method: &syn::ImplItemFn, is_async: bool) -> syn::Resul
             "`start_async` must return `Result<HostTaskResult, TaskError>`"
         } else {
             "`start` must return `Result<HostTaskResult, TaskError>`"
+        },
+    )
+}
+
+fn validate_dry_run_method(method: &syn::ImplItemFn, is_async: bool) -> syn::Result<()> {
+    if method.sig.asyncness.is_some() != is_async {
+        let expected = if is_async {
+            "`dry_run_async` must be declared as `async fn`"
+        } else {
+            "`dry_run` must be declared as `fn`, not `async fn`"
+        };
+        return Err(syn::Error::new_spanned(&method.sig.ident, expected));
+    }
+
+    validate_shared_method_shape(method)?;
+
+    if method.sig.inputs.len() != 3 {
+        return Err(syn::Error::new_spanned(
+            &method.sig.inputs,
+            "task dry-run methods must take `&self`, `host`, and `context`",
+        ));
+    }
+
+    let mut inputs = method.sig.inputs.iter();
+    validate_receiver(inputs.next().unwrap())?;
+    validate_typed_arg(
+        inputs.next().unwrap(),
+        is_host_ref,
+        "`host` must be `&Host`",
+    )?;
+    validate_typed_arg(
+        inputs.next().unwrap(),
+        if is_async {
+            is_async_context_ref
+        } else {
+            is_blocking_context_ref
+        },
+        if is_async {
+            "`context` must be `&TaskRuntimeContext`"
+        } else {
+            "`context` must be `&BlockingTaskRuntimeContext`"
+        },
+    )?;
+
+    validate_return_type(
+        &method.sig.output,
+        is_result_host_task_error,
+        if is_async {
+            "`dry_run_async` must return `Result<HostTaskResult, TaskError>`"
+        } else {
+            "`dry_run` must return `Result<HostTaskResult, TaskError>`"
         },
     )
 }

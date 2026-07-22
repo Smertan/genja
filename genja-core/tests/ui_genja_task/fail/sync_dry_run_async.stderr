@@ -1,0 +1,5 @@
+error: `dry_run_async` must be declared as `async fn`
+  --> tests/ui_genja_task/fail/sync_dry_run_async.rs:19:8
+   |
+19 |     fn dry_run_async(
+   |        ^^^^^^^^^^^^^
