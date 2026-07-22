@@ -1089,6 +1089,7 @@ struct HostExecutionMetadataHumanJson {
     attempts: usize,
     retried: bool,
     retry_exhausted: bool,
+    dry_run: bool,
 }
 
 #[derive(Serialize)]
@@ -1222,6 +1223,7 @@ impl From<&HostExecutionMetadata> for HostExecutionMetadataHumanJson {
             attempts: metadata.attempts(),
             retried: metadata.retried(),
             retry_exhausted: metadata.retry_exhausted(),
+            dry_run: metadata.dry_run(),
         }
     }
 }
@@ -1768,6 +1770,7 @@ pub struct HostExecutionMetadata {
     attempts: usize,
     retried: bool,
     retry_exhausted: bool,
+    dry_run: bool,
 }
 
 impl Default for HostExecutionMetadata {
@@ -1780,6 +1783,7 @@ impl Default for HostExecutionMetadata {
             attempts: 1,
             retried: false,
             retry_exhausted: false,
+            dry_run: false,
         }
     }
 }
@@ -1820,6 +1824,11 @@ impl HostExecutionMetadata {
         self
     }
 
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
     pub fn started_at(&self) -> Option<SystemTime> {
         self.started_at
     }
@@ -1851,6 +1860,10 @@ impl HostExecutionMetadata {
 
     pub fn retry_exhausted(&self) -> bool {
         self.retry_exhausted
+    }
+
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
     }
 
     pub fn started_at_display(&self) -> Option<String> {
@@ -3120,6 +3133,11 @@ pub trait TaskInfo {
     fn retry_config(&self) -> Option<&RetryConfig> {
         None
     }
+
+    /// Return whether this task declares support for dry-run execution.
+    fn supports_dry_run(&self) -> bool {
+        false
+    }
 }
 
 /// Sub-task provider interface.
@@ -3177,6 +3195,30 @@ pub trait Task: TaskInfo + Send + Sync {
         )))
     }
 
+    /// Execute a blocking dry run with runtime execution context.
+    fn dry_run(
+        &self,
+        host: &Host,
+        context: &BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "blocking dry_run() not implemented",
+        )))
+    }
+
+    /// Execute an async dry run with runtime execution context.
+    async fn dry_run_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "async dry_run_async() not implemented",
+        )))
+    }
+
     /// Return any sub-tasks for this task.
     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
         Vec::new()
@@ -3216,6 +3258,7 @@ pub struct TaskRuntimeContext {
     execution: TaskExecutionContext,
     connection: Option<Arc<Mutex<dyn Connection>>>,
     current_attempt: usize,
+    dry_run: bool,
 }
 
 impl TaskRuntimeContext {
@@ -3227,6 +3270,7 @@ impl TaskRuntimeContext {
             execution,
             connection,
             current_attempt: 1,
+            dry_run: false,
         }
     }
 
@@ -3247,8 +3291,18 @@ impl TaskRuntimeContext {
         self.current_attempt
     }
 
+    /// Returns true when the current task invocation is a dry run.
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
     pub(crate) fn with_current_attempt(mut self, current_attempt: usize) -> Self {
         self.current_attempt = current_attempt.max(1);
+        self
+    }
+
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
         self
     }
 
@@ -3332,6 +3386,7 @@ pub struct BlockingTaskRuntimeContext {
     execution: TaskExecutionContext,
     connection: Option<BlockingTaskConnection>,
     current_attempt: usize,
+    dry_run: bool,
 }
 
 impl BlockingTaskRuntimeContext {
@@ -3345,6 +3400,7 @@ impl BlockingTaskRuntimeContext {
             connection: connection
                 .map(|connection| BlockingTaskConnection::new(connection, runtime_handle)),
             current_attempt: 1,
+            dry_run: false,
         }
     }
 
@@ -3365,8 +3421,18 @@ impl BlockingTaskRuntimeContext {
         self.current_attempt
     }
 
+    /// Returns true when the current task invocation is a dry run.
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
     pub(crate) fn with_current_attempt(mut self, current_attempt: usize) -> Self {
         self.current_attempt = current_attempt.max(1);
+        self
+    }
+
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
         self
     }
 
@@ -5685,15 +5751,39 @@ mod tests {
 
         assert!(json.contains("\"router1\":{\"outcome\":{\"Passed\":{"));
         assert!(json.contains("\"summary\":\"ok\""));
-        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"2ms\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}"));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"2ms\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false}"));
         assert!(json.contains("\"router2\":{\"outcome\":{\"Failed\":"));
-        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"250us\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}"));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"250us\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false}"));
         assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\""));
-        assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\",\"message\":null}},\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}}"));
+        assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\",\"message\":null}},\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false}}"));
         assert!(!json.contains("\"Passed\":{\"result\":null,\"changed\":false,\"diff\":null,\"summary\":\"ok\",\"warnings\":[],\"messages\":[],\"metadata\":null,\"started_at\""));
         assert!(!json.contains("\"Failed\":{\"kind\":\"Internal\",\"error_type\":\"genja_core::task::tests::TestTaskFailureError\",\"message\":\"task failure test error\",\"retryable\":false,\"details\":null,\"warnings\":[],\"messages\":[],\"started_at\""));
         assert!(!json.contains("\"duration_ns\""));
         assert!(!json.contains("\"duration_ms\""));
+    }
+
+    #[test]
+    fn host_execution_metadata_tracks_dry_run_state() {
+        let metadata = HostExecutionMetadata::new();
+        assert!(!metadata.dry_run());
+
+        let metadata = metadata.with_dry_run(true);
+        assert!(metadata.dry_run());
+
+        let mut results = TaskResults::new("plan");
+        let mut passed = HostTaskResult::passed(TaskSuccess::new().with_changed(true));
+        *passed.execution_metadata_mut() = passed.execution_metadata().clone().with_dry_run(true);
+        results.insert_host_result("router1", passed);
+
+        let raw_json = results
+            .to_raw_json_string()
+            .expect("raw json should serialize dry-run metadata");
+        assert!(raw_json.contains("\"dry_run\":true"));
+
+        let human_json = results
+            .to_json_string()
+            .expect("human json should serialize dry-run metadata");
+        assert!(human_json.contains("\"dry_run\":true"));
     }
 
     #[test]
@@ -5729,6 +5819,7 @@ mod tests {
         assert_eq!(context.current_depth(), 2);
         assert_eq!(context.max_depth(), 5);
         assert_eq!(context.current_attempt(), 1);
+        assert!(!context.dry_run());
         assert!(context.has_connection());
         assert!(context.connection().is_some());
 
@@ -5736,6 +5827,69 @@ mod tests {
             .with_connection(|connection| Ok(connection.is_alive()))
             .expect("connection helper should not fail");
         assert_eq!(is_alive, Some(true));
+    }
+
+    #[test]
+    fn task_runtime_context_exposes_dry_run_state() {
+        let context =
+            TaskRuntimeContext::new(TaskExecutionContext::new(0, 1), None).with_dry_run(true);
+        assert!(context.dry_run());
+
+        run_async(async {
+            let blocking_context = BlockingTaskRuntimeContext::new(
+                TaskExecutionContext::new(0, 1),
+                None,
+                Handle::current(),
+            )
+            .with_dry_run(true);
+            assert!(blocking_context.dry_run());
+        });
+    }
+
+    #[test]
+    fn task_info_defaults_to_no_dry_run_support() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+
+        assert!(!task.supports_dry_run());
+    }
+
+    #[test]
+    fn task_default_dry_run_methods_report_not_implemented() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+        let host = Host::builder().hostname("router1").build();
+
+        run_async(async {
+            let async_context =
+                TaskRuntimeContext::new(TaskExecutionContext::new(0, 1), None).with_dry_run(true);
+            let error = task
+                .dry_run_async(&host, &async_context)
+                .await
+                .expect_err("default async dry-run should fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("dry_run_async() not implemented")
+            );
+
+            let blocking_context = BlockingTaskRuntimeContext::new(
+                TaskExecutionContext::new(0, 1),
+                None,
+                Handle::current(),
+            )
+            .with_dry_run(true);
+            let error = task
+                .dry_run(&host, &blocking_context)
+                .expect_err("default blocking dry-run should fail");
+            assert!(error.to_string().contains("dry_run() not implemented"));
+        });
     }
 
     #[test]

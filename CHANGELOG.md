@@ -6,6 +6,7 @@ All notable changes to this workspace should be documented in this file.
 
 ### Added
 
+- Added core Rust dry-run task capability, context, trait, and execution metadata APIs. Refs: #80
 - Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
 - Added Rust `Genja::from_settings_async(...)` plus Python `Genja.from_settings_async(...)` and `Genja.from_settings_file_async(...)` for strict async inventory loading. Refs: #86
 
