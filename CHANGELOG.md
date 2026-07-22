@@ -4,6 +4,10 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+Changed packages:
+
+- Rust crates: `genja-core`
+
 ### Added
 
 - Added core Rust dry-run task capability, context, trait, and execution metadata APIs. Refs: #80

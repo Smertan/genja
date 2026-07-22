@@ -13,6 +13,9 @@ Repository-specific instructions for AI coding agents working in this workspace.
 ### Format
 
 - Add entries under `Unreleased`.
+- Keep an `Unreleased` changed-package list when modifying release packages, using the existing release-section style:
+  - `Rust crates: ...`
+  - `Python package: ...`
 - Use user-facing headings such as:
   - `Added`
   - `Changed`
