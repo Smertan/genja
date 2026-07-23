@@ -1,5 +1,7 @@
 use genja_core::inventory::{Host, Hosts};
-use genja_core::task::{TaskConnectionResolver, TaskDefinition, TaskInfo, TaskResults};
+use genja_core::task::{
+    TaskConnectionResolver, TaskDefinition, TaskInfo, TaskResults, TaskRunOptions,
+};
 use genja_core::{GenjaError, NatString};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -21,7 +23,7 @@ pub(crate) struct TaskExecutor<'a> {
     hosts: &'a Hosts,
     connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
     runner_config: &'a genja_core::settings::RunnerConfig,
-    max_depth: usize,
+    options: TaskRunOptions,
 }
 
 impl<'a> TaskExecutor<'a> {
@@ -45,13 +47,13 @@ impl<'a> TaskExecutor<'a> {
         hosts: &'a Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &'a genja_core::settings::RunnerConfig,
-        max_depth: usize,
+        options: TaskRunOptions,
     ) -> Self {
         Self {
             hosts,
             connection_resolver,
             runner_config,
-            max_depth,
+            options,
         }
     }
 
@@ -97,7 +99,7 @@ impl<'a> TaskExecutor<'a> {
                     host,
                     self.connection_resolver.clone(),
                     self.runner_config,
-                    self.max_depth,
+                    self.options,
                 )
                 .await?,
             );
@@ -151,17 +153,17 @@ impl<'a> TaskExecutor<'a> {
         host: &Host,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &genja_core::settings::RunnerConfig,
-        max_depth: usize,
+        options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
         let mut results = TaskResults::new(task_definition.name());
         task_definition
-            .start_with_connection_resolver_and_runner_config(
+            .start_with_connection_resolver_runner_config_and_options(
                 host_id.as_str(),
                 host,
                 &mut results,
                 connection_resolver.as_deref(),
                 runner_config,
-                max_depth,
+                options,
             )
             .await?;
         Ok(results)

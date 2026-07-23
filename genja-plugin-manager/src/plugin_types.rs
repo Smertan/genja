@@ -266,7 +266,7 @@
 //! use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 //! use genja_core::inventory::Hosts;
 //! use genja_core::settings::RunnerConfig;
-//! use genja_core::task::{TaskDefinition, TaskResults};
+//! use genja_core::task::{TaskDefinition, TaskResults, TaskRunOptions};
 //!
 //! #[derive(Debug)]
 //! struct ExampleSequentialRunner;
@@ -286,10 +286,10 @@
 //!         hosts: &Hosts,
 //!         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
 //!         runner_config: &RunnerConfig,
-//!         max_depth: usize,
+//!         options: TaskRunOptions,
 //!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Execute task sequentially on each host
-//!         let _ = (task, hosts, connection_resolver, runner_config, max_depth);
+//!         let _ = (task, hosts, connection_resolver, runner_config, options);
 //!         Ok(TaskResults::new("example_sequential"))
 //!     }
 //!
@@ -434,7 +434,9 @@ use genja_core::inventory::{
     ConnectionKey, Hosts, Inventory, ResolvedConnectionParams, TransformFunction,
 };
 use genja_core::settings::RunnerConfig;
-use genja_core::task::{TaskConnectionResolver, TaskDefinition, TaskProcessor, TaskResults, Tasks};
+use genja_core::task::{
+    TaskConnectionResolver, TaskDefinition, TaskProcessor, TaskResults, TaskRunOptions, Tasks,
+};
 use genja_core::{InventoryLoadError, Settings};
 use std::sync::Arc;
 /// Filesystem path to a plugin or plugin metadata entry.
@@ -574,7 +576,7 @@ pub trait PluginRunner: Plugin {
         hosts: &Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        max_depth: usize,
+        options: TaskRunOptions,
     ) -> Result<TaskResults, genja_core::GenjaError>;
 
     /// Run all tasks in the provided task list against the provided hosts.
@@ -588,7 +590,7 @@ pub trait PluginRunner: Plugin {
         hosts: &Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        max_depth: usize,
+        options: TaskRunOptions,
     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
@@ -598,7 +600,7 @@ pub trait PluginRunner: Plugin {
                     hosts,
                     connection_resolver.clone(),
                     runner_config,
-                    max_depth,
+                    options,
                 )
                 .await?,
             );
@@ -853,7 +855,7 @@ mod tests {
             _hosts: &Hosts,
             _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
             _runner_config: &RunnerConfig,
-            _max_depth: usize,
+            _options: TaskRunOptions,
         ) -> Result<TaskResults, genja_core::GenjaError> {
             Ok(TaskResults::new(task.name()))
         }
@@ -1046,9 +1048,14 @@ mod tests {
         tasks.add_task(DummyTask { name: "first" });
         tasks.add_task(DummyTask { name: "second" });
 
-        let results =
-            run_async(runner.run_tasks(&tasks, &Hosts::new(), None, &RunnerConfig::default(), 0))
-                .expect("default run_tasks should execute");
+        let results = run_async(runner.run_tasks(
+            &tasks,
+            &Hosts::new(),
+            None,
+            &RunnerConfig::default(),
+            TaskRunOptions::new(0),
+        ))
+        .expect("default run_tasks should execute");
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].task_name(), "first");

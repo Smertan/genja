@@ -30,7 +30,7 @@
 //! use genja_core::settings::RunnerConfig;
 //! use genja_core::inventory::{Host, Hosts};
 //! use genja_core::task::{
-//!     HostTaskResult, TaskDefinition, TaskError, TaskRuntimeContext, TaskSuccess,
+//!     HostTaskResult, TaskDefinition, TaskError, TaskRuntimeContext, TaskRunOptions, TaskSuccess,
 //! };
 //! use genja_plugin_manager::plugin_types::PluginRunner;
 //! use tokio::runtime::Builder;
@@ -55,7 +55,13 @@
 //! let config = RunnerConfig::default();
 //!
 //! let runtime = Builder::new_current_thread().enable_all().build().unwrap();
-//! let results = runtime.block_on(runner.run_task(&task, &hosts, None, &config, 10))?;
+//! let results = runtime.block_on(runner.run_task(
+//!     &task,
+//!     &hosts,
+//!     None,
+//!     &config,
+//!     TaskRunOptions::new(10),
+//! ))?;
 //! # Ok::<(), genja_core::GenjaError>(())
 //! ```
 //!
@@ -76,7 +82,7 @@ use async_trait::async_trait;
 use genja_core::GenjaError;
 use genja_core::inventory::Hosts;
 use genja_core::settings::RunnerConfig;
-use genja_core::task::{TaskDefinition, TaskResults, Tasks};
+use genja_core::task::{TaskDefinition, TaskResults, TaskRunOptions, Tasks};
 use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 
 /// Built-in serial task runner plugin.
@@ -105,7 +111,7 @@ impl PluginRunner for SerialRunnerPlugin {
     /// * `hosts` - The inventory of hosts on which to execute the task.
     /// * `connection_resolver` - Optional shared resolver used for per-host connection selection.
     /// * `_runner_config` - The runner configuration (currently unused in serial execution).
-    /// * `max_depth` - The maximum depth for nested task execution, used to prevent infinite recursion.
+    /// * `options` - Runtime options for task execution.
     ///
     /// # Returns
     ///
@@ -117,9 +123,9 @@ impl PluginRunner for SerialRunnerPlugin {
         hosts: &Hosts,
         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        max_depth: usize,
+        options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
-        TaskExecutor::new(hosts, connection_resolver, runner_config, max_depth)
+        TaskExecutor::new(hosts, connection_resolver, runner_config, options)
             .run_definition(task)
             .await
     }
@@ -135,7 +141,7 @@ impl PluginRunner for SerialRunnerPlugin {
     /// * `hosts` - The inventory of hosts on which to execute each task.
     /// * `connection_resolver` - Optional shared resolver used for per-host connection selection.
     /// * `runner_config` - The runner configuration forwarded to [`Self::run_task`].
-    /// * `max_depth` - The maximum depth for nested task execution.
+    /// * `options` - Runtime options for task execution.
     ///
     /// # Returns
     ///
@@ -147,7 +153,7 @@ impl PluginRunner for SerialRunnerPlugin {
         hosts: &Hosts,
         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        max_depth: usize,
+        options: TaskRunOptions,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
@@ -157,7 +163,7 @@ impl PluginRunner for SerialRunnerPlugin {
                     hosts,
                     connection_resolver.clone(),
                     runner_config,
-                    max_depth,
+                    options,
                 )
                 .await?,
             );

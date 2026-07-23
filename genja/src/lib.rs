@@ -63,6 +63,7 @@ pub use genja_core;
 pub use genja_core::GenjaError;
 use genja_core::inventory::{Host, Hosts, Inventory};
 use genja_core::settings::RunnerConfig;
+pub use genja_core::task::TaskRunOptions;
 use genja_core::task::{
     Task, TaskConnectionResolver, TaskDefinition, TaskInfo, TaskProcessorResolver, TaskResults,
     TaskResultsSummary, Tasks,
@@ -967,11 +968,24 @@ impl Genja {
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
         ensure_sync_execution_outside_tokio("run_task()", "run_task_async()")?;
+        self.run_task_with_options(task, TaskRunOptions::new(max_depth))
+    }
+
+    /// Executes a task using explicit runtime options.
+    pub fn run_task_with_options<T: Task + 'static>(
+        &self,
+        task: T,
+        options: TaskRunOptions,
+    ) -> Result<TaskResults, GenjaError> {
+        ensure_sync_execution_outside_tokio(
+            "run_task_with_options()",
+            "run_task_with_options_async()",
+        )?;
         let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_task_async(task, max_depth))
+        runtime.block_on(self.run_task_with_options_async(task, options))
     }
 
     /// Executes a task against the currently selected hosts using the configured runner plugin.
@@ -984,15 +998,26 @@ impl Genja {
         task: T,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
-        self.run_task_definition_async(TaskDefinition::new(task), max_depth)
+        self.run_task_with_options_async(task, TaskRunOptions::new(max_depth))
+            .await
+    }
+
+    /// Executes a task asynchronously using explicit runtime options.
+    pub async fn run_task_with_options_async<T: Task + 'static>(
+        &self,
+        task: T,
+        options: TaskRunOptions,
+    ) -> Result<TaskResults, GenjaError> {
+        self.run_task_definition_async(TaskDefinition::new(task), options)
             .await
     }
 
     async fn run_task_definition_async(
         &self,
         task_definition: TaskDefinition,
-        max_depth: usize,
+        options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
+        let max_depth = options.max_depth();
         let hosts = self.selected_hosts()?;
         let host_count = hosts.len();
         let inventory = self
@@ -1023,7 +1048,7 @@ impl Genja {
                 &hosts,
                 Some(connection_resolver),
                 self.settings.runner(),
-                max_depth,
+                options,
             )
             .await?;
         let summary = results.task_summary();
@@ -1042,11 +1067,24 @@ impl Genja {
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         ensure_sync_execution_outside_tokio("run_tasks()", "run_tasks_async()")?;
+        self.run_tasks_with_options(tasks, TaskRunOptions::new(max_depth))
+    }
+
+    /// Executes an ordered list of root task trees using explicit runtime options.
+    pub fn run_tasks_with_options(
+        &self,
+        tasks: Tasks,
+        options: TaskRunOptions,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        ensure_sync_execution_outside_tokio(
+            "run_tasks_with_options()",
+            "run_tasks_with_options_async()",
+        )?;
         let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_tasks_async(tasks, max_depth))
+        runtime.block_on(self.run_tasks_with_options_async(tasks, options))
     }
 
     /// Executes an ordered list of root task trees using the configured runner plugin.
@@ -1056,9 +1094,20 @@ impl Genja {
     /// async application work.
     pub async fn run_tasks_async(
         &self,
-        mut tasks: Tasks,
+        tasks: Tasks,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
+        self.run_tasks_with_options_async(tasks, TaskRunOptions::new(max_depth))
+            .await
+    }
+
+    /// Executes an ordered list of root task trees asynchronously using explicit runtime options.
+    pub async fn run_tasks_with_options_async(
+        &self,
+        mut tasks: Tasks,
+        options: TaskRunOptions,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        let max_depth = options.max_depth();
         let hosts = self.selected_hosts()?;
         let host_count = hosts.len();
         let inventory = self
@@ -1095,7 +1144,7 @@ impl Genja {
                 &hosts,
                 Some(connection_resolver),
                 self.settings.runner(),
-                max_depth,
+                options,
             )
             .await?;
         for result in &results {
@@ -1183,7 +1232,7 @@ impl Default for Genja {
 
 #[cfg(test)]
 mod tests {
-    use super::{Genja, GenjaError, genja_task};
+    use super::{Genja, GenjaError, TaskRunOptions, genja_task};
     use async_trait::async_trait;
     use genja_core::Settings;
     use genja_core::inventory::{
@@ -1424,6 +1473,32 @@ mod tests {
         saw_connection: Arc<AtomicBool>,
     }
 
+    struct UnsupportedDryRunTask {
+        start_calls: Arc<AtomicUsize>,
+    }
+
+    struct AsyncDryRunRuntimeTask {
+        start_calls: Arc<AtomicUsize>,
+        dry_run_calls: Arc<AtomicUsize>,
+        saw_dry_run_context: Arc<AtomicBool>,
+    }
+
+    struct BlockingDryRunRuntimeTask {
+        start_calls: Arc<AtomicUsize>,
+        dry_run_calls: Arc<AtomicUsize>,
+        saw_dry_run_context: Arc<AtomicBool>,
+    }
+
+    struct DryRunConnectionAwareTask {
+        start_calls: Arc<AtomicUsize>,
+        saw_connection: Arc<AtomicBool>,
+        saw_dry_run_context: Arc<AtomicBool>,
+    }
+
+    struct FlakyDryRunTask {
+        attempts: Arc<AtomicUsize>,
+    }
+
     struct BlockingSuccessTask;
 
     struct SlowBlockingTask {
@@ -1652,6 +1727,156 @@ mod tests {
 
         fn execution_mode(&self) -> TaskExecutionMode {
             TaskExecutionMode::Async
+        }
+    }
+
+    impl TaskInfo for UnsupportedDryRunTask {
+        fn name(&self) -> &str {
+            "unsupported-dry-run"
+        }
+    }
+
+    #[async_trait]
+    impl Task for UnsupportedDryRunTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[genja_task(name = "async-dry-run-runtime", supports_dry_run = true)]
+    impl AsyncDryRunRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary("started"),
+            ))
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.dry_run_calls.fetch_add(1, Ordering::SeqCst);
+            self.saw_dry_run_context
+                .store(context.dry_run(), Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("planned"),
+            ))
+        }
+    }
+
+    #[genja_task(name = "blocking-dry-run-runtime", supports_dry_run = true)]
+    impl BlockingDryRunRuntimeTask {
+        fn start(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary("started"),
+            ))
+        }
+
+        fn dry_run(
+            &self,
+            _host: &Host,
+            context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.dry_run_calls.fetch_add(1, Ordering::SeqCst);
+            self.saw_dry_run_context
+                .store(context.dry_run(), Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("planned"),
+            ))
+        }
+    }
+
+    #[genja_task(
+        name = "dry-run-connection-aware",
+        connection_plugin_name = "test",
+        supports_dry_run = true
+    )]
+    impl DryRunConnectionAwareTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.saw_dry_run_context
+                .store(context.dry_run(), Ordering::SeqCst);
+            let alive = if let Some(connection) = context.connection() {
+                let guard = connection.lock().await;
+                guard.is_alive()
+            } else {
+                false
+            };
+            self.saw_connection.store(alive, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_changed(alive),
+            ))
+        }
+    }
+
+    #[genja_task(
+        name = "flaky-dry-run",
+        supports_dry_run = true,
+        retry(allow = true, max_attempts = 3)
+    )]
+    impl FlakyDryRunTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary("started"),
+            ))
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt == 1 {
+                return Ok(HostTaskResult::failed(
+                    TaskFailure::new(std::io::Error::other("temporary dry-run failure"))
+                        .with_retryable(true),
+                ));
+            }
+
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary("dry-run recovered"),
+            ))
         }
     }
 
@@ -2324,6 +2549,148 @@ mod tests {
             assert!(host_result.execution_metadata().retried());
             assert!(!host_result.execution_metadata().retry_exhausted());
         }
+    }
+
+    #[test]
+    fn run_task_with_options_dry_run_calls_async_dry_run_not_start() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let dry_run_calls = Arc::new(AtomicUsize::new(0));
+        let saw_dry_run_context = Arc::new(AtomicBool::new(false));
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja
+            .run_task_with_options(
+                AsyncDryRunRuntimeTask {
+                    start_calls: Arc::clone(&start_calls),
+                    dry_run_calls: Arc::clone(&dry_run_calls),
+                    saw_dry_run_context: Arc::clone(&saw_dry_run_context),
+                },
+                TaskRunOptions::new(0).with_dry_run(true),
+            )
+            .expect("dry-run should execute");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(dry_run_calls.load(Ordering::SeqCst), 2);
+        assert!(saw_dry_run_context.load(Ordering::SeqCst));
+        for (_, host_result) in results.hosts().iter() {
+            assert!(host_result.is_passed());
+            assert!(host_result.execution_metadata().dry_run());
+            assert!(
+                host_result
+                    .success()
+                    .is_some_and(|success| success.changed())
+            );
+        }
+    }
+
+    #[test]
+    fn run_task_with_options_dry_run_calls_blocking_dry_run_not_start() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let dry_run_calls = Arc::new(AtomicUsize::new(0));
+        let saw_dry_run_context = Arc::new(AtomicBool::new(false));
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja
+            .run_task_with_options(
+                BlockingDryRunRuntimeTask {
+                    start_calls: Arc::clone(&start_calls),
+                    dry_run_calls: Arc::clone(&dry_run_calls),
+                    saw_dry_run_context: Arc::clone(&saw_dry_run_context),
+                },
+                TaskRunOptions::new(0).with_dry_run(true),
+            )
+            .expect("blocking dry-run should execute");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(dry_run_calls.load(Ordering::SeqCst), 2);
+        assert!(saw_dry_run_context.load(Ordering::SeqCst));
+        for (_, host_result) in results.hosts().iter() {
+            assert!(host_result.is_passed());
+            assert!(host_result.execution_metadata().dry_run());
+        }
+    }
+
+    #[test]
+    fn run_task_with_options_dry_run_fails_unsupported_task_without_start() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja
+            .run_task_with_options(
+                UnsupportedDryRunTask {
+                    start_calls: Arc::clone(&start_calls),
+                },
+                TaskRunOptions::new(0).with_dry_run(true),
+            )
+            .expect("unsupported dry-run should be captured in results");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        for (_, host_result) in results.hosts().iter() {
+            let failure = host_result.failure().expect("host should fail");
+            assert!(matches!(
+                failure.kind(),
+                genja_core::task::TaskFailureKind::Unsupported
+            ));
+            assert!(failure.message().contains("does not support dry-run"));
+            assert!(host_result.execution_metadata().dry_run());
+        }
+    }
+
+    #[test]
+    fn run_task_with_options_dry_run_opens_declared_connections() {
+        let mut plugin_manager = PluginManager::new();
+        plugin_manager.register_plugin(Plugins::Connection(Box::new(TestConnectionPlugin)));
+        let saw_connection = Arc::new(AtomicBool::new(false));
+        let saw_dry_run_context = Arc::new(AtomicBool::new(false));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let genja = Genja::builder(test_inventory())
+            .with_plugin_manager(plugin_manager)
+            .build()
+            .expect("genja should build with test connection plugin");
+
+        let results = genja
+            .run_task_with_options(
+                DryRunConnectionAwareTask {
+                    start_calls: Arc::clone(&start_calls),
+                    saw_connection: Arc::clone(&saw_connection),
+                    saw_dry_run_context: Arc::clone(&saw_dry_run_context),
+                },
+                TaskRunOptions::new(0).with_dry_run(true),
+            )
+            .expect("dry-run should resolve connection");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        assert!(saw_connection.load(Ordering::SeqCst));
+        assert!(saw_dry_run_context.load(Ordering::SeqCst));
+        assert_eq!(results.passed_hosts().len(), 2);
+    }
+
+    #[test]
+    fn run_task_with_options_dry_run_uses_existing_retry_policy() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let mut hosts = Hosts::new();
+        hosts.add_host(
+            "router1",
+            Host::builder().hostname("10.0.0.1").platform("ios").build(),
+        );
+        let genja = Genja::from_inventory(Inventory::builder().hosts(hosts).build());
+
+        let results = genja
+            .run_task_with_options(
+                FlakyDryRunTask {
+                    attempts: Arc::clone(&attempts),
+                },
+                TaskRunOptions::new(0).with_dry_run(true),
+            )
+            .expect("dry-run should retry retryable failures");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let router1 = results
+            .host_result("router1")
+            .expect("router1 result should exist");
+        assert!(router1.execution_metadata().dry_run());
+        assert_eq!(router1.execution_metadata().attempts(), 2);
+        assert!(router1.execution_metadata().retried());
     }
 
     #[tokio::test]

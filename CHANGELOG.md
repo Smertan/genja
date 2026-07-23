@@ -6,17 +6,20 @@ All notable changes to this workspace should be documented in this file.
 
 Changed packages:
 
-- Rust crates: `genja-core`, `genja-core-derive`
+- Rust crates: `genja`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`
+- Python package: `genja-py`
 
 ### Added
 
 - Added core Rust dry-run task capability, context, trait, and execution metadata APIs. Refs: #80
 - Added Rust `#[genja_task(...)]` dry-run metadata with `supports_dry_run = true`. Refs: #80
+- Added Rust runtime task execution options with dry-run support through `Genja::run_task_with_options(...)`, `Genja::run_task_with_options_async(...)`, `Genja::run_tasks_with_options(...)`, and `Genja::run_tasks_with_options_async(...)`. Refs: #80
 - Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
 - Added Rust `Genja::from_settings_async(...)` plus Python `Genja.from_settings_async(...)` and `Genja.from_settings_file_async(...)` for strict async inventory loading. Refs: #86
 
 ### Changed
 
+- **Breaking:** Rust runner plugins now receive `TaskRunOptions` instead of a bare `max_depth` in `PluginRunner::run_task(...)` and `PluginRunner::run_tasks(...)`. Update runner plugin implementations to accept `options: TaskRunOptions` and read recursion depth with `options.max_depth()`. Refs: #80
 - Improved Python type stubs and editor-facing API documentation for Genja runtime, settings, plugin manager, connection, plugin, and processor APIs. Refs: #94
 - **Breaking:** Rust `Genja::from_settings_file_async(...)` now requires the selected inventory plugin to implement `AsyncPluginInventory` and no longer falls back to synchronous inventory plugins. Python `Genja.from_settings(...)` now rejects async Python inventory plugins; use `await Genja.from_settings_async(...)` instead. Use sync constructors for sync inventory plugins such as `FileInventoryPlugin`, and async constructors for async inventory plugins. Refs: #86
 

@@ -3147,6 +3147,49 @@ pub enum TaskExecutionMode {
     Async,
 }
 
+/// Runtime options for executing a task or ordered task list.
+///
+/// These options represent operator-selected execution behavior for a single
+/// invocation. Task metadata declares what a task supports; run options declare
+/// what the runtime should request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskRunOptions {
+    max_depth: usize,
+    dry_run: bool,
+}
+
+impl TaskRunOptions {
+    /// Create run options for normal task execution with the provided maximum depth.
+    pub fn new(max_depth: usize) -> Self {
+        Self {
+            max_depth,
+            dry_run: false,
+        }
+    }
+
+    /// Return the maximum recursive task depth for this invocation.
+    pub fn max_depth(&self) -> usize {
+        self.max_depth
+    }
+
+    /// Return whether this invocation should run in dry-run mode.
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    /// Set whether this invocation should run in dry-run mode.
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
+    /// Set the maximum recursive task depth for this invocation.
+    pub fn with_max_depth(mut self, max_depth: usize) -> Self {
+        self.max_depth = max_depth;
+        self
+    }
+}
+
 /// Core task interface required for execution.
 ///
 /// # Example
@@ -3773,12 +3816,24 @@ impl TaskDefinition {
         results: &mut TaskResults,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
+        self.start_with_options(hostname, host, results, TaskRunOptions::new(max_depth))
+            .await
+    }
+
+    /// Execute this task and all its sub-tasks with explicit runtime options.
+    pub async fn start_with_options(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        options: TaskRunOptions,
+    ) -> Result<(), crate::GenjaError> {
         self.start_with_retry_defaults(
             hostname,
             host,
             results,
             None,
-            max_depth,
+            options,
             TaskRetryDefaults::default(),
         )
         .await
@@ -3793,12 +3848,31 @@ impl TaskDefinition {
         connection_resolver: Option<&dyn TaskConnectionResolver>,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
+        self.start_with_connection_resolver_and_options(
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            TaskRunOptions::new(max_depth),
+        )
+        .await
+    }
+
+    /// Executes this task definition with explicit runtime options and task-scoped connections.
+    pub async fn start_with_connection_resolver_and_options(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        options: TaskRunOptions,
+    ) -> Result<(), crate::GenjaError> {
         self.start_with_retry_defaults(
             hostname,
             host,
             results,
             connection_resolver,
-            max_depth,
+            options,
             TaskRetryDefaults::default(),
         )
         .await
@@ -3814,12 +3888,33 @@ impl TaskDefinition {
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
+        self.start_with_connection_resolver_runner_config_and_options(
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            runner_config,
+            TaskRunOptions::new(max_depth),
+        )
+        .await
+    }
+
+    /// Executes this task definition with runner retry defaults and explicit runtime options.
+    pub async fn start_with_connection_resolver_runner_config_and_options(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        runner_config: &RunnerConfig,
+        options: TaskRunOptions,
+    ) -> Result<(), crate::GenjaError> {
         self.start_with_retry_defaults(
             hostname,
             host,
             results,
             connection_resolver,
-            max_depth,
+            options,
             TaskRetryDefaults::from(runner_config),
         )
         .await
@@ -3831,7 +3926,7 @@ impl TaskDefinition {
         host: &Host,
         results: &mut TaskResults,
         connection_resolver: Option<&dyn TaskConnectionResolver>,
-        max_depth: usize,
+        options: TaskRunOptions,
         retry_defaults: TaskRetryDefaults,
     ) -> Result<(), crate::GenjaError> {
         Self::start_with_depth(
@@ -3844,7 +3939,7 @@ impl TaskDefinition {
             self.processor_names(),
             None,
             0,
-            max_depth,
+            options,
             retry_defaults,
         )
         .await
@@ -3927,9 +4022,10 @@ impl TaskDefinition {
         processor_names: Vec<&str>,
         parent_task_name: Option<&str>,
         depth: usize,
-        max_depth: usize,
+        options: TaskRunOptions,
         retry_defaults: TaskRetryDefaults,
     ) -> Result<(), crate::GenjaError> {
+        let max_depth = options.max_depth();
         if depth > max_depth {
             let started_at = SystemTime::now();
             let finished_at = started_at;
@@ -3950,7 +4046,8 @@ impl TaskDefinition {
                 .clone()
                 .with_attempts(1)
                 .with_retried(false)
-                .with_retry_exhausted(false);
+                .with_retry_exhausted(false)
+                .with_dry_run(options.dry_run());
             results.insert_host_result(hostname, host_result);
             return Ok(());
         }
@@ -4002,7 +4099,8 @@ impl TaskDefinition {
                         .clone()
                         .with_attempts(1)
                         .with_retried(false)
-                        .with_retry_exhausted(false);
+                        .with_retry_exhausted(false)
+                        .with_dry_run(options.dry_run());
                     for processor in &processors {
                         processor.on_instance_finish(&processor_context, &mut host_result)?;
                     }
@@ -4013,6 +4111,35 @@ impl TaskDefinition {
         } else {
             None
         };
+
+        if options.dry_run() && !task.supports_dry_run() {
+            let finished_at = SystemTime::now();
+            let duration_ns = finished_at
+                .duration_since(started_at)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            results.record_execution_timing(started_at, finished_at);
+            let mut host_result = HostTaskResult::failed(
+                TaskFailure::new(crate::GenjaError::Message(format!(
+                    "task '{}' does not support dry-run execution",
+                    task.name()
+                )))
+                .with_kind(TaskFailureKind::Unsupported),
+            )
+            .with_execution_timing(started_at, finished_at, duration_ns);
+            *host_result.execution_metadata_mut() = host_result
+                .execution_metadata()
+                .clone()
+                .with_attempts(1)
+                .with_retried(false)
+                .with_retry_exhausted(false)
+                .with_dry_run(true);
+            for processor in &processors {
+                processor.on_instance_finish(&processor_context, &mut host_result)?;
+            }
+            results.insert_host_result(hostname, host_result);
+            return Ok(());
+        }
 
         let mut attempts = 0;
         let host_result = loop {
@@ -4026,8 +4153,13 @@ impl TaskDefinition {
                 TaskExecutionMode::Async => {
                     let runtime_context =
                         TaskRuntimeContext::new(execution_context, connection.clone())
-                            .with_current_attempt(attempts);
-                    task.start_async(host, &runtime_context).await
+                            .with_current_attempt(attempts)
+                            .with_dry_run(options.dry_run());
+                    if options.dry_run() {
+                        task.dry_run_async(host, &runtime_context).await
+                    } else {
+                        task.start_async(host, &runtime_context).await
+                    }
                 }
                 TaskExecutionMode::Blocking => {
                     let blocking_context = BlockingTaskRuntimeContext::new(
@@ -4035,10 +4167,20 @@ impl TaskDefinition {
                         connection.clone(),
                         Handle::current(),
                     )
-                    .with_current_attempt(attempts);
+                    .with_current_attempt(attempts)
+                    .with_dry_run(options.dry_run());
                     let task = Arc::clone(&task);
                     let host = host.clone();
-                    match task::spawn_blocking(move || task.start(&host, &blocking_context)).await {
+                    let dry_run = options.dry_run();
+                    match task::spawn_blocking(move || {
+                        if dry_run {
+                            task.dry_run(&host, &blocking_context)
+                        } else {
+                            task.start(&host, &blocking_context)
+                        }
+                    })
+                    .await
+                    {
                         Ok(result) => result,
                         Err(err) => Err(TaskError::new(std::io::Error::other(format!(
                             "blocking task join error: {err}"
@@ -4115,7 +4257,8 @@ impl TaskDefinition {
             .clone()
             .with_attempts(attempts)
             .with_retried(attempts > 1)
-            .with_retry_exhausted(retry_exhausted);
+            .with_retry_exhausted(retry_exhausted)
+            .with_dry_run(options.dry_run());
         let duration_display = host_result
             .execution_metadata()
             .duration_display()
@@ -4172,7 +4315,7 @@ impl TaskDefinition {
                 sub_processor_names,
                 Some(task.name()),
                 depth + 1,
-                max_depth,
+                options,
                 retry_defaults,
             )
             .await?;

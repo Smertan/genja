@@ -1075,8 +1075,9 @@ impl PluginRunner for PyRunnerPlugin {
         hosts: &genja_core::inventory::Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        max_depth: usize,
+        options: genja_core::task::TaskRunOptions,
     ) -> Result<TaskResults, genja_core::GenjaError> {
+        let max_depth = options.max_depth();
         let result = Python::attach(|py| {
             let plugin = self.plugin.bind(py);
             let task_payload = Py::new(py, PyTaskDefinition::from_runtime_definition(task.clone()))
@@ -1128,8 +1129,9 @@ impl PluginRunner for PyRunnerPlugin {
         hosts: &genja_core::inventory::Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        max_depth: usize,
+        options: genja_core::task::TaskRunOptions,
     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
+        let max_depth = options.max_depth();
         let has_run_tasks = Python::attach(|py| {
             self.plugin
                 .bind(py)
@@ -1145,7 +1147,7 @@ impl PluginRunner for PyRunnerPlugin {
                         hosts,
                         connection_resolver.clone(),
                         runner_config,
-                        max_depth,
+                        options,
                     )
                     .await?,
                 );
@@ -3545,7 +3547,7 @@ audit = { path = "processor_plugins:MinimalAuditProcessor" }
                     &RunnerConfig::builder()
                         .plugin("python_batch_runner")
                         .build(),
-                    2,
+                    genja_core::task::TaskRunOptions::new(2),
                 ),
             )
             .expect("run_tasks should succeed");
