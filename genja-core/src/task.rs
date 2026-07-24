@@ -4398,6 +4398,10 @@ impl TaskInfo for TaskDefinition {
     fn retry_config(&self) -> Option<&RetryConfig> {
         self.inner.retry_config()
     }
+
+    fn supports_dry_run(&self) -> bool {
+        self.inner.supports_dry_run()
+    }
 }
 
 /// A collection of task definitions that can be executed together.
@@ -4531,6 +4535,8 @@ mod tests {
 
     struct SkippingTask;
 
+    struct DryRunInfoTask;
+
     struct FlakyTask {
         name: &'static str,
         attempts: Arc<AtomicUsize>,
@@ -4635,6 +4641,31 @@ mod tests {
 
         fn processor_names(&self) -> Vec<&str> {
             self.processors.iter().map(String::as_str).collect()
+        }
+    }
+
+    impl TaskInfo for DryRunInfoTask {
+        fn name(&self) -> &str {
+            "dry-run-info"
+        }
+
+        fn supports_dry_run(&self) -> bool {
+            true
+        }
+    }
+
+    #[async_trait]
+    impl Task for DryRunInfoTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -5998,6 +6029,13 @@ mod tests {
         };
 
         assert!(!task.supports_dry_run());
+    }
+
+    #[test]
+    fn task_definition_delegates_dry_run_support() {
+        let task = TaskDefinition::new(DryRunInfoTask);
+
+        assert!(task.supports_dry_run());
     }
 
     #[test]

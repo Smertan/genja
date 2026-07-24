@@ -165,6 +165,70 @@ def test_python_backed_task_applies_retry_delay():
     assert host_result["execution_metadata"]["retried"] is True
 
 
+def test_python_backed_task_dry_run_calls_dry_run_not_start():
+    calls: list[str] = []
+
+    @task(name="preview_backup", supports_dry_run=True)
+    class PreviewBackupTask:
+        def start(self, task, host, context):
+            calls.append("start")
+            return TaskSuccessResult(summary="started")
+
+        def dry_run(self, task, host, context):
+            calls.append("dry_run")
+            assert task.supports_dry_run is True
+            assert context.dry_run is True
+            return TaskSuccessResult(
+                changed=True,
+                diff="- old\n+ new",
+                summary=f"would update {host.hostname}",
+            )
+
+    task_definition = genja.TaskDefinition.from_python_class(PreviewBackupTask)
+    result = task_definition.run_on_host(
+        Host(hostname="router1"),
+        run_options=genja.TaskRunOptions(dry_run=True),
+    )
+
+    assert task_definition.supports_dry_run is True
+    assert calls == ["dry_run"]
+    assert result.passed_hosts == ["router1"]
+    host_result = result.to_dict()["hosts"]["router1"]
+    assert host_result["outcome"]["Passed"]["changed"] is True
+    assert host_result["execution_metadata"]["dry_run"] is True
+
+
+def test_python_backed_task_dry_run_fails_unsupported_without_start():
+    calls: list[str] = []
+
+    @task(name="unsupported_preview")
+    class UnsupportedPreviewTask:
+        def start(self, task, host, context):
+            calls.append("start")
+            return TaskSuccessResult(summary="started")
+
+    task_definition = genja.TaskDefinition.from_python_class(UnsupportedPreviewTask)
+    result = task_definition.run_on_host(
+        Host(hostname="router1"),
+        run_options=genja.TaskRunOptions(dry_run=True),
+    )
+
+    assert task_definition.supports_dry_run is False
+    assert calls == []
+    host_result = result.to_dict()["hosts"]["router1"]
+    assert "does not support dry-run" in host_result["outcome"]["Failed"]["message"]
+    assert host_result["execution_metadata"]["dry_run"] is True
+
+
+def test_task_decorator_requires_dry_run_method_when_supported():
+    with pytest.raises(TypeError, match="requires 'dry_run'"):
+
+        @task(name="missing_preview", supports_dry_run=True)
+        class MissingDryRunTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="started")
+
+
 def test_task_definition_from_python_class_requires_decorator_metadata():
     class MissingMetadataTask:
         def start(self, task, host, context):

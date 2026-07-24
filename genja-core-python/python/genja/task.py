@@ -287,6 +287,8 @@ class TaskInfo(_GenjaModel):
             processors are specified.
         retry (RetryConfig | None): Optional task-level retry overrides. If
             None, runner defaults apply.
+        supports_dry_run (bool): Whether the task declares a dry-run entrypoint
+            that the runtime may call when dry-run execution is requested.
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure or None if no options are provided.
@@ -309,6 +311,10 @@ class TaskInfo(_GenjaModel):
     retry: RetryConfig | None = Field(
         default=None,
         description="Optional grouped task retry overrides.",
+    )
+    supports_dry_run: bool = Field(
+        default=False,
+        description="Whether the task declares dry-run support.",
     )
     options: Any | None = Field(
         default=None,
@@ -391,16 +397,22 @@ class TaskRuntimeContext:
         current_depth: int = 0,
         max_depth: int | None = None,
         current_attempt: int = 1,
+        dry_run: bool = False,
         connection: Any | None = None,
     ) -> None:
         self._current_depth = current_depth
         self._max_depth = max_depth
         self._current_attempt = max(current_attempt, 1)
+        self._dry_run = dry_run
         self._connection = connection
 
     @property
     def current_attempt(self) -> int:
         return self._current_attempt
+
+    @property
+    def dry_run(self) -> bool:
+        return self._dry_run
 
     def connection(self) -> Any | None:
         return self._connection
@@ -413,6 +425,7 @@ class TaskRuntimeContext:
             "current_depth": self._current_depth,
             "max_depth": self._max_depth,
             "current_attempt": self._current_attempt,
+            "dry_run": self._dry_run,
             "connection": self._connection,
         }
 
@@ -478,6 +491,24 @@ class GenjaTaskProtocol(Protocol):
         """
         ...
 
+    def dry_run(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult:
+        """Preview task behavior for sync dry-run execution."""
+        ...
+
+    async def dry_run_async(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult | TaskFailureResult | TaskSkipResult:
+        """Preview task behavior for async dry-run execution."""
+        ...
+
 
 def _validate_sub_tasks(
     cls_name: str,
@@ -511,6 +542,7 @@ def task(
     sub_tasks: list[type[GenjaTaskProtocol]] | None = None,
     processors: list[str] | None = None,
     retry: RetryConfig | None = None,
+    supports_dry_run: bool = False,
     options: Any | None = None,
     **kwargs: Any,
 ):
@@ -540,6 +572,9 @@ def task(
             overrides. This setting does not force retries by itself; the task
             must still return ``TaskFailureResult(..., retryable=True)``. Omitted
             retry fields fall back to runner defaults field by field.
+        supports_dry_run (bool): Declares that the task supports dry-run
+            execution. Sync tasks must define ``dry_run(...)`` and async tasks
+            must define ``dry_run_async(...)`` when this is True.
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure. If None, no options are provided to the task.
@@ -596,6 +631,39 @@ def task(
             raise TypeError(
                 f"@task-decorated class '{cls.__name__}' attribute 'start_async' must be callable"
             )
+        dry_run = class_dict.get("dry_run")
+        dry_run_async = class_dict.get("dry_run_async")
+        has_dry_run = callable(dry_run)
+        has_dry_run_async = callable(dry_run_async)
+        if dry_run is not None and not has_dry_run:
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' attribute 'dry_run' must be callable"
+            )
+        if dry_run_async is not None and not has_dry_run_async:
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' attribute 'dry_run_async' must be callable"
+            )
+        if not isinstance(supports_dry_run, bool):
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' supports_dry_run must be a bool"
+            )
+        if supports_dry_run:
+            if has_start and not has_dry_run:
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' supports_dry_run=True requires 'dry_run'"
+                )
+            if has_start_async and not has_dry_run_async:
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' supports_dry_run=True requires 'dry_run_async'"
+                )
+            if has_start and has_dry_run_async:
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' sync dry-run support requires 'dry_run', not 'dry_run_async'"
+                )
+            if has_start_async and has_dry_run:
+                raise TypeError(
+                    f"@task-decorated class '{cls.__name__}' async dry-run support requires 'dry_run_async', not 'dry_run'"
+                )
         if not isinstance(name, str) or not name.strip():
             raise TypeError(
                 f"@task-decorated class '{cls.__name__}' name must be a non-empty string"
@@ -632,6 +700,7 @@ def task(
             "connection_plugin_name": connection_plugin_name,
             "processors": list(processors or []),
             "retry": retry.to_dict() if retry is not None else None,
+            "supports_dry_run": supports_dry_run,
             "options": options,
             "sub_tasks": validated_sub_tasks,
         }

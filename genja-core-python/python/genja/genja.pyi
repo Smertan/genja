@@ -265,6 +265,34 @@ class TaskConnectionResolver:
 
     ...
 
+class TaskRunOptions:
+    """Options that control task execution at runtime."""
+
+    def __init__(
+        self,
+        max_depth: int | None = None,
+        dry_run: bool = False,
+    ) -> None:
+        """Create task run options."""
+        ...
+    @property
+    def max_depth(self) -> int | None:
+        """Maximum nested sub-task depth, or None to use the runtime default."""
+        ...
+    @property
+    def dry_run(self) -> bool:
+        """Whether dry-run execution is requested."""
+        ...
+    def with_max_depth(self, max_depth: int) -> TaskRunOptions:
+        """Return a copy with a different maximum nested sub-task depth."""
+        ...
+    def with_dry_run(self, dry_run: bool) -> TaskRunOptions:
+        """Return a copy with dry-run execution enabled or disabled."""
+        ...
+    def to_dict(self) -> dict[str, Any]:
+        """Return the options as a dictionary."""
+        ...
+
 class TaskDefinition:
     """Runtime task definition built from a decorated Python task class."""
 
@@ -285,6 +313,10 @@ class TaskDefinition:
         """Task retry metadata, if configured."""
         ...
     @property
+    def supports_dry_run(self) -> bool:
+        """Whether the task declares dry-run support."""
+        ...
+    @property
     def sub_tasks(self) -> list[TaskDefinition]:
         """Nested sub-task definitions."""
         ...
@@ -295,7 +327,10 @@ class TaskDefinition:
         self,
         host: Any,
         connection_resolver: TaskConnectionResolver | None = None,
-        max_depth: int = 0,
+        run_options: TaskRunOptions | None = None,
+        *,
+        max_depth: int | None = None,
+        dry_run: bool | None = None,
     ) -> TaskResults:
         """Execute this task definition against a single host payload."""
         ...
@@ -303,7 +338,10 @@ class TaskDefinition:
         self,
         hosts: dict[str, Any],
         connection_resolver: TaskConnectionResolver | None = None,
-        max_depth: int = 0,
+        run_options: TaskRunOptions | None = None,
+        *,
+        max_depth: int | None = None,
+        dry_run: bool | None = None,
     ) -> TaskResults:
         """Execute this task definition against multiple host payloads."""
         ...
@@ -794,7 +832,10 @@ class Genja:
     def run_task(
         self,
         task_class: type[GenjaTaskProtocol],
+        run_options: TaskRunOptions | None = None,
+        *,
         max_depth: int | None = None,
+        dry_run: bool | None = None,
     ) -> TaskResults:
         """Execute one decorated task class against selected hosts.
 
@@ -803,8 +844,9 @@ class Genja:
 
         Args:
             task_class: Class decorated with `genja.task.task`.
-            max_depth: Optional maximum nested sub-task depth. When omitted, the
-                runtime's configured depth limit is used.
+            run_options: Optional runtime task execution options.
+            max_depth: Compatibility shortcut for `TaskRunOptions(max_depth=...)`.
+            dry_run: Compatibility shortcut for `TaskRunOptions(dry_run=...)`.
 
         Returns:
             Aggregated task results containing passed, failed, and skipped hosts.
@@ -817,7 +859,10 @@ class Genja:
     def run_task_async(
         self,
         task_class: type[GenjaTaskProtocol],
+        run_options: TaskRunOptions | None = None,
+        *,
         max_depth: int | None = None,
+        dry_run: bool | None = None,
     ) -> Awaitable[TaskResults]:
         """Asynchronously execute one decorated task class against selected hosts.
 
@@ -828,7 +873,10 @@ class Genja:
     def run_tasks(
         self,
         tasks: Tasks,
+        run_options: TaskRunOptions | None = None,
+        *,
         max_depth: int | None = None,
+        dry_run: bool | None = None,
     ) -> list[TaskResults]:
         """Execute an ordered task collection against selected hosts.
 
@@ -840,7 +888,10 @@ class Genja:
     def run_tasks_async(
         self,
         tasks: Tasks,
+        run_options: TaskRunOptions | None = None,
+        *,
         max_depth: int | None = None,
+        dry_run: bool | None = None,
     ) -> Awaitable[list[TaskResults]]:
         """Asynchronously execute an ordered task collection against selected hosts.
 

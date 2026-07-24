@@ -51,6 +51,7 @@ DUPLICATED_TOP_LEVEL_CLASSES = [
     "HostTaskResult",
     "TaskConnectionResolver",
     "TaskDefinition",
+    "TaskRunOptions",
     "Tasks",
     "TaskResults",
     "Genja",
