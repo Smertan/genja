@@ -44,15 +44,11 @@ async def run_task_async(
     runtime: "Genja",
     task_class: type["GenjaTaskProtocol"],
     run_options: Any | None = None,
-    max_depth: int | None = None,
-    dry_run: bool | None = None,
 ) -> "TaskResults":
     runtime_any = cast(Any, runtime)
     return await runtime_any._run_task_async_native(
         task_class,
         run_options,
-        max_depth=max_depth,
-        dry_run=dry_run,
     )
 
 
@@ -60,13 +56,9 @@ async def run_tasks_async(
     runtime: "Genja",
     tasks: "Tasks",
     run_options: Any | None = None,
-    max_depth: int | None = None,
-    dry_run: bool | None = None,
 ) -> list["TaskResults"]:
     runtime_any = cast(Any, runtime)
     return await runtime_any._run_tasks_async_native(
         tasks,
         run_options,
-        max_depth=max_depth,
-        dry_run=dry_run,
     )

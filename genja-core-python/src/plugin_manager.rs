@@ -71,8 +71,8 @@ use std::sync::{Arc, Mutex};
 use crate::runtime::python_inventory_to_rust_inventory;
 use crate::settings::{PyRunnerConfig, PySettings};
 use crate::task::{
-    PyHostTaskResult, PyTaskConnectionResolver, PyTaskDefinition, PyTaskResults, hosts_to_py_dict,
-    python_result_to_host_task_result, python_result_to_task_results,
+    PyHostTaskResult, PyTaskConnectionResolver, PyTaskDefinition, PyTaskResults, PyTaskRunOptions,
+    hosts_to_py_dict, python_result_to_host_task_result, python_result_to_task_results,
 };
 
 /// A Python-exposed wrapper around the Rust `PluginManager`.
@@ -1077,7 +1077,6 @@ impl PluginRunner for PyRunnerPlugin {
         runner_config: &RunnerConfig,
         options: genja_core::task::TaskRunOptions,
     ) -> Result<TaskResults, genja_core::GenjaError> {
-        let max_depth = options.max_depth();
         let result = Python::attach(|py| {
             let plugin = self.plugin.bind(py);
             let task_payload = Py::new(py, PyTaskDefinition::from_runtime_definition(task.clone()))
@@ -1101,6 +1100,14 @@ impl PluginRunner for PyRunnerPlugin {
                 },
             )
             .map_err(python_processor_error)?;
+            let run_options_payload = Py::new(
+                py,
+                PyTaskRunOptions {
+                    max_depth: Some(options.max_depth()),
+                    dry_run: options.dry_run(),
+                },
+            )
+            .map_err(python_processor_error)?;
             plugin
                 .call_method1(
                     "run_task",
@@ -1109,7 +1116,7 @@ impl PluginRunner for PyRunnerPlugin {
                         hosts_payload.bind(py),
                         resolver_payload.bind(py),
                         runner_payload.bind(py),
-                        max_depth,
+                        run_options_payload.bind(py),
                     ),
                 )
                 .map(Bound::unbind)
@@ -1131,7 +1138,6 @@ impl PluginRunner for PyRunnerPlugin {
         runner_config: &RunnerConfig,
         options: genja_core::task::TaskRunOptions,
     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
-        let max_depth = options.max_depth();
         let has_run_tasks = Python::attach(|py| {
             self.plugin
                 .bind(py)
@@ -1181,6 +1187,14 @@ impl PluginRunner for PyRunnerPlugin {
                 },
             )
             .map_err(python_processor_error)?;
+            let run_options_payload = Py::new(
+                py,
+                PyTaskRunOptions {
+                    max_depth: Some(options.max_depth()),
+                    dry_run: options.dry_run(),
+                },
+            )
+            .map_err(python_processor_error)?;
             plugin
                 .call_method1(
                     "run_tasks",
@@ -1189,7 +1203,7 @@ impl PluginRunner for PyRunnerPlugin {
                         hosts_payload.bind(py),
                         resolver_payload.bind(py),
                         runner_payload.bind(py),
-                        max_depth,
+                        run_options_payload.bind(py),
                     ),
                 )
                 .map(Bound::unbind)

@@ -340,8 +340,8 @@ pub struct PyTaskConnectionResolver {
 #[derive(Clone)]
 /// Python wrapper for runtime task execution options.
 pub struct PyTaskRunOptions {
-    max_depth: Option<usize>,
-    dry_run: bool,
+    pub(crate) max_depth: Option<usize>,
+    pub(crate) dry_run: bool,
 }
 
 #[pymethods]
@@ -407,14 +407,12 @@ impl PyTaskDefinition {
         }
     }
 
-    #[pyo3(signature = (host, connection_resolver=None, run_options=None, *, max_depth=None, dry_run=None))]
+    #[pyo3(signature = (host, connection_resolver=None, run_options=None))]
     fn run_on_host(
         &self,
         host: Bound<'_, PyAny>,
         connection_resolver: Option<PyRef<'_, PyTaskConnectionResolver>>,
         run_options: Option<Bound<'_, PyAny>>,
-        max_depth: Option<usize>,
-        dry_run: Option<bool>,
     ) -> PyResult<PyTaskResults> {
         let py = host.py();
         let host = python_host_to_rust_host(host)?;
@@ -422,26 +420,24 @@ impl PyTaskDefinition {
         let host_id = host.hostname().unwrap_or("host").to_string();
         hosts.add_host(host_id, host);
         let resolver = connection_resolver.and_then(|resolver| resolver.inner.clone());
-        let run_options = resolve_task_run_options(run_options.as_ref(), max_depth, dry_run, 0)?;
+        let run_options = resolve_task_run_options(run_options.as_ref(), 0)?;
         let inner = py
             .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, run_options))
             .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
         Ok(PyTaskResults { inner })
     }
 
-    #[pyo3(signature = (hosts, connection_resolver=None, run_options=None, *, max_depth=None, dry_run=None))]
+    #[pyo3(signature = (hosts, connection_resolver=None, run_options=None))]
     fn run_on_hosts(
         &self,
         hosts: Bound<'_, PyAny>,
         connection_resolver: Option<PyRef<'_, PyTaskConnectionResolver>>,
         run_options: Option<Bound<'_, PyAny>>,
-        max_depth: Option<usize>,
-        dry_run: Option<bool>,
     ) -> PyResult<PyTaskResults> {
         let py = hosts.py();
         let hosts = python_hosts_to_rust_hosts(hosts)?;
         let resolver = connection_resolver.and_then(|resolver| resolver.inner.clone());
-        let run_options = resolve_task_run_options(run_options.as_ref(), max_depth, dry_run, 0)?;
+        let run_options = resolve_task_run_options(run_options.as_ref(), 0)?;
         let inner = py
             .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, run_options))
             .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
@@ -725,15 +721,11 @@ pub fn run_task(
     runtime: &RuntimeGenja,
     task_class: Bound<'_, PyAny>,
     run_options: Option<Bound<'_, PyAny>>,
-    max_depth: Option<usize>,
-    dry_run: Option<bool>,
 ) -> PyResult<PyTaskResults> {
     let spec = extract_python_task_spec(task_class)?;
     let task = task_from_spec(&spec);
     let run_options = resolve_task_run_options(
         run_options.as_ref(),
-        max_depth,
-        dry_run,
         runtime.settings().runner().max_task_depth(),
     )?;
     let inner = py
@@ -749,16 +741,12 @@ pub fn run_task_async(
     runtime: &RuntimeGenja,
     task_class: Bound<'_, PyAny>,
     run_options: Option<Bound<'_, PyAny>>,
-    max_depth: Option<usize>,
-    dry_run: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     let spec = extract_python_task_spec(task_class)?;
     let runtime = runtime.clone();
     let task = task_from_spec(&spec);
     let run_options = resolve_task_run_options(
         run_options.as_ref(),
-        max_depth,
-        dry_run,
         runtime.settings().runner().max_task_depth(),
     )?;
 
@@ -779,8 +767,6 @@ pub fn run_tasks(
     runtime: &RuntimeGenja,
     task_input: Bound<'_, PyAny>,
     run_options: Option<Bound<'_, PyAny>>,
-    max_depth: Option<usize>,
-    dry_run: Option<bool>,
 ) -> PyResult<Vec<PyTaskResults>> {
     let tasks = task_input
         .extract::<PyRef<'_, PyTasks>>()
@@ -789,8 +775,6 @@ pub fn run_tasks(
 
     let run_options = resolve_task_run_options(
         run_options.as_ref(),
-        max_depth,
-        dry_run,
         runtime.settings().runner().max_task_depth(),
     )?;
     let results = py
@@ -809,8 +793,6 @@ pub fn run_tasks_async(
     runtime: &RuntimeGenja,
     task_input: Bound<'_, PyAny>,
     run_options: Option<Bound<'_, PyAny>>,
-    max_depth: Option<usize>,
-    dry_run: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     let tasks = task_input
         .extract::<PyRef<'_, PyTasks>>()
@@ -820,8 +802,6 @@ pub fn run_tasks_async(
     let runtime = runtime.clone();
     let run_options = resolve_task_run_options(
         run_options.as_ref(),
-        max_depth,
-        dry_run,
         runtime.settings().runner().max_task_depth(),
     )?;
 
@@ -842,31 +822,16 @@ pub fn run_tasks_async(
 
 fn resolve_task_run_options(
     run_options: Option<&Bound<'_, PyAny>>,
-    max_depth: Option<usize>,
-    dry_run: Option<bool>,
     default_max_depth: usize,
 ) -> PyResult<TaskRunOptions> {
-    let mut resolved_max_depth = max_depth;
-    let mut resolved_dry_run = dry_run.unwrap_or(false);
-
     if let Some(run_options) = run_options {
         if run_options.is_none() {
             // Explicit None is equivalent to omitting run_options.
         } else if let Ok(run_options) = run_options.extract::<PyRef<'_, PyTaskRunOptions>>() {
-            if max_depth.is_some() || dry_run.is_some() {
-                return Err(PyValueError::new_err(
-                    "pass either run_options or max_depth/dry_run overrides, not both",
-                ));
-            }
-            resolved_max_depth = run_options.max_depth;
-            resolved_dry_run = run_options.dry_run;
-        } else if let Ok(legacy_max_depth) = run_options.extract::<usize>() {
-            if max_depth.is_some() {
-                return Err(PyValueError::new_err(
-                    "max_depth was provided both positionally and by keyword",
-                ));
-            }
-            resolved_max_depth = Some(legacy_max_depth);
+            return Ok(
+                TaskRunOptions::new(run_options.max_depth.unwrap_or(default_max_depth))
+                    .with_dry_run(run_options.dry_run),
+            );
         } else {
             return Err(PyValueError::new_err(
                 "run_options must be a genja.TaskRunOptions instance",
@@ -874,10 +839,7 @@ fn resolve_task_run_options(
         }
     }
 
-    Ok(
-        TaskRunOptions::new(resolved_max_depth.unwrap_or(default_max_depth))
-            .with_dry_run(resolved_dry_run),
-    )
+    Ok(TaskRunOptions::new(default_max_depth))
 }
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -2175,7 +2137,7 @@ mod tests {
             };
 
             let result = task_definition
-                .run_on_host(host.into_any(), None, None, Some(0), None)
+                .run_on_host(host.into_any(), None, None)
                 .expect("async task should execute");
             assert_eq!(result.passed_hosts(), vec!["router1".to_string()]);
             let host_result = result

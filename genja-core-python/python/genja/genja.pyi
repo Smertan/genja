@@ -328,9 +328,6 @@ class TaskDefinition:
         host: Any,
         connection_resolver: TaskConnectionResolver | None = None,
         run_options: TaskRunOptions | None = None,
-        *,
-        max_depth: int | None = None,
-        dry_run: bool | None = None,
     ) -> TaskResults:
         """Execute this task definition against a single host payload."""
         ...
@@ -339,9 +336,6 @@ class TaskDefinition:
         hosts: dict[str, Any],
         connection_resolver: TaskConnectionResolver | None = None,
         run_options: TaskRunOptions | None = None,
-        *,
-        max_depth: int | None = None,
-        dry_run: bool | None = None,
     ) -> TaskResults:
         """Execute this task definition against multiple host payloads."""
         ...
@@ -833,9 +827,6 @@ class Genja:
         self,
         task_class: type[GenjaTaskProtocol],
         run_options: TaskRunOptions | None = None,
-        *,
-        max_depth: int | None = None,
-        dry_run: bool | None = None,
     ) -> TaskResults:
         """Execute one decorated task class against selected hosts.
 
@@ -845,8 +836,6 @@ class Genja:
         Args:
             task_class: Class decorated with `genja.task.task`.
             run_options: Optional runtime task execution options.
-            max_depth: Compatibility shortcut for `TaskRunOptions(max_depth=...)`.
-            dry_run: Compatibility shortcut for `TaskRunOptions(dry_run=...)`.
 
         Returns:
             Aggregated task results containing passed, failed, and skipped hosts.
@@ -860,9 +849,6 @@ class Genja:
         self,
         task_class: type[GenjaTaskProtocol],
         run_options: TaskRunOptions | None = None,
-        *,
-        max_depth: int | None = None,
-        dry_run: bool | None = None,
     ) -> Awaitable[TaskResults]:
         """Asynchronously execute one decorated task class against selected hosts.
 
@@ -874,9 +860,6 @@ class Genja:
         self,
         tasks: Tasks,
         run_options: TaskRunOptions | None = None,
-        *,
-        max_depth: int | None = None,
-        dry_run: bool | None = None,
     ) -> list[TaskResults]:
         """Execute an ordered task collection against selected hosts.
 
@@ -889,9 +872,6 @@ class Genja:
         self,
         tasks: Tasks,
         run_options: TaskRunOptions | None = None,
-        *,
-        max_depth: int | None = None,
-        dry_run: bool | None = None,
     ) -> Awaitable[list[TaskResults]]:
         """Asynchronously execute an ordered task collection against selected hosts.
 

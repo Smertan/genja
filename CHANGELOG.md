@@ -21,6 +21,7 @@ Changed packages:
 ### Changed
 
 - **Breaking:** Rust runner plugins now receive `TaskRunOptions` instead of a bare `max_depth` in `PluginRunner::run_task(...)` and `PluginRunner::run_tasks(...)`. Update runner plugin implementations to accept `options: TaskRunOptions` and read recursion depth with `options.max_depth()`. Refs: #80
+- **Breaking:** Python runner plugins now receive `run_options: TaskRunOptions` instead of a bare `max_depth` in `run_task(...)` and `run_tasks(...)`. Update runner plugin implementations to accept `run_options` and pass it to `TaskDefinition.run_on_host(...)` / `run_on_hosts(...)`, or read recursion depth with `run_options.max_depth`. Refs: #80
 - Improved Python type stubs and editor-facing API documentation for Genja runtime, settings, plugin manager, connection, plugin, and processor APIs. Refs: #94
 - **Breaking:** Rust `Genja::from_settings_file_async(...)` now requires the selected inventory plugin to implement `AsyncPluginInventory` and no longer falls back to synchronous inventory plugins. Python `Genja.from_settings(...)` now rejects async Python inventory plugins; use `await Genja.from_settings_async(...)` instead. Use sync constructors for sync inventory plugins such as `FileInventoryPlugin`, and async constructors for async inventory plugins. Refs: #86
 

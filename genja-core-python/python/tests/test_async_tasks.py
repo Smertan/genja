@@ -129,7 +129,10 @@ def test_runtime_run_task_async_with_sub_tasks():
             "router1": Host(hostname="10.0.0.1", platform="ios"),
         }).with_runner("serial")
 
-        return await runtime.run_task_async(AsyncParentTask, max_depth=2)
+        return await runtime.run_task_async(
+            AsyncParentTask,
+            run_options=genja.TaskRunOptions(max_depth=2),
+        )
 
     results = asyncio.run(run_case())
 

@@ -25,7 +25,7 @@ from .plugin import PluginBase
 from .settings import RunnerConfig
 
 if TYPE_CHECKING:
-    from . import TaskConnectionResolver, TaskDefinition, TaskResults
+    from . import TaskConnectionResolver, TaskDefinition, TaskResults, TaskRunOptions
 
 
 class RunnerPluginBase(PluginBase):
@@ -41,7 +41,7 @@ class RunnerPluginBase(PluginBase):
         hosts: dict[str, object],
         connection_resolver: TaskConnectionResolver | None,
         runner_config: RunnerConfig,
-        max_depth: int,
+        run_options: TaskRunOptions,
     ) -> TaskResults | Awaitable[TaskResults]: ...
 
 
@@ -55,7 +55,7 @@ class BatchRunnerPluginBase(RunnerPluginBase, ABC):
         hosts: dict[str, object],
         connection_resolver: TaskConnectionResolver | None,
         runner_config: RunnerConfig,
-        max_depth: int,
+        run_options: TaskRunOptions,
     ) -> list[TaskResults] | Awaitable[list[TaskResults]]: ...
 
 
