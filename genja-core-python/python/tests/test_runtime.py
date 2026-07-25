@@ -646,6 +646,72 @@ def test_genja_runtime_passes_python_connection_into_runtime_context():
     }
 
 
+def test_genja_runtime_opens_python_connection_for_dry_run():
+    calls: list[str] = []
+
+    @task(
+        name="runtime_connection_dry_run",
+        connection_plugin_name="ssh",
+        supports_dry_run=True,
+    )
+    class RuntimeConnectionDryRunTask:
+        def start(self, task, host, context):
+            calls.append("start")
+            return TaskSuccessResult(summary="started")
+
+        def dry_run(self, task, host, context):
+            calls.append("dry_run")
+            assert task.supports_dry_run is True
+            assert context.dry_run is True
+            assert isinstance(context.connection(), TestConnection)
+            connection = context.connection()
+            return TaskSuccessResult(
+                changed=True,
+                summary=f"would connect to {host.hostname}",
+                metadata={
+                    "connection_alive": connection.is_alive(),
+                    "connection_hostname": connection.key.hostname,
+                    "opened_with": connection.opened_with,
+                },
+            )
+
+    plugins = genja.PluginManager()
+    plugins.register_plugin(ConnectionPlugin())
+
+    runtime = genja.Genja.from_hosts(
+        {
+            "router1": Host(
+                hostname="10.0.0.1",
+                port=22,
+                username="admin",
+                password="secret",
+                platform="ios",
+            ),
+        },
+        plugin_manager=plugins,
+    ).with_runner("serial")
+    results = runtime.run_task(
+        RuntimeConnectionDryRunTask,
+        run_options=genja.TaskRunOptions(dry_run=True),
+    )
+    data = results.to_dict()
+
+    assert calls == ["dry_run"]
+    assert data["hosts"]["router1"]["execution_metadata"]["dry_run"] is True
+    assert data["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
+        "connection_alive": True,
+        "connection_hostname": "router1",
+        "opened_with": {
+            "hostname": "10.0.0.1",
+            "port": 22,
+            "username": "admin",
+            "password": "secret",
+            "platform": "ios",
+            "extras": None,
+        },
+    }
+
+
 def test_genja_builder_registers_plugin_and_builds_runtime():
     runtime = (
         genja.Genja
