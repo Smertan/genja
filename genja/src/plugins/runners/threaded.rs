@@ -297,7 +297,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         hosts: &Hosts,
         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
         if hosts.is_empty() {
             let started_at = SystemTime::now();
@@ -332,7 +332,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
                     &host,
                     connection_resolver,
                     &runner_config,
-                    options,
+                    run_options,
                 )
                 .await
             });
@@ -372,7 +372,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
                         &host,
                         connection_resolver,
                         &runner_config,
-                        options,
+                        run_options,
                     )
                     .await
                 });
@@ -398,7 +398,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         hosts: &Hosts,
         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
@@ -408,7 +408,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
                     hosts,
                     connection_resolver.clone(),
                     runner_config,
-                    options,
+                    run_options,
                 )
                 .await?,
             );

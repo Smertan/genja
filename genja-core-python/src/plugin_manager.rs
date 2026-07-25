@@ -1075,7 +1075,7 @@ impl PluginRunner for PyRunnerPlugin {
         hosts: &genja_core::inventory::Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        options: genja_core::task::TaskRunOptions,
+        run_options: genja_core::task::TaskRunOptions,
     ) -> Result<TaskResults, genja_core::GenjaError> {
         let result = Python::attach(|py| {
             let plugin = self.plugin.bind(py);
@@ -1103,8 +1103,8 @@ impl PluginRunner for PyRunnerPlugin {
             let run_options_payload = Py::new(
                 py,
                 PyTaskRunOptions {
-                    max_depth: Some(options.max_depth()),
-                    dry_run: options.dry_run(),
+                    max_depth: Some(run_options.max_depth()),
+                    dry_run: run_options.dry_run(),
                 },
             )
             .map_err(python_processor_error)?;
@@ -1136,7 +1136,7 @@ impl PluginRunner for PyRunnerPlugin {
         hosts: &genja_core::inventory::Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        options: genja_core::task::TaskRunOptions,
+        run_options: genja_core::task::TaskRunOptions,
     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
         let has_run_tasks = Python::attach(|py| {
             self.plugin
@@ -1153,7 +1153,7 @@ impl PluginRunner for PyRunnerPlugin {
                         hosts,
                         connection_resolver.clone(),
                         runner_config,
-                        options,
+                        run_options,
                     )
                     .await?,
                 );
@@ -1190,8 +1190,8 @@ impl PluginRunner for PyRunnerPlugin {
             let run_options_payload = Py::new(
                 py,
                 PyTaskRunOptions {
-                    max_depth: Some(options.max_depth()),
-                    dry_run: options.dry_run(),
+                    max_depth: Some(run_options.max_depth()),
+                    dry_run: run_options.dry_run(),
                 },
             )
             .map_err(python_processor_error)?;

@@ -286,10 +286,10 @@
 //!         hosts: &Hosts,
 //!         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
 //!         runner_config: &RunnerConfig,
-//!         options: TaskRunOptions,
+//!         run_options: TaskRunOptions,
 //!     ) -> Result<TaskResults, genja_core::GenjaError> {
 //!         // Execute task sequentially on each host
-//!         let _ = (task, hosts, connection_resolver, runner_config, options);
+//!         let _ = (task, hosts, connection_resolver, runner_config, run_options);
 //!         Ok(TaskResults::new("example_sequential"))
 //!     }
 //!
@@ -576,7 +576,7 @@ pub trait PluginRunner: Plugin {
         hosts: &Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<TaskResults, genja_core::GenjaError>;
 
     /// Run all tasks in the provided task list against the provided hosts.
@@ -590,7 +590,7 @@ pub trait PluginRunner: Plugin {
         hosts: &Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<Vec<TaskResults>, genja_core::GenjaError> {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
@@ -600,7 +600,7 @@ pub trait PluginRunner: Plugin {
                     hosts,
                     connection_resolver.clone(),
                     runner_config,
-                    options,
+                    run_options,
                 )
                 .await?,
             );
@@ -855,7 +855,7 @@ mod tests {
             _hosts: &Hosts,
             _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
             _runner_config: &RunnerConfig,
-            _options: TaskRunOptions,
+            _run_options: TaskRunOptions,
         ) -> Result<TaskResults, genja_core::GenjaError> {
             Ok(TaskResults::new(task.name()))
         }

@@ -111,7 +111,7 @@ impl PluginRunner for SerialRunnerPlugin {
     /// * `hosts` - The inventory of hosts on which to execute the task.
     /// * `connection_resolver` - Optional shared resolver used for per-host connection selection.
     /// * `_runner_config` - The runner configuration (currently unused in serial execution).
-    /// * `options` - Runtime options for task execution.
+    /// * `run_options` - Runtime options for task execution.
     ///
     /// # Returns
     ///
@@ -123,9 +123,9 @@ impl PluginRunner for SerialRunnerPlugin {
         hosts: &Hosts,
         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
-        TaskExecutor::new(hosts, connection_resolver, runner_config, options)
+        TaskExecutor::new(hosts, connection_resolver, runner_config, run_options)
             .run_definition(task)
             .await
     }
@@ -141,7 +141,7 @@ impl PluginRunner for SerialRunnerPlugin {
     /// * `hosts` - The inventory of hosts on which to execute each task.
     /// * `connection_resolver` - Optional shared resolver used for per-host connection selection.
     /// * `runner_config` - The runner configuration forwarded to [`Self::run_task`].
-    /// * `options` - Runtime options for task execution.
+    /// * `run_options` - Runtime options for task execution.
     ///
     /// # Returns
     ///
@@ -153,7 +153,7 @@ impl PluginRunner for SerialRunnerPlugin {
         hosts: &Hosts,
         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
@@ -163,7 +163,7 @@ impl PluginRunner for SerialRunnerPlugin {
                     hosts,
                     connection_resolver.clone(),
                     runner_config,
-                    options,
+                    run_options,
                 )
                 .await?,
             );

@@ -16,14 +16,13 @@ use std::time::SystemTime;
 /// * `hosts` - A reference to the collection of hosts on which tasks will be executed.
 /// * `connection_resolver` - An optional connection resolver for establishing connections to hosts.
 ///   If `None`, tasks will execute without custom connection resolution.
-/// * `max_depth` - The maximum recursion depth allowed for nested task execution,
-///   preventing infinite loops in task dependencies.
+/// * `run_options` - Runtime options controlling execution behavior.
 #[derive(Debug)]
 pub(crate) struct TaskExecutor<'a> {
     hosts: &'a Hosts,
     connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
     runner_config: &'a genja_core::settings::RunnerConfig,
-    options: TaskRunOptions,
+    run_options: TaskRunOptions,
 }
 
 impl<'a> TaskExecutor<'a> {
@@ -37,8 +36,7 @@ impl<'a> TaskExecutor<'a> {
     /// * `hosts` - A reference to the collection of hosts on which tasks will be executed.
     /// * `connection_resolver` - An optional connection resolver for establishing connections to hosts.
     ///   If `None`, tasks will execute without custom connection resolution.
-    /// * `max_depth` - The maximum recursion depth allowed for nested task execution,
-    ///   preventing infinite loops in task dependencies.
+    /// * `run_options` - Runtime options controlling execution behavior.
     ///
     /// # Returns
     ///
@@ -47,13 +45,13 @@ impl<'a> TaskExecutor<'a> {
         hosts: &'a Hosts,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &'a genja_core::settings::RunnerConfig,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Self {
         Self {
             hosts,
             connection_resolver,
             runner_config,
-            options,
+            run_options,
         }
     }
 
@@ -99,7 +97,7 @@ impl<'a> TaskExecutor<'a> {
                     host,
                     self.connection_resolver.clone(),
                     self.runner_config,
-                    self.options,
+                    self.run_options,
                 )
                 .await?,
             );
@@ -132,8 +130,7 @@ impl<'a> TaskExecutor<'a> {
     /// * `host` - A reference to the host object containing host-specific configuration and state.
     /// * `connection_resolver` - An optional connection resolver for establishing connections to the host.
     ///   If `None`, the task will execute without custom connection resolution.
-    /// * `max_depth` - The maximum recursion depth allowed for nested task execution,
-    ///   preventing infinite loops in task dependencies.
+    /// * `run_options` - Runtime options controlling execution behavior.
     ///
     /// # Returns
     ///
@@ -153,7 +150,7 @@ impl<'a> TaskExecutor<'a> {
         host: &Host,
         connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
         runner_config: &genja_core::settings::RunnerConfig,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
         let mut results = TaskResults::new(task_definition.name());
         task_definition
@@ -163,7 +160,7 @@ impl<'a> TaskExecutor<'a> {
                 &mut results,
                 connection_resolver.as_deref(),
                 runner_config,
-                options,
+                run_options,
             )
             .await?;
         Ok(results)

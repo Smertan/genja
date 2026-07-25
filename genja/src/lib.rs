@@ -975,7 +975,7 @@ impl Genja {
     pub fn run_task_with_options<T: Task + 'static>(
         &self,
         task: T,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
         ensure_sync_execution_outside_tokio(
             "run_task_with_options()",
@@ -985,7 +985,7 @@ impl Genja {
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_task_with_options_async(task, options))
+        runtime.block_on(self.run_task_with_options_async(task, run_options))
     }
 
     /// Executes a task against the currently selected hosts using the configured runner plugin.
@@ -1006,18 +1006,18 @@ impl Genja {
     pub async fn run_task_with_options_async<T: Task + 'static>(
         &self,
         task: T,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
-        self.run_task_definition_async(TaskDefinition::new(task), options)
+        self.run_task_definition_async(TaskDefinition::new(task), run_options)
             .await
     }
 
     async fn run_task_definition_async(
         &self,
         task_definition: TaskDefinition,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
-        let max_depth = options.max_depth();
+        let max_depth = run_options.max_depth();
         let hosts = self.selected_hosts()?;
         let host_count = hosts.len();
         let inventory = self
@@ -1048,7 +1048,7 @@ impl Genja {
                 &hosts,
                 Some(connection_resolver),
                 self.settings.runner(),
-                options,
+                run_options,
             )
             .await?;
         let summary = results.task_summary();
@@ -1074,7 +1074,7 @@ impl Genja {
     pub fn run_tasks_with_options(
         &self,
         tasks: Tasks,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         ensure_sync_execution_outside_tokio(
             "run_tasks_with_options()",
@@ -1084,7 +1084,7 @@ impl Genja {
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_tasks_with_options_async(tasks, options))
+        runtime.block_on(self.run_tasks_with_options_async(tasks, run_options))
     }
 
     /// Executes an ordered list of root task trees using the configured runner plugin.
@@ -1105,9 +1105,9 @@ impl Genja {
     pub async fn run_tasks_with_options_async(
         &self,
         mut tasks: Tasks,
-        options: TaskRunOptions,
+        run_options: TaskRunOptions,
     ) -> Result<Vec<TaskResults>, GenjaError> {
-        let max_depth = options.max_depth();
+        let max_depth = run_options.max_depth();
         let hosts = self.selected_hosts()?;
         let host_count = hosts.len();
         let inventory = self
@@ -1144,7 +1144,7 @@ impl Genja {
                 &hosts,
                 Some(connection_resolver),
                 self.settings.runner(),
-                options,
+                run_options,
             )
             .await?;
         for result in &results {
