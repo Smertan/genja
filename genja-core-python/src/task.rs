@@ -72,6 +72,39 @@ struct PythonBackedTask {
     sub_tasks: Vec<Arc<dyn Task>>,
 }
 
+struct PythonTaskRunContext {
+    current_depth: usize,
+    max_depth: Option<usize>,
+    current_attempt: usize,
+    dry_run: bool,
+    connection: Option<Py<PyAny>>,
+}
+
+impl PythonTaskRunContext {
+    fn from_blocking(
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+        connection: Option<Py<PyAny>>,
+    ) -> Self {
+        Self {
+            current_depth: context.current_depth(),
+            max_depth: Some(context.max_depth()),
+            current_attempt: context.current_attempt(),
+            dry_run: context.dry_run(),
+            connection,
+        }
+    }
+
+    fn from_async(context: &TaskRuntimeContext, connection: Option<Py<PyAny>>) -> Self {
+        Self {
+            current_depth: context.current_depth(),
+            max_depth: Some(context.max_depth()),
+            current_attempt: context.current_attempt(),
+            dry_run: context.dry_run(),
+            connection,
+        }
+    }
+}
+
 impl TaskInfo for PythonBackedTask {
     fn name(&self) -> &str {
         &self.spec.name
@@ -123,11 +156,7 @@ impl Task for PythonBackedTask {
         .flatten();
         self.run_python_blocking(
             host,
-            context.current_depth(),
-            Some(context.max_depth()),
-            context.current_attempt(),
-            context.dry_run(),
-            python_connection,
+            PythonTaskRunContext::from_blocking(context, python_connection),
             "start",
         )
     }
@@ -146,11 +175,7 @@ impl Task for PythonBackedTask {
         .flatten();
         self.run_python_blocking(
             host,
-            context.current_depth(),
-            Some(context.max_depth()),
-            context.current_attempt(),
-            context.dry_run(),
-            python_connection,
+            PythonTaskRunContext::from_blocking(context, python_connection),
             "dry_run",
         )
     }
@@ -168,11 +193,7 @@ impl Task for PythonBackedTask {
         };
         self.run_python(
             host,
-            context.current_depth(),
-            Some(context.max_depth()),
-            context.current_attempt(),
-            context.dry_run(),
-            python_connection,
+            PythonTaskRunContext::from_async(context, python_connection),
             "start_async",
         )
         .await
@@ -191,11 +212,7 @@ impl Task for PythonBackedTask {
         };
         self.run_python(
             host,
-            context.current_depth(),
-            Some(context.max_depth()),
-            context.current_attempt(),
-            context.dry_run(),
-            python_connection,
+            PythonTaskRunContext::from_async(context, python_connection),
             "dry_run_async",
         )
         .await
@@ -217,11 +234,7 @@ impl PythonBackedTask {
     fn run_python_blocking(
         &self,
         host: &Host,
-        current_depth: usize,
-        max_depth: Option<usize>,
-        current_attempt: usize,
-        dry_run: bool,
-        connection: Option<Py<PyAny>>,
+        context: PythonTaskRunContext,
         method_name: &str,
     ) -> Result<HostTaskResult, TaskError> {
         let result = Python::attach(|py| {
@@ -241,11 +254,11 @@ impl PythonBackedTask {
             .map_err(python_task_error)?;
             let context_payload = build_python_task_runtime_context(
                 py,
-                current_depth,
-                max_depth,
-                current_attempt,
-                dry_run,
-                connection,
+                context.current_depth,
+                context.max_depth,
+                context.current_attempt,
+                context.dry_run,
+                context.connection,
             )
             .map_err(python_task_error)?;
             let result = instance
@@ -271,11 +284,7 @@ impl PythonBackedTask {
     async fn run_python(
         &self,
         host: &Host,
-        current_depth: usize,
-        max_depth: Option<usize>,
-        current_attempt: usize,
-        dry_run: bool,
-        connection: Option<Py<PyAny>>,
+        context: PythonTaskRunContext,
         method_name: &str,
     ) -> Result<HostTaskResult, TaskError> {
         let result = Python::attach(|py| {
@@ -295,11 +304,11 @@ impl PythonBackedTask {
             .map_err(python_task_error)?;
             let context_payload = build_python_task_runtime_context(
                 py,
-                current_depth,
-                max_depth,
-                current_attempt,
-                dry_run,
-                connection,
+                context.current_depth,
+                context.max_depth,
+                context.current_attempt,
+                context.dry_run,
+                context.connection,
             )
             .map_err(python_task_error)?;
 
