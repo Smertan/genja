@@ -210,7 +210,10 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
 
 
     genja = genja_lib.Genja.from_settings_file("settings.yaml")
-    results = genja.run_task(CollectFacts, max_depth=1)
+    results = genja.run_task(
+        CollectFacts,
+        run_options=genja_lib.TaskRunOptions(max_depth=1),
+    )
 
     print(results.to_json(pretty=True))
     ```
@@ -252,7 +255,10 @@ The sync wrapper returns an error if it is called from an active Tokio runtime.
 
     async def main() -> None:
         genja = genja_lib.Genja.from_settings_file("settings.yaml")
-        results = await genja.run_task_async(CollectFactsAsync, max_depth=1)
+        results = await genja.run_task_async(
+            CollectFactsAsync,
+            run_options=genja_lib.TaskRunOptions(max_depth=1),
+        )
 
         print(results.to_json(pretty=True))
 

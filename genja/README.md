@@ -142,7 +142,7 @@ use genja::genja_core::task::{HostTaskResult, TaskError, TaskRuntimeContext, Tas
 
 struct CheckConfig;
 
-#[genja_task(name = "check_config")]
+#[genja_task(name = "check_config", supports_dry_run = true)]
 impl CheckConfig {
     async fn start_async(
         &self,
@@ -151,6 +151,19 @@ impl CheckConfig {
     ) -> Result<HostTaskResult, TaskError> {
         Ok(HostTaskResult::passed(
             TaskSuccess::new().with_summary("configuration checked"),
+        ))
+    }
+
+    async fn dry_run_async(
+        &self,
+        _host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        assert!(context.dry_run());
+        Ok(HostTaskResult::passed(
+            TaskSuccess::new()
+                .with_changed(false)
+                .with_summary("configuration would be checked"),
         ))
     }
 }
@@ -167,6 +180,21 @@ let host_result = results.host_result("router1").unwrap();
 assert!(host_result.is_passed());
 assert_eq!(host_result.status(), "passed");
 assert_eq!(host_result.execution_metadata().attempts(), 1);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Tasks that declare dry-run support can be previewed with explicit runtime
+options:
+
+```rust
+use genja::TaskRunOptions;
+
+let results = genja.run_task_with_options(
+    CheckConfig,
+    TaskRunOptions::new(1).with_dry_run(true),
+)?;
+
+assert!(results.host_result("router1").unwrap().execution_metadata().dry_run());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 

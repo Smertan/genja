@@ -76,24 +76,24 @@ class TaskConnectionResolver:
     ...
 
 class TaskRunOptions:
-    """Options that control task execution at runtime."""
+    """Runtime execution controls for task or task-list invocations."""
 
     def __init__(
         self,
         max_depth: int | None = None,
         dry_run: bool = False,
     ) -> None:
-        """Create task run options."""
+        """Create runtime options for task execution."""
         ...
 
     @property
     def max_depth(self) -> int | None:
-        """Maximum nested sub-task depth, or None to use the runtime default."""
+        """Maximum nested sub-task depth, or None to use runner settings."""
         ...
 
     @property
     def dry_run(self) -> bool:
-        """Whether dry-run execution is requested."""
+        """Whether the runtime should call dry-run task entrypoints."""
         ...
 
     def with_max_depth(self, max_depth: int) -> TaskRunOptions:
@@ -105,7 +105,7 @@ class TaskRunOptions:
         ...
 
     def to_dict(self) -> dict[str, Any]:
-        """Return the options as a dictionary."""
+        """Return the runtime options as a dictionary."""
         ...
 
 class TaskDefinition:
@@ -689,7 +689,8 @@ class Genja:
 
         Args:
             task_class: Class decorated with `genja.task.task`.
-            run_options: Optional runtime task execution options.
+            run_options: Optional runtime execution controls such as depth and
+                dry-run mode.
 
         Returns:
             Aggregated task results containing passed, failed, and skipped hosts.

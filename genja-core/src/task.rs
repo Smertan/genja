@@ -369,6 +369,10 @@
 //!   `on_task_start`, then for each selected host `on_instance_start`,
 //!   [`Task::start`], `on_instance_finish`, then any sub-task trees, then
 //!   `on_task_finish`.
+//! - Dry-run is requested through [`TaskRunOptions`]. When dry-run is enabled,
+//!   the runtime opens declared task connections, then calls [`Task::dry_run`]
+//!   or [`Task::dry_run_async`] instead of [`Task::start`] or
+//!   [`Task::start_async`].
 //! - If processor name resolution fails, execution returns
 //!   `GenjaError::PluginNotFound`. If a processor hook returns an error, execution
 //!   stops and propagates that error.
@@ -3151,7 +3155,8 @@ pub enum TaskExecutionMode {
 ///
 /// These options represent operator-selected execution behavior for a single
 /// invocation. Task metadata declares what a task supports; run options declare
-/// what the runtime should request.
+/// what the runtime should request. Use [`TaskRunOptions::with_dry_run`] to
+/// request dry-run execution for tasks that declare dry-run support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TaskRunOptions {
     max_depth: usize,
@@ -3178,6 +3183,9 @@ impl TaskRunOptions {
     }
 
     /// Set whether this invocation should run in dry-run mode.
+    ///
+    /// Dry-run mode requires the target task to report dry-run support. The
+    /// runtime validates support before calling the normal task entrypoint.
     pub fn with_dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
         self
@@ -3239,6 +3247,12 @@ pub trait Task: TaskInfo + Send + Sync {
     }
 
     /// Execute a blocking dry run with runtime execution context.
+    ///
+    /// Implement this for blocking tasks that return `true` from
+    /// [`TaskInfo::supports_dry_run`]. Dry-run methods return the same
+    /// [`HostTaskResult`] shape as normal execution and should use fields such
+    /// as `changed`, `diff`, `summary`, and `metadata` to describe the planned
+    /// result.
     fn dry_run(
         &self,
         host: &Host,
@@ -3251,6 +3265,12 @@ pub trait Task: TaskInfo + Send + Sync {
     }
 
     /// Execute an async dry run with runtime execution context.
+    ///
+    /// Implement this for async tasks that return `true` from
+    /// [`TaskInfo::supports_dry_run`]. Dry-run methods return the same
+    /// [`HostTaskResult`] shape as normal execution and should use fields such
+    /// as `changed`, `diff`, `summary`, and `metadata` to describe the planned
+    /// result.
     async fn dry_run_async(
         &self,
         host: &Host,

@@ -339,6 +339,10 @@ pub struct PyTaskConnectionResolver {
 #[pyclass(name = "TaskRunOptions", skip_from_py_object)]
 #[derive(Clone)]
 /// Python wrapper for runtime task execution options.
+///
+/// `TaskRunOptions` carries operator-selected execution controls such as
+/// maximum sub-task depth and dry-run mode. It is separate from task decorator
+/// `options`, which are task-authored metadata.
 pub struct PyTaskRunOptions {
     pub(crate) max_depth: Option<usize>,
     pub(crate) dry_run: bool,
@@ -491,7 +495,7 @@ impl PyTaskRunOptions {
         }
     }
 
-    /// Convert the options to a Python dictionary.
+    /// Convert the runtime options to a Python dictionary.
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let payload = PyDict::new(py);
         match self.max_depth {

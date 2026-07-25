@@ -972,6 +972,9 @@ impl Genja {
     }
 
     /// Executes a task using explicit runtime options.
+    ///
+    /// Use this when the invocation needs controls beyond the required maximum
+    /// depth argument accepted by [`Self::run_task`], such as dry-run mode.
     pub fn run_task_with_options<T: Task + 'static>(
         &self,
         task: T,
@@ -1003,6 +1006,9 @@ impl Genja {
     }
 
     /// Executes a task asynchronously using explicit runtime options.
+    ///
+    /// Use this when the invocation needs controls beyond the required maximum
+    /// depth argument accepted by [`Self::run_task_async`], such as dry-run mode.
     pub async fn run_task_with_options_async<T: Task + 'static>(
         &self,
         task: T,
@@ -1071,6 +1077,9 @@ impl Genja {
     }
 
     /// Executes an ordered list of root task trees using explicit runtime options.
+    ///
+    /// Use this when the invocation needs controls beyond the required maximum
+    /// depth argument accepted by [`Self::run_tasks`], such as dry-run mode.
     pub fn run_tasks_with_options(
         &self,
         tasks: Tasks,
@@ -1102,6 +1111,9 @@ impl Genja {
     }
 
     /// Executes an ordered list of root task trees asynchronously using explicit runtime options.
+    ///
+    /// Use this when the invocation needs controls beyond the required maximum
+    /// depth argument accepted by [`Self::run_tasks_async`], such as dry-run mode.
     pub async fn run_tasks_with_options_async(
         &self,
         mut tasks: Tasks,

@@ -382,13 +382,14 @@ class TaskRuntimeContext:
 
     This class encapsulates runtime execution context information provided to
     task entrypoint methods during execution. It includes depth tracking for
-    nested task execution, depth limits, and the resolved connection object
-    that the task can use to interact with the target host.
+    nested task execution, depth limits, dry-run state, and the resolved
+    connection object that the task can use to interact with the target host.
 
     Task code can inspect the current retry attempt through
-    ``current_attempt`` and the resolved connection through ``connection()``
-    and ``has_connection()``. Depth bookkeeping is retained internally by the
-    runtime and is not part of the public Python task API.
+    ``current_attempt``, dry-run state through ``dry_run``, and the resolved
+    connection through ``connection()`` and ``has_connection()``. Depth
+    bookkeeping is retained internally by the runtime and is not part of the
+    public Python task API.
     """
 
     def __init__(
@@ -412,6 +413,7 @@ class TaskRuntimeContext:
 
     @property
     def dry_run(self) -> bool:
+        """Whether the current task entrypoint is running in dry-run mode."""
         return self._dry_run
 
     def connection(self) -> Any | None:
