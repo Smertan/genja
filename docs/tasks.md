@@ -511,13 +511,132 @@ different depth limits depending on the workflow.
     import genja as genja_lib
 
     genja = genja_lib.Genja.from_settings_file("settings.yaml")
-    results = genja.run_task(CollectFacts, max_depth=1)
+    results = genja.run_task(
+        CollectFacts,
+        run_options=genja_lib.TaskRunOptions(max_depth=1),
+    )
 
     print(results.to_json(pretty=True))
     ```
 
 The maximum depth controls nested sub-task execution. Use `0` when only the
 top-level task should run, and a higher value when sub-tasks are expected.
+
+## Dry-Run Execution
+
+Dry-run is an execution mode requested by the runtime. Task authors opt in by
+declaring support and implementing the matching dry-run entrypoint.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::Genja;
+    use genja::genja_core::inventory::Host;
+    use genja::genja_core::task::{
+        HostTaskResult, TaskError, TaskRunOptions, TaskRuntimeContext, TaskSuccess,
+    };
+    use genja::genja_task;
+
+    struct ConfigureInterface;
+
+    #[genja_task(
+        name = "configure_interface",
+        connection_plugin_name = "ssh",
+        supports_dry_run = true,
+    )]
+    impl ConfigureInterface {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new().with_changed(true)))
+        }
+
+        async fn dry_run_async(
+            &self,
+            host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            assert!(context.dry_run());
+
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_diff("- shutdown\n+ no shutdown")
+                    .with_summary(format!("would update {}", host.hostname().unwrap_or("host"))),
+            ))
+        }
+    }
+
+    let genja = Genja::from_settings_file("settings.yaml")?;
+    let results = genja.run_task_with_options(
+        ConfigureInterface,
+        TaskRunOptions::new(1).with_dry_run(true),
+    )?;
+    # Ok::<(), genja::GenjaError>(())
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja as genja_lib
+    from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
+
+
+    @task(
+        name="configure_interface",
+        connection_plugin_name="ssh",
+        supports_dry_run=True,
+    )
+    class ConfigureInterface:
+        def start(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskSuccessResult:
+            return TaskSuccessResult(changed=True)
+
+        def dry_run(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskSuccessResult:
+            assert context.dry_run
+
+            return TaskSuccessResult(
+                changed=True,
+                diff="- shutdown\n+ no shutdown",
+                summary=f"would update {host.hostname}",
+            )
+
+
+    genja = genja_lib.Genja.from_settings_file("settings.yaml")
+    results = genja.run_task(
+        ConfigureInterface,
+        run_options=genja_lib.TaskRunOptions(max_depth=1, dry_run=True),
+    )
+    ```
+
+During dry-run, Genja resolves the task normally and opens any declared task
+connection before calling `dry_run(...)` or `dry_run_async(...)`. This validates
+inventory, settings, plugin lookup, credentials, and connection establishment,
+but opening a connection can still create external side effects such as login
+audit records, sessions, locks, or rate-limit usage.
+
+Dry-run entrypoints return the same result types as normal execution. Use
+`changed=True` when normal execution is expected to change managed state, use
+`changed=False` when the target is already in the desired state, and use `diff`,
+`summary`, and `metadata` to describe the planned change. Serialized host
+execution metadata includes `dry_run`, so consumers can distinguish a planned
+change from an applied change.
+
+If dry-run is requested for a task that does not declare support, Genja records a
+clear host failure before calling `start(...)` or `start_async(...)`. Declaring
+dry-run support without the matching dry-run method fails during macro expansion
+or Python task decoration.
 
 ## Inspect Results
 
@@ -740,6 +859,9 @@ sub-tasks for execution trees such as deploy, validate, and collect logs.
 ## Task Options
 
 Task options are JSON-serializable metadata passed into task execution.
+They are task-authored metadata and are separate from runtime
+`TaskRunOptions`, which operators use for controls such as `max_depth` and
+`dry_run`.
 
 === ":fontawesome-brands-rust: Rust"
 

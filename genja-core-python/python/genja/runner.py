@@ -13,7 +13,9 @@ calling ``task.run_on_host(...)`` or ``task.run_on_hosts(...)``. Runners may
 also implement ``run_tasks(...)`` for custom ordered task-list execution; when
 omitted, the Rust bridge delegates each root task to ``run_task(...)`` in order.
 Runner methods may be implemented as either ``def`` or ``async def``; Genja
-will resolve either form.
+will resolve either form. Runner callbacks receive ``run_options`` so they can
+preserve operator-selected execution controls such as maximum task depth and
+dry-run mode when delegating to task definitions.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from .plugin import PluginBase
 from .settings import RunnerConfig
 
 if TYPE_CHECKING:
-    from . import TaskConnectionResolver, TaskDefinition, TaskResults
+    from . import TaskConnectionResolver, TaskDefinition, TaskResults, TaskRunOptions
 
 
 class RunnerPluginBase(PluginBase):
@@ -41,7 +43,7 @@ class RunnerPluginBase(PluginBase):
         hosts: dict[str, object],
         connection_resolver: TaskConnectionResolver | None,
         runner_config: RunnerConfig,
-        max_depth: int,
+        run_options: TaskRunOptions,
     ) -> TaskResults | Awaitable[TaskResults]: ...
 
 
@@ -55,7 +57,7 @@ class BatchRunnerPluginBase(RunnerPluginBase, ABC):
         hosts: dict[str, object],
         connection_resolver: TaskConnectionResolver | None,
         runner_config: RunnerConfig,
-        max_depth: int,
+        run_options: TaskRunOptions,
     ) -> list[TaskResults] | Awaitable[list[TaskResults]]: ...
 
 

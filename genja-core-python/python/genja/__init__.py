@@ -21,6 +21,7 @@ from .genja import (
     Settings as _CoreSettings,
     TaskConnectionResolver,
     TaskDefinition,
+    TaskRunOptions,
     TaskResults,
     Tasks,
 )
@@ -65,6 +66,7 @@ __all__ = [
     "HostTaskResult",
     "TaskConnectionResolver",
     "TaskDefinition",
+    "TaskRunOptions",
     "Tasks",
     "TaskResults",
     "Genja",

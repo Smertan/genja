@@ -39,6 +39,9 @@ with HOSTS_FILE.open() as hosts_file:
     hosts = json.load(hosts_file)
 
 genja = genja_lib.Genja.from_hosts(hosts).with_runner("serial")
-results = genja.run_task(DeployConfig, max_depth=1)
+results = genja.run_task(
+    DeployConfig,
+    run_options=genja_lib.TaskRunOptions(max_depth=1),
+)
 
 print(results.to_json(pretty=True))

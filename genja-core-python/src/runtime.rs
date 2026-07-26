@@ -161,12 +161,18 @@
 //! results = runtime.run_task(BackupTask)
 //!
 //! # Run with custom depth limit for sub-tasks
-//! results = runtime.run_task(BackupTask, max_depth=5)
+//! results = runtime.run_task(
+//!     BackupTask,
+//!     run_options=genja.TaskRunOptions(max_depth=5),
+//! )
 //!
 //! # Run an ordered Tasks collection
 //! tasks = genja.Tasks()
 //! tasks.add_task(BackupTask)
-//! all_results = runtime.run_tasks(tasks, max_depth=5)
+//! all_results = runtime.run_tasks(
+//!     tasks,
+//!     run_options=genja.TaskRunOptions(max_depth=5),
+//! )
 //! ```
 //!
 //! # Plugin Integration
@@ -1264,37 +1270,37 @@ impl PyGenja {
     /// - The runner plugin encounters an error during task execution
     /// - Task execution exceeds the maximum depth limit for sub-tasks
     /// - The task implementation raises an unhandled exception
-    #[pyo3(signature = (task_class, max_depth=None))]
+    #[pyo3(signature = (task_class, run_options=None))]
     fn run_task(
         &self,
         py: Python<'_>,
         task_class: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<PyTaskResults> {
-        task::run_task(py, &self.inner, task_class, max_depth)
+        task::run_task(py, &self.inner, task_class, run_options)
     }
 
-    #[pyo3(signature = (task_class, max_depth=None))]
+    #[pyo3(signature = (task_class, run_options=None))]
     fn _run_task_async_native(
         &self,
         py: Python<'_>,
         task_class: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        task::run_task_async(py, &self.inner, task_class, max_depth)
+        task::run_task_async(py, &self.inner, task_class, run_options)
     }
 
-    #[pyo3(signature = (task_class, max_depth=None))]
+    #[pyo3(signature = (task_class, run_options=None))]
     fn run_task_async(
         slf: PyRef<'_, Self>,
         py: Python<'_>,
         task_class: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let async_helpers = PyModule::import(py, "genja._async")?;
         let helper = async_helpers.getattr("run_task_async")?;
         Ok(helper
-            .call1((slf.into_pyobject(py)?, task_class, max_depth))?
+            .call1((slf.into_pyobject(py)?, task_class, run_options))?
             .unbind())
     }
 
@@ -1303,37 +1309,37 @@ impl PyGenja {
     /// Each entry in `tasks` is a root task definition and may declare its own
     /// nested sub-task tree. The returned list preserves input order, so
     /// `results[n]` corresponds to `tasks[n]`.
-    #[pyo3(signature = (tasks, max_depth=None))]
+    #[pyo3(signature = (tasks, run_options=None))]
     fn run_tasks(
         &self,
         py: Python<'_>,
         tasks: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Vec<PyTaskResults>> {
-        task::run_tasks(py, &self.inner, tasks, max_depth)
+        task::run_tasks(py, &self.inner, tasks, run_options)
     }
 
-    #[pyo3(signature = (tasks, max_depth=None))]
+    #[pyo3(signature = (tasks, run_options=None))]
     fn _run_tasks_async_native(
         &self,
         py: Python<'_>,
         tasks: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        task::run_tasks_async(py, &self.inner, tasks, max_depth)
+        task::run_tasks_async(py, &self.inner, tasks, run_options)
     }
 
-    #[pyo3(signature = (tasks, max_depth=None))]
+    #[pyo3(signature = (tasks, run_options=None))]
     fn run_tasks_async(
         slf: PyRef<'_, Self>,
         py: Python<'_>,
         tasks: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let async_helpers = PyModule::import(py, "genja._async")?;
         let helper = async_helpers.getattr("run_tasks_async")?;
         Ok(helper
-            .call1((slf.into_pyobject(py)?, tasks, max_depth))?
+            .call1((slf.into_pyobject(py)?, tasks, run_options))?
             .unbind())
     }
 
@@ -2612,7 +2618,7 @@ mod tests {
                 .getattr("AsyncRuntimeTask")
                 .expect("task fixture should exist");
             let results = runtime
-                .run_task(py, task_class, Some(5))
+                .run_task(py, task_class, None)
                 .expect("task should execute through python runner");
 
             assert_eq!(

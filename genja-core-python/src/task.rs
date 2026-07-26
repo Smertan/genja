@@ -3,7 +3,7 @@ use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
     HostTaskResult, MessageLevel, RetryConfig, Task, TaskConnectionResolver, TaskDefinition,
     TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
-    TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
+    TaskResultsSummary, TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
 };
 use async_trait::async_trait;
 use pyo3::exceptions::PyValueError;
@@ -61,6 +61,7 @@ struct PythonTaskSpec {
     processor_names: Vec<String>,
     retry_config: Option<RetryConfig>,
     options: Option<Value>,
+    supports_dry_run: bool,
     py_task_class: Arc<Py<PyAny>>,
     execution_mode: PythonTaskExecutionMode,
     sub_tasks: Vec<PythonTaskSpec>,
@@ -69,6 +70,39 @@ struct PythonTaskSpec {
 struct PythonBackedTask {
     spec: PythonTaskSpec,
     sub_tasks: Vec<Arc<dyn Task>>,
+}
+
+struct PythonTaskRunContext {
+    current_depth: usize,
+    max_depth: Option<usize>,
+    current_attempt: usize,
+    dry_run: bool,
+    connection: Option<Py<PyAny>>,
+}
+
+impl PythonTaskRunContext {
+    fn from_blocking(
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+        connection: Option<Py<PyAny>>,
+    ) -> Self {
+        Self {
+            current_depth: context.current_depth(),
+            max_depth: Some(context.max_depth()),
+            current_attempt: context.current_attempt(),
+            dry_run: context.dry_run(),
+            connection,
+        }
+    }
+
+    fn from_async(context: &TaskRuntimeContext, connection: Option<Py<PyAny>>) -> Self {
+        Self {
+            current_depth: context.current_depth(),
+            max_depth: Some(context.max_depth()),
+            current_attempt: context.current_attempt(),
+            dry_run: context.dry_run(),
+            connection,
+        }
+    }
 }
 
 impl TaskInfo for PythonBackedTask {
@@ -100,6 +134,10 @@ impl TaskInfo for PythonBackedTask {
     fn retry_config(&self) -> Option<&RetryConfig> {
         self.spec.retry_config.as_ref()
     }
+
+    fn supports_dry_run(&self) -> bool {
+        self.spec.supports_dry_run
+    }
 }
 
 #[async_trait]
@@ -118,10 +156,27 @@ impl Task for PythonBackedTask {
         .flatten();
         self.run_python_blocking(
             host,
-            context.current_depth(),
-            Some(context.max_depth()),
-            context.current_attempt(),
-            python_connection,
+            PythonTaskRunContext::from_blocking(context, python_connection),
+            "start",
+        )
+    }
+
+    fn dry_run(
+        &self,
+        host: &Host,
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let python_connection = match context.connection() {
+            Some(connection) => Some(connection.with_connection(|connection| {
+                Ok(python_connection_from_runtime_connection(connection))
+            })?),
+            None => None,
+        }
+        .flatten();
+        self.run_python_blocking(
+            host,
+            PythonTaskRunContext::from_blocking(context, python_connection),
+            "dry_run",
         )
     }
 
@@ -138,10 +193,27 @@ impl Task for PythonBackedTask {
         };
         self.run_python(
             host,
-            context.current_depth(),
-            Some(context.max_depth()),
-            context.current_attempt(),
-            python_connection,
+            PythonTaskRunContext::from_async(context, python_connection),
+            "start_async",
+        )
+        .await
+    }
+
+    async fn dry_run_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let python_connection = if let Some(connection) = context.connection() {
+            let guard = connection.lock().await;
+            python_connection_from_runtime_connection(&*guard)
+        } else {
+            None
+        };
+        self.run_python(
+            host,
+            PythonTaskRunContext::from_async(context, python_connection),
+            "dry_run_async",
         )
         .await
     }
@@ -162,10 +234,8 @@ impl PythonBackedTask {
     fn run_python_blocking(
         &self,
         host: &Host,
-        current_depth: usize,
-        max_depth: Option<usize>,
-        current_attempt: usize,
-        connection: Option<Py<PyAny>>,
+        context: PythonTaskRunContext,
+        method_name: &str,
     ) -> Result<HostTaskResult, TaskError> {
         let result = Python::attach(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
@@ -184,14 +254,15 @@ impl PythonBackedTask {
             .map_err(python_task_error)?;
             let context_payload = build_python_task_runtime_context(
                 py,
-                current_depth,
-                max_depth,
-                current_attempt,
-                connection,
+                context.current_depth,
+                context.max_depth,
+                context.current_attempt,
+                context.dry_run,
+                context.connection,
             )
             .map_err(python_task_error)?;
             let result = instance
-                .call_method1("start", (task_payload, host_payload, context_payload))
+                .call_method1(method_name, (task_payload, host_payload, context_payload))
                 .map_err(python_task_error)?;
             let is_awaitable: bool = PyModule::import(py, "inspect")
                 .map_err(python_task_error)?
@@ -213,10 +284,8 @@ impl PythonBackedTask {
     async fn run_python(
         &self,
         host: &Host,
-        current_depth: usize,
-        max_depth: Option<usize>,
-        current_attempt: usize,
-        connection: Option<Py<PyAny>>,
+        context: PythonTaskRunContext,
+        method_name: &str,
     ) -> Result<HostTaskResult, TaskError> {
         let result = Python::attach(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
@@ -235,15 +304,16 @@ impl PythonBackedTask {
             .map_err(python_task_error)?;
             let context_payload = build_python_task_runtime_context(
                 py,
-                current_depth,
-                max_depth,
-                current_attempt,
-                connection,
+                context.current_depth,
+                context.max_depth,
+                context.current_attempt,
+                context.dry_run,
+                context.connection,
             )
             .map_err(python_task_error)?;
 
             instance
-                .call_method1("start_async", (task_payload, host_payload, context_payload))
+                .call_method1(method_name, (task_payload, host_payload, context_payload))
                 .map(Bound::unbind)
                 .map_err(python_task_error)
         })?;
@@ -273,6 +343,18 @@ pub struct PyTasks {
 #[derive(Clone)]
 pub struct PyTaskConnectionResolver {
     pub(crate) inner: Option<Arc<dyn TaskConnectionResolver>>,
+}
+
+#[pyclass(name = "TaskRunOptions", skip_from_py_object)]
+#[derive(Clone)]
+/// Python wrapper for runtime task execution options.
+///
+/// `TaskRunOptions` carries operator-selected execution controls such as
+/// maximum sub-task depth and dry-run mode. It is separate from task decorator
+/// `options`, which are task-authored metadata.
+pub struct PyTaskRunOptions {
+    pub(crate) max_depth: Option<usize>,
+    pub(crate) dry_run: bool,
 }
 
 #[pymethods]
@@ -326,6 +408,11 @@ impl PyTaskDefinition {
         retry_config_to_py_object(py, self.inner.retry_config())
     }
 
+    #[getter]
+    fn supports_dry_run(&self) -> bool {
+        self.inner.supports_dry_run()
+    }
+
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self.spec.as_ref() {
             Some(spec) => json_value_to_py(py, &python_task_spec_to_json(spec)),
@@ -333,12 +420,12 @@ impl PyTaskDefinition {
         }
     }
 
-    #[pyo3(signature = (host, connection_resolver=None, max_depth=0))]
+    #[pyo3(signature = (host, connection_resolver=None, run_options=None))]
     fn run_on_host(
         &self,
         host: Bound<'_, PyAny>,
         connection_resolver: Option<PyRef<'_, PyTaskConnectionResolver>>,
-        max_depth: usize,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<PyTaskResults> {
         let py = host.py();
         let host = python_host_to_rust_host(host)?;
@@ -346,24 +433,26 @@ impl PyTaskDefinition {
         let host_id = host.hostname().unwrap_or("host").to_string();
         hosts.add_host(host_id, host);
         let resolver = connection_resolver.and_then(|resolver| resolver.inner.clone());
+        let run_options = resolve_task_run_options(run_options.as_ref(), 0)?;
         let inner = py
-            .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, max_depth))
+            .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, run_options))
             .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
         Ok(PyTaskResults { inner })
     }
 
-    #[pyo3(signature = (hosts, connection_resolver=None, max_depth=0))]
+    #[pyo3(signature = (hosts, connection_resolver=None, run_options=None))]
     fn run_on_hosts(
         &self,
         hosts: Bound<'_, PyAny>,
         connection_resolver: Option<PyRef<'_, PyTaskConnectionResolver>>,
-        max_depth: usize,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<PyTaskResults> {
         let py = hosts.py();
         let hosts = python_hosts_to_rust_hosts(hosts)?;
         let resolver = connection_resolver.and_then(|resolver| resolver.inner.clone());
+        let run_options = resolve_task_run_options(run_options.as_ref(), 0)?;
         let inner = py
-            .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, max_depth))
+            .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, run_options))
             .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
         Ok(PyTaskResults { inner })
     }
@@ -374,6 +463,62 @@ impl PyTaskDefinition {
             self.name(),
             self.connection_plugin_name(),
             self.sub_tasks().len()
+        )
+    }
+}
+
+#[pymethods]
+impl PyTaskRunOptions {
+    /// Create runtime task execution options.
+    #[new]
+    #[pyo3(signature = (max_depth=None, dry_run=false))]
+    fn new(max_depth: Option<usize>, dry_run: bool) -> Self {
+        Self { max_depth, dry_run }
+    }
+
+    /// Return the maximum nested sub-task depth override, if configured.
+    #[getter]
+    fn max_depth(&self) -> Option<usize> {
+        self.max_depth
+    }
+
+    /// Return whether dry-run execution is requested.
+    #[getter]
+    fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    /// Return a copy with a different maximum nested sub-task depth.
+    fn with_max_depth(&self, max_depth: usize) -> Self {
+        Self {
+            max_depth: Some(max_depth),
+            dry_run: self.dry_run,
+        }
+    }
+
+    /// Return a copy with dry-run execution enabled or disabled.
+    fn with_dry_run(&self, dry_run: bool) -> Self {
+        Self {
+            max_depth: self.max_depth,
+            dry_run,
+        }
+    }
+
+    /// Convert the runtime options to a Python dictionary.
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let payload = PyDict::new(py);
+        match self.max_depth {
+            Some(max_depth) => payload.set_item("max_depth", max_depth)?,
+            None => payload.set_item("max_depth", py.None())?,
+        }
+        payload.set_item("dry_run", self.dry_run)?;
+        Ok(payload.unbind().into())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TaskRunOptions(max_depth={:?}, dry_run={})",
+            self.max_depth, self.dry_run
         )
     }
 }
@@ -588,13 +733,16 @@ pub fn run_task(
     py: Python<'_>,
     runtime: &RuntimeGenja,
     task_class: Bound<'_, PyAny>,
-    max_depth: Option<usize>,
+    run_options: Option<Bound<'_, PyAny>>,
 ) -> PyResult<PyTaskResults> {
     let spec = extract_python_task_spec(task_class)?;
     let task = task_from_spec(&spec);
-    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+    let run_options = resolve_task_run_options(
+        run_options.as_ref(),
+        runtime.settings().runner().max_task_depth(),
+    )?;
     let inner = py
-        .detach(|| runtime.run_task(task, max_depth))
+        .detach(|| runtime.run_task_with_options(task, run_options))
         .map_err(|err| {
             PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
         })?;
@@ -605,16 +753,19 @@ pub fn run_task_async(
     py: Python<'_>,
     runtime: &RuntimeGenja,
     task_class: Bound<'_, PyAny>,
-    max_depth: Option<usize>,
+    run_options: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let spec = extract_python_task_spec(task_class)?;
     let runtime = runtime.clone();
     let task = task_from_spec(&spec);
-    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+    let run_options = resolve_task_run_options(
+        run_options.as_ref(),
+        runtime.settings().runner().max_task_depth(),
+    )?;
 
     future_into_py(py, async move {
         let inner = runtime
-            .run_task_async(task, max_depth)
+            .run_task_with_options_async(task, run_options)
             .await
             .map_err(|err| {
                 PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
@@ -628,16 +779,19 @@ pub fn run_tasks(
     py: Python<'_>,
     runtime: &RuntimeGenja,
     task_input: Bound<'_, PyAny>,
-    max_depth: Option<usize>,
+    run_options: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Vec<PyTaskResults>> {
     let tasks = task_input
         .extract::<PyRef<'_, PyTasks>>()
         .map_err(|_| PyValueError::new_err("tasks must be a genja.Tasks instance"))?
         .to_runtime_tasks();
 
-    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+    let run_options = resolve_task_run_options(
+        run_options.as_ref(),
+        runtime.settings().runner().max_task_depth(),
+    )?;
     let results = py
-        .detach(|| runtime.run_tasks(tasks, max_depth))
+        .detach(|| runtime.run_tasks_with_options(tasks, run_options))
         .map_err(|err| {
             PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
         })?;
@@ -651,7 +805,7 @@ pub fn run_tasks_async(
     py: Python<'_>,
     runtime: &RuntimeGenja,
     task_input: Bound<'_, PyAny>,
-    max_depth: Option<usize>,
+    run_options: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let tasks = task_input
         .extract::<PyRef<'_, PyTasks>>()
@@ -659,11 +813,14 @@ pub fn run_tasks_async(
         .to_runtime_tasks();
 
     let runtime = runtime.clone();
-    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+    let run_options = resolve_task_run_options(
+        run_options.as_ref(),
+        runtime.settings().runner().max_task_depth(),
+    )?;
 
     future_into_py(py, async move {
         let results = runtime
-            .run_tasks_async(tasks, max_depth)
+            .run_tasks_with_options_async(tasks, run_options)
             .await
             .map_err(|err| {
                 PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
@@ -676,11 +833,34 @@ pub fn run_tasks_async(
     .map(Bound::unbind)
 }
 
+fn resolve_task_run_options(
+    run_options: Option<&Bound<'_, PyAny>>,
+    default_max_depth: usize,
+) -> PyResult<TaskRunOptions> {
+    if let Some(run_options) = run_options {
+        if run_options.is_none() {
+            // Explicit None is equivalent to omitting run_options.
+        } else if let Ok(run_options) = run_options.extract::<PyRef<'_, PyTaskRunOptions>>() {
+            return Ok(
+                TaskRunOptions::new(run_options.max_depth.unwrap_or(default_max_depth))
+                    .with_dry_run(run_options.dry_run),
+            );
+        } else {
+            return Err(PyValueError::new_err(
+                "run_options must be a genja.TaskRunOptions instance",
+            ));
+        }
+    }
+
+    Ok(TaskRunOptions::new(default_max_depth))
+}
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyHostTaskResult>()?;
     module.add_class::<PyTaskDefinition>()?;
     module.add_class::<PyTasks>()?;
     module.add_class::<PyTaskConnectionResolver>()?;
+    module.add_class::<PyTaskRunOptions>()?;
     module.add_class::<PyTaskResults>()?;
     Ok(())
 }
@@ -951,6 +1131,7 @@ fn task_to_json(task: &dyn Task) -> Value {
         "processors": task.processor_names(),
         "retry": retry_config_to_json(task.retry_config()),
         "options": task.options(),
+        "supports_dry_run": task.supports_dry_run(),
         "sub_tasks": task.sub_tasks().into_iter().map(|sub_task| task_to_json(sub_task.as_ref())).collect::<Vec<_>>(),
     })
 }
@@ -968,7 +1149,7 @@ fn run_task_definition_on_hosts(
     task_definition: &TaskDefinition,
     hosts: &Hosts,
     connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
-    max_depth: usize,
+    run_options: TaskRunOptions,
 ) -> Result<TaskResults, ::genja_core::GenjaError> {
     let future = async {
         let started_at = SystemTime::now();
@@ -978,12 +1159,12 @@ fn run_task_definition_on_hosts(
         for (host_id, host) in hosts.iter() {
             let mut host_results = TaskResults::new(task_definition.name());
             task_definition
-                .start_with_connection_resolver(
+                .start_with_connection_resolver_and_options(
                     host_id.as_str(),
                     host,
                     &mut host_results,
                     connection_resolver.as_deref(),
-                    max_depth,
+                    run_options,
                 )
                 .await?;
             results.merge(host_results);
@@ -1016,6 +1197,8 @@ fn run_task_definition_on_hosts(
 
 fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonTaskSpec> {
     let class_dict = py_task_class.getattr("__dict__")?;
+    let has_dry_run = class_dict.contains("dry_run")?;
+    let has_dry_run_async = class_dict.contains("dry_run_async")?;
     let execution_mode = match (
         class_dict.contains("start")?,
         class_dict.contains("start_async")?,
@@ -1067,6 +1250,42 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     reject_misplaced_retry_metadata(&info)?;
     let retry_config = extract_retry_config_from_metadata(&info)?;
 
+    let supports_dry_run = if let Some(value) = info.get_item("supports_dry_run")? {
+        if value.is_none() {
+            false
+        } else {
+            value.extract::<bool>()?
+        }
+    } else {
+        false
+    };
+    if supports_dry_run {
+        match (execution_mode, has_dry_run, has_dry_run_async) {
+            (PythonTaskExecutionMode::Blocking, true, false) => {}
+            (PythonTaskExecutionMode::Async, false, true) => {}
+            (PythonTaskExecutionMode::Blocking, false, _) => {
+                return Err(PyValueError::new_err(
+                    "supports_dry_run=True requires 'dry_run' for sync Python tasks",
+                ));
+            }
+            (PythonTaskExecutionMode::Async, _, false) => {
+                return Err(PyValueError::new_err(
+                    "supports_dry_run=True requires 'dry_run_async' for async Python tasks",
+                ));
+            }
+            (PythonTaskExecutionMode::Blocking, _, true) => {
+                return Err(PyValueError::new_err(
+                    "supports_dry_run=True requires sync Python tasks to define 'dry_run', not 'dry_run_async'",
+                ));
+            }
+            (PythonTaskExecutionMode::Async, true, _) => {
+                return Err(PyValueError::new_err(
+                    "supports_dry_run=True requires async Python tasks to define 'dry_run_async', not 'dry_run'",
+                ));
+            }
+        }
+    }
+
     let options = if let Some(options) = info.get_item("options")? {
         if options.is_none() {
             None
@@ -1092,6 +1311,7 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         processor_names,
         retry_config,
         options,
+        supports_dry_run,
         py_task_class: Arc::new(py_task_class.unbind()),
         execution_mode,
         sub_tasks,
@@ -1120,6 +1340,7 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
         "processors": spec.processor_names,
         "retry": retry_config_to_json(spec.retry_config.as_ref()),
         "options": spec.options,
+        "supports_dry_run": spec.supports_dry_run,
         "sub_tasks": spec.sub_tasks.iter().map(python_task_spec_to_json).collect::<Vec<_>>(),
     })
 }
@@ -1141,6 +1362,7 @@ fn python_task_spec_to_py_dict<'py>(
         "retry",
         retry_config_to_py_object(py, spec.retry_config.as_ref())?,
     )?;
+    task.set_item("supports_dry_run", spec.supports_dry_run)?;
     if let Some(options) = spec.options.as_ref() {
         task.set_item("options", json_value_to_py(py, options)?)?;
     } else {
@@ -1256,11 +1478,13 @@ fn build_python_task_runtime_context(
     current_depth: usize,
     max_depth: Option<usize>,
     current_attempt: usize,
+    dry_run: bool,
     connection: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let context = PyDict::new(py);
     context.set_item("current_depth", current_depth)?;
     context.set_item("current_attempt", current_attempt)?;
+    context.set_item("dry_run", dry_run)?;
     if let Some(max_depth) = max_depth {
         context.set_item("max_depth", max_depth)?;
     } else {
@@ -1377,16 +1601,44 @@ impl TaskInfo for RuntimeTaskWrapper {
     fn retry_config(&self) -> Option<&RetryConfig> {
         self.inner.retry_config()
     }
+
+    fn supports_dry_run(&self) -> bool {
+        self.inner.supports_dry_run()
+    }
 }
 
 #[async_trait]
 impl Task for RuntimeTaskWrapper {
+    fn start(
+        &self,
+        host: &Host,
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        self.inner.start(host, context)
+    }
+
     async fn start_async(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         self.inner.start_async(host, context).await
+    }
+
+    fn dry_run(
+        &self,
+        host: &Host,
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        self.inner.dry_run(host, context)
+    }
+
+    async fn dry_run_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        self.inner.dry_run_async(host, context).await
     }
 
     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
@@ -1551,6 +1803,7 @@ mod tests {
             None => info.set_item("connection_plugin_name", py.None())?,
         }
         info.set_item("retry", py.None())?;
+        info.set_item("supports_dry_run", false)?;
         info.set_item("sub_tasks", sub_tasks)?;
 
         let attrs = PyDict::new(py);
@@ -1897,7 +2150,7 @@ mod tests {
             };
 
             let result = task_definition
-                .run_on_host(host.into_any(), None, 0)
+                .run_on_host(host.into_any(), None, None)
                 .expect("async task should execute");
             assert_eq!(result.passed_hosts(), vec!["router1".to_string()]);
             let host_result = result

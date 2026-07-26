@@ -1,0 +1,5 @@
+error: `supports_dry_run = true` requires `fn dry_run(...)` for blocking tasks
+  --> tests/ui_genja_task/fail/missing_blocking_dry_run.rs:10:6
+   |
+10 | impl BadTask {
+   |      ^^^^^^^

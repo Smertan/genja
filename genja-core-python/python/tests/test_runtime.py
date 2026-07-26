@@ -296,7 +296,10 @@ def test_genja_runtime_run_tasks_async_preserves_order():
         tasks = genja.Tasks()
         tasks.add_task(RuntimeBackupTask)
         tasks.add_task(RuntimeAsyncBackupTask)
-        return await runtime.run_tasks_async(tasks, max_depth=1)
+        return await runtime.run_tasks_async(
+            tasks,
+            run_options=genja.TaskRunOptions(max_depth=1),
+        )
 
     results = asyncio.run(run_case())
 
@@ -344,7 +347,7 @@ def test_genja_runtime_runs_ordered_task_list_with_nested_subtasks():
         "runtime_parent",
     ]
 
-    results = runtime.run_tasks(tasks, max_depth=1)
+    results = runtime.run_tasks(tasks, run_options=genja.TaskRunOptions(max_depth=1))
 
     assert [result.task_name for result in results] == [
         "runtime_backup",
@@ -366,7 +369,10 @@ def test_genja_runtime_run_tasks_rejects_plain_task_iterable():
     }).with_runner("serial")
 
     try:
-        runtime.run_tasks([RuntimeBackupTask, RuntimeParentTask], max_depth=1)
+        runtime.run_tasks(
+            [RuntimeBackupTask, RuntimeParentTask],
+            run_options=genja.TaskRunOptions(max_depth=1),
+        )
     except ValueError as err:
         assert "tasks must be a genja.Tasks instance" in str(err)
     else:
@@ -591,7 +597,10 @@ def test_genja_runtime_hides_depth_from_python_task_context():
     runtime = genja.Genja.from_hosts({
         "router1": Host(hostname="10.0.0.1", platform="ios"),
     }).with_runner("serial")
-    results = runtime.run_task(RuntimeParentTask, max_depth=1)
+    results = runtime.run_task(
+        RuntimeParentTask,
+        run_options=genja.TaskRunOptions(max_depth=1),
+    )
     data = results.to_dict(raw=True)
 
     assert data["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
@@ -623,6 +632,72 @@ def test_genja_runtime_passes_python_connection_into_runtime_context():
     results = runtime.run_task(RuntimeConnectionTask)
     data = results.to_dict()
 
+    assert data["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
+        "connection_alive": True,
+        "connection_hostname": "router1",
+        "opened_with": {
+            "hostname": "10.0.0.1",
+            "port": 22,
+            "username": "admin",
+            "password": "secret",
+            "platform": "ios",
+            "extras": None,
+        },
+    }
+
+
+def test_genja_runtime_opens_python_connection_for_dry_run():
+    calls: list[str] = []
+
+    @task(
+        name="runtime_connection_dry_run",
+        connection_plugin_name="ssh",
+        supports_dry_run=True,
+    )
+    class RuntimeConnectionDryRunTask:
+        def start(self, task, host, context):
+            calls.append("start")
+            return TaskSuccessResult(summary="started")
+
+        def dry_run(self, task, host, context):
+            calls.append("dry_run")
+            assert task.supports_dry_run is True
+            assert context.dry_run is True
+            assert isinstance(context.connection(), TestConnection)
+            connection = context.connection()
+            return TaskSuccessResult(
+                changed=True,
+                summary=f"would connect to {host.hostname}",
+                metadata={
+                    "connection_alive": connection.is_alive(),
+                    "connection_hostname": connection.key.hostname,
+                    "opened_with": connection.opened_with,
+                },
+            )
+
+    plugins = genja.PluginManager()
+    plugins.register_plugin(ConnectionPlugin())
+
+    runtime = genja.Genja.from_hosts(
+        {
+            "router1": Host(
+                hostname="10.0.0.1",
+                port=22,
+                username="admin",
+                password="secret",
+                platform="ios",
+            ),
+        },
+        plugin_manager=plugins,
+    ).with_runner("serial")
+    results = runtime.run_task(
+        RuntimeConnectionDryRunTask,
+        run_options=genja.TaskRunOptions(dry_run=True),
+    )
+    data = results.to_dict()
+
+    assert calls == ["dry_run"]
+    assert data["hosts"]["router1"]["execution_metadata"]["dry_run"] is True
     assert data["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
         "connection_alive": True,
         "connection_hostname": "router1",

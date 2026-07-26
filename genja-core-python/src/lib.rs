@@ -51,7 +51,10 @@
 //! genja = Genja.builder(inventory).with_settings(settings).build()
 //!
 //! # Execute task
-//! results = genja.run_task(TaskClass, max_depth=10)
+//! results = genja.run_task(
+//!     TaskClass,
+//!     run_options=genja.TaskRunOptions(max_depth=10),
+//! )
 //! ```
 //!
 //! ## Plugin Management

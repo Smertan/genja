@@ -43,16 +43,22 @@ async def from_settings_file_async(
 async def run_task_async(
     runtime: "Genja",
     task_class: type["GenjaTaskProtocol"],
-    max_depth: int | None = None,
+    run_options: Any | None = None,
 ) -> "TaskResults":
     runtime_any = cast(Any, runtime)
-    return await runtime_any._run_task_async_native(task_class, max_depth=max_depth)
+    return await runtime_any._run_task_async_native(
+        task_class,
+        run_options,
+    )
 
 
 async def run_tasks_async(
     runtime: "Genja",
     tasks: "Tasks",
-    max_depth: int | None = None,
+    run_options: Any | None = None,
 ) -> list["TaskResults"]:
     runtime_any = cast(Any, runtime)
-    return await runtime_any._run_tasks_async_native(tasks, max_depth=max_depth)
+    return await runtime_any._run_tasks_async_native(
+        tasks,
+        run_options,
+    )
