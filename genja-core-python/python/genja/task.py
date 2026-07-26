@@ -123,6 +123,7 @@ Genja does not infer whether a task is safe to repeat, mutable, or idempotent.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 import json
@@ -131,6 +132,54 @@ from typing import Any, Awaitable, Literal, Protocol, TypeVar, cast
 from pydantic import BaseModel, Field, field_validator
 
 _TaskClassT = TypeVar("_TaskClassT", bound=type)
+
+
+@dataclass(frozen=True)
+class _DryRunMode:
+    article: str
+    label: str
+    start_method: str
+    dry_run_method: str
+
+
+_SYNC_DRY_RUN = _DryRunMode("a", "sync", "start", "dry_run")
+_ASYNC_DRY_RUN = _DryRunMode("an", "async", "start_async", "dry_run_async")
+_DRY_RUN_METHOD_SIGNATURE_ARGS = "self, task, host, context"
+
+
+def _task_decorator_class_error(cls_name: str, message: str) -> str:
+    return f"@task-decorated class '{cls_name}' {message}"
+
+
+def _dry_run_method_signature(method_name: str) -> str:
+    return f"{method_name}({_DRY_RUN_METHOD_SIGNATURE_ARGS})"
+
+
+def _missing_dry_run_method_error(cls_name: str, mode: _DryRunMode) -> str:
+    return _task_decorator_class_error(
+        cls_name,
+        (
+            f"is {mode.article} {mode.label} task with supports_dry_run=True, so it must "
+            f"define a dry-run method named "
+            f"'{_dry_run_method_signature(mode.dry_run_method)}'"
+        ),
+    )
+
+
+def _wrong_dry_run_method_error(
+    cls_name: str,
+    mode: _DryRunMode,
+    invalid_method: str,
+) -> str:
+    return _task_decorator_class_error(
+        cls_name,
+        (
+            f"is {mode.article} {mode.label} task, so dry-run support requires "
+            "a dry-run method named "
+            f"'{_dry_run_method_signature(mode.dry_run_method)}', "
+            f"not '{invalid_method}'"
+        ),
+    )
 
 
 def _ensure_json_serializable(value: Any, field_name: str) -> Any:
@@ -652,19 +701,27 @@ def task(
         if supports_dry_run:
             if has_start and not has_dry_run:
                 raise TypeError(
-                    f"@task-decorated class '{cls.__name__}' supports_dry_run=True requires 'dry_run'"
+                    _missing_dry_run_method_error(cls.__name__, _SYNC_DRY_RUN)
                 )
             if has_start_async and not has_dry_run_async:
                 raise TypeError(
-                    f"@task-decorated class '{cls.__name__}' supports_dry_run=True requires 'dry_run_async'"
+                    _missing_dry_run_method_error(cls.__name__, _ASYNC_DRY_RUN)
                 )
             if has_start and has_dry_run_async:
                 raise TypeError(
-                    f"@task-decorated class '{cls.__name__}' sync dry-run support requires 'dry_run', not 'dry_run_async'"
+                    _wrong_dry_run_method_error(
+                        cls.__name__,
+                        _SYNC_DRY_RUN,
+                        _ASYNC_DRY_RUN.dry_run_method,
+                    )
                 )
             if has_start_async and has_dry_run:
                 raise TypeError(
-                    f"@task-decorated class '{cls.__name__}' async dry-run support requires 'dry_run_async', not 'dry_run'"
+                    _wrong_dry_run_method_error(
+                        cls.__name__,
+                        _ASYNC_DRY_RUN,
+                        _SYNC_DRY_RUN.dry_run_method,
+                    )
                 )
         if not isinstance(name, str) or not name.strip():
             raise TypeError(

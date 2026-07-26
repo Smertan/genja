@@ -221,11 +221,32 @@ def test_python_backed_task_dry_run_fails_unsupported_without_start():
 
 
 def test_task_decorator_requires_dry_run_method_when_supported():
-    with pytest.raises(TypeError, match="requires 'dry_run'"):
+    with pytest.raises(
+        TypeError,
+        match=(
+            "is a sync task with supports_dry_run=True.*"
+            r"dry_run\(self, task, host, context\)"
+        ),
+    ):
 
         @task(name="missing_preview", supports_dry_run=True)
         class MissingDryRunTask:
             def start(self, task, host, context):
+                return TaskSuccessResult(summary="started")
+
+
+def test_task_decorator_requires_async_dry_run_method_when_supported():
+    with pytest.raises(
+        TypeError,
+        match=(
+            "is an async task with supports_dry_run=True.*"
+            r"dry_run_async\(self, task, host, context\)"
+        ),
+    ):
+
+        @task(name="missing_async_preview", supports_dry_run=True)
+        class MissingAsyncDryRunTask:
+            async def start_async(self, task, host, context):
                 return TaskSuccessResult(summary="started")
 
 

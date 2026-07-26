@@ -27,6 +27,7 @@ Changed packages:
 
 ### Fixed
 
+- Improved Python dry-run task decorator validation errors so missing dry-run methods identify the task execution mode and required method signature. Refs: #80
 - Settings files now allow partial `inventory` sections, with omitted inventory fields falling back to their defaults. Refs: #86
 
 ## 0.3.0 - 2026-07-14
