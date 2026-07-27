@@ -3119,6 +3119,30 @@ pub enum IdempotencyMode {
     CheckAndVerify,
 }
 
+/// Result of an idempotency convergence check.
+///
+/// A check reports the host's current convergence state. `Converged` means the
+/// desired state is already satisfied. `ChangeRequired` means normal execution
+/// should apply the task change. Details are JSON values so they can be
+/// serialized in task results and passed through language bindings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum IdempotencyCheck {
+    /// The host is already in the desired state.
+    Converged {
+        /// Optional human-readable convergence summary.
+        summary: Option<String>,
+        /// Optional structured convergence details.
+        details: Option<Value>,
+    },
+    /// The host is not yet in the desired state.
+    ChangeRequired {
+        /// Optional diff describing the remaining change.
+        diff: Option<String>,
+        /// Optional structured diagnostic details.
+        details: Option<Value>,
+    },
+}
+
 /// Task metadata required for execution.
 ///
 /// Task authoring macros such as `#[genja_task(...)]` implement this trait
@@ -3264,6 +3288,38 @@ pub trait Task: TaskInfo + Send + Sync {
         let _ = (host, context);
         Err(TaskError::new(std::io::Error::other(
             "async start_async() not implemented",
+        )))
+    }
+
+    /// Check current convergence state for a blocking idempotent task.
+    ///
+    /// Implement this for blocking tasks whose [`TaskInfo::idempotency_mode`]
+    /// returns [`IdempotencyMode::Check`] or
+    /// [`IdempotencyMode::CheckAndVerify`].
+    fn check(
+        &self,
+        host: &Host,
+        context: &BlockingTaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "blocking check() not implemented",
+        )))
+    }
+
+    /// Check current convergence state for an async idempotent task.
+    ///
+    /// Implement this for async tasks whose [`TaskInfo::idempotency_mode`]
+    /// returns [`IdempotencyMode::Check`] or
+    /// [`IdempotencyMode::CheckAndVerify`].
+    async fn check_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "async check_async() not implemented",
         )))
     }
 
@@ -6129,6 +6185,45 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_check_serializes_convergence_states() {
+        let converged = IdempotencyCheck::Converged {
+            summary: Some("already configured".to_string()),
+            details: Some(json!({"current": "ntp server 192.0.2.10"})),
+        };
+        let converged_json =
+            serde_json::to_value(&converged).expect("converged check should serialize");
+        assert_eq!(
+            converged_json,
+            json!({
+                "Converged": {
+                    "summary": "already configured",
+                    "details": {
+                        "current": "ntp server 192.0.2.10"
+                    }
+                }
+            })
+        );
+
+        let change_required = IdempotencyCheck::ChangeRequired {
+            diff: Some("+ntp server 192.0.2.10".to_string()),
+            details: Some(json!({"desired": "ntp server 192.0.2.10"})),
+        };
+        let change_required_json =
+            serde_json::to_value(&change_required).expect("change check should serialize");
+        assert_eq!(
+            change_required_json,
+            json!({
+                "ChangeRequired": {
+                    "diff": "+ntp server 192.0.2.10",
+                    "details": {
+                        "desired": "ntp server 192.0.2.10"
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
     fn task_default_dry_run_methods_report_not_implemented() {
         let task = TestTask {
             name: "default",
@@ -6160,6 +6255,43 @@ mod tests {
                 .dry_run(&host, &blocking_context)
                 .expect_err("default blocking dry-run should fail");
             assert!(error.to_string().contains("dry_run() not implemented"));
+        });
+    }
+
+    #[test]
+    fn task_default_idempotency_check_methods_report_not_implemented() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+        let host = Host::builder().hostname("router1").build();
+
+        run_async(async {
+            let async_context = TaskRuntimeContext::new(TaskExecutionContext::new(0, 1), None);
+            let error = task
+                .check_async(&host, &async_context)
+                .await
+                .expect_err("default async check should fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("async check_async() not implemented")
+            );
+
+            let blocking_context = BlockingTaskRuntimeContext::new(
+                TaskExecutionContext::new(0, 1),
+                None,
+                Handle::current(),
+            );
+            let error = task
+                .check(&host, &blocking_context)
+                .expect_err("default blocking check should fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("blocking check() not implemented")
+            );
         });
     }
 
