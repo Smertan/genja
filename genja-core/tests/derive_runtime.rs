@@ -3,7 +3,7 @@ use std::sync::Arc;
 use genja_core::genja_task;
 use genja_core::inventory::{BaseBuilderHost, Host};
 use genja_core::task::{
-    BlockingTaskRuntimeContext, HostTaskResult, Task, TaskExecutionMode, TaskInfo,
+    BlockingTaskRuntimeContext, HostTaskResult, IdempotencyMode, Task, TaskExecutionMode, TaskInfo,
     TaskRuntimeContext, TaskSuccess,
 };
 use serde_json::{Value, json};
@@ -50,6 +50,22 @@ impl AsyncTask {
 
     fn helper(&self) -> bool {
         self.options.is_some()
+    }
+}
+
+struct IdempotentTask;
+
+#[genja_task(
+    name = "idempotent_task",
+    idempotency = IdempotencyMode::CheckAndVerify
+)]
+impl IdempotentTask {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
     }
 }
 
@@ -157,6 +173,14 @@ fn genja_task_generates_task_info_from_metadata() {
     assert_eq!(task.options(), Some(&json!({"changed": false})));
     assert!(task.helper());
     assert!(!task.supports_dry_run());
+    assert_eq!(task.idempotency_mode(), IdempotencyMode::Disabled);
+}
+
+#[test]
+fn genja_task_generates_idempotency_mode_metadata() {
+    let task = IdempotentTask;
+
+    assert_eq!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify);
 }
 
 #[test]

@@ -14,6 +14,7 @@ Changed packages:
 - Added core Rust dry-run task capability, context, trait, and execution metadata APIs. Refs: #80
 - Added Rust `#[genja_task(...)]` dry-run metadata with `supports_dry_run = true`. Refs: #80
 - Added Rust task idempotency mode metadata with `IdempotencyMode` and `TaskInfo::idempotency_mode()`, defaulting to disabled. Refs: #88
+- Added Rust `#[genja_task(...)]` idempotency metadata with `idempotency = IdempotencyMode::...`. Refs: #88
 - Added Rust runtime task execution options with dry-run support through `Genja::run_task_with_options(...)`, `Genja::run_task_with_options_async(...)`, `Genja::run_tasks_with_options(...)`, and `Genja::run_tasks_with_options_async(...)`. Refs: #80
 - Added Python dry-run task support with `@genja.task(..., supports_dry_run=True)`, `dry_run` / `dry_run_async` task methods, `TaskRunOptions` via `run_options=...`, and `TaskRuntimeContext.dry_run`. Refs: #80
 - Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85

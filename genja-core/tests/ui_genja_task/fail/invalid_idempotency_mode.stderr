@@ -1,0 +1,19 @@
+error: `idempotency` must be IdempotencyMode::Disabled, IdempotencyMode::Check, or IdempotencyMode::CheckAndVerify
+ --> tests/ui_genja_task/fail/invalid_idempotency_mode.rs:9:19
+  |
+9 |     idempotency = IdempotencyMode::Validate
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `genja_core::inventory::Host`
+ --> tests/ui_genja_task/fail/invalid_idempotency_mode.rs:2:5
+  |
+2 | use genja_core::inventory::Host;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `HostTaskResult`, `IdempotencyMode`, `TaskRuntimeContext`, and `TaskSuccess`
+ --> tests/ui_genja_task/fail/invalid_idempotency_mode.rs:3:24
+  |
+3 | use genja_core::task::{HostTaskResult, IdempotencyMode, TaskRuntimeContext, TaskSuccess};
+  |                        ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^

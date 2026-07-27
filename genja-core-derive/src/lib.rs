@@ -168,8 +168,16 @@ struct GenjaTaskArgs {
     name: Option<LitStr>,
     connection_plugin_name: Option<LitStr>,
     supports_dry_run: Option<LitBool>,
+    idempotency: Option<IdempotencyModeArg>,
     processors: Vec<LitStr>,
     retry: Option<RetryArgs>,
+}
+
+#[derive(Clone, Copy)]
+enum IdempotencyModeArg {
+    Disabled,
+    Check,
+    CheckAndVerify,
 }
 
 #[derive(Default)]
@@ -211,6 +219,14 @@ impl Parse for GenjaTaskArgs {
                     }
                     args.supports_dry_run = Some(input.parse()?);
                 }
+                "idempotency" => {
+                    input.parse::<Token![=]>()?;
+                    if args.idempotency.is_some() {
+                        return Err(syn::Error::new_spanned(key, "duplicate `idempotency`"));
+                    }
+                    let expr: Expr = input.parse()?;
+                    args.idempotency = Some(parse_idempotency_mode_expr(&expr)?);
+                }
                 "processors" => {
                     input.parse::<Token![=]>()?;
                     if !args.processors.is_empty() {
@@ -242,7 +258,7 @@ impl Parse for GenjaTaskArgs {
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "unsupported key; expected `name`, `connection_plugin_name`, `supports_dry_run`, `processors`, or `retry(...)`",
+                        "unsupported key; expected `name`, `connection_plugin_name`, `supports_dry_run`, `idempotency`, `processors`, or `retry(...)`",
                     ));
                 }
             }
@@ -262,6 +278,43 @@ impl Parse for GenjaTaskArgs {
         }
 
         Ok(args)
+    }
+}
+
+fn parse_idempotency_mode_expr(expr: &Expr) -> syn::Result<IdempotencyModeArg> {
+    let Expr::Path(path) = expr else {
+        return Err(syn::Error::new_spanned(
+            expr,
+            "`idempotency` must use IdempotencyMode::Disabled, IdempotencyMode::Check, or IdempotencyMode::CheckAndVerify",
+        ));
+    };
+    let Some(variant) = path.path.segments.last() else {
+        return Err(syn::Error::new_spanned(
+            expr,
+            "`idempotency` must use IdempotencyMode::Disabled, IdempotencyMode::Check, or IdempotencyMode::CheckAndVerify",
+        ));
+    };
+    let Some(mode_type) = path.path.segments.iter().rev().nth(1) else {
+        return Err(syn::Error::new_spanned(
+            expr,
+            "`idempotency` must use IdempotencyMode::Disabled, IdempotencyMode::Check, or IdempotencyMode::CheckAndVerify",
+        ));
+    };
+    if mode_type.ident != "IdempotencyMode" {
+        return Err(syn::Error::new_spanned(
+            expr,
+            "`idempotency` must use IdempotencyMode::Disabled, IdempotencyMode::Check, or IdempotencyMode::CheckAndVerify",
+        ));
+    }
+
+    match variant.ident.to_string().as_str() {
+        "Disabled" => Ok(IdempotencyModeArg::Disabled),
+        "Check" => Ok(IdempotencyModeArg::Check),
+        "CheckAndVerify" => Ok(IdempotencyModeArg::CheckAndVerify),
+        _ => Err(syn::Error::new_spanned(
+            expr,
+            "`idempotency` must be IdempotencyMode::Disabled, IdempotencyMode::Check, or IdempotencyMode::CheckAndVerify",
+        )),
     }
 }
 
@@ -466,6 +519,7 @@ fn expand_genja_task(
     let name = args.name.expect("validated above");
     let connection_plugin_name = args.connection_plugin_name;
     let processors = args.processors;
+    let idempotency = args.idempotency;
     let retry = args.retry;
 
     let connection_impl = match connection_plugin_name {
@@ -531,6 +585,27 @@ fn expand_genja_task(
         quote! {
             fn supports_dry_run(&self) -> bool {
                 true
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let idempotency_mode_impl = if let Some(idempotency) = idempotency {
+        let mode = match idempotency {
+            IdempotencyModeArg::Disabled => {
+                quote! { genja_core::task::IdempotencyMode::Disabled }
+            }
+            IdempotencyModeArg::Check => {
+                quote! { genja_core::task::IdempotencyMode::Check }
+            }
+            IdempotencyModeArg::CheckAndVerify => {
+                quote! { genja_core::task::IdempotencyMode::CheckAndVerify }
+            }
+        };
+        quote! {
+            fn idempotency_mode(&self) -> genja_core::task::IdempotencyMode {
+                #mode
             }
         }
     } else {
@@ -626,6 +701,8 @@ fn expand_genja_task(
             #retry_config_impl
 
             #supports_dry_run_impl
+
+            #idempotency_mode_impl
         }
 
         #task_impl
