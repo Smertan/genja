@@ -3103,6 +3103,22 @@ pub enum TaskFailureKind {
     External,
 }
 
+/// Task-authored idempotency behavior.
+///
+/// Idempotency is declared by task authors and controls whether Genja should
+/// perform convergence checks around normal task execution. It is disabled by
+/// default so existing tasks keep their current behavior.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IdempotencyMode {
+    /// Do not perform idempotency checks.
+    #[default]
+    Disabled,
+    /// Check convergence before invoking the normal task entrypoint.
+    Check,
+    /// Check convergence before execution and verify convergence after success.
+    CheckAndVerify,
+}
+
 /// Task metadata required for execution.
 ///
 /// Task authoring macros such as `#[genja_task(...)]` implement this trait
@@ -3141,6 +3157,11 @@ pub trait TaskInfo {
     /// Return whether this task declares support for dry-run execution.
     fn supports_dry_run(&self) -> bool {
         false
+    }
+
+    /// Return the task-authored idempotency mode.
+    fn idempotency_mode(&self) -> IdempotencyMode {
+        IdempotencyMode::Disabled
     }
 }
 
@@ -4422,6 +4443,10 @@ impl TaskInfo for TaskDefinition {
     fn supports_dry_run(&self) -> bool {
         self.inner.supports_dry_run()
     }
+
+    fn idempotency_mode(&self) -> IdempotencyMode {
+        self.inner.idempotency_mode()
+    }
 }
 
 /// A collection of task definitions that can be executed together.
@@ -4557,6 +4582,8 @@ mod tests {
 
     struct DryRunInfoTask;
 
+    struct IdempotencyInfoTask;
+
     struct FlakyTask {
         name: &'static str,
         attempts: Arc<AtomicUsize>,
@@ -4671,6 +4698,31 @@ mod tests {
 
         fn supports_dry_run(&self) -> bool {
             true
+        }
+    }
+
+    impl TaskInfo for IdempotencyInfoTask {
+        fn name(&self) -> &str {
+            "idempotency-info"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::CheckAndVerify
+        }
+    }
+
+    #[async_trait]
+    impl Task for IdempotencyInfoTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -6052,10 +6104,28 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_mode_defaults_to_disabled() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+
+        assert_eq!(task.idempotency_mode(), IdempotencyMode::Disabled);
+    }
+
+    #[test]
     fn task_definition_delegates_dry_run_support() {
         let task = TaskDefinition::new(DryRunInfoTask);
 
         assert!(task.supports_dry_run());
+    }
+
+    #[test]
+    fn task_definition_delegates_idempotency_mode() {
+        let task = TaskDefinition::new(IdempotencyInfoTask);
+
+        assert_eq!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify);
     }
 
     #[test]
