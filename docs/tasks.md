@@ -633,6 +633,13 @@ Dry-run entrypoints return the same result types as normal execution. Use
 execution metadata includes `dry_run`, so consumers can distinguish a planned
 change from an applied change.
 
+Dry-run dispatch does not automatically invoke idempotency checks. Idempotency
+checks inspect current state, while dry-run does not mutate state; automatically
+checking child tasks can be misleading when a parent dry-run would have created
+the prerequisite state. Task authors who want dry-run to reuse idempotency logic
+can call their check hook from their dry-run hook, but dependent sub-tasks should
+account for parent dry-run behavior explicitly.
+
 If dry-run is requested for a task that does not declare support, Genja records a
 clear host failure before calling `start(...)` or `start_async(...)`. Declaring
 dry-run support without the matching dry-run method fails during macro expansion

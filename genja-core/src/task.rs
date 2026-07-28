@@ -633,7 +633,7 @@ use async_recursion::async_recursion;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::any::{Any, type_name};
 use std::error::Error;
 use std::fmt;
@@ -3143,6 +3143,25 @@ pub enum IdempotencyCheck {
     },
 }
 
+fn converged_check_to_host_result(
+    summary: Option<String>,
+    details: Option<Value>,
+) -> HostTaskResult {
+    let mut success = TaskSuccess::new().with_changed(false);
+    if let Some(summary) = summary {
+        success = success.with_summary(summary);
+    }
+    if let Some(details) = details {
+        success = success.with_metadata(json!({
+            "idempotency": {
+                "state": "converged",
+                "details": details,
+            }
+        }));
+    }
+    HostTaskResult::passed(success)
+}
+
 /// Task metadata required for execution.
 ///
 /// Task authoring macros such as `#[genja_task(...)]` implement this trait
@@ -4255,7 +4274,22 @@ impl TaskDefinition {
                     if run_options.dry_run() {
                         task.dry_run_async(host, &runtime_context).await
                     } else {
-                        task.start_async(host, &runtime_context).await
+                        match task.idempotency_mode() {
+                            IdempotencyMode::Disabled => {
+                                task.start_async(host, &runtime_context).await
+                            }
+                            IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                                match task.check_async(host, &runtime_context).await {
+                                    Ok(IdempotencyCheck::Converged { summary, details }) => {
+                                        Ok(converged_check_to_host_result(summary, details))
+                                    }
+                                    Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                        task.start_async(host, &runtime_context).await
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            }
+                        }
                     }
                 }
                 TaskExecutionMode::Blocking => {
@@ -4273,7 +4307,20 @@ impl TaskDefinition {
                         if dry_run {
                             task.dry_run(&host, &blocking_context)
                         } else {
-                            task.start(&host, &blocking_context)
+                            match task.idempotency_mode() {
+                                IdempotencyMode::Disabled => task.start(&host, &blocking_context),
+                                IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                                    match task.check(&host, &blocking_context) {
+                                        Ok(IdempotencyCheck::Converged { summary, details }) => {
+                                            Ok(converged_check_to_host_result(summary, details))
+                                        }
+                                        Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                            task.start(&host, &blocking_context)
+                                        }
+                                        Err(error) => Err(error),
+                                    }
+                                }
+                            }
                         }
                     })
                     .await
@@ -4665,6 +4712,24 @@ mod tests {
         succeed_on_attempt: usize,
     }
 
+    struct IdempotentAsyncRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+        check_result: IdempotencyCheck,
+    }
+
+    struct IdempotentBlockingRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+        check_result: IdempotencyCheck,
+    }
+
+    struct DryRunIdempotentRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        dry_run_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+    }
+
     #[derive(Debug)]
     struct TestConnection {
         key: ConnectionKey,
@@ -4764,6 +4829,141 @@ mod tests {
 
         fn idempotency_mode(&self) -> IdempotencyMode {
             IdempotencyMode::CheckAndVerify
+        }
+    }
+
+    impl TaskInfo for IdempotentAsyncRuntimeTask {
+        fn name(&self) -> &str {
+            "idempotent-async-runtime"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::Check
+        }
+    }
+
+    #[async_trait]
+    impl Task for IdempotentAsyncRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied"),
+            ))
+        }
+
+        async fn check_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.check_result.clone())
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    impl TaskInfo for IdempotentBlockingRuntimeTask {
+        fn name(&self) -> &str {
+            "idempotent-blocking-runtime"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::Check
+        }
+    }
+
+    #[async_trait]
+    impl Task for IdempotentBlockingRuntimeTask {
+        fn start(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied"),
+            ))
+        }
+
+        fn check(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.check_result.clone())
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Blocking
+        }
+    }
+
+    impl TaskInfo for DryRunIdempotentRuntimeTask {
+        fn name(&self) -> &str {
+            "dry-run-idempotent-runtime"
+        }
+
+        fn supports_dry_run(&self) -> bool {
+            true
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::Check
+        }
+    }
+
+    #[async_trait]
+    impl Task for DryRunIdempotentRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_changed(true),
+            ))
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.dry_run_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary(format!("dry_run={}", context.dry_run())),
+            ))
+        }
+
+        async fn check_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(IdempotencyCheck::Converged {
+                summary: Some("already converged".to_string()),
+                details: None,
+            })
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -5289,6 +5489,104 @@ mod tests {
             .expect("host result should be skipped");
         assert_eq!(skip.reason(), Some("filtered"));
         assert_eq!(skip.message(), None);
+    }
+
+    #[test]
+    fn idempotent_async_converged_check_skips_start_and_passes_unchanged() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(IdempotentAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_result: IdempotencyCheck::Converged {
+                summary: Some("already configured".to_string()),
+                details: Some(json!({"current": "desired"})),
+            },
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("idempotent-async-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("converged check should pass");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        let success = results
+            .host_result("router1")
+            .and_then(HostTaskResult::success)
+            .expect("host should pass");
+        assert!(!success.changed());
+        assert_eq!(success.summary(), Some("already configured"));
+        assert_eq!(
+            success.metadata(),
+            Some(&json!({
+                "idempotency": {
+                    "state": "converged",
+                    "details": {
+                        "current": "desired",
+                    }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn idempotent_blocking_change_required_invokes_start_once() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(IdempotentBlockingRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_result: IdempotencyCheck::ChangeRequired {
+                diff: Some("+configured".to_string()),
+                details: Some(json!({"desired": "configured"})),
+            },
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("idempotent-blocking-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("change-required check should invoke start");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let success = results
+            .host_result("router1")
+            .and_then(HostTaskResult::success)
+            .expect("host should pass");
+        assert!(success.changed());
+        assert_eq!(success.summary(), Some("applied"));
+    }
+
+    #[test]
+    fn dry_run_does_not_invoke_idempotency_check() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let dry_run_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(DryRunIdempotentRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            dry_run_calls: Arc::clone(&dry_run_calls),
+            start_calls: Arc::clone(&start_calls),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("dry-run-idempotent-runtime");
+
+        run_async(task.start_with_options(
+            "router1",
+            &host,
+            &mut results,
+            TaskRunOptions::new(0).with_dry_run(true),
+        ))
+        .expect("dry-run should execute without idempotency check");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(dry_run_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.execution_metadata().dry_run());
+        let success = host_result.success().expect("host should pass");
+        assert!(success.changed());
+        assert_eq!(success.summary(), Some("dry_run=true"));
     }
 
     #[test]

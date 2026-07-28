@@ -17,6 +17,7 @@ Changed packages:
 - Added Rust `#[genja_task(...)]` idempotency metadata with `idempotency = IdempotencyMode::...`. Refs: #88
 - Added Rust idempotency check result and default task check hooks for blocking and async tasks. Refs: #88
 - Added Rust `#[genja_task(...)]` validation and delegation for idempotency check hooks. Refs: #88
+- Added Rust runtime pre-check execution for idempotent tasks, preserving dry-run dispatch without automatic idempotency checks. Refs: #88
 - Added Rust runtime task execution options with dry-run support through `Genja::run_task_with_options(...)`, `Genja::run_task_with_options_async(...)`, `Genja::run_tasks_with_options(...)`, and `Genja::run_tasks_with_options_async(...)`. Refs: #80
 - Added Python dry-run task support with `@genja.task(..., supports_dry_run=True)`, `dry_run` / `dry_run_async` task methods, `TaskRunOptions` via `run_options=...`, and `TaskRuntimeContext.dry_run`. Refs: #80
 - Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
