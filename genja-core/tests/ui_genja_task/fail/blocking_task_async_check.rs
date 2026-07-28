@@ -1,20 +1,21 @@
 use genja_core::genja_task;
 use genja_core::inventory::Host;
 use genja_core::task::{
-    HostTaskResult, IdempotencyCheck, IdempotencyMode, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    BlockingTaskRuntimeContext, HostTaskResult, IdempotencyCheck, IdempotencyMode,
+    TaskRuntimeContext, TaskSuccess,
 };
 
-struct IdempotentTask;
+struct BlockingAsyncCheckTask;
 
 #[genja_task(
-    name = "idempotent",
-    idempotency = IdempotencyMode::Check
+    name = "blocking_async_check",
+    idempotency = IdempotencyMode::CheckAndVerify
 )]
-impl IdempotentTask {
-    async fn start_async(
+impl BlockingAsyncCheckTask {
+    fn start(
         &self,
         _host: &Host,
-        _context: &TaskRuntimeContext,
+        _context: &BlockingTaskRuntimeContext,
     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
         Ok(HostTaskResult::passed(TaskSuccess::new()))
     }
@@ -25,13 +26,10 @@ impl IdempotentTask {
         _context: &TaskRuntimeContext,
     ) -> Result<IdempotencyCheck, genja_core::task::TaskError> {
         Ok(IdempotencyCheck::Converged {
-            summary: Some("already converged".to_string()),
+            summary: None,
             details: None,
         })
     }
 }
 
-fn main() {
-    let task = IdempotentTask;
-    assert_eq!(task.idempotency_mode(), IdempotencyMode::Check);
-}
+fn main() {}

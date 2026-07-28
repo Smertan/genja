@@ -180,6 +180,12 @@ enum IdempotencyModeArg {
     CheckAndVerify,
 }
 
+impl IdempotencyModeArg {
+    fn requires_check(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+}
+
 #[derive(Default)]
 struct RetryArgs {
     allow: Option<LitBool>,
@@ -425,6 +431,8 @@ fn expand_genja_task(
     let mut has_start_async = false;
     let mut has_dry_run = false;
     let mut has_dry_run_async = false;
+    let mut has_check = false;
+    let mut has_check_async = false;
     let mut has_options = false;
     let mut has_sub_tasks = false;
 
@@ -449,6 +457,14 @@ fn expand_genja_task(
             "dry_run_async" => {
                 validate_dry_run_method(method, true)?;
                 has_dry_run_async = true;
+            }
+            "check" => {
+                validate_check_method(method, false)?;
+                has_check = true;
+            }
+            "check_async" => {
+                validate_check_method(method, true)?;
+                has_check_async = true;
             }
             "options" => {
                 validate_options_method(method)?;
@@ -477,6 +493,13 @@ fn expand_genja_task(
         return Err(syn::Error::new_spanned(
             &item_impl.self_ty,
             "define at most one of `fn dry_run(...)` or `async fn dry_run_async(...)`",
+        ));
+    }
+
+    if has_check && has_check_async {
+        return Err(syn::Error::new_spanned(
+            &item_impl.self_ty,
+            "define at most one of `fn check(...)` or `async fn check_async(...)`",
         ));
     }
 
@@ -516,10 +539,41 @@ fn expand_genja_task(
         }
     }
 
+    let idempotency = args.idempotency;
+    if idempotency.is_some_and(IdempotencyModeArg::requires_check) {
+        match (has_start, has_start_async, has_check, has_check_async) {
+            (true, false, true, false) | (false, true, false, true) => {}
+            (true, false, false, false) => {
+                return Err(syn::Error::new_spanned(
+                    &item_impl.self_ty,
+                    "`idempotency` requires `fn check(...)` for blocking tasks",
+                ));
+            }
+            (false, true, false, false) => {
+                return Err(syn::Error::new_spanned(
+                    &item_impl.self_ty,
+                    "`idempotency` requires `async fn check_async(...)` for async tasks",
+                ));
+            }
+            (true, false, false, true) => {
+                return Err(syn::Error::new_spanned(
+                    &item_impl.self_ty,
+                    "`idempotency` requires blocking tasks to define `fn check(...)`, not `check_async(...)`",
+                ));
+            }
+            (false, true, true, false) => {
+                return Err(syn::Error::new_spanned(
+                    &item_impl.self_ty,
+                    "`idempotency` requires async tasks to define `async fn check_async(...)`, not `check(...)`",
+                ));
+            }
+            _ => {}
+        }
+    }
+
     let name = args.name.expect("validated above");
     let connection_plugin_name = args.connection_plugin_name;
     let processors = args.processors;
-    let idempotency = args.idempotency;
     let retry = args.retry;
 
     let connection_impl = match connection_plugin_name {
@@ -626,6 +680,19 @@ fn expand_genja_task(
         } else {
             quote! {}
         };
+        let check_impl = if has_check {
+            quote! {
+                fn check(
+                    &self,
+                    host: &genja_core::inventory::Host,
+                    context: &genja_core::task::BlockingTaskRuntimeContext,
+                ) -> Result<genja_core::task::IdempotencyCheck, genja_core::task::TaskError> {
+                    #self_ty::check(self, host, context)
+                }
+            }
+        } else {
+            quote! {}
+        };
         quote! {
             #[genja_core::async_trait]
             impl genja_core::task::Task for #self_ty {
@@ -638,6 +705,8 @@ fn expand_genja_task(
                 }
 
                 #dry_run_impl
+
+                #check_impl
 
                 #sub_tasks_impl
 
@@ -660,6 +729,19 @@ fn expand_genja_task(
         } else {
             quote! {}
         };
+        let check_impl = if has_check_async {
+            quote! {
+                async fn check_async(
+                    &self,
+                    host: &genja_core::inventory::Host,
+                    context: &genja_core::task::TaskRuntimeContext,
+                ) -> Result<genja_core::task::IdempotencyCheck, genja_core::task::TaskError> {
+                    #self_ty::check_async(self, host, context).await
+                }
+            }
+        } else {
+            quote! {}
+        };
         quote! {
             #[genja_core::async_trait]
             impl genja_core::task::Task for #self_ty {
@@ -672,6 +754,8 @@ fn expand_genja_task(
                 }
 
                 #dry_run_impl
+
+                #check_impl
 
                 #sub_tasks_impl
 
@@ -839,6 +923,57 @@ fn validate_dry_run_method(method: &syn::ImplItemFn, is_async: bool) -> syn::Res
     )
 }
 
+fn validate_check_method(method: &syn::ImplItemFn, is_async: bool) -> syn::Result<()> {
+    if method.sig.asyncness.is_some() != is_async {
+        let expected = if is_async {
+            "`check_async` must be declared as `async fn`"
+        } else {
+            "`check` must be declared as `fn`, not `async fn`"
+        };
+        return Err(syn::Error::new_spanned(&method.sig.ident, expected));
+    }
+
+    validate_shared_method_shape(method)?;
+
+    if method.sig.inputs.len() != 3 {
+        return Err(syn::Error::new_spanned(
+            &method.sig.inputs,
+            "task idempotency check methods must take `&self`, `host`, and `context`",
+        ));
+    }
+
+    let mut inputs = method.sig.inputs.iter();
+    validate_receiver(inputs.next().unwrap())?;
+    validate_typed_arg(
+        inputs.next().unwrap(),
+        is_host_ref,
+        "`host` must be `&Host`",
+    )?;
+    validate_typed_arg(
+        inputs.next().unwrap(),
+        if is_async {
+            is_async_context_ref
+        } else {
+            is_blocking_context_ref
+        },
+        if is_async {
+            "`context` must be `&TaskRuntimeContext`"
+        } else {
+            "`context` must be `&BlockingTaskRuntimeContext`"
+        },
+    )?;
+
+    validate_return_type(
+        &method.sig.output,
+        is_result_idempotency_check_task_error,
+        if is_async {
+            "`check_async` must return `Result<IdempotencyCheck, TaskError>`"
+        } else {
+            "`check` must return `Result<IdempotencyCheck, TaskError>`"
+        },
+    )
+}
+
 fn validate_options_method(method: &syn::ImplItemFn) -> syn::Result<()> {
     if method.sig.asyncness.is_some() {
         return Err(syn::Error::new_spanned(
@@ -941,6 +1076,14 @@ fn validate_return_type(
 }
 
 fn is_result_host_task_error(ty: &Type) -> bool {
+    is_result_with_ok_type(ty, "HostTaskResult")
+}
+
+fn is_result_idempotency_check_task_error(ty: &Type) -> bool {
+    is_result_with_ok_type(ty, "IdempotencyCheck")
+}
+
+fn is_result_with_ok_type(ty: &Type, ok_type_name: &str) -> bool {
     let Type::Path(TypePath { path, .. }) = ty else {
         return false;
     };
@@ -959,7 +1102,7 @@ fn is_result_host_task_error(ty: &Type) -> bool {
 
     let mut args_iter = args.args.iter();
     let ok = match args_iter.next() {
-        Some(GenericArgument::Type(ty)) => type_ends_with(ty, "HostTaskResult"),
+        Some(GenericArgument::Type(ty)) => type_ends_with(ty, ok_type_name),
         _ => false,
     };
     let err = match args_iter.next() {
