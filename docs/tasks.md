@@ -398,11 +398,14 @@ Tasks return one result per host.
     ```
 
 Success results can include result payloads, change status, diffs, summaries,
-warnings, messages, and metadata. Failure results include a message, failure
-kind, retryability, details, warnings, and messages. Skip results include a
-machine-readable reason and human-readable message. Per-host timing and retry
-data are reported on `HostTaskResult.execution_metadata`, not inside success or
-failure payloads.
+warnings, messages, and metadata. Warning-bearing successes may be represented
+as `PassedWithWarnings` when the desired state is satisfied but important
+non-fatal warnings should be visible in the top-level outcome; these still count
+as passed hosts in summaries and `passed_hosts()`. Failure results include a
+message, failure kind, retryability, details, warnings, and messages. Skip
+results include a machine-readable reason and human-readable message. Per-host
+timing and retry data are reported on `HostTaskResult.execution_metadata`, not
+inside success or failure payloads.
 
 For Rust consumers, a good pattern is:
 
@@ -728,8 +731,8 @@ Normalized output stores each host result with fields such as `status`,
 }
 ```
 
-Raw output preserves the underlying variant names, such as `Passed`, `Failed`,
-and `Skipped`:
+Raw output preserves the underlying variant names, such as `Passed`,
+`PassedWithWarnings`, `Failed`, and `Skipped`:
 
 ```json
 {
