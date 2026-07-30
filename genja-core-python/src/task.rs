@@ -907,9 +907,9 @@ fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
 
     match status {
         "passed" => Ok(HostTaskResult::passed(json_to_task_success(&result_value)?)),
-        "passed_with_warnings" => Ok(HostTaskResult::passed_with_warnings(
-            json_to_task_success(&result_value)?,
-        )),
+        "passed_with_warnings" => Ok(HostTaskResult::passed_with_warnings(json_to_task_success(
+            &result_value,
+        )?)),
         "failed" => Ok(HostTaskResult::failed(json_to_task_failure(&result_value)?)),
         "skipped" => Ok(HostTaskResult::skipped_with_detail(json_to_task_skip(
             &result_value,
@@ -1910,7 +1910,9 @@ mod tests {
             let result = PyDict::new(py);
             result.set_item("status", "passed_with_warnings").unwrap();
             result.set_item("changed", false).unwrap();
-            result.set_item("summary", "state appears converged").unwrap();
+            result
+                .set_item("summary", "state appears converged")
+                .unwrap();
             result
                 .set_item(
                     "warnings",
