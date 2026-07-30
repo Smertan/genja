@@ -1081,6 +1081,7 @@ struct HostTaskResultHumanJson<'a> {
 #[derive(Serialize)]
 enum HostTaskOutcomeHumanJson<'a> {
     Passed(TaskSuccessHumanJson<'a>),
+    PassedWithWarnings(TaskSuccessHumanJson<'a>),
     Failed(TaskFailureHumanJson<'a>),
     Skipped(TaskSkipHumanJson<'a>),
 }
@@ -1212,6 +1213,9 @@ impl<'a> From<&'a HostTaskOutcome> for HostTaskOutcomeHumanJson<'a> {
     fn from(result: &'a HostTaskOutcome) -> Self {
         match result {
             HostTaskOutcome::Passed(success) => Self::Passed(TaskSuccessHumanJson::from(success)),
+            HostTaskOutcome::PassedWithWarnings(success) => {
+                Self::PassedWithWarnings(TaskSuccessHumanJson::from(success))
+            }
             HostTaskOutcome::Failed(failure) => Self::Failed(TaskFailureHumanJson::from(failure)),
             HostTaskOutcome::Skipped(skip) => Self::Skipped(TaskSkipHumanJson::from(skip)),
         }
@@ -1761,6 +1765,7 @@ pub struct HostTaskResult {
 #[derive(Debug, Clone, Serialize)]
 pub enum HostTaskOutcome {
     Passed(TaskSuccess),
+    PassedWithWarnings(TaskSuccess),
     Failed(TaskFailure),
     Skipped(TaskSkip),
 }
@@ -1904,6 +1909,14 @@ impl HostTaskResult {
         }
     }
 
+    /// Creates a successful `HostTaskResult` whose warnings should be surfaced prominently.
+    pub fn passed_with_warnings(result: TaskSuccess) -> Self {
+        Self {
+            outcome: HostTaskOutcome::PassedWithWarnings(result),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
+    }
+
     /// Creates a new `HostTaskResult` representing a failed task execution.
     ///
     /// This constructor wraps a `TaskFailure` instance in the `Failed` variant,
@@ -1975,7 +1988,10 @@ impl HostTaskResult {
     /// `true` if this result represents a successful task execution (`Passed` variant),
     /// `false` otherwise.
     pub fn is_passed(&self) -> bool {
-        matches!(self.outcome, HostTaskOutcome::Passed(_))
+        matches!(
+            self.outcome,
+            HostTaskOutcome::Passed(_) | HostTaskOutcome::PassedWithWarnings(_)
+        )
     }
 
     /// Checks if the task execution failed.
@@ -2026,6 +2042,7 @@ impl HostTaskResult {
     pub fn status(&self) -> &'static str {
         match self.outcome() {
             HostTaskOutcome::Passed(_) => "passed",
+            HostTaskOutcome::PassedWithWarnings(_) => "passed_with_warnings",
             HostTaskOutcome::Failed(_) => "failed",
             HostTaskOutcome::Skipped(_) => "skipped",
         }
@@ -2042,7 +2059,9 @@ impl HostTaskResult {
     /// or was skipped.
     pub fn success(&self) -> Option<&TaskSuccess> {
         match self.outcome() {
-            HostTaskOutcome::Passed(success) => Some(success),
+            HostTaskOutcome::Passed(success) | HostTaskOutcome::PassedWithWarnings(success) => {
+                Some(success)
+            }
             HostTaskOutcome::Failed(_) | HostTaskOutcome::Skipped(_) => None,
         }
     }
@@ -2059,7 +2078,9 @@ impl HostTaskResult {
     pub fn failure(&self) -> Option<&TaskFailure> {
         match self.outcome() {
             HostTaskOutcome::Failed(failure) => Some(failure),
-            HostTaskOutcome::Passed(_) | HostTaskOutcome::Skipped(_) => None,
+            HostTaskOutcome::Passed(_)
+            | HostTaskOutcome::PassedWithWarnings(_)
+            | HostTaskOutcome::Skipped(_) => None,
         }
     }
 
@@ -2075,7 +2096,9 @@ impl HostTaskResult {
     pub fn skipped_detail(&self) -> Option<&TaskSkip> {
         match self.outcome() {
             HostTaskOutcome::Skipped(skip) => Some(skip),
-            HostTaskOutcome::Passed(_) | HostTaskOutcome::Failed(_) => None,
+            HostTaskOutcome::Passed(_)
+            | HostTaskOutcome::PassedWithWarnings(_)
+            | HostTaskOutcome::Failed(_) => None,
         }
     }
 
@@ -6415,6 +6438,43 @@ mod tests {
         assert_eq!(success.messages()[0].code(), Some("commit_ok"));
         assert!(matches!(success.messages()[0].level(), MessageLevel::Info));
         assert_eq!(success.metadata(), Some(&json!({"version": 1})));
+    }
+
+    #[test]
+    fn passed_with_warnings_is_successful_and_serializes_distinct_outcome() {
+        let result = HostTaskResult::passed_with_warnings(
+            TaskSuccess::new()
+                .with_changed(false)
+                .with_summary("state appears converged")
+                .with_warning("previous attempt may have skipped finalization"),
+        );
+
+        assert!(result.is_passed());
+        assert!(!result.is_failed());
+        assert_eq!(result.status(), "passed_with_warnings");
+        assert!(matches!(
+            result.outcome(),
+            HostTaskOutcome::PassedWithWarnings(_)
+        ));
+        assert_eq!(
+            result
+                .success()
+                .expect("warning success payload should be accessible")
+                .warnings(),
+            ["previous attempt may have skipped finalization"]
+        );
+
+        let mut results = TaskResults::new("warning-success");
+        results.insert_host_result("router1", result);
+
+        assert_eq!(results.passed_hosts(), vec![&NatString::from("router1")]);
+        assert_eq!(results.host_summary().passed(), 1);
+
+        let json = results
+            .to_json_string()
+            .expect("human json should serialize passed-with-warnings");
+        assert!(json.contains("\"PassedWithWarnings\""));
+        assert!(json.contains("previous attempt may have skipped finalization"));
     }
 
     #[test]

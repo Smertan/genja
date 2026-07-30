@@ -26,6 +26,7 @@ Changed packages:
 
 ### Changed
 
+- **Breaking:** Added `PassedWithWarnings` as a new host task outcome for successful results that carry important warnings. Update exhaustive Rust matches on `HostTaskOutcome` and serialized result parsers to handle `PassedWithWarnings` alongside `Passed`, `Failed`, and `Skipped`. Refs: #99
 - **Breaking:** Rust runner plugins now receive `TaskRunOptions` instead of a bare `max_depth` in `PluginRunner::run_task(...)` and `PluginRunner::run_tasks(...)`. Update runner plugin implementations to accept `run_options: TaskRunOptions` and read recursion depth with `run_options.max_depth()`. Refs: #80
 - **Breaking:** Python runner plugins now receive `run_options: TaskRunOptions` instead of a bare `max_depth` in `run_task(...)` and `run_tasks(...)`. Update runner plugin implementations to accept `run_options` and pass it to `TaskDefinition.run_on_host(...)` / `run_on_hosts(...)`, or read recursion depth with `run_options.max_depth`. Refs: #80
 - Improved Python type stubs and editor-facing API documentation for Genja runtime, settings, plugin manager, connection, plugin, and processor APIs. Refs: #94
