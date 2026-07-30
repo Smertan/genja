@@ -3166,14 +3166,36 @@ pub enum IdempotencyCheck {
     },
 }
 
+const IDEMPOTENCY_RETRY_CONVERGED_WARNING: &str = "Task converged after a failed retry attempt; previous attempts may have partially changed state or skipped finalization steps.";
+
 fn converged_check_to_host_result(
     summary: Option<String>,
     details: Option<Value>,
+    attempts: usize,
 ) -> HostTaskResult {
     let mut success = TaskSuccess::new().with_changed(false);
     if let Some(summary) = summary {
         success = success.with_summary(summary);
     }
+
+    if attempts > 1 {
+        let mut idempotency = json!({
+            "state": "converged",
+            "converged_after_retry": true,
+            "previous_attempts_may_have_changed_state": true,
+            "previous_attempts_may_have_skipped_finalization": true,
+        });
+        if let Some(details) = details {
+            idempotency["details"] = details;
+        }
+        success = success
+            .with_warning(IDEMPOTENCY_RETRY_CONVERGED_WARNING)
+            .with_metadata(json!({
+                "idempotency": idempotency,
+            }));
+        return HostTaskResult::passed_with_warnings(success);
+    }
+
     if let Some(details) = details {
         success = success.with_metadata(json!({
             "idempotency": {
@@ -4325,9 +4347,9 @@ impl TaskDefinition {
                             }
                             IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
                                 match task.check_async(host, &runtime_context).await {
-                                    Ok(IdempotencyCheck::Converged { summary, details }) => {
-                                        Ok(converged_check_to_host_result(summary, details))
-                                    }
+                                    Ok(IdempotencyCheck::Converged { summary, details }) => Ok(
+                                        converged_check_to_host_result(summary, details, attempts),
+                                    ),
                                     Ok(IdempotencyCheck::ChangeRequired { .. }) => {
                                         match task.start_async(host, &runtime_context).await {
                                             Ok(host_result) => {
@@ -4386,7 +4408,9 @@ impl TaskDefinition {
                                 IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
                                     match task.check(&host, &blocking_context) {
                                         Ok(IdempotencyCheck::Converged { summary, details }) => {
-                                            Ok(converged_check_to_host_result(summary, details))
+                                            Ok(converged_check_to_host_result(
+                                                summary, details, attempts,
+                                            ))
                                         }
                                         Ok(IdempotencyCheck::ChangeRequired { .. }) => {
                                             let host_result =
@@ -4482,13 +4506,7 @@ impl TaskDefinition {
             );
         }
 
-        let status = if host_result.is_passed() {
-            "passed"
-        } else if host_result.is_failed() {
-            "failed"
-        } else {
-            "skipped"
-        };
+        let status = host_result.status();
 
         let retry_exhausted = retry_policy.retry_exhausted(&host_result, attempts);
         let mut host_result =
@@ -5654,10 +5672,9 @@ mod tests {
 
         assert_eq!(check_calls.load(Ordering::SeqCst), 1);
         assert_eq!(start_calls.load(Ordering::SeqCst), 0);
-        let success = results
-            .host_result("router1")
-            .and_then(HostTaskResult::success)
-            .expect("host should pass");
+        let host_result = results.host_result("router1").expect("host should pass");
+        assert_eq!(host_result.status(), "passed");
+        let success = host_result.success().expect("host should pass");
         assert!(!success.changed());
         assert_eq!(success.summary(), Some("already configured"));
         assert_eq!(
@@ -5865,6 +5882,76 @@ mod tests {
             .expect("host should preserve application failure");
         assert!(matches!(failure.kind(), TaskFailureKind::Command));
         assert_eq!(failure.message(), "apply failed");
+    }
+
+    #[test]
+    fn retry_converged_pre_check_returns_passed_with_warnings() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(CheckAndVerifyAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::ChangeRequired {
+                    diff: Some("+configured".to_string()),
+                    details: None,
+                },
+                IdempotencyCheck::Converged {
+                    summary: Some("already configured after retry".to_string()),
+                    details: Some(json!({"current": "configured"})),
+                },
+            ])),
+            start_result: HostTaskResult::failed(
+                TaskFailure::new(crate::GenjaError::Message("apply failed".to_string()))
+                    .with_kind(TaskFailureKind::Command)
+                    .with_retryable(true),
+            ),
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(RetryConfig::builder().allow(true).max_attempts(2).build())
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-async-runtime");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("retry should finish with a warning-bearing pass");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let host_result = results.host_result("router1").expect("host result");
+        assert_eq!(host_result.status(), "passed_with_warnings");
+        assert!(matches!(
+            host_result.outcome(),
+            HostTaskOutcome::PassedWithWarnings(_)
+        ));
+        assert_eq!(host_result.execution_metadata().attempts(), 2);
+        assert!(host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+        let success = host_result.success().expect("host should pass");
+        assert!(!success.changed());
+        assert_eq!(success.summary(), Some("already configured after retry"));
+        assert_eq!(success.warnings(), [IDEMPOTENCY_RETRY_CONVERGED_WARNING]);
+        assert_eq!(
+            success.metadata(),
+            Some(&json!({
+                "idempotency": {
+                    "state": "converged",
+                    "details": {
+                        "current": "configured",
+                    },
+                    "converged_after_retry": true,
+                    "previous_attempts_may_have_changed_state": true,
+                    "previous_attempts_may_have_skipped_finalization": true,
+                },
+            }))
+        );
     }
 
     #[test]
