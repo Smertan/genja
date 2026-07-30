@@ -12,6 +12,7 @@ from genja.task import (
     TaskMessageLevel,
     TaskInfo,
     TaskMessage,
+    TaskStatus,
     TaskSuccessResult,
     task,
 )
@@ -196,6 +197,29 @@ def test_python_backed_task_dry_run_calls_dry_run_not_start():
     host_result = result.to_dict()["hosts"]["router1"]
     assert host_result["outcome"]["Passed"]["changed"] is True
     assert host_result["execution_metadata"]["dry_run"] is True
+
+
+def test_python_backed_task_can_return_passed_with_warnings():
+    @task(name="warning_success")
+    class WarningSuccessTask:
+        def start(self, task, host, context):
+            return TaskSuccessResult(
+                status=TaskStatus.PASSED_WITH_WARNINGS,
+                summary="state appears converged",
+                warnings=["previous attempt may have skipped finalization"],
+            )
+
+    task_definition = genja.TaskDefinition.from_python_class(WarningSuccessTask)
+    result = task_definition.run_on_host(Host(hostname="router1"))
+
+    assert result.passed_hosts == ["router1"]
+    host_result = result.to_dict()["hosts"]["router1"]
+    assert host_result["outcome"]["PassedWithWarnings"]["summary"] == (
+        "state appears converged"
+    )
+    assert host_result["outcome"]["PassedWithWarnings"]["warnings"] == [
+        "previous attempt may have skipped finalization"
+    ]
 
 
 def test_python_backed_task_dry_run_fails_unsupported_without_start():

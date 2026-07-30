@@ -819,6 +819,9 @@ class TaskStatus(str, Enum):
         PASSED (str): Indicates the task completed successfully without errors.
             This status is returned by TaskSuccessResult and signifies that the
             task's intended operation was performed as expected.
+        PASSED_WITH_WARNINGS (str): Indicates the task completed successfully
+            but produced important non-fatal warnings that should be surfaced
+            prominently.
         FAILED (str): Indicates the task encountered an error and could not
             complete successfully. This status is returned by TaskFailureResult
             and signifies that the task's operation failed due to an exception,
@@ -830,6 +833,7 @@ class TaskStatus(str, Enum):
     """
 
     PASSED = "passed"
+    PASSED_WITH_WARNINGS = "passed_with_warnings"
     FAILED = "failed"
     SKIPPED = "skipped"
 
@@ -927,10 +931,11 @@ class TaskSuccessResult(_GenjaModel):
     task entrypoint methods when the task completes without errors.
 
     Attributes:
-        status (Literal[TaskStatus.PASSED]): The task execution status, always
-            set to TaskStatus.PASSED for successful results. This field is
-            automatically populated and indicates that the task completed
-            successfully without errors.
+        status (Literal[TaskStatus.PASSED, TaskStatus.PASSED_WITH_WARNINGS]):
+            The task execution status for successful results. Use
+            TaskStatus.PASSED_WITH_WARNINGS when the task's desired state is
+            satisfied but important non-fatal warnings should be visible in the
+            top-level outcome.
         result (Any | None): The primary output or return value produced by
             the task execution. This can contain any JSON-serializable data
             structure representing the task's main result. If None, the task
@@ -964,7 +969,7 @@ class TaskSuccessResult(_GenjaModel):
             metadata is provided.
     """
 
-    status: Literal[TaskStatus.PASSED] = Field(
+    status: Literal[TaskStatus.PASSED, TaskStatus.PASSED_WITH_WARNINGS] = Field(
         default=TaskStatus.PASSED,
         description="Task status for a successful result.",
     )

@@ -884,6 +884,10 @@ fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
         let mut tagged = passed.clone();
         tagged["status"] = Value::String("passed".to_string());
         tagged
+    } else if let Some(passed_with_warnings) = value.get("PassedWithWarnings") {
+        let mut tagged = passed_with_warnings.clone();
+        tagged["status"] = Value::String("passed_with_warnings".to_string());
+        tagged
     } else if let Some(failed) = value.get("Failed") {
         let mut tagged = failed.clone();
         tagged["status"] = Value::String("failed".to_string());
@@ -903,6 +907,9 @@ fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
 
     match status {
         "passed" => Ok(HostTaskResult::passed(json_to_task_success(&result_value)?)),
+        "passed_with_warnings" => Ok(HostTaskResult::passed_with_warnings(
+            json_to_task_success(&result_value)?,
+        )),
         "failed" => Ok(HostTaskResult::failed(json_to_task_failure(&result_value)?)),
         "skipped" => Ok(HostTaskResult::skipped_with_detail(json_to_task_skip(
             &result_value,
@@ -1892,6 +1899,35 @@ mod tests {
             assert_eq!(
                 data["outcome"]["Passed"]["metadata"]["backup_file"],
                 "/tmp/router1.cfg"
+            );
+        });
+    }
+
+    #[test]
+    fn python_result_to_host_task_result_round_trips_passed_with_warnings_dict() {
+        init_python();
+        Python::attach(|py| {
+            let result = PyDict::new(py);
+            result.set_item("status", "passed_with_warnings").unwrap();
+            result.set_item("changed", false).unwrap();
+            result.set_item("summary", "state appears converged").unwrap();
+            result
+                .set_item(
+                    "warnings",
+                    vec!["previous attempt may have skipped finalization"],
+                )
+                .unwrap();
+
+            let host_result = python_result_to_host_task_result(result.into_any())
+                .expect("passed-with-warnings result should convert");
+            let data = host_task_result_to_json(&host_result);
+
+            assert!(host_result.is_passed());
+            assert_eq!(host_result.status(), "passed_with_warnings");
+            assert!(data["outcome"]["PassedWithWarnings"].is_object());
+            assert_eq!(
+                data["outcome"]["PassedWithWarnings"]["warnings"],
+                json!(["previous attempt may have skipped finalization"])
             );
         });
     }
