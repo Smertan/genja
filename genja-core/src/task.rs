@@ -3166,6 +3166,50 @@ pub enum IdempotencyCheck {
     },
 }
 
+impl IdempotencyCheck {
+    /// Create a converged check result with a human-readable summary.
+    pub fn converged(summary: impl Into<String>) -> Self {
+        Self::Converged {
+            summary: Some(summary.into()),
+            details: None,
+        }
+    }
+
+    /// Create a converged check result without a summary.
+    pub fn converged_without_summary() -> Self {
+        Self::Converged {
+            summary: None,
+            details: None,
+        }
+    }
+
+    /// Create a change-required check result with a human-readable diff.
+    pub fn change_required(diff: impl Into<String>) -> Self {
+        Self::ChangeRequired {
+            diff: Some(diff.into()),
+            details: None,
+        }
+    }
+
+    /// Create a change-required check result without a diff.
+    pub fn change_required_without_diff() -> Self {
+        Self::ChangeRequired {
+            diff: None,
+            details: None,
+        }
+    }
+
+    /// Attach structured JSON details to this check result.
+    pub fn with_details(mut self, value: Value) -> Self {
+        match &mut self {
+            Self::Converged { details, .. } | Self::ChangeRequired { details, .. } => {
+                *details = Some(value);
+            }
+        }
+        self
+    }
+}
+
 const IDEMPOTENCY_RETRY_CONVERGED_WARNING: &str = "Task converged after a failed retry attempt; previous attempts may have partially changed state or skipped finalization steps.";
 
 fn converged_check_to_host_result(
@@ -5117,10 +5161,7 @@ mod tests {
             _context: &TaskRuntimeContext,
         ) -> Result<IdempotencyCheck, TaskError> {
             self.check_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(IdempotencyCheck::Converged {
-                summary: Some("already converged".to_string()),
-                details: None,
-            })
+            Ok(IdempotencyCheck::converged("already converged"))
         }
 
         fn execution_mode(&self) -> TaskExecutionMode {
@@ -5659,10 +5700,8 @@ mod tests {
         let task = TaskDefinition::new(IdempotentAsyncRuntimeTask {
             check_calls: Arc::clone(&check_calls),
             start_calls: Arc::clone(&start_calls),
-            check_result: IdempotencyCheck::Converged {
-                summary: Some("already configured".to_string()),
-                details: Some(json!({"current": "desired"})),
-            },
+            check_result: IdempotencyCheck::converged("already configured")
+                .with_details(json!({"current": "desired"})),
         });
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("idempotent-async-runtime");
@@ -5697,10 +5736,8 @@ mod tests {
         let task = TaskDefinition::new(IdempotentBlockingRuntimeTask {
             check_calls: Arc::clone(&check_calls),
             start_calls: Arc::clone(&start_calls),
-            check_result: IdempotencyCheck::ChangeRequired {
-                diff: Some("+configured".to_string()),
-                details: Some(json!({"desired": "configured"})),
-            },
+            check_result: IdempotencyCheck::change_required("+configured")
+                .with_details(json!({"desired": "configured"})),
         });
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("idempotent-blocking-runtime");
@@ -5757,14 +5794,9 @@ mod tests {
             check_calls: Arc::clone(&check_calls),
             start_calls: Arc::clone(&start_calls),
             check_results: Arc::new(Mutex::new(vec![
-                IdempotencyCheck::ChangeRequired {
-                    diff: Some("+configured".to_string()),
-                    details: None,
-                },
-                IdempotencyCheck::Converged {
-                    summary: Some("verified".to_string()),
-                    details: Some(json!({"current": "configured"})),
-                },
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::converged("verified")
+                    .with_details(json!({"current": "configured"})),
             ])),
             start_result: HostTaskResult::passed(
                 TaskSuccess::new()
@@ -5798,14 +5830,9 @@ mod tests {
             check_calls: Arc::clone(&check_calls),
             start_calls: Arc::clone(&start_calls),
             check_results: Arc::new(Mutex::new(vec![
-                IdempotencyCheck::ChangeRequired {
-                    diff: Some("+configured".to_string()),
-                    details: None,
-                },
-                IdempotencyCheck::ChangeRequired {
-                    diff: Some("+remaining".to_string()),
-                    details: Some(json!({"desired": "remaining"})),
-                },
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::change_required("+remaining")
+                    .with_details(json!({"desired": "remaining"})),
             ])),
             start_result: HostTaskResult::passed(
                 TaskSuccess::new()
@@ -5854,14 +5881,8 @@ mod tests {
             check_calls: Arc::clone(&check_calls),
             start_calls: Arc::clone(&start_calls),
             check_results: Arc::new(Mutex::new(vec![
-                IdempotencyCheck::ChangeRequired {
-                    diff: Some("+configured".to_string()),
-                    details: None,
-                },
-                IdempotencyCheck::Converged {
-                    summary: Some("would not be called".to_string()),
-                    details: None,
-                },
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::converged("would not be called"),
             ])),
             start_result: HostTaskResult::failed(
                 TaskFailure::new(crate::GenjaError::Message("apply failed".to_string()))
@@ -5892,14 +5913,9 @@ mod tests {
             check_calls: Arc::clone(&check_calls),
             start_calls: Arc::clone(&start_calls),
             check_results: Arc::new(Mutex::new(vec![
-                IdempotencyCheck::ChangeRequired {
-                    diff: Some("+configured".to_string()),
-                    details: None,
-                },
-                IdempotencyCheck::Converged {
-                    summary: Some("already configured after retry".to_string()),
-                    details: Some(json!({"current": "configured"})),
-                },
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::converged("already configured after retry")
+                    .with_details(json!({"current": "configured"})),
             ])),
             start_result: HostTaskResult::failed(
                 TaskFailure::new(crate::GenjaError::Message("apply failed".to_string()))
@@ -6886,10 +6902,8 @@ mod tests {
 
     #[test]
     fn idempotency_check_serializes_convergence_states() {
-        let converged = IdempotencyCheck::Converged {
-            summary: Some("already configured".to_string()),
-            details: Some(json!({"current": "ntp server 192.0.2.10"})),
-        };
+        let converged = IdempotencyCheck::converged("already configured")
+            .with_details(json!({"current": "ntp server 192.0.2.10"}));
         let converged_json =
             serde_json::to_value(&converged).expect("converged check should serialize");
         assert_eq!(
@@ -6904,10 +6918,8 @@ mod tests {
             })
         );
 
-        let change_required = IdempotencyCheck::ChangeRequired {
-            diff: Some("+ntp server 192.0.2.10".to_string()),
-            details: Some(json!({"desired": "ntp server 192.0.2.10"})),
-        };
+        let change_required = IdempotencyCheck::change_required("+ntp server 192.0.2.10")
+            .with_details(json!({"desired": "ntp server 192.0.2.10"}));
         let change_required_json =
             serde_json::to_value(&change_required).expect("change check should serialize");
         assert_eq!(

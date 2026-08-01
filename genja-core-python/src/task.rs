@@ -1,9 +1,10 @@
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
-    HostTaskResult, MessageLevel, RetryConfig, Task, TaskConnectionResolver, TaskDefinition,
-    TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
-    TaskResultsSummary, TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
+    HostTaskResult, IdempotencyCheck, IdempotencyMode, MessageLevel, RetryConfig, Task,
+    TaskConnectionResolver, TaskDefinition, TaskError, TaskExecutionMode, TaskFailure,
+    TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskRunOptions,
+    TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
 };
 use async_trait::async_trait;
 use pyo3::exceptions::PyValueError;
@@ -22,6 +23,201 @@ use crate::plugin_manager::{
 enum PythonTaskExecutionMode {
     Blocking,
     Async,
+}
+
+macro_rules! py_string_enum {
+    (
+        py: $py_enum:ident,
+        rust: $rust_enum:ident,
+        python_name: $python_name:literal,
+        variants: {
+            $(
+                $variant:ident => $class_attr:ident => $value:literal
+            ),+ $(,)?
+        }
+    ) => {
+        #[pyclass(name = $python_name, eq, skip_from_py_object)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum $py_enum {
+            $($variant),+
+        }
+
+        impl $py_enum {
+            fn value_str(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => $value),+
+                }
+            }
+
+            fn variant_name(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => stringify!($class_attr)),+
+                }
+            }
+        }
+
+        #[pymethods]
+        impl $py_enum {
+            $(
+                #[classattr]
+                const $class_attr: Self = Self::$variant;
+            )+
+
+            #[getter]
+            fn value(&self) -> &'static str {
+                self.value_str()
+            }
+
+            fn __str__(&self) -> &'static str {
+                self.value_str()
+            }
+
+            fn __repr__(&self) -> String {
+                format!("{}.{}", $python_name, self.variant_name())
+            }
+        }
+
+        impl From<$rust_enum> for $py_enum {
+            fn from(value: $rust_enum) -> Self {
+                match value {
+                    $($rust_enum::$variant => Self::$variant),+
+                }
+            }
+        }
+
+        impl From<$py_enum> for $rust_enum {
+            fn from(value: $py_enum) -> Self {
+                match value {
+                    $($py_enum::$variant => Self::$variant),+
+                }
+            }
+        }
+    };
+}
+
+py_string_enum! {
+    py: PyIdempotencyMode,
+    rust: IdempotencyMode,
+    python_name: "IdempotencyMode",
+    variants: {
+        Disabled => DISABLED => "disabled",
+        Check => CHECK => "check",
+        CheckAndVerify => CHECK_AND_VERIFY => "check_and_verify",
+    }
+}
+
+impl PyIdempotencyMode {
+    fn task_model_value(py: Python<'_>, mode: IdempotencyMode) -> PyResult<Py<PyAny>> {
+        let task_module = PyModule::import(py, "genja.task")?;
+        let mode_class = task_module.getattr("IdempotencyMode")?;
+        let py_mode = Self::from(mode);
+
+        Ok(mode_class.getattr(py_mode.variant_name())?.unbind())
+    }
+}
+
+#[pyclass(name = "IdempotencyCheckResult", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyIdempotencyCheckResult {
+    inner: IdempotencyCheck,
+}
+
+impl From<IdempotencyCheck> for PyIdempotencyCheckResult {
+    fn from(inner: IdempotencyCheck) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<PyIdempotencyCheckResult> for IdempotencyCheck {
+    fn from(value: PyIdempotencyCheckResult) -> Self {
+        value.inner
+    }
+}
+
+#[pymethods]
+impl PyIdempotencyCheckResult {
+    #[staticmethod]
+    #[pyo3(signature = (summary=None, details=None))]
+    fn converged(summary: Option<String>, details: Option<Bound<'_, PyAny>>) -> PyResult<Self> {
+        let mut check = match summary {
+            Some(summary) => IdempotencyCheck::converged(summary),
+            None => IdempotencyCheck::converged_without_summary(),
+        };
+        if let Some(details) = details {
+            check = check.with_details(py_any_to_json_value(&details)?);
+        }
+        Ok(Self { inner: check })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (diff=None, details=None))]
+    fn change_required(diff: Option<String>, details: Option<Bound<'_, PyAny>>) -> PyResult<Self> {
+        let mut check = match diff {
+            Some(diff) => IdempotencyCheck::change_required(diff),
+            None => IdempotencyCheck::change_required_without_diff(),
+        };
+        if let Some(details) = details {
+            check = check.with_details(py_any_to_json_value(&details)?);
+        }
+        Ok(Self { inner: check })
+    }
+
+    #[getter]
+    fn status(&self) -> &'static str {
+        match self.inner {
+            IdempotencyCheck::Converged { .. } => "converged",
+            IdempotencyCheck::ChangeRequired { .. } => "change_required",
+        }
+    }
+
+    #[getter]
+    fn summary(&self) -> Option<&str> {
+        match &self.inner {
+            IdempotencyCheck::Converged { summary, .. } => summary.as_deref(),
+            IdempotencyCheck::ChangeRequired { .. } => None,
+        }
+    }
+
+    #[getter]
+    fn diff(&self) -> Option<&str> {
+        match &self.inner {
+            IdempotencyCheck::ChangeRequired { diff, .. } => diff.as_deref(),
+            IdempotencyCheck::Converged { .. } => None,
+        }
+    }
+
+    #[getter]
+    fn details(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner {
+            IdempotencyCheck::Converged { details, .. }
+            | IdempotencyCheck::ChangeRequired { details, .. } => match details {
+                Some(details) => json_value_to_py(py, details),
+                None => Ok(py.None()),
+            },
+        }
+    }
+
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let value = match &self.inner {
+            IdempotencyCheck::Converged { summary, details } => json!({
+                "status": self.status(),
+                "summary": summary,
+                "diff": Value::Null,
+                "details": details,
+            }),
+            IdempotencyCheck::ChangeRequired { diff, details } => json!({
+                "status": self.status(),
+                "summary": Value::Null,
+                "diff": diff,
+                "details": details,
+            }),
+        };
+        json_value_to_py(py, &value)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("IdempotencyCheckResult(status={:?})", self.status())
+    }
 }
 
 #[pyclass(name = "HostTaskResult", skip_from_py_object)]
@@ -62,6 +258,7 @@ struct PythonTaskSpec {
     retry_config: Option<RetryConfig>,
     options: Option<Value>,
     supports_dry_run: bool,
+    idempotency_mode: IdempotencyMode,
     py_task_class: Arc<Py<PyAny>>,
     execution_mode: PythonTaskExecutionMode,
     sub_tasks: Vec<PythonTaskSpec>,
@@ -138,6 +335,10 @@ impl TaskInfo for PythonBackedTask {
     fn supports_dry_run(&self) -> bool {
         self.spec.supports_dry_run
     }
+
+    fn idempotency_mode(&self) -> IdempotencyMode {
+        self.spec.idempotency_mode
+    }
 }
 
 #[async_trait]
@@ -180,6 +381,25 @@ impl Task for PythonBackedTask {
         )
     }
 
+    fn check(
+        &self,
+        host: &Host,
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let python_connection = match context.connection() {
+            Some(connection) => Some(connection.with_connection(|connection| {
+                Ok(python_connection_from_runtime_connection(connection))
+            })?),
+            None => None,
+        }
+        .flatten();
+        self.run_python_check_blocking(
+            host,
+            PythonTaskRunContext::from_blocking(context, python_connection),
+            "check",
+        )
+    }
+
     async fn start_async(
         &self,
         host: &Host,
@@ -214,6 +434,25 @@ impl Task for PythonBackedTask {
             host,
             PythonTaskRunContext::from_async(context, python_connection),
             "dry_run_async",
+        )
+        .await
+    }
+
+    async fn check_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let python_connection = if let Some(connection) = context.connection() {
+            let guard = connection.lock().await;
+            python_connection_from_runtime_connection(&*guard)
+        } else {
+            None
+        };
+        self.run_python_check(
+            host,
+            PythonTaskRunContext::from_async(context, python_connection),
+            "check_async",
         )
         .await
     }
@@ -324,6 +563,100 @@ impl PythonBackedTask {
             python_result_to_host_task_result(result.bind(py).clone()).map_err(python_task_error)
         })
     }
+
+    fn run_python_check_blocking(
+        &self,
+        host: &Host,
+        context: PythonTaskRunContext,
+        method_name: &str,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let result = Python::attach(|py| {
+            let class = self.spec.py_task_class.as_ref().bind(py);
+            let instance = class.call0().map_err(python_task_error)?;
+            let task_payload = build_python_task_model(
+                py,
+                "TaskInfo",
+                python_task_spec_to_py_dict(py, &self.spec).map_err(python_task_error)?,
+            )
+            .map_err(python_task_error)?;
+            let host_payload = build_python_task_model(
+                py,
+                "Host",
+                host_to_py_dict(py, host).map_err(python_task_error)?,
+            )
+            .map_err(python_task_error)?;
+            let context_payload = build_python_task_runtime_context(
+                py,
+                context.current_depth,
+                context.max_depth,
+                context.current_attempt,
+                context.dry_run,
+                context.connection,
+            )
+            .map_err(python_task_error)?;
+            let result = instance
+                .call_method1(method_name, (task_payload, host_payload, context_payload))
+                .map_err(python_task_error)?;
+            let is_awaitable: bool = PyModule::import(py, "inspect")
+                .map_err(python_task_error)?
+                .call_method1("isawaitable", (result.clone(),))
+                .map_err(python_task_error)?
+                .extract()
+                .map_err(python_task_error)?;
+            if is_awaitable {
+                return Err(TaskError::new(std::io::Error::other(
+                    "python blocking task check() must not return an awaitable",
+                )));
+            }
+            python_result_to_idempotency_check(result).map_err(python_task_error)
+        })?;
+
+        Ok(result)
+    }
+
+    async fn run_python_check(
+        &self,
+        host: &Host,
+        context: PythonTaskRunContext,
+        method_name: &str,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let result = Python::attach(|py| {
+            let class = self.spec.py_task_class.as_ref().bind(py);
+            let instance = class.call0().map_err(python_task_error)?;
+            let task_payload = build_python_task_model(
+                py,
+                "TaskInfo",
+                python_task_spec_to_py_dict(py, &self.spec).map_err(python_task_error)?,
+            )
+            .map_err(python_task_error)?;
+            let host_payload = build_python_task_model(
+                py,
+                "Host",
+                host_to_py_dict(py, host).map_err(python_task_error)?,
+            )
+            .map_err(python_task_error)?;
+            let context_payload = build_python_task_runtime_context(
+                py,
+                context.current_depth,
+                context.max_depth,
+                context.current_attempt,
+                context.dry_run,
+                context.connection,
+            )
+            .map_err(python_task_error)?;
+
+            instance
+                .call_method1(method_name, (task_payload, host_payload, context_payload))
+                .map(Bound::unbind)
+                .map_err(python_task_error)
+        })?;
+        let result = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(python_task_error)?;
+        Python::attach(|py| {
+            python_result_to_idempotency_check(result.bind(py).clone()).map_err(python_task_error)
+        })
+    }
 }
 
 #[pyclass(name = "TaskDefinition", skip_from_py_object)]
@@ -411,6 +744,11 @@ impl PyTaskDefinition {
     #[getter]
     fn supports_dry_run(&self) -> bool {
         self.inner.supports_dry_run()
+    }
+
+    #[getter]
+    fn idempotency(&self, py: Python<'_>) -> PyResult<Py<PyIdempotencyMode>> {
+        Py::new(py, PyIdempotencyMode::from(self.inner.idempotency_mode()))
     }
 
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -857,6 +1195,8 @@ fn resolve_task_run_options(
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyHostTaskResult>()?;
+    module.add_class::<PyIdempotencyMode>()?;
+    module.add_class::<PyIdempotencyCheckResult>()?;
     module.add_class::<PyTaskDefinition>()?;
     module.add_class::<PyTasks>()?;
     module.add_class::<PyTaskConnectionResolver>()?;
@@ -873,6 +1213,11 @@ pub(crate) fn python_result_to_host_task_result(obj: Bound<'_, PyAny>) -> PyResu
 pub(crate) fn python_result_to_task_results(obj: Bound<'_, PyAny>) -> PyResult<TaskResults> {
     let value = normalize_python_task_results_payload(&obj)?;
     json_to_task_results(&value)
+}
+
+fn python_result_to_idempotency_check(obj: Bound<'_, PyAny>) -> PyResult<IdempotencyCheck> {
+    let result = obj.extract::<PyRef<'_, PyIdempotencyCheckResult>>()?;
+    Ok(result.inner.clone())
 }
 
 fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
@@ -1139,6 +1484,7 @@ fn task_to_json(task: &dyn Task) -> Value {
         "retry": retry_config_to_json(task.retry_config()),
         "options": task.options(),
         "supports_dry_run": task.supports_dry_run(),
+        "idempotency": PyIdempotencyMode::from(task.idempotency_mode()).value_str(),
         "sub_tasks": task.sub_tasks().into_iter().map(|sub_task| task_to_json(sub_task.as_ref())).collect::<Vec<_>>(),
     })
 }
@@ -1292,6 +1638,44 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
             }
         }
     }
+    let idempotency_mode = if let Some(value) = info.get_item("idempotency")? {
+        if value.is_none() {
+            IdempotencyMode::Disabled
+        } else {
+            let py_mode = value.extract::<PyRef<'_, PyIdempotencyMode>>()?;
+            (*py_mode).into()
+        }
+    } else {
+        IdempotencyMode::Disabled
+    };
+    if !matches!(idempotency_mode, IdempotencyMode::Disabled) {
+        let has_check = class_dict.contains("check")?;
+        let has_check_async = class_dict.contains("check_async")?;
+        match (execution_mode, has_check, has_check_async) {
+            (PythonTaskExecutionMode::Blocking, true, false) => {}
+            (PythonTaskExecutionMode::Async, false, true) => {}
+            (PythonTaskExecutionMode::Blocking, false, _) => {
+                return Err(PyValueError::new_err(
+                    "idempotency requires 'check' for sync Python tasks",
+                ));
+            }
+            (PythonTaskExecutionMode::Async, _, false) => {
+                return Err(PyValueError::new_err(
+                    "idempotency requires 'check_async' for async Python tasks",
+                ));
+            }
+            (PythonTaskExecutionMode::Blocking, _, true) => {
+                return Err(PyValueError::new_err(
+                    "idempotency requires sync Python tasks to define 'check', not 'check_async'",
+                ));
+            }
+            (PythonTaskExecutionMode::Async, true, _) => {
+                return Err(PyValueError::new_err(
+                    "idempotency requires async Python tasks to define 'check_async', not 'check'",
+                ));
+            }
+        }
+    }
 
     let options = if let Some(options) = info.get_item("options")? {
         if options.is_none() {
@@ -1319,6 +1703,7 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         retry_config,
         options,
         supports_dry_run,
+        idempotency_mode,
         py_task_class: Arc::new(py_task_class.unbind()),
         execution_mode,
         sub_tasks,
@@ -1348,6 +1733,7 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
         "retry": retry_config_to_json(spec.retry_config.as_ref()),
         "options": spec.options,
         "supports_dry_run": spec.supports_dry_run,
+        "idempotency": PyIdempotencyMode::from(spec.idempotency_mode).value_str(),
         "sub_tasks": spec.sub_tasks.iter().map(python_task_spec_to_json).collect::<Vec<_>>(),
     })
 }
@@ -1370,6 +1756,10 @@ fn python_task_spec_to_py_dict<'py>(
         retry_config_to_py_object(py, spec.retry_config.as_ref())?,
     )?;
     task.set_item("supports_dry_run", spec.supports_dry_run)?;
+    task.set_item(
+        "idempotency",
+        PyIdempotencyMode::task_model_value(py, spec.idempotency_mode)?,
+    )?;
     if let Some(options) = spec.options.as_ref() {
         task.set_item("options", json_value_to_py(py, options)?)?;
     } else {
@@ -1612,6 +2002,10 @@ impl TaskInfo for RuntimeTaskWrapper {
     fn supports_dry_run(&self) -> bool {
         self.inner.supports_dry_run()
     }
+
+    fn idempotency_mode(&self) -> IdempotencyMode {
+        self.inner.idempotency_mode()
+    }
 }
 
 #[async_trait]
@@ -1646,6 +2040,22 @@ impl Task for RuntimeTaskWrapper {
         context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         self.inner.dry_run_async(host, context).await
+    }
+
+    fn check(
+        &self,
+        host: &Host,
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        self.inner.check(host, context)
+    }
+
+    async fn check_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        self.inner.check_async(host, context).await
     }
 
     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
@@ -1771,7 +2181,7 @@ mod tests {
             let task = PyModule::from_code(
                 py,
                 pyo3::ffi::c_str!(
-                    "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    def has_connection(self):\n        return self.connection is not None\n"
+                    "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass _IdempotencyModeValue:\n    def __init__(self, value):\n        self.value = value\n\nclass IdempotencyMode:\n    DISABLED = _IdempotencyModeValue('disabled')\n    CHECK = _IdempotencyModeValue('check')\n    CHECK_AND_VERIFY = _IdempotencyModeValue('check_and_verify')\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    def has_connection(self):\n        return self.connection is not None\n"
                 ),
                 pyo3::ffi::c_str!("genja/task.py"),
                 pyo3::ffi::c_str!("genja.task"),
@@ -1811,6 +2221,7 @@ mod tests {
         }
         info.set_item("retry", py.None())?;
         info.set_item("supports_dry_run", false)?;
+        info.set_item("idempotency", Py::new(py, PyIdempotencyMode::Disabled)?)?;
         info.set_item("sub_tasks", sub_tasks)?;
 
         let attrs = PyDict::new(py);
@@ -1930,6 +2341,72 @@ mod tests {
             assert_eq!(
                 data["outcome"]["PassedWithWarnings"]["warnings"],
                 json!(["previous attempt may have skipped finalization"])
+            );
+        });
+    }
+
+    #[test]
+    fn py_idempotency_mode_exposes_stable_values() {
+        Python::attach(|py| {
+            let mode = Py::new(py, PyIdempotencyMode::CheckAndVerify)
+                .expect("mode should convert to python");
+            let mode = mode.bind(py).clone().into_any();
+
+            assert_eq!(
+                mode.getattr("value")
+                    .expect("value should exist")
+                    .extract::<String>()
+                    .expect("value should be a string"),
+                "check_and_verify"
+            );
+            assert_eq!(
+                mode.call_method0("__str__")
+                    .expect("__str__ should work")
+                    .extract::<String>()
+                    .expect("__str__ should return a string"),
+                "check_and_verify"
+            );
+            assert_eq!(
+                mode.call_method0("__repr__")
+                    .expect("__repr__ should work")
+                    .extract::<String>()
+                    .expect("__repr__ should return a string"),
+                "IdempotencyMode.CHECK_AND_VERIFY"
+            );
+        });
+    }
+
+    #[test]
+    fn py_idempotency_check_result_exposes_expected_fields() {
+        Python::attach(|py| {
+            let details =
+                json_value_to_py(py, &json!({"desired": "ntp"})).expect("details should convert");
+            let result = PyIdempotencyCheckResult::change_required(
+                Some("+ntp server 192.0.2.10".to_string()),
+                Some(details.bind(py).clone()),
+            )
+            .expect("check result should build");
+            let result = Py::new(py, result).expect("result should convert to python");
+            let result = result.bind(py);
+
+            for field in ["status", "summary", "diff", "details"] {
+                assert!(
+                    result.hasattr(field).expect("hasattr should work"),
+                    "{field} should be exposed as a Python property"
+                );
+            }
+
+            let payload = result.call_method0("to_dict").expect("to_dict should work");
+            assert_eq!(
+                py_any_to_json_value(&payload).expect("payload should convert"),
+                json!({
+                    "status": "change_required",
+                    "summary": null,
+                    "diff": "+ntp server 192.0.2.10",
+                    "details": {
+                        "desired": "ntp",
+                    },
+                })
             );
         });
     }

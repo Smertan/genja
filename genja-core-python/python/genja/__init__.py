@@ -11,6 +11,8 @@ from .genja import (
     Genja,
     GenjaBuilder,
     HostTaskResult,
+    IdempotencyCheckResult,
+    IdempotencyMode,
     InventoryConfig,
     LoggingConfig,
     OptionsConfig,
@@ -64,6 +66,8 @@ assert Settings is _CoreSettings
 
 __all__ = [
     "HostTaskResult",
+    "IdempotencyCheckResult",
+    "IdempotencyMode",
     "TaskConnectionResolver",
     "TaskDefinition",
     "TaskRunOptions",

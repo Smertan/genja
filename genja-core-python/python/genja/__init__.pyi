@@ -8,7 +8,7 @@ compatibility, but new code should prefer:
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, ClassVar
 
 from .connection import (
     ConnectionBase,
@@ -33,6 +33,10 @@ from .settings import (
     RunnerRetryConfig,
     SSHConfig,
     Settings,
+)
+from .genja import (
+    IdempotencyCheckResult,
+    IdempotencyMode,
 )
 from .task import (
     GenjaTaskProtocol,
@@ -68,6 +72,61 @@ class HostTaskResult:
 
     def to_dict(self) -> dict[str, Any]:
         """Return the host task result as a dictionary."""
+        ...
+
+class IdempotencyMode:
+    """Task-authored idempotency check mode."""
+
+    DISABLED: ClassVar[IdempotencyMode]
+    CHECK: ClassVar[IdempotencyMode]
+    CHECK_AND_VERIFY: ClassVar[IdempotencyMode]
+
+    @property
+    def value(self) -> str:
+        """Stable string value for this idempotency mode."""
+        ...
+
+class IdempotencyCheckResult:
+    """Result returned from Python idempotency check methods."""
+
+    @staticmethod
+    def converged(
+        summary: str | None = None,
+        details: Any | None = None,
+    ) -> IdempotencyCheckResult:
+        """Create a check result indicating the host is already converged."""
+        ...
+
+    @staticmethod
+    def change_required(
+        diff: str | None = None,
+        details: Any | None = None,
+    ) -> IdempotencyCheckResult:
+        """Create a check result indicating normal execution should run."""
+        ...
+
+    @property
+    def status(self) -> str:
+        """Current convergence state."""
+        ...
+
+    @property
+    def summary(self) -> str | None:
+        """Human-readable convergence summary, if this result is converged."""
+        ...
+
+    @property
+    def diff(self) -> str | None:
+        """Human-readable remaining diff, if this result requires change."""
+        ...
+
+    @property
+    def details(self) -> Any | None:
+        """Structured JSON-compatible check details."""
+        ...
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the check result as a dictionary."""
         ...
 
 class TaskConnectionResolver:
@@ -134,6 +193,11 @@ class TaskDefinition:
     @property
     def supports_dry_run(self) -> bool:
         """Whether the task declares dry-run support."""
+        ...
+
+    @property
+    def idempotency(self) -> IdempotencyMode:
+        """Task-authored idempotency check mode."""
         ...
 
     @property
@@ -801,6 +865,8 @@ class GenjaBuilder:
 
 __all__ = [
     "HostTaskResult",
+    "IdempotencyMode",
+    "IdempotencyCheckResult",
     "TaskConnectionResolver",
     "TaskDefinition",
     "TaskRunOptions",

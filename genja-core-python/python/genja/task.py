@@ -11,6 +11,8 @@ directly. The top-level package re-exports these names for compatibility, but
 - ``TaskFailureResult``
 - ``TaskSkipResult``
 - ``RetryConfig``
+- ``IdempotencyMode``
+- ``IdempotencyCheckResult``
 - task ``options`` metadata
 
 The canonical authoring shape is:
@@ -22,6 +24,8 @@ The canonical authoring shape is:
         TaskFailureKind,
         TaskFailureResult,
         TaskRuntimeContext,
+        IdempotencyCheckResult,
+        IdempotencyMode,
         RetryConfig,
         TaskInfo,
         TaskMessage,
@@ -33,11 +37,23 @@ The canonical authoring shape is:
     @task(
         name="backup_config",
         connection_plugin_name="ssh",
+        idempotency=IdempotencyMode.CHECK,
         processors=["audit"],
         retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
         options={"backup_path": "/tmp/configs", "compress": True},
     )
     class BackupConfigTask:
+        def check(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> IdempotencyCheckResult:
+            return IdempotencyCheckResult.change_required(
+                diff=f"+backup {host.hostname}",
+                details={"host": host.hostname},
+            )
+
         def start(
             self,
             task: TaskInfo,
@@ -109,6 +125,7 @@ Task metadata comes from ``@task(...)``:
 - ``sub_tasks``: optional list of decorated task classes
 - ``processors``: optional list of processor plugin names
 - ``retry``: optional grouped retry metadata
+- ``idempotency``: optional task-authored convergence check mode
 - ``options``: optional JSON-serializable task options payload
 
 Retry metadata only controls policy. A task is retried only when both of these
@@ -129,7 +146,9 @@ from enum import Enum
 import json
 from typing import Any, Awaitable, Literal, Protocol, TypeVar, cast
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+
+from .genja import IdempotencyCheckResult, IdempotencyMode
 
 _TaskClassT = TypeVar("_TaskClassT", bound=type)
 
@@ -145,6 +164,7 @@ class _DryRunMode:
 _SYNC_DRY_RUN = _DryRunMode("a", "sync", "start", "dry_run")
 _ASYNC_DRY_RUN = _DryRunMode("an", "async", "start_async", "dry_run_async")
 _DRY_RUN_METHOD_SIGNATURE_ARGS = "self, task, host, context"
+_CHECK_METHOD_SIGNATURE_ARGS = "self, task, host, context"
 
 
 def _task_decorator_class_error(cls_name: str, message: str) -> str:
@@ -153,6 +173,10 @@ def _task_decorator_class_error(cls_name: str, message: str) -> str:
 
 def _dry_run_method_signature(method_name: str) -> str:
     return f"{method_name}({_DRY_RUN_METHOD_SIGNATURE_ARGS})"
+
+
+def _check_method_signature(method_name: str) -> str:
+    return f"{method_name}({_CHECK_METHOD_SIGNATURE_ARGS})"
 
 
 def _missing_dry_run_method_error(cls_name: str, mode: _DryRunMode) -> str:
@@ -177,6 +201,34 @@ def _wrong_dry_run_method_error(
             f"is {mode.article} {mode.label} task, so dry-run support requires "
             "a dry-run method named "
             f"'{_dry_run_method_signature(mode.dry_run_method)}', "
+            f"not '{invalid_method}'"
+        ),
+    )
+
+
+def _missing_check_method_error(cls_name: str, mode: _DryRunMode) -> str:
+    return _task_decorator_class_error(
+        cls_name,
+        (
+            f"is {mode.article} {mode.label} task with idempotency enabled, so it must "
+            "define an idempotency check method named "
+            f"'{_check_method_signature('check' if mode is _SYNC_DRY_RUN else 'check_async')}'"
+        ),
+    )
+
+
+def _wrong_check_method_error(
+    cls_name: str,
+    mode: _DryRunMode,
+    invalid_method: str,
+) -> str:
+    expected = "check" if mode is _SYNC_DRY_RUN else "check_async"
+    return _task_decorator_class_error(
+        cls_name,
+        (
+            f"is {mode.article} {mode.label} task, so idempotency support requires "
+            "a check method named "
+            f"'{_check_method_signature(expected)}', "
             f"not '{invalid_method}'"
         ),
     )
@@ -220,6 +272,8 @@ class _GenjaModel(BaseModel):
     Extends Pydantic's BaseModel to provide convenient dictionary conversion
     and attribute access via subscript notation for all Genja model classes.
     """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert the model instance to a JSON-serializable dictionary.
@@ -338,6 +392,7 @@ class TaskInfo(_GenjaModel):
             None, runner defaults apply.
         supports_dry_run (bool): Whether the task declares a dry-run entrypoint
             that the runtime may call when dry-run execution is requested.
+        idempotency (IdempotencyMode): Task-authored convergence check mode.
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure or None if no options are provided.
@@ -365,6 +420,10 @@ class TaskInfo(_GenjaModel):
         default=False,
         description="Whether the task declares dry-run support.",
     )
+    idempotency: IdempotencyMode = Field(
+        default=IdempotencyMode.DISABLED,
+        description="Task-authored convergence check mode.",
+    )
     options: Any | None = Field(
         default=None,
         description="JSON-serializable task options payload.",
@@ -373,6 +432,11 @@ class TaskInfo(_GenjaModel):
         default_factory=list,
         description="Nested task metadata for optional sub-tasks.",
     )
+
+    @field_serializer("idempotency")
+    def _serialize_idempotency(self, value: IdempotencyMode) -> str:
+        """Serialize the Rust-backed idempotency enum as its stable value."""
+        return value.value
 
 
 class Host(_GenjaModel):
@@ -560,6 +624,24 @@ class GenjaTaskProtocol(Protocol):
         """Preview task behavior for async dry-run execution."""
         ...
 
+    def check(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> IdempotencyCheckResult:
+        """Check convergence for sync idempotent execution."""
+        ...
+
+    async def check_async(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> IdempotencyCheckResult:
+        """Check convergence for async idempotent execution."""
+        ...
+
 
 def _validate_sub_tasks(
     cls_name: str,
@@ -594,6 +676,7 @@ def task(
     processors: list[str] | None = None,
     retry: RetryConfig | None = None,
     supports_dry_run: bool = False,
+    idempotency: IdempotencyMode = IdempotencyMode.DISABLED,
     options: Any | None = None,
     **kwargs: Any,
 ):
@@ -626,6 +709,9 @@ def task(
         supports_dry_run (bool): Declares that the task supports dry-run
             execution. Sync tasks must define ``dry_run(...)`` and async tasks
             must define ``dry_run_async(...)`` when this is True.
+        idempotency (IdempotencyMode): Declares task-authored convergence check
+            behavior. Enabled sync tasks must define ``check(...)`` and enabled
+            async tasks must define ``check_async(...)``.
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure. If None, no options are provided to the task.
@@ -642,8 +728,8 @@ def task(
             not a non-empty string or None, if sub_tasks is not a list of
             @task-decorated classes or None, if processors is not a list of
             non-empty strings or None, if retry is not RetryConfig or None, if
-            retry fields are passed outside RetryConfig, or if options is not
-            JSON-serializable.
+            idempotency is not IdempotencyMode, if retry fields are passed
+            outside RetryConfig, or if options is not JSON-serializable.
     """
     if "allow_retries" in kwargs:
         raise TypeError(
@@ -698,6 +784,10 @@ def task(
             raise TypeError(
                 f"@task-decorated class '{cls.__name__}' supports_dry_run must be a bool"
             )
+        if not isinstance(idempotency, IdempotencyMode):
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' idempotency must be IdempotencyMode"
+            )
         if supports_dry_run:
             if has_start and not has_dry_run:
                 raise TypeError(
@@ -722,6 +812,37 @@ def task(
                         _ASYNC_DRY_RUN,
                         _SYNC_DRY_RUN.dry_run_method,
                     )
+                )
+        check = class_dict.get("check")
+        check_async = class_dict.get("check_async")
+        has_check = callable(check)
+        has_check_async = callable(check_async)
+        if check is not None and not has_check:
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' attribute 'check' must be callable"
+            )
+        if check_async is not None and not has_check_async:
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' attribute 'check_async' must be callable"
+            )
+        if idempotency != IdempotencyMode.DISABLED:
+            if has_start and not has_check:
+                raise TypeError(
+                    _missing_check_method_error(cls.__name__, _SYNC_DRY_RUN)
+                )
+            if has_start_async and not has_check_async:
+                raise TypeError(
+                    _missing_check_method_error(cls.__name__, _ASYNC_DRY_RUN)
+                )
+            if has_start and has_check_async:
+                raise TypeError(
+                    _wrong_check_method_error(
+                        cls.__name__, _SYNC_DRY_RUN, "check_async"
+                    )
+                )
+            if has_start_async and has_check:
+                raise TypeError(
+                    _wrong_check_method_error(cls.__name__, _ASYNC_DRY_RUN, "check")
                 )
         if not isinstance(name, str) or not name.strip():
             raise TypeError(
@@ -760,6 +881,7 @@ def task(
             "processors": list(processors or []),
             "retry": retry.to_dict() if retry is not None else None,
             "supports_dry_run": supports_dry_run,
+            "idempotency": idempotency,
             "options": options,
             "sub_tasks": validated_sub_tasks,
         }
@@ -1191,6 +1313,8 @@ __all__ = [
     "task",
     "GenjaTaskProtocol",
     "RetryConfig",
+    "IdempotencyMode",
+    "IdempotencyCheckResult",
     "TaskInfo",
     "Host",
     "TaskRuntimeContext",
