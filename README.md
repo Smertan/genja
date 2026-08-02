@@ -251,6 +251,8 @@ Notes:
 
 - `max_depth` limits recursive sub-task execution. A task with no sub-tasks can use a small value like `1`.
 - `#[genja_task(...)]` owns static task metadata like name, processors, and connection plugin selection.
+- Tasks can opt into dry-run support and idempotency checks through
+  `#[genja_task(...)]` metadata and matching task hooks.
 - `connection_plugin_name` is optional, but usually needed for real task execution.
 - Rich task output is split between semantic outcome payloads
   (`TaskSuccess`, `TaskFailure`, `TaskSkip`) and host-level execution metadata on

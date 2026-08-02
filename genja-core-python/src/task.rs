@@ -36,6 +36,7 @@ macro_rules! py_string_enum {
             ),+ $(,)?
         }
     ) => {
+        /// Python-facing task metadata enum backed by a Rust enum.
         #[pyclass(name = $python_name, eq, skip_from_py_object)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum $py_enum {
@@ -63,11 +64,13 @@ macro_rules! py_string_enum {
                 const $class_attr: Self = Self::$variant;
             )+
 
+            /// Return the stable string value for this enum variant.
             #[getter]
             fn value(&self) -> &'static str {
                 self.value_str()
             }
 
+            /// Return the stable string value for display.
             fn __str__(&self) -> &'static str {
                 self.value_str()
             }
@@ -116,6 +119,7 @@ impl PyIdempotencyMode {
     }
 }
 
+/// Python wrapper for a task-authored idempotency convergence check result.
 #[pyclass(name = "IdempotencyCheckResult", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyIdempotencyCheckResult {
@@ -136,6 +140,7 @@ impl From<PyIdempotencyCheckResult> for IdempotencyCheck {
 
 #[pymethods]
 impl PyIdempotencyCheckResult {
+    /// Create a check result indicating the host is already converged.
     #[staticmethod]
     #[pyo3(signature = (summary=None, details=None))]
     fn converged(summary: Option<String>, details: Option<Bound<'_, PyAny>>) -> PyResult<Self> {
@@ -149,6 +154,7 @@ impl PyIdempotencyCheckResult {
         Ok(Self { inner: check })
     }
 
+    /// Create a check result indicating normal task execution should run.
     #[staticmethod]
     #[pyo3(signature = (diff=None, details=None))]
     fn change_required(diff: Option<String>, details: Option<Bound<'_, PyAny>>) -> PyResult<Self> {
@@ -162,6 +168,7 @@ impl PyIdempotencyCheckResult {
         Ok(Self { inner: check })
     }
 
+    /// Return the current convergence state as a stable string.
     #[getter]
     fn status(&self) -> &'static str {
         match self.inner {
@@ -170,6 +177,7 @@ impl PyIdempotencyCheckResult {
         }
     }
 
+    /// Return the convergence summary for a converged result, if present.
     #[getter]
     fn summary(&self) -> Option<&str> {
         match &self.inner {
@@ -178,6 +186,7 @@ impl PyIdempotencyCheckResult {
         }
     }
 
+    /// Return the remaining diff for a change-required result, if present.
     #[getter]
     fn diff(&self) -> Option<&str> {
         match &self.inner {
@@ -186,6 +195,7 @@ impl PyIdempotencyCheckResult {
         }
     }
 
+    /// Return structured check details, if present.
     #[getter]
     fn details(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match &self.inner {
@@ -197,6 +207,7 @@ impl PyIdempotencyCheckResult {
         }
     }
 
+    /// Return the check result as a Python dictionary.
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let value = match &self.inner {
             IdempotencyCheck::Converged { summary, details } => json!({

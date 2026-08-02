@@ -146,6 +146,9 @@ The common macro options are:
 - `retry.allow`: optional task-level override for whether retries are allowed
 - `retry.max_attempts`: optional task-level override for total task attempts
 - `retry.delay_ms`: optional fixed in-process delay in milliseconds between retry attempts
+- `supports_dry_run`: opt into runtime dry-run dispatch
+- `idempotency`: opt into task-authored convergence checks with
+  `IdempotencyMode::Check` or `IdempotencyMode::CheckAndVerify`
 
 Define exactly one task entrypoint in the macro `impl` block:
 
@@ -208,6 +211,9 @@ Common decorator options:
 - `processors`: processor plugin names to run around task execution
 - `sub_tasks`: child tasks to execute beneath the current task
 - `retry`: optional grouped task-level retry overrides
+- `supports_dry_run`: opt into runtime dry-run dispatch
+- `idempotency`: opt into task-authored convergence checks with
+  `IdempotencyMode.CHECK` or `IdempotencyMode.CHECK_AND_VERIFY`
 
 ### Python Retry Overrides
 
@@ -524,6 +530,189 @@ different depth limits depending on the workflow.
 
 The maximum depth controls nested sub-task execution. Use `0` when only the
 top-level task should run, and a higher value when sub-tasks are expected.
+
+## Idempotency Checks
+
+Idempotency is declared by the task author. When enabled, Genja checks the
+current host state before calling the normal task entrypoint. If the host is
+already converged, Genja records a passed result with `changed=false` and does
+not call `start(...)` or `start_async(...)`.
+
+Modes:
+
+- `Disabled`: default behavior; no convergence check runs
+- `Check`: run one pre-execution check
+- `CheckAndVerify`: run the pre-execution check, apply when needed, then run the
+  same check again after a passed application result
+
+The check hook must match the task execution mode:
+
+- blocking tasks implement `check(...)`
+- async tasks implement `check_async(...)`
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::Genja;
+    use genja::genja_core::inventory::Host;
+    use genja::genja_core::task::{
+        HostTaskResult, IdempotencyCheck, IdempotencyMode, TaskError,
+        TaskRuntimeContext, TaskSuccess,
+    };
+    use genja::genja_task;
+
+    struct EnsureNtp;
+
+    #[genja_task(
+        name = "ensure_ntp",
+        connection_plugin_name = "ssh",
+        idempotency = IdempotencyMode::CheckAndVerify,
+    )]
+    impl EnsureNtp {
+        async fn check_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            let connection = context.connection().expect("ssh connection is configured");
+            let mut connection = connection.lock().await;
+            let running = connection
+                .execute_command("show running-config | include ^ntp server")
+                .await?;
+
+            let desired = "ntp server 192.0.2.10";
+            if running.lines().any(|line| line.trim() == desired) {
+                return Ok(IdempotencyCheck::converged(format!(
+                    "{desired} is already configured"
+                )));
+            }
+
+            Ok(IdempotencyCheck::change_required(format!("+{desired}"))
+                .with_details(serde_json::json!({
+                    "current": running,
+                    "desired": desired,
+                })))
+        }
+
+        async fn start_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let desired = "ntp server 192.0.2.10";
+            let connection = context.connection().expect("ssh connection is configured");
+            let mut connection = connection.lock().await;
+            connection
+                .execute_command(format!("configure terminal\n{desired}\nend"))
+                .await?;
+
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_diff(format!("+{desired}"))
+                    .with_summary("Configured NTP server"),
+            ))
+        }
+    }
+
+    let genja = Genja::from_settings_file("settings.yaml")?;
+    let results = genja.run_task(EnsureNtp, 1)?;
+    # Ok::<(), genja::GenjaError>(())
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import asyncio
+
+    import genja as genja_lib
+    from genja.task import (
+        Host,
+        IdempotencyCheckResult,
+        IdempotencyMode,
+        TaskInfo,
+        TaskRuntimeContext,
+        TaskSuccessResult,
+        task,
+    )
+
+
+    @task(
+        name="ensure_ntp",
+        connection_plugin_name="ssh",
+        idempotency=IdempotencyMode.CHECK_AND_VERIFY,
+        options={"server": "192.0.2.10"},
+    )
+    class EnsureNtp:
+        async def check_async(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> IdempotencyCheckResult:
+            connection = context.connection()
+            running = await connection.execute_command(
+                "show running-config | include ^ntp server"
+            )
+
+            desired = f"ntp server {task.options['server']}"
+            if desired in {line.strip() for line in running.splitlines()}:
+                return IdempotencyCheckResult.converged(
+                    summary=f"{desired} is already configured",
+                )
+
+            return IdempotencyCheckResult.change_required(
+                diff=f"+{desired}",
+                details={
+                    "current": running,
+                    "desired": desired,
+                },
+            )
+
+        async def start_async(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskSuccessResult:
+            connection = context.connection()
+            desired = f"ntp server {task.options['server']}"
+            await connection.execute_command(f"configure terminal\n{desired}\nend")
+
+            return TaskSuccessResult(
+                changed=True,
+                diff=f"+{desired}",
+                summary="Configured NTP server",
+            )
+
+
+    async def main() -> None:
+        genja = genja_lib.Genja.from_settings_file("settings.yaml")
+        results = await genja.run_task_async(
+            EnsureNtp,
+            run_options=genja_lib.TaskRunOptions(max_depth=1),
+        )
+
+        print(results.to_json(pretty=True))
+
+
+    asyncio.run(main())
+    ```
+
+`CheckAndVerify` reuses the same check hook for post-application verification.
+If the second check still reports `ChangeRequired`, Genja records a validation
+failure. Verification only runs after the normal task entrypoint returns a
+passed result.
+
+Idempotency checks should be read-only. They may open declared connections,
+run inspection commands, normalize current state, calculate diffs, and return
+diagnostic details. They should not apply configuration, save configuration,
+create or delete resources, or call mutating task entrypoints.
+
+Dry-run remains separate from idempotency. If dry-run is requested, Genja calls
+the task dry-run hook and does not automatically call the idempotency check.
+Task authors may call shared private inspection code from both hooks, but
+dependent sub-tasks should account for parent dry-run behavior explicitly.
 
 ## Dry-Run Execution
 
