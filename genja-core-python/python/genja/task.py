@@ -826,14 +826,6 @@ def task(
                 f"@task-decorated class '{cls.__name__}' attribute 'check_async' must be callable"
             )
         if idempotency != IdempotencyMode.DISABLED:
-            if has_start and not has_check:
-                raise TypeError(
-                    _missing_check_method_error(cls.__name__, _SYNC_DRY_RUN)
-                )
-            if has_start_async and not has_check_async:
-                raise TypeError(
-                    _missing_check_method_error(cls.__name__, _ASYNC_DRY_RUN)
-                )
             if has_start and has_check_async:
                 raise TypeError(
                     _wrong_check_method_error(
@@ -843,6 +835,14 @@ def task(
             if has_start_async and has_check:
                 raise TypeError(
                     _wrong_check_method_error(cls.__name__, _ASYNC_DRY_RUN, "check")
+                )
+            if has_start and not has_check:
+                raise TypeError(
+                    _missing_check_method_error(cls.__name__, _SYNC_DRY_RUN)
+                )
+            if has_start_async and not has_check_async:
+                raise TypeError(
+                    _missing_check_method_error(cls.__name__, _ASYNC_DRY_RUN)
                 )
         if not isinstance(name, str) or not name.strip():
             raise TypeError(
