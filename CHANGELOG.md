@@ -13,6 +13,14 @@ Changed packages:
 
 - Added core Rust dry-run task capability, context, trait, and execution metadata APIs. Refs: #80
 - Added Rust `#[genja_task(...)]` dry-run metadata with `supports_dry_run = true`. Refs: #80
+- Added Rust task idempotency mode metadata with `IdempotencyMode` and `TaskInfo::idempotency_mode()`, defaulting to disabled. Refs: #88
+- Added Rust `#[genja_task(...)]` idempotency metadata with `idempotency = IdempotencyMode::...`. Refs: #88
+- Added Rust idempotency check result and default task check hooks for blocking and async tasks. Refs: #88
+- Added Rust `#[genja_task(...)]` validation and delegation for idempotency check hooks. Refs: #88
+- Added Rust runtime pre-check execution for idempotent tasks, preserving dry-run dispatch without automatic idempotency checks. Refs: #88
+- Added Rust `CheckAndVerify` post-application convergence verification with validation failures for remaining changes. Refs: #88
+- Added Rust idempotency retry convergence results as `PassedWithWarnings` when a later pre-check finds convergence after a retryable failure. Refs: #88
+- Added Python task idempotency support with `IdempotencyMode`, `IdempotencyCheckResult`, `@task(..., idempotency=...)`, and blocking or async check hooks. Refs: #88
 - Added Rust runtime task execution options with dry-run support through `Genja::run_task_with_options(...)`, `Genja::run_task_with_options_async(...)`, `Genja::run_tasks_with_options(...)`, and `Genja::run_tasks_with_options_async(...)`. Refs: #80
 - Added Python dry-run task support with `@genja.task(..., supports_dry_run=True)`, `dry_run` / `dry_run_async` task methods, `TaskRunOptions` via `run_options=...`, and `TaskRuntimeContext.dry_run`. Refs: #80
 - Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
@@ -20,8 +28,10 @@ Changed packages:
 
 ### Changed
 
+- **Breaking:** Added `PassedWithWarnings` as a new host task outcome for successful results that carry important warnings. Update exhaustive Rust matches on `HostTaskOutcome` and serialized result parsers to handle `PassedWithWarnings` alongside `Passed`, `Failed`, and `Skipped`. Refs: #99
 - **Breaking:** Rust runner plugins now receive `TaskRunOptions` instead of a bare `max_depth` in `PluginRunner::run_task(...)` and `PluginRunner::run_tasks(...)`. Update runner plugin implementations to accept `run_options: TaskRunOptions` and read recursion depth with `run_options.max_depth()`. Refs: #80
 - **Breaking:** Python runner plugins now receive `run_options: TaskRunOptions` instead of a bare `max_depth` in `run_task(...)` and `run_tasks(...)`. Update runner plugin implementations to accept `run_options` and pass it to `TaskDefinition.run_on_host(...)` / `run_on_hosts(...)`, or read recursion depth with `run_options.max_depth`. Refs: #80
+- **Breaking:** Python task results now support `TaskStatus.PASSED_WITH_WARNINGS` and serialize warning-bearing successes as `PassedWithWarnings`. Update result parsers that assume only `Passed`, `Failed`, and `Skipped` outcome keys. Refs: #99
 - Improved Python type stubs and editor-facing API documentation for Genja runtime, settings, plugin manager, connection, plugin, and processor APIs. Refs: #94
 - **Breaking:** Rust `Genja::from_settings_file_async(...)` now requires the selected inventory plugin to implement `AsyncPluginInventory` and no longer falls back to synchronous inventory plugins. Python `Genja.from_settings(...)` now rejects async Python inventory plugins; use `await Genja.from_settings_async(...)` instead. Use sync constructors for sync inventory plugins such as `FileInventoryPlugin`, and async constructors for async inventory plugins. Refs: #86
 

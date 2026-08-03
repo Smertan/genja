@@ -68,3 +68,9 @@ The current supported contract does not include:
 - unknown `#[task(...)]` helper attributes
 - `DerefMacro` or `DerefMutMacro` on non-tuple-wrapper types
 - `DerefMacro` without an in-scope `DerefTarget` trait
+
+`#[genja_task(...)]` also validates optional task hooks. Use
+`supports_dry_run = true` with `dry_run(...)` or `dry_run_async(...)`, and use
+`idempotency = IdempotencyMode::Check` or
+`idempotency = IdempotencyMode::CheckAndVerify` with `check(...)` or
+`check_async(...)`. The hook must match the task entrypoint mode.

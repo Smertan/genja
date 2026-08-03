@@ -3,7 +3,13 @@
 Task authoring helpers live in ``genja.task``. They are re-exported here
 for compatibility, but new code should prefer:
 
-    from genja.task import task, TaskMessage, TaskSuccessResult
+    from genja.task import (
+        IdempotencyCheckResult,
+        IdempotencyMode,
+        task,
+        TaskMessage,
+        TaskSuccessResult,
+    )
 """
 
 from .genja import (
@@ -11,6 +17,8 @@ from .genja import (
     Genja,
     GenjaBuilder,
     HostTaskResult,
+    IdempotencyCheckResult,
+    IdempotencyMode,
     InventoryConfig,
     LoggingConfig,
     OptionsConfig,
@@ -64,6 +72,8 @@ assert Settings is _CoreSettings
 
 __all__ = [
     "HostTaskResult",
+    "IdempotencyCheckResult",
+    "IdempotencyMode",
     "TaskConnectionResolver",
     "TaskDefinition",
     "TaskRunOptions",

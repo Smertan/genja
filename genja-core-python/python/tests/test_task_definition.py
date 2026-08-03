@@ -6,12 +6,15 @@ import pytest
 from genja.task import (
     Host,
     GenjaTaskProtocol,
+    IdempotencyCheckResult,
+    IdempotencyMode,
     RetryConfig,
     TaskFailureResult,
     TaskRuntimeContext,
     TaskMessageLevel,
     TaskInfo,
     TaskMessage,
+    TaskStatus,
     TaskSuccessResult,
     task,
 )
@@ -198,6 +201,244 @@ def test_python_backed_task_dry_run_calls_dry_run_not_start():
     assert host_result["execution_metadata"]["dry_run"] is True
 
 
+def test_python_backed_task_can_return_passed_with_warnings():
+    @task(name="warning_success")
+    class WarningSuccessTask:
+        def start(self, task, host, context):
+            return TaskSuccessResult(
+                status=TaskStatus.PASSED_WITH_WARNINGS,
+                summary="state appears converged",
+                warnings=["previous attempt may have skipped finalization"],
+            )
+
+    task_definition = genja.TaskDefinition.from_python_class(WarningSuccessTask)
+    result = task_definition.run_on_host(Host(hostname="router1"))
+
+    assert result.passed_hosts == ["router1"]
+    host_result = result.to_dict()["hosts"]["router1"]
+    assert host_result["outcome"]["PassedWithWarnings"]["summary"] == (
+        "state appears converged"
+    )
+    assert host_result["outcome"]["PassedWithWarnings"]["warnings"] == [
+        "previous attempt may have skipped finalization"
+    ]
+
+
+def test_idempotency_mode_and_check_result_are_rust_backed_exports():
+    assert IdempotencyMode.CHECK.value == "check"
+    assert str(IdempotencyMode.CHECK_AND_VERIFY) == "check_and_verify"
+    assert repr(IdempotencyMode.DISABLED) == "IdempotencyMode.DISABLED"
+    assert genja.IdempotencyMode.CHECK == IdempotencyMode.CHECK
+
+    converged = IdempotencyCheckResult.converged(
+        summary="already configured",
+        details={"current": "desired"},
+    )
+    assert converged.status == "converged"
+    assert converged.summary == "already configured"
+    assert converged.diff is None
+    assert converged.details == {"current": "desired"}
+    assert converged.to_dict() == {
+        "status": "converged",
+        "summary": "already configured",
+        "diff": None,
+        "details": {"current": "desired"},
+    }
+
+    change_required = IdempotencyCheckResult.change_required(diff="+configured")
+    assert change_required.status == "change_required"
+    assert change_required.summary is None
+    assert change_required.diff == "+configured"
+    assert change_required.details is None
+
+
+def test_python_backed_idempotent_task_converged_check_skips_start():
+    calls: list[str] = []
+
+    @task(name="idempotent_converged", idempotency=IdempotencyMode.CHECK)
+    class IdempotentConvergedTask:
+        def check(self, task, host, context):
+            calls.append("check")
+            assert task.idempotency == IdempotencyMode.CHECK
+            assert task.to_dict()["idempotency"] == "check"
+            return IdempotencyCheckResult.converged(
+                summary=f"{host.hostname} already configured",
+                details={"current": "desired"},
+            )
+
+        def start(self, task, host, context):
+            calls.append("start")
+            return TaskSuccessResult(changed=True, summary="started")
+
+    task_definition = genja.TaskDefinition.from_python_class(IdempotentConvergedTask)
+    result = task_definition.run_on_host(Host(hostname="router1"))
+    host_result = result.to_dict()["hosts"]["router1"]
+
+    assert task_definition.idempotency == IdempotencyMode.CHECK
+    assert task_definition.to_dict()["idempotency"] == "check"
+    assert calls == ["check"]
+    assert host_result["outcome"]["Passed"]["changed"] is False
+    assert host_result["outcome"]["Passed"]["summary"] == "router1 already configured"
+    assert host_result["outcome"]["Passed"]["metadata"] == {
+        "idempotency": {
+            "state": "converged",
+            "details": {"current": "desired"},
+        }
+    }
+
+
+def test_python_backed_idempotent_task_change_required_invokes_start():
+    calls: list[str] = []
+
+    @task(name="idempotent_change", idempotency=IdempotencyMode.CHECK)
+    class IdempotentChangeTask:
+        def check(self, task, host, context):
+            calls.append("check")
+            return IdempotencyCheckResult.change_required(diff="+configured")
+
+        def start(self, task, host, context):
+            calls.append("start")
+            return TaskSuccessResult(changed=True, summary="applied")
+
+    task_definition = genja.TaskDefinition.from_python_class(IdempotentChangeTask)
+    result = task_definition.run_on_host(Host(hostname="router1"))
+
+    assert calls == ["check", "start"]
+    assert (
+        result.to_dict()["hosts"]["router1"]["outcome"]["Passed"]["summary"]
+        == "applied"
+    )
+
+
+def test_python_backed_check_and_verify_preserves_applied_result_when_converged():
+    calls: list[str] = []
+
+    @task(
+        name="idempotent_verified",
+        idempotency=IdempotencyMode.CHECK_AND_VERIFY,
+    )
+    class IdempotentVerifiedTask:
+        def check(self, task, host, context):
+            calls.append("check")
+            if calls.count("check") == 1:
+                return IdempotencyCheckResult.change_required(diff="+configured")
+            return IdempotencyCheckResult.converged(summary="now converged")
+
+        def start(self, task, host, context):
+            calls.append("start")
+            return TaskSuccessResult(changed=True, summary="applied")
+
+    task_definition = genja.TaskDefinition.from_python_class(IdempotentVerifiedTask)
+    result = task_definition.run_on_host(Host(hostname="router1"))
+    host_result = result.to_dict()["hosts"]["router1"]
+
+    assert calls == ["check", "start", "check"]
+    assert result.passed_hosts == ["router1"]
+    assert host_result["outcome"]["Passed"]["changed"] is True
+    assert host_result["outcome"]["Passed"]["summary"] == "applied"
+
+
+def test_python_backed_check_and_verify_fails_when_post_check_requires_change():
+    calls: list[str] = []
+
+    @task(
+        name="idempotent_not_verified",
+        idempotency=IdempotencyMode.CHECK_AND_VERIFY,
+    )
+    class IdempotentNotVerifiedTask:
+        def check(self, task, host, context):
+            calls.append("check")
+            return IdempotencyCheckResult.change_required(
+                diff="+still missing",
+                details={"remaining": "ntp"},
+            )
+
+        def start(self, task, host, context):
+            calls.append("start")
+            return TaskSuccessResult(changed=True, summary="applied")
+
+    task_definition = genja.TaskDefinition.from_python_class(IdempotentNotVerifiedTask)
+    result = task_definition.run_on_host(Host(hostname="router1"))
+    host_result = result.to_dict()["hosts"]["router1"]
+
+    assert calls == ["check", "start", "check"]
+    assert result.failed_hosts == ["router1"]
+    failure = host_result["outcome"]["Failed"]
+    assert failure["kind"] == "Validation"
+    assert failure["message"] == "Configuration did not converge after application"
+    assert failure["details"] == {
+        "application_completed": True,
+        "configuration_may_have_changed": True,
+        "remaining_diff": "+still missing",
+        "idempotency": {
+            "state": "change_required",
+            "details": {"remaining": "ntp"},
+        },
+    }
+
+
+def test_python_backed_idempotent_pre_check_exception_fails_only_affected_host():
+    calls: list[str] = []
+
+    @task(name="idempotent_check_exception", idempotency=IdempotencyMode.CHECK)
+    class IdempotentCheckExceptionTask:
+        def check(self, task, host, context):
+            calls.append(f"check:{host.hostname}")
+            if host.hostname == "10.0.0.1":
+                raise ValueError("inspection failed")
+            return IdempotencyCheckResult.converged(summary="already configured")
+
+        def start(self, task, host, context):
+            calls.append(f"start:{host.hostname}")
+            return TaskSuccessResult(changed=True, summary="started")
+
+    runtime = genja.Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1"),
+        "router2": Host(hostname="10.0.0.2"),
+    }).with_runner("serial")
+    result = runtime.run_task(IdempotentCheckExceptionTask)
+    data = result.to_dict()
+
+    assert calls == ["check:10.0.0.1", "check:10.0.0.2"]
+    assert result.failed_hosts == ["router1"]
+    assert result.passed_hosts == ["router2"]
+    assert (
+        "inspection failed" in data["hosts"]["router1"]["outcome"]["Failed"]["message"]
+    )
+    assert data["hosts"]["router2"]["outcome"]["Passed"]["changed"] is False
+
+
+def test_python_backed_idempotent_task_dry_run_does_not_call_check():
+    calls: list[str] = []
+
+    @task(
+        name="idempotent_dry_run",
+        idempotency=IdempotencyMode.CHECK,
+        supports_dry_run=True,
+    )
+    class IdempotentDryRunTask:
+        def check(self, task, host, context):
+            calls.append("check")
+            return IdempotencyCheckResult.converged()
+
+        def start(self, task, host, context):
+            calls.append("start")
+            return TaskSuccessResult(changed=True, summary="started")
+
+        def dry_run(self, task, host, context):
+            calls.append("dry_run")
+            return TaskSuccessResult(changed=True, summary="would change")
+
+    task_definition = genja.TaskDefinition.from_python_class(IdempotentDryRunTask)
+    result = task_definition.run_on_host(
+        Host(hostname="router1"),
+        run_options=genja.TaskRunOptions(dry_run=True),
+    )
+
+    assert calls == ["dry_run"]
+    assert result.to_dict()["hosts"]["router1"]["execution_metadata"]["dry_run"] is True
+
+
 def test_python_backed_task_dry_run_fails_unsupported_without_start():
     calls: list[str] = []
 
@@ -247,6 +488,80 @@ def test_task_decorator_requires_async_dry_run_method_when_supported():
         @task(name="missing_async_preview", supports_dry_run=True)
         class MissingAsyncDryRunTask:
             async def start_async(self, task, host, context):
+                return TaskSuccessResult(summary="started")
+
+
+def test_task_decorator_requires_idempotency_mode_enum():
+    with pytest.raises(TypeError, match="idempotency must be IdempotencyMode"):
+
+        @task(name="bad_idempotency", idempotency="check")
+        class BadIdempotencyTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="started")
+
+
+def test_task_decorator_requires_check_method_when_idempotency_enabled():
+    with pytest.raises(
+        TypeError,
+        match=(
+            "is a sync task with idempotency enabled.*"
+            r"check\(self, task, host, context\)"
+        ),
+    ):
+
+        @task(name="missing_check", idempotency=IdempotencyMode.CHECK)
+        class MissingCheckTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="started")
+
+
+def test_task_decorator_requires_async_check_method_when_idempotency_enabled():
+    with pytest.raises(
+        TypeError,
+        match=(
+            "is an async task with idempotency enabled.*"
+            r"check_async\(self, task, host, context\)"
+        ),
+    ):
+
+        @task(name="missing_async_check", idempotency=IdempotencyMode.CHECK)
+        class MissingAsyncCheckTask:
+            async def start_async(self, task, host, context):
+                return TaskSuccessResult(summary="started")
+
+
+def test_task_decorator_rejects_wrong_check_method_for_sync_task():
+    with pytest.raises(TypeError, match="sync task.*not 'check_async'"):
+
+        @task(name="wrong_sync_check", idempotency=IdempotencyMode.CHECK)
+        class WrongSyncCheckTask:
+            async def check_async(self, task, host, context):
+                return IdempotencyCheckResult.converged()
+
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="started")
+
+
+def test_task_decorator_rejects_wrong_check_method_for_async_task():
+    with pytest.raises(TypeError, match="async task.*not 'check'"):
+
+        @task(name="wrong_async_check", idempotency=IdempotencyMode.CHECK)
+        class WrongAsyncCheckTask:
+            def check(self, task, host, context):
+                return IdempotencyCheckResult.converged()
+
+            async def start_async(self, task, host, context):
+                return TaskSuccessResult(summary="started")
+
+
+def test_task_decorator_rejects_non_callable_check_method():
+    with pytest.raises(TypeError, match="attribute 'check' must be callable"):
+
+        @task(name="non_callable_check", idempotency=IdempotencyMode.CHECK)
+        class NonCallableCheckTask:
+            check = "not callable"
+
+            def start(self, task, host, context):
                 return TaskSuccessResult(summary="started")
 
 

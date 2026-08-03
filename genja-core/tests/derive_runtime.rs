@@ -3,8 +3,8 @@ use std::sync::Arc;
 use genja_core::genja_task;
 use genja_core::inventory::{BaseBuilderHost, Host};
 use genja_core::task::{
-    BlockingTaskRuntimeContext, HostTaskResult, Task, TaskExecutionMode, TaskInfo,
-    TaskRuntimeContext, TaskSuccess,
+    BlockingTaskRuntimeContext, HostTaskResult, IdempotencyCheck, IdempotencyMode, Task,
+    TaskExecutionMode, TaskInfo, TaskRuntimeContext, TaskSuccess,
 };
 use serde_json::{Value, json};
 
@@ -50,6 +50,33 @@ impl AsyncTask {
 
     fn helper(&self) -> bool {
         self.options.is_some()
+    }
+}
+
+struct IdempotentTask;
+
+#[genja_task(
+    name = "idempotent_task",
+    idempotency = IdempotencyMode::CheckAndVerify
+)]
+impl IdempotentTask {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
+    }
+
+    async fn check_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, genja_core::task::TaskError> {
+        Ok(IdempotencyCheck::ChangeRequired {
+            diff: Some("+configured".to_string()),
+            details: Some(json!({"mode": "async"})),
+        })
     }
 }
 
@@ -157,6 +184,31 @@ fn genja_task_generates_task_info_from_metadata() {
     assert_eq!(task.options(), Some(&json!({"changed": false})));
     assert!(task.helper());
     assert!(!task.supports_dry_run());
+    assert_eq!(task.idempotency_mode(), IdempotencyMode::Disabled);
+}
+
+#[test]
+fn genja_task_generates_idempotency_mode_metadata() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime should build");
+    let task = IdempotentTask;
+
+    assert_eq!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify);
+
+    let host = Host::builder().hostname("router1").build();
+    let context = TaskRuntimeContext::new(genja_core::task::TaskExecutionContext::new(0, 0), None);
+    let check = runtime
+        .block_on(task.check_async(&host, &context))
+        .expect("generated async check delegate should run");
+    assert_eq!(
+        check,
+        IdempotencyCheck::ChangeRequired {
+            diff: Some("+configured".to_string()),
+            details: Some(json!({"mode": "async"})),
+        }
+    );
 }
 
 #[test]

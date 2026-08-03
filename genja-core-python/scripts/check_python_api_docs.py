@@ -49,6 +49,8 @@ def check_all_stubs_require_docstrings() -> list[str]:
 
 DUPLICATED_TOP_LEVEL_CLASSES = [
     "HostTaskResult",
+    "IdempotencyCheckResult",
+    "IdempotencyMode",
     "TaskConnectionResolver",
     "TaskDefinition",
     "TaskRunOptions",

@@ -40,6 +40,7 @@ cargo run -p genja --example async_inventory_plugin
 | `basic_runtime.rs` | Loading a runtime from `settings.yaml` and printing host IDs. |
 | `filter_hosts.rs` | Filtering selected hosts with `filter_by_key_value(...)`. |
 | `run_task.rs` | Defining a task with `#[genja_task]`, running it, and printing JSON results. |
+| `idempotent_task.rs` | Defining a task-authored convergence check that skips already-converged hosts. |
 | `run_task_tree.rs` | Defining sub-tasks and running a task tree with depth control. |
 | `async_inventory_plugin.rs` | Implementing an async Rust inventory plugin and building a runtime from generated inventory. |
 

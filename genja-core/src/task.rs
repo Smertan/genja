@@ -633,7 +633,7 @@ use async_recursion::async_recursion;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::any::{Any, type_name};
 use std::error::Error;
 use std::fmt;
@@ -1081,6 +1081,7 @@ struct HostTaskResultHumanJson<'a> {
 #[derive(Serialize)]
 enum HostTaskOutcomeHumanJson<'a> {
     Passed(TaskSuccessHumanJson<'a>),
+    PassedWithWarnings(TaskSuccessHumanJson<'a>),
     Failed(TaskFailureHumanJson<'a>),
     Skipped(TaskSkipHumanJson<'a>),
 }
@@ -1212,6 +1213,9 @@ impl<'a> From<&'a HostTaskOutcome> for HostTaskOutcomeHumanJson<'a> {
     fn from(result: &'a HostTaskOutcome) -> Self {
         match result {
             HostTaskOutcome::Passed(success) => Self::Passed(TaskSuccessHumanJson::from(success)),
+            HostTaskOutcome::PassedWithWarnings(success) => {
+                Self::PassedWithWarnings(TaskSuccessHumanJson::from(success))
+            }
             HostTaskOutcome::Failed(failure) => Self::Failed(TaskFailureHumanJson::from(failure)),
             HostTaskOutcome::Skipped(skip) => Self::Skipped(TaskSkipHumanJson::from(skip)),
         }
@@ -1761,6 +1765,7 @@ pub struct HostTaskResult {
 #[derive(Debug, Clone, Serialize)]
 pub enum HostTaskOutcome {
     Passed(TaskSuccess),
+    PassedWithWarnings(TaskSuccess),
     Failed(TaskFailure),
     Skipped(TaskSkip),
 }
@@ -1904,6 +1909,14 @@ impl HostTaskResult {
         }
     }
 
+    /// Creates a successful `HostTaskResult` whose warnings should be surfaced prominently.
+    pub fn passed_with_warnings(result: TaskSuccess) -> Self {
+        Self {
+            outcome: HostTaskOutcome::PassedWithWarnings(result),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
+    }
+
     /// Creates a new `HostTaskResult` representing a failed task execution.
     ///
     /// This constructor wraps a `TaskFailure` instance in the `Failed` variant,
@@ -1975,7 +1988,10 @@ impl HostTaskResult {
     /// `true` if this result represents a successful task execution (`Passed` variant),
     /// `false` otherwise.
     pub fn is_passed(&self) -> bool {
-        matches!(self.outcome, HostTaskOutcome::Passed(_))
+        matches!(
+            self.outcome,
+            HostTaskOutcome::Passed(_) | HostTaskOutcome::PassedWithWarnings(_)
+        )
     }
 
     /// Checks if the task execution failed.
@@ -2026,6 +2042,7 @@ impl HostTaskResult {
     pub fn status(&self) -> &'static str {
         match self.outcome() {
             HostTaskOutcome::Passed(_) => "passed",
+            HostTaskOutcome::PassedWithWarnings(_) => "passed_with_warnings",
             HostTaskOutcome::Failed(_) => "failed",
             HostTaskOutcome::Skipped(_) => "skipped",
         }
@@ -2042,7 +2059,9 @@ impl HostTaskResult {
     /// or was skipped.
     pub fn success(&self) -> Option<&TaskSuccess> {
         match self.outcome() {
-            HostTaskOutcome::Passed(success) => Some(success),
+            HostTaskOutcome::Passed(success) | HostTaskOutcome::PassedWithWarnings(success) => {
+                Some(success)
+            }
             HostTaskOutcome::Failed(_) | HostTaskOutcome::Skipped(_) => None,
         }
     }
@@ -2059,7 +2078,9 @@ impl HostTaskResult {
     pub fn failure(&self) -> Option<&TaskFailure> {
         match self.outcome() {
             HostTaskOutcome::Failed(failure) => Some(failure),
-            HostTaskOutcome::Passed(_) | HostTaskOutcome::Skipped(_) => None,
+            HostTaskOutcome::Passed(_)
+            | HostTaskOutcome::PassedWithWarnings(_)
+            | HostTaskOutcome::Skipped(_) => None,
         }
     }
 
@@ -2075,7 +2096,9 @@ impl HostTaskResult {
     pub fn skipped_detail(&self) -> Option<&TaskSkip> {
         match self.outcome() {
             HostTaskOutcome::Skipped(skip) => Some(skip),
-            HostTaskOutcome::Passed(_) | HostTaskOutcome::Failed(_) => None,
+            HostTaskOutcome::Passed(_)
+            | HostTaskOutcome::PassedWithWarnings(_)
+            | HostTaskOutcome::Failed(_) => None,
         }
     }
 
@@ -3103,6 +3126,153 @@ pub enum TaskFailureKind {
     External,
 }
 
+/// Task-authored idempotency behavior.
+///
+/// Idempotency is declared by task authors and controls whether Genja should
+/// perform convergence checks around normal task execution. It is disabled by
+/// default so existing tasks keep their current behavior.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IdempotencyMode {
+    /// Do not perform idempotency checks.
+    #[default]
+    Disabled,
+    /// Check convergence before invoking the normal task entrypoint.
+    Check,
+    /// Check convergence before execution and verify convergence after success.
+    CheckAndVerify,
+}
+
+/// Result of an idempotency convergence check.
+///
+/// A check reports the host's current convergence state. `Converged` means the
+/// desired state is already satisfied. `ChangeRequired` means normal execution
+/// should apply the task change. Details are JSON values so they can be
+/// serialized in task results and passed through language bindings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum IdempotencyCheck {
+    /// The host is already in the desired state.
+    Converged {
+        /// Optional human-readable convergence summary.
+        summary: Option<String>,
+        /// Optional structured convergence details.
+        details: Option<Value>,
+    },
+    /// The host is not yet in the desired state.
+    ChangeRequired {
+        /// Optional diff describing the remaining change.
+        diff: Option<String>,
+        /// Optional structured diagnostic details.
+        details: Option<Value>,
+    },
+}
+
+impl IdempotencyCheck {
+    /// Create a converged check result with a human-readable summary.
+    pub fn converged(summary: impl Into<String>) -> Self {
+        Self::Converged {
+            summary: Some(summary.into()),
+            details: None,
+        }
+    }
+
+    /// Create a converged check result without a summary.
+    pub fn converged_without_summary() -> Self {
+        Self::Converged {
+            summary: None,
+            details: None,
+        }
+    }
+
+    /// Create a change-required check result with a human-readable diff.
+    pub fn change_required(diff: impl Into<String>) -> Self {
+        Self::ChangeRequired {
+            diff: Some(diff.into()),
+            details: None,
+        }
+    }
+
+    /// Create a change-required check result without a diff.
+    pub fn change_required_without_diff() -> Self {
+        Self::ChangeRequired {
+            diff: None,
+            details: None,
+        }
+    }
+
+    /// Attach structured JSON details to this check result.
+    pub fn with_details(mut self, value: Value) -> Self {
+        match &mut self {
+            Self::Converged { details, .. } | Self::ChangeRequired { details, .. } => {
+                *details = Some(value);
+            }
+        }
+        self
+    }
+}
+
+const IDEMPOTENCY_RETRY_CONVERGED_WARNING: &str = "Task converged after a failed retry attempt; previous attempts may have partially changed state or skipped finalization steps.";
+
+fn converged_check_to_host_result(
+    summary: Option<String>,
+    details: Option<Value>,
+    attempts: usize,
+) -> HostTaskResult {
+    let mut success = TaskSuccess::new().with_changed(false);
+    if let Some(summary) = summary {
+        success = success.with_summary(summary);
+    }
+
+    if attempts > 1 {
+        let mut idempotency = json!({
+            "state": "converged",
+            "converged_after_retry": true,
+            "previous_attempts_may_have_changed_state": true,
+            "previous_attempts_may_have_skipped_finalization": true,
+        });
+        if let Some(details) = details {
+            idempotency["details"] = details;
+        }
+        success = success
+            .with_warning(IDEMPOTENCY_RETRY_CONVERGED_WARNING)
+            .with_metadata(json!({
+                "idempotency": idempotency,
+            }));
+        return HostTaskResult::passed_with_warnings(success);
+    }
+
+    if let Some(details) = details {
+        success = success.with_metadata(json!({
+            "idempotency": {
+                "state": "converged",
+                "details": details,
+            }
+        }));
+    }
+    HostTaskResult::passed(success)
+}
+
+fn failed_verification_check_to_host_result(
+    diff: Option<String>,
+    details: Option<Value>,
+) -> HostTaskResult {
+    let failure_details = json!({
+        "application_completed": true,
+        "configuration_may_have_changed": true,
+        "remaining_diff": diff,
+        "idempotency": {
+            "state": "change_required",
+            "details": details,
+        },
+    });
+    HostTaskResult::failed(
+        TaskFailure::new(crate::GenjaError::Message(
+            "Configuration did not converge after application".to_string(),
+        ))
+        .with_kind(TaskFailureKind::Validation)
+        .with_details(failure_details),
+    )
+}
+
 /// Task metadata required for execution.
 ///
 /// Task authoring macros such as `#[genja_task(...)]` implement this trait
@@ -3141,6 +3311,11 @@ pub trait TaskInfo {
     /// Return whether this task declares support for dry-run execution.
     fn supports_dry_run(&self) -> bool {
         false
+    }
+
+    /// Return the task-authored idempotency mode.
+    fn idempotency_mode(&self) -> IdempotencyMode {
+        IdempotencyMode::Disabled
     }
 }
 
@@ -3243,6 +3418,38 @@ pub trait Task: TaskInfo + Send + Sync {
         let _ = (host, context);
         Err(TaskError::new(std::io::Error::other(
             "async start_async() not implemented",
+        )))
+    }
+
+    /// Check current convergence state for a blocking idempotent task.
+    ///
+    /// Implement this for blocking tasks whose [`TaskInfo::idempotency_mode`]
+    /// returns [`IdempotencyMode::Check`] or
+    /// [`IdempotencyMode::CheckAndVerify`].
+    fn check(
+        &self,
+        host: &Host,
+        context: &BlockingTaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "blocking check() not implemented",
+        )))
+    }
+
+    /// Check current convergence state for an async idempotent task.
+    ///
+    /// Implement this for async tasks whose [`TaskInfo::idempotency_mode`]
+    /// returns [`IdempotencyMode::Check`] or
+    /// [`IdempotencyMode::CheckAndVerify`].
+    async fn check_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "async check_async() not implemented",
         )))
     }
 
@@ -4178,7 +4385,51 @@ impl TaskDefinition {
                     if run_options.dry_run() {
                         task.dry_run_async(host, &runtime_context).await
                     } else {
-                        task.start_async(host, &runtime_context).await
+                        match task.idempotency_mode() {
+                            IdempotencyMode::Disabled => {
+                                task.start_async(host, &runtime_context).await
+                            }
+                            IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                                match task.check_async(host, &runtime_context).await {
+                                    Ok(IdempotencyCheck::Converged { summary, details }) => Ok(
+                                        converged_check_to_host_result(summary, details, attempts),
+                                    ),
+                                    Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                        match task.start_async(host, &runtime_context).await {
+                                            Ok(host_result) => {
+                                                if matches!(
+                                                    task.idempotency_mode(),
+                                                    IdempotencyMode::CheckAndVerify
+                                                ) && host_result.is_passed()
+                                                {
+                                                    match task
+                                                        .check_async(host, &runtime_context)
+                                                        .await
+                                                    {
+                                                        Ok(IdempotencyCheck::Converged {
+                                                            ..
+                                                        }) => Ok(host_result),
+                                                        Ok(IdempotencyCheck::ChangeRequired {
+                                                            diff,
+                                                            details,
+                                                        }) => {
+                                                            Ok(failed_verification_check_to_host_result(
+                                                                diff, details,
+                                                            ))
+                                                        }
+                                                        Err(error) => Err(error),
+                                                    }
+                                                } else {
+                                                    Ok(host_result)
+                                                }
+                                            }
+                                            Err(error) => Err(error),
+                                        }
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            }
+                        }
                     }
                 }
                 TaskExecutionMode::Blocking => {
@@ -4196,7 +4447,45 @@ impl TaskDefinition {
                         if dry_run {
                             task.dry_run(&host, &blocking_context)
                         } else {
-                            task.start(&host, &blocking_context)
+                            match task.idempotency_mode() {
+                                IdempotencyMode::Disabled => task.start(&host, &blocking_context),
+                                IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                                    match task.check(&host, &blocking_context) {
+                                        Ok(IdempotencyCheck::Converged { summary, details }) => {
+                                            Ok(converged_check_to_host_result(
+                                                summary, details, attempts,
+                                            ))
+                                        }
+                                        Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                            let host_result =
+                                                task.start(&host, &blocking_context)?;
+                                            if matches!(
+                                                task.idempotency_mode(),
+                                                IdempotencyMode::CheckAndVerify
+                                            ) && host_result.is_passed()
+                                            {
+                                                match task.check(&host, &blocking_context) {
+                                                    Ok(IdempotencyCheck::Converged { .. }) => {
+                                                        Ok(host_result)
+                                                    }
+                                                    Ok(IdempotencyCheck::ChangeRequired {
+                                                        diff,
+                                                        details,
+                                                    }) => Ok(
+                                                        failed_verification_check_to_host_result(
+                                                            diff, details,
+                                                        ),
+                                                    ),
+                                                    Err(error) => Err(error),
+                                                }
+                                            } else {
+                                                Ok(host_result)
+                                            }
+                                        }
+                                        Err(error) => Err(error),
+                                    }
+                                }
+                            }
                         }
                     })
                     .await
@@ -4261,13 +4550,7 @@ impl TaskDefinition {
             );
         }
 
-        let status = if host_result.is_passed() {
-            "passed"
-        } else if host_result.is_failed() {
-            "failed"
-        } else {
-            "skipped"
-        };
+        let status = host_result.status();
 
         let retry_exhausted = retry_policy.retry_exhausted(&host_result, attempts);
         let mut host_result =
@@ -4422,6 +4705,10 @@ impl TaskInfo for TaskDefinition {
     fn supports_dry_run(&self) -> bool {
         self.inner.supports_dry_run()
     }
+
+    fn idempotency_mode(&self) -> IdempotencyMode {
+        self.inner.idempotency_mode()
+    }
 }
 
 /// A collection of task definitions that can be executed together.
@@ -4557,6 +4844,8 @@ mod tests {
 
     struct DryRunInfoTask;
 
+    struct IdempotencyInfoTask;
+
     struct FlakyTask {
         name: &'static str,
         attempts: Arc<AtomicUsize>,
@@ -4580,6 +4869,31 @@ mod tests {
         attempts: Arc<AtomicUsize>,
         current_attempts: Arc<Mutex<Vec<usize>>>,
         succeed_on_attempt: usize,
+    }
+
+    struct IdempotentAsyncRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+        check_result: IdempotencyCheck,
+    }
+
+    struct IdempotentBlockingRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+        check_result: IdempotencyCheck,
+    }
+
+    struct DryRunIdempotentRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        dry_run_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+    }
+
+    struct CheckAndVerifyAsyncRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+        check_results: Arc<Mutex<Vec<IdempotencyCheck>>>,
+        start_result: HostTaskResult,
     }
 
     #[derive(Debug)]
@@ -4671,6 +4985,202 @@ mod tests {
 
         fn supports_dry_run(&self) -> bool {
             true
+        }
+    }
+
+    impl TaskInfo for IdempotencyInfoTask {
+        fn name(&self) -> &str {
+            "idempotency-info"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::CheckAndVerify
+        }
+    }
+
+    impl TaskInfo for IdempotentAsyncRuntimeTask {
+        fn name(&self) -> &str {
+            "idempotent-async-runtime"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::Check
+        }
+    }
+
+    #[async_trait]
+    impl Task for IdempotentAsyncRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied"),
+            ))
+        }
+
+        async fn check_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.check_result.clone())
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    impl TaskInfo for IdempotentBlockingRuntimeTask {
+        fn name(&self) -> &str {
+            "idempotent-blocking-runtime"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::Check
+        }
+    }
+
+    #[async_trait]
+    impl Task for IdempotentBlockingRuntimeTask {
+        fn start(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied"),
+            ))
+        }
+
+        fn check(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.check_result.clone())
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Blocking
+        }
+    }
+
+    impl TaskInfo for DryRunIdempotentRuntimeTask {
+        fn name(&self) -> &str {
+            "dry-run-idempotent-runtime"
+        }
+
+        fn supports_dry_run(&self) -> bool {
+            true
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::Check
+        }
+    }
+
+    impl TaskInfo for CheckAndVerifyAsyncRuntimeTask {
+        fn name(&self) -> &str {
+            "check-and-verify-async-runtime"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::CheckAndVerify
+        }
+    }
+
+    #[async_trait]
+    impl Task for CheckAndVerifyAsyncRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.start_result.clone())
+        }
+
+        async fn check_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            let mut check_results = self
+                .check_results
+                .lock()
+                .expect("check results lock should not be poisoned");
+            Ok(check_results.remove(0))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for DryRunIdempotentRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_changed(true),
+            ))
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.dry_run_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary(format!("dry_run={}", context.dry_run())),
+            ))
+        }
+
+        async fn check_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(IdempotencyCheck::converged("already converged"))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for IdempotencyInfoTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -5181,6 +5691,283 @@ mod tests {
             .expect("host result should be skipped");
         assert_eq!(skip.reason(), Some("filtered"));
         assert_eq!(skip.message(), None);
+    }
+
+    #[test]
+    fn idempotent_async_converged_check_skips_start_and_passes_unchanged() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(IdempotentAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_result: IdempotencyCheck::converged("already configured")
+                .with_details(json!({"current": "desired"})),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("idempotent-async-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("converged check should pass");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host should pass");
+        assert_eq!(host_result.status(), "passed");
+        let success = host_result.success().expect("host should pass");
+        assert!(!success.changed());
+        assert_eq!(success.summary(), Some("already configured"));
+        assert_eq!(
+            success.metadata(),
+            Some(&json!({
+                "idempotency": {
+                    "state": "converged",
+                    "details": {
+                        "current": "desired",
+                    }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn idempotent_blocking_change_required_invokes_start_once() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(IdempotentBlockingRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_result: IdempotencyCheck::change_required("+configured")
+                .with_details(json!({"desired": "configured"})),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("idempotent-blocking-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("change-required check should invoke start");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let success = results
+            .host_result("router1")
+            .and_then(HostTaskResult::success)
+            .expect("host should pass");
+        assert!(success.changed());
+        assert_eq!(success.summary(), Some("applied"));
+    }
+
+    #[test]
+    fn dry_run_does_not_invoke_idempotency_check() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let dry_run_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(DryRunIdempotentRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            dry_run_calls: Arc::clone(&dry_run_calls),
+            start_calls: Arc::clone(&start_calls),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("dry-run-idempotent-runtime");
+
+        run_async(task.start_with_options(
+            "router1",
+            &host,
+            &mut results,
+            TaskRunOptions::new(0).with_dry_run(true),
+        ))
+        .expect("dry-run should execute without idempotency check");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(dry_run_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.execution_metadata().dry_run());
+        let success = host_result.success().expect("host should pass");
+        assert!(success.changed());
+        assert_eq!(success.summary(), Some("dry_run=true"));
+    }
+
+    #[test]
+    fn check_and_verify_preserves_successful_application_result_after_convergence() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(CheckAndVerifyAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::converged("verified")
+                    .with_details(json!({"current": "configured"})),
+            ])),
+            start_result: HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied")
+                    .with_diff("+configured"),
+            ),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-async-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("check-and-verify should preserve successful application");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let success = results
+            .host_result("router1")
+            .and_then(HostTaskResult::success)
+            .expect("host should pass");
+        assert!(success.changed());
+        assert_eq!(success.summary(), Some("applied"));
+        assert_eq!(success.diff(), Some("+configured"));
+    }
+
+    #[test]
+    fn check_and_verify_change_required_post_check_returns_validation_failure() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(CheckAndVerifyAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::change_required("+remaining")
+                    .with_details(json!({"desired": "remaining"})),
+            ])),
+            start_result: HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied"),
+            ),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-async-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("validation failure should be captured as a host result");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("host should fail validation");
+        assert!(matches!(failure.kind(), TaskFailureKind::Validation));
+        assert_eq!(
+            failure.message(),
+            "Configuration did not converge after application"
+        );
+        assert_eq!(
+            failure.details(),
+            Some(&json!({
+                "application_completed": true,
+                "configuration_may_have_changed": true,
+                "remaining_diff": "+remaining",
+                "idempotency": {
+                    "state": "change_required",
+                    "details": {
+                        "desired": "remaining",
+                    },
+                },
+            }))
+        );
+    }
+
+    #[test]
+    fn check_and_verify_does_not_verify_after_failed_application_result() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(CheckAndVerifyAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::converged("would not be called"),
+            ])),
+            start_result: HostTaskResult::failed(
+                TaskFailure::new(crate::GenjaError::Message("apply failed".to_string()))
+                    .with_kind(TaskFailureKind::Command),
+            ),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-async-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("application failure should be captured");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("host should preserve application failure");
+        assert!(matches!(failure.kind(), TaskFailureKind::Command));
+        assert_eq!(failure.message(), "apply failed");
+    }
+
+    #[test]
+    fn retry_converged_pre_check_returns_passed_with_warnings() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(CheckAndVerifyAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::converged("already configured after retry")
+                    .with_details(json!({"current": "configured"})),
+            ])),
+            start_result: HostTaskResult::failed(
+                TaskFailure::new(crate::GenjaError::Message("apply failed".to_string()))
+                    .with_kind(TaskFailureKind::Command)
+                    .with_retryable(true),
+            ),
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(RetryConfig::builder().allow(true).max_attempts(2).build())
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-async-runtime");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("retry should finish with a warning-bearing pass");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let host_result = results.host_result("router1").expect("host result");
+        assert_eq!(host_result.status(), "passed_with_warnings");
+        assert!(matches!(
+            host_result.outcome(),
+            HostTaskOutcome::PassedWithWarnings(_)
+        ));
+        assert_eq!(host_result.execution_metadata().attempts(), 2);
+        assert!(host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+        let success = host_result.success().expect("host should pass");
+        assert!(!success.changed());
+        assert_eq!(success.summary(), Some("already configured after retry"));
+        assert_eq!(success.warnings(), [IDEMPOTENCY_RETRY_CONVERGED_WARNING]);
+        assert_eq!(
+            success.metadata(),
+            Some(&json!({
+                "idempotency": {
+                    "state": "converged",
+                    "details": {
+                        "current": "configured",
+                    },
+                    "converged_after_retry": true,
+                    "previous_attempts_may_have_changed_state": true,
+                    "previous_attempts_may_have_skipped_finalization": true,
+                },
+            }))
+        );
     }
 
     #[test]
@@ -5757,6 +6544,43 @@ mod tests {
     }
 
     #[test]
+    fn passed_with_warnings_is_successful_and_serializes_distinct_outcome() {
+        let result = HostTaskResult::passed_with_warnings(
+            TaskSuccess::new()
+                .with_changed(false)
+                .with_summary("state appears converged")
+                .with_warning("previous attempt may have skipped finalization"),
+        );
+
+        assert!(result.is_passed());
+        assert!(!result.is_failed());
+        assert_eq!(result.status(), "passed_with_warnings");
+        assert!(matches!(
+            result.outcome(),
+            HostTaskOutcome::PassedWithWarnings(_)
+        ));
+        assert_eq!(
+            result
+                .success()
+                .expect("warning success payload should be accessible")
+                .warnings(),
+            ["previous attempt may have skipped finalization"]
+        );
+
+        let mut results = TaskResults::new("warning-success");
+        results.insert_host_result("router1", result);
+
+        assert_eq!(results.passed_hosts(), vec![&NatString::from("router1")]);
+        assert_eq!(results.host_summary().passed(), 1);
+
+        let json = results
+            .to_json_string()
+            .expect("human json should serialize passed-with-warnings");
+        assert!(json.contains("\"PassedWithWarnings\""));
+        assert!(json.contains("previous attempt may have skipped finalization"));
+    }
+
+    #[test]
     fn task_skip_and_host_task_result_expose_skip_metadata() {
         let skipped = HostTaskResult {
             outcome: HostTaskOutcome::Skipped(
@@ -6052,10 +6876,63 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_mode_defaults_to_disabled() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+
+        assert_eq!(task.idempotency_mode(), IdempotencyMode::Disabled);
+    }
+
+    #[test]
     fn task_definition_delegates_dry_run_support() {
         let task = TaskDefinition::new(DryRunInfoTask);
 
         assert!(task.supports_dry_run());
+    }
+
+    #[test]
+    fn task_definition_delegates_idempotency_mode() {
+        let task = TaskDefinition::new(IdempotencyInfoTask);
+
+        assert_eq!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify);
+    }
+
+    #[test]
+    fn idempotency_check_serializes_convergence_states() {
+        let converged = IdempotencyCheck::converged("already configured")
+            .with_details(json!({"current": "ntp server 192.0.2.10"}));
+        let converged_json =
+            serde_json::to_value(&converged).expect("converged check should serialize");
+        assert_eq!(
+            converged_json,
+            json!({
+                "Converged": {
+                    "summary": "already configured",
+                    "details": {
+                        "current": "ntp server 192.0.2.10"
+                    }
+                }
+            })
+        );
+
+        let change_required = IdempotencyCheck::change_required("+ntp server 192.0.2.10")
+            .with_details(json!({"desired": "ntp server 192.0.2.10"}));
+        let change_required_json =
+            serde_json::to_value(&change_required).expect("change check should serialize");
+        assert_eq!(
+            change_required_json,
+            json!({
+                "ChangeRequired": {
+                    "diff": "+ntp server 192.0.2.10",
+                    "details": {
+                        "desired": "ntp server 192.0.2.10"
+                    }
+                }
+            })
+        );
     }
 
     #[test]
@@ -6090,6 +6967,43 @@ mod tests {
                 .dry_run(&host, &blocking_context)
                 .expect_err("default blocking dry-run should fail");
             assert!(error.to_string().contains("dry_run() not implemented"));
+        });
+    }
+
+    #[test]
+    fn task_default_idempotency_check_methods_report_not_implemented() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+        let host = Host::builder().hostname("router1").build();
+
+        run_async(async {
+            let async_context = TaskRuntimeContext::new(TaskExecutionContext::new(0, 1), None);
+            let error = task
+                .check_async(&host, &async_context)
+                .await
+                .expect_err("default async check should fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("async check_async() not implemented")
+            );
+
+            let blocking_context = BlockingTaskRuntimeContext::new(
+                TaskExecutionContext::new(0, 1),
+                None,
+                Handle::current(),
+            );
+            let error = task
+                .check(&host, &blocking_context)
+                .expect_err("default blocking check should fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("blocking check() not implemented")
+            );
         });
     }
 

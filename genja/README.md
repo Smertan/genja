@@ -198,6 +198,13 @@ assert!(results.host_result("router1").unwrap().execution_metadata().dry_run());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
+Tasks may also declare idempotency checks with `IdempotencyMode::Check` or
+`IdempotencyMode::CheckAndVerify`. When a pre-check reports convergence, Genja
+records a passed host result with `changed=false` and does not invoke the normal
+task entrypoint. `CheckAndVerify` reruns the same check after a passed
+application result and records a validation failure if the host is still not
+converged.
+
 For async Rust applications, use `run_task_async(...)` instead of `run_task(...)`:
 
 ```rust

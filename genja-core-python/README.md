@@ -125,6 +125,47 @@ Python task authoring rules:
 - Define `async def start_async(...)` for async tasks.
 - Define exactly one of those methods on a `@task(...)` class.
 - Use `sub_tasks=[ChildTask, ...]` to declare child tasks.
+- Use `supports_dry_run=True` with `dry_run(...)` or `dry_run_async(...)`
+  when operators should be able to preview a task.
+- Use `idempotency=IdempotencyMode.CHECK` or
+  `idempotency=IdempotencyMode.CHECK_AND_VERIFY` with `check(...)` or
+  `check_async(...)` when the task can inspect whether a host is already in
+  the desired state.
+
+```python
+from genja.task import (
+    Host,
+    IdempotencyCheckResult,
+    IdempotencyMode,
+    TaskInfo,
+    TaskRuntimeContext,
+    TaskSuccessResult,
+    task,
+)
+
+
+@task(name="ensure_ntp", idempotency=IdempotencyMode.CHECK)
+class EnsureNtp:
+    def check(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> IdempotencyCheckResult:
+        return IdempotencyCheckResult.change_required(diff="+ntp server 192.0.2.10")
+
+    def start(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult:
+        return TaskSuccessResult(changed=True, summary="configured NTP")
+```
+
+Dry-run dispatch does not automatically run idempotency checks. Task authors
+who want shared inspection behavior can call private helper code from both
+their dry-run hook and check hook.
 
 ## Logging
 
