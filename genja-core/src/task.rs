@@ -757,6 +757,78 @@ impl RetryConfigBuilder {
     }
 }
 
+/// Optional task metadata for verifying that a fresh management session can be
+/// established after a task changes a host.
+///
+/// Session verification is independent from task retry and idempotency. The
+/// absence of this configuration means session verification is disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionVerificationConfig {
+    attempts: usize,
+    delay_ms: u64,
+}
+
+impl Default for SessionVerificationConfig {
+    fn default() -> Self {
+        Self {
+            attempts: 1,
+            delay_ms: 0,
+        }
+    }
+}
+
+impl SessionVerificationConfig {
+    /// Create session verification metadata from explicit field values.
+    pub const fn new(attempts: usize, delay_ms: u64) -> Self {
+        Self { attempts, delay_ms }
+    }
+
+    /// Return the configured total number of new-session establishment attempts.
+    pub fn attempts(&self) -> usize {
+        self.attempts
+    }
+
+    /// Return the fixed delay between session establishment attempts in milliseconds.
+    pub fn delay_ms(&self) -> u64 {
+        self.delay_ms
+    }
+}
+
+/// Host-level execution metadata for post-change session verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SessionVerificationMetadata {
+    requested: bool,
+    attempts: usize,
+    new_session_established: bool,
+}
+
+impl SessionVerificationMetadata {
+    /// Create session verification execution metadata.
+    pub const fn new(requested: bool, attempts: usize, new_session_established: bool) -> Self {
+        Self {
+            requested,
+            attempts,
+            new_session_established,
+        }
+    }
+
+    /// Return whether session verification was requested for the task.
+    pub fn requested(&self) -> bool {
+        self.requested
+    }
+
+    /// Return how many session establishment attempts were made.
+    pub fn attempts(&self) -> usize {
+        self.attempts
+    }
+
+    /// Return whether a fresh session was successfully established.
+    pub fn new_session_established(&self) -> bool {
+        self.new_session_established
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct TaskRetryDefaults {
     allow: bool,
@@ -1095,6 +1167,7 @@ struct HostExecutionMetadataHumanJson {
     retried: bool,
     retry_exhausted: bool,
     dry_run: bool,
+    session_verification: Option<SessionVerificationMetadata>,
 }
 
 #[derive(Serialize)]
@@ -1232,6 +1305,7 @@ impl From<&HostExecutionMetadata> for HostExecutionMetadataHumanJson {
             retried: metadata.retried(),
             retry_exhausted: metadata.retry_exhausted(),
             dry_run: metadata.dry_run(),
+            session_verification: metadata.session_verification(),
         }
     }
 }
@@ -1780,6 +1854,7 @@ pub struct HostExecutionMetadata {
     retried: bool,
     retry_exhausted: bool,
     dry_run: bool,
+    session_verification: Option<SessionVerificationMetadata>,
 }
 
 impl Default for HostExecutionMetadata {
@@ -1793,6 +1868,7 @@ impl Default for HostExecutionMetadata {
             retried: false,
             retry_exhausted: false,
             dry_run: false,
+            session_verification: None,
         }
     }
 }
@@ -1838,6 +1914,14 @@ impl HostExecutionMetadata {
         self
     }
 
+    pub fn with_session_verification(
+        mut self,
+        session_verification: SessionVerificationMetadata,
+    ) -> Self {
+        self.session_verification = Some(session_verification);
+        self
+    }
+
     pub fn started_at(&self) -> Option<SystemTime> {
         self.started_at
     }
@@ -1873,6 +1957,10 @@ impl HostExecutionMetadata {
 
     pub fn dry_run(&self) -> bool {
         self.dry_run
+    }
+
+    pub fn session_verification(&self) -> Option<SessionVerificationMetadata> {
+        self.session_verification
     }
 
     pub fn started_at_display(&self) -> Option<String> {
@@ -3308,6 +3396,11 @@ pub trait TaskInfo {
         None
     }
 
+    /// Return task-specific post-change session verification metadata, if set.
+    fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+        None
+    }
+
     /// Return whether this task declares support for dry-run execution.
     fn supports_dry_run(&self) -> bool {
         false
@@ -4702,6 +4795,10 @@ impl TaskInfo for TaskDefinition {
         self.inner.retry_config()
     }
 
+    fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+        self.inner.session_verification_config()
+    }
+
     fn supports_dry_run(&self) -> bool {
         self.inner.supports_dry_run()
     }
@@ -4845,6 +4942,10 @@ mod tests {
     struct DryRunInfoTask;
 
     struct IdempotencyInfoTask;
+
+    struct SessionVerificationInfoTask {
+        config: SessionVerificationConfig,
+    }
 
     struct FlakyTask {
         name: &'static str,
@@ -4995,6 +5096,31 @@ mod tests {
 
         fn idempotency_mode(&self) -> IdempotencyMode {
             IdempotencyMode::CheckAndVerify
+        }
+    }
+
+    impl TaskInfo for SessionVerificationInfoTask {
+        fn name(&self) -> &str {
+            "session-verification-info"
+        }
+
+        fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+            Some(&self.config)
+        }
+    }
+
+    #[async_trait]
+    impl Task for SessionVerificationInfoTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -6769,11 +6895,11 @@ mod tests {
 
         assert!(json.contains("\"router1\":{\"outcome\":{\"Passed\":{"));
         assert!(json.contains("\"summary\":\"ok\""));
-        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"2ms\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false}"));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"2ms\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false,\"session_verification\":null}"));
         assert!(json.contains("\"router2\":{\"outcome\":{\"Failed\":"));
-        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"250us\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false}"));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"250us\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false,\"session_verification\":null}"));
         assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\""));
-        assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\",\"message\":null}},\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false}}"));
+        assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\",\"message\":null}},\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false,\"session_verification\":null}}"));
         assert!(!json.contains("\"Passed\":{\"result\":null,\"changed\":false,\"diff\":null,\"summary\":\"ok\",\"warnings\":[],\"messages\":[],\"metadata\":null,\"started_at\""));
         assert!(!json.contains("\"Failed\":{\"kind\":\"Internal\",\"error_type\":\"genja_core::task::tests::TestTaskFailureError\",\"message\":\"task failure test error\",\"retryable\":false,\"details\":null,\"warnings\":[],\"messages\":[],\"started_at\""));
         assert!(!json.contains("\"duration_ns\""));
@@ -6802,6 +6928,37 @@ mod tests {
             .to_json_string()
             .expect("human json should serialize dry-run metadata");
         assert!(human_json.contains("\"dry_run\":true"));
+    }
+
+    #[test]
+    fn host_execution_metadata_tracks_session_verification() {
+        let metadata = HostExecutionMetadata::new();
+        assert_eq!(metadata.session_verification(), None);
+
+        let session_verification = SessionVerificationMetadata::new(true, 2, true);
+        let metadata = metadata.with_session_verification(session_verification);
+        assert_eq!(metadata.session_verification(), Some(session_verification));
+        assert!(session_verification.requested());
+        assert_eq!(session_verification.attempts(), 2);
+        assert!(session_verification.new_session_established());
+
+        let mut results = TaskResults::new("verify-session");
+        let mut passed = HostTaskResult::passed(TaskSuccess::new().with_changed(true));
+        *passed.execution_metadata_mut() = passed
+            .execution_metadata()
+            .clone()
+            .with_session_verification(session_verification);
+        results.insert_host_result("router1", passed);
+
+        let raw_json = results
+            .to_raw_json_string()
+            .expect("raw json should serialize session verification metadata");
+        assert!(raw_json.contains("\"session_verification\":{\"requested\":true,\"attempts\":2,\"new_session_established\":true}"));
+
+        let human_json = results
+            .to_json_string()
+            .expect("human json should serialize session verification metadata");
+        assert!(human_json.contains("\"session_verification\":{\"requested\":true,\"attempts\":2,\"new_session_established\":true}"));
     }
 
     #[test]
@@ -6887,6 +7044,25 @@ mod tests {
     }
 
     #[test]
+    fn session_verification_config_defaults_to_single_immediate_attempt() {
+        let config = SessionVerificationConfig::default();
+
+        assert_eq!(config.attempts(), 1);
+        assert_eq!(config.delay_ms(), 0);
+    }
+
+    #[test]
+    fn task_info_defaults_to_no_session_verification_config() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+
+        assert!(task.session_verification_config().is_none());
+    }
+
+    #[test]
     fn task_definition_delegates_dry_run_support() {
         let task = TaskDefinition::new(DryRunInfoTask);
 
@@ -6898,6 +7074,14 @@ mod tests {
         let task = TaskDefinition::new(IdempotencyInfoTask);
 
         assert_eq!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify);
+    }
+
+    #[test]
+    fn task_definition_delegates_session_verification_config() {
+        let config = SessionVerificationConfig::new(3, 5_000);
+        let task = TaskDefinition::new(SessionVerificationInfoTask { config });
+
+        assert_eq!(task.session_verification_config(), Some(&config));
     }
 
     #[test]
