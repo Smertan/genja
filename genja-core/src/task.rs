@@ -765,14 +765,14 @@ impl RetryConfigBuilder {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionVerificationConfig {
-    attempts: usize,
+    max_attempts: usize,
     delay_ms: u64,
 }
 
 impl Default for SessionVerificationConfig {
     fn default() -> Self {
         Self {
-            attempts: 1,
+            max_attempts: 1,
             delay_ms: 0,
         }
     }
@@ -780,13 +780,16 @@ impl Default for SessionVerificationConfig {
 
 impl SessionVerificationConfig {
     /// Create session verification metadata from explicit field values.
-    pub const fn new(attempts: usize, delay_ms: u64) -> Self {
-        Self { attempts, delay_ms }
+    pub const fn new(max_attempts: usize, delay_ms: u64) -> Self {
+        Self {
+            max_attempts,
+            delay_ms,
+        }
     }
 
-    /// Return the configured total number of new-session establishment attempts.
-    pub fn attempts(&self) -> usize {
-        self.attempts
+    /// Return the configured maximum total new-session establishment attempts.
+    pub fn max_attempts(&self) -> usize {
+        self.max_attempts
     }
 
     /// Return the fixed delay between session establishment attempts in milliseconds.
@@ -7044,10 +7047,10 @@ mod tests {
     }
 
     #[test]
-    fn session_verification_config_defaults_to_single_immediate_attempt() {
+    fn session_verification_config_defaults_to_single_immediate_max_attempt() {
         let config = SessionVerificationConfig::default();
 
-        assert_eq!(config.attempts(), 1);
+        assert_eq!(config.max_attempts(), 1);
         assert_eq!(config.delay_ms(), 0);
     }
 

@@ -33,6 +33,10 @@ struct AsyncTask {
         allow = true,
         max_attempts = 3,
         delay_ms = 500
+    ),
+    session_verification(
+        max_attempts = 2,
+        delay_ms = 1000
     )
 )]
 impl AsyncTask {
@@ -181,6 +185,11 @@ fn genja_task_generates_task_info_from_metadata() {
     assert_eq!(retry_config.allow(), Some(true));
     assert_eq!(retry_config.max_attempts(), Some(3));
     assert_eq!(retry_config.delay_ms(), Some(500));
+    let session_verification_config = task
+        .session_verification_config()
+        .expect("session verification config should be generated");
+    assert_eq!(session_verification_config.max_attempts(), 2);
+    assert_eq!(session_verification_config.delay_ms(), 1000);
     assert_eq!(task.options(), Some(&json!({"changed": false})));
     assert!(task.helper());
     assert!(!task.supports_dry_run());

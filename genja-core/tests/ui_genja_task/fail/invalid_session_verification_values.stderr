@@ -1,0 +1,19 @@
+error: `max_attempts` must be greater than 0
+  --> tests/ui_genja_task/fail/invalid_session_verification_values.rs:10:41
+   |
+10 |     session_verification(max_attempts = 0)
+   |                                         ^
+
+warning: unused import: `genja_core::inventory::Host`
+ --> tests/ui_genja_task/fail/invalid_session_verification_values.rs:2:5
+  |
+2 | use genja_core::inventory::Host;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `HostTaskResult`, `TaskRuntimeContext`, and `TaskSuccess`
+ --> tests/ui_genja_task/fail/invalid_session_verification_values.rs:3:24
+  |
+3 | use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+  |                        ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^

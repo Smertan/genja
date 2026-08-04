@@ -25,6 +25,7 @@ Changed packages:
 - Added Python dry-run task support with `@genja.task(..., supports_dry_run=True)`, `dry_run` / `dry_run_async` task methods, `TaskRunOptions` via `run_options=...`, and `TaskRuntimeContext.dry_run`. Refs: #80
 - Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
 - Added Rust `Genja::from_settings_async(...)` plus Python `Genja.from_settings_async(...)` and `Genja.from_settings_file_async(...)` for strict async inventory loading. Refs: #86
+- Added Rust `#[genja_task(...)]` session verification metadata with `session_verification(max_attempts = ..., delay_ms = ...)`.
 - Added core Rust session verification configuration and host execution metadata APIs for future post-change new-session verification.
 
 ### Changed
