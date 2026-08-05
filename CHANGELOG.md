@@ -27,6 +27,7 @@ Changed packages:
 - Added Rust `Genja::from_settings_async(...)` plus Python `Genja.from_settings_async(...)` and `Genja.from_settings_file_async(...)` for strict async inventory loading. Refs: #86
 - Added Rust `#[genja_task(...)]` session verification metadata with `session_verification(max_attempts = ..., delay_ms = ...)`.
 - Added core Rust session verification configuration and host execution metadata APIs for future post-change new-session verification.
+- Added async-safe Rust connection replacement support in `ConnectionManager` for future post-change session verification.
 
 ### Changed
 
