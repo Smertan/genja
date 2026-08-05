@@ -61,7 +61,9 @@
 pub use ::async_trait::async_trait;
 pub use genja_core;
 pub use genja_core::GenjaError;
-use genja_core::inventory::{Host, Hosts, Inventory};
+use genja_core::inventory::{
+    Connection, ConnectionKey, Host, Hosts, Inventory, ResolvedConnectionParams,
+};
 use genja_core::settings::RunnerConfig;
 pub use genja_core::task::TaskRunOptions;
 use genja_core::task::{
@@ -126,19 +128,24 @@ struct RuntimeTaskConnectionResolver {
 }
 
 impl RuntimeTaskConnectionResolver {
+    /// Create a resolver backed by the runtime inventory.
+    ///
+    /// The resolver uses the inventory for both connection parameter resolution and
+    /// access to the shared connection manager cache.
     fn new(inventory: Arc<Inventory>) -> Self {
         Self { inventory }
     }
-}
 
-#[async_trait]
-impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
-    async fn resolve_task_connection(
+    /// Resolve the task's connection key and current inventory parameters.
+    ///
+    /// Both normal connection opening and post-change connection replacement use this
+    /// helper so replacement re-reads the host's resolved connection parameters before
+    /// creating the new connection instance.
+    fn task_connection_key_and_params(
         &self,
         task: &dyn Task,
         hostname: &str,
-    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn genja_core::inventory::Connection>>>, GenjaError>
-    {
+    ) -> Result<Option<(ConnectionKey, ResolvedConnectionParams)>, GenjaError> {
         let Some(key) = task.get_connection_key(hostname) else {
             return Ok(None);
         };
@@ -153,9 +160,49 @@ impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
                 ))
             })?;
 
+        Ok(Some((key, params)))
+    }
+}
+
+#[async_trait]
+impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
+    /// Open or retrieve the task connection through the inventory connection manager.
+    ///
+    /// This preserves the normal runtime behavior of caching connections by
+    /// `ConnectionKey` while ensuring the returned connection has been opened.
+    async fn resolve_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, GenjaError> {
+        let Some((key, params)) = self.task_connection_key_and_params(task, hostname)? else {
+            return Ok(None);
+        };
+
         self.inventory
             .connections()
             .open_connection(&key, &params)
+            .await
+            .map_err(GenjaError::Message)
+    }
+
+    /// Replace the task connection through the inventory connection manager.
+    ///
+    /// This path is used by session verification after a changed task result. It
+    /// delegates cache eviction, old-connection close, new instance creation, and
+    /// authentication to `ConnectionManager::replace_connection`.
+    async fn replace_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, GenjaError> {
+        let Some((key, params)) = self.task_connection_key_and_params(task, hostname)? else {
+            return Ok(None);
+        };
+
+        self.inventory
+            .connections()
+            .replace_connection(&key, &params)
             .await
             .map_err(GenjaError::Message)
     }
@@ -1244,7 +1291,7 @@ impl Default for Genja {
 
 #[cfg(test)]
 mod tests {
-    use super::{Genja, GenjaError, TaskRunOptions, genja_task};
+    use super::{Genja, GenjaError, RuntimeTaskConnectionResolver, TaskRunOptions, genja_task};
     use async_trait::async_trait;
     use genja_core::Settings;
     use genja_core::inventory::{
@@ -1254,8 +1301,9 @@ mod tests {
     use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig, SSHConfig};
     use genja_core::task::RetryConfig;
     use genja_core::task::{
-        BlockingTaskRuntimeContext, HostTaskResult, Task, TaskDefinition, TaskError,
-        TaskExecutionMode, TaskFailure, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
+        BlockingTaskRuntimeContext, HostTaskResult, Task, TaskConnectionResolver, TaskDefinition,
+        TaskError, TaskExecutionMode, TaskFailure, TaskInfo, TaskRuntimeContext, TaskSuccess,
+        Tasks,
     };
     use genja_plugin_manager::PluginManager;
     use genja_plugin_manager::plugin_types::{
@@ -2675,6 +2723,57 @@ mod tests {
         assert!(saw_connection.load(Ordering::SeqCst));
         assert!(saw_dry_run_context.load(Ordering::SeqCst));
         assert_eq!(results.passed_hosts().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn runtime_task_connection_resolver_replaces_cached_connection() {
+        let inventory = Arc::new(test_inventory());
+        let factory_calls = Arc::new(AtomicUsize::new(0));
+        let factory_calls_for_factory = Arc::clone(&factory_calls);
+        inventory
+            .connections()
+            .set_connection_factory(Arc::new(move |key: &ConnectionKey| {
+                factory_calls_for_factory.fetch_add(1, Ordering::SeqCst);
+                Some(Arc::new(tokio::sync::Mutex::new(TestRuntimeConnection {
+                    key: key.clone(),
+                    alive: false,
+                }))
+                    as Arc<tokio::sync::Mutex<dyn Connection>>)
+            }));
+
+        let resolver = RuntimeTaskConnectionResolver::new(Arc::clone(&inventory));
+        let task = ConnectionAwareTask {
+            saw_connection: Arc::new(AtomicBool::new(false)),
+        };
+        let key = ConnectionKey::new("router1", "test");
+
+        let first = resolver
+            .resolve_task_connection(&task, "router1")
+            .await
+            .expect("initial connection should resolve")
+            .expect("initial connection should exist");
+        let replacement = resolver
+            .replace_task_connection(&task, "router1")
+            .await
+            .expect("replacement should resolve")
+            .expect("replacement connection should exist");
+
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &inventory
+                .connections()
+                .get(&key)
+                .expect("replacement should be cached")
+        ));
+        assert_eq!(factory_calls.load(Ordering::SeqCst), 2);
+
+        let first = first.lock().await;
+        assert!(!first.is_alive());
+        drop(first);
+
+        let replacement = replacement.lock().await;
+        assert!(replacement.is_alive());
     }
 
     #[test]

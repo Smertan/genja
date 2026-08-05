@@ -3933,19 +3933,49 @@ pub trait TaskProcessorResolver: Send + Sync {
     fn resolve_task_processor(&self, name: &str) -> Option<Arc<dyn TaskProcessor>>;
 }
 
-/// Opens or verifies task-scoped connections before execution.
+/// Opens, verifies, or replaces task-scoped connections during execution.
 ///
 /// The full runtime can implement this trait to ensure the connection selected by
 /// a task is available before the task body runs. Core task execution remains
 /// generic by depending only on this trait rather than on a concrete runtime type.
+///
+/// Session verification uses [`TaskConnectionResolver::replace_task_connection`]
+/// after a task has successfully changed a host. Resolver implementations that
+/// own connection caches should evict the old connection, close it on a
+/// best-effort basis, create a new connection instance, and authenticate that new
+/// connection before returning it.
 #[async_trait]
 pub trait TaskConnectionResolver: Send + Sync {
     /// Open or retrieve the connection required by `task` for `hostname`.
+    ///
+    /// Implementations should return `Ok(None)` when the task does not declare a
+    /// connection. When a connection is declared, the returned connection should be
+    /// ready for the task runtime context to use.
     async fn resolve_task_connection(
         &self,
         task: &dyn Task,
         hostname: &str,
     ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError>;
+
+    /// Replace the connection required by `task` for `hostname`.
+    ///
+    /// Implementations that support replacement should not call `open()` on the
+    /// existing cached connection. A successful replacement requires a newly
+    /// created and authenticated connection instance, returned to the runtime so
+    /// post-change verification can run through the fresh session.
+    ///
+    /// The default implementation returns an explicit unsupported-operation error so
+    /// custom resolvers remain source-compatible until they opt in to replacement.
+    async fn replace_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError> {
+        let _ = (task, hostname);
+        Err(crate::GenjaError::NotImplemented(
+            "task connection replacement is not supported by this resolver",
+        ))
+    }
 }
 
 impl fmt::Debug for dyn TaskProcessorResolver {
@@ -5027,6 +5057,19 @@ mod tests {
         fn close(&mut self) -> ConnectionKey {
             self.alive = false;
             self.key.clone()
+        }
+    }
+
+    struct UnsupportedConnectionReplacementResolver;
+
+    #[async_trait]
+    impl TaskConnectionResolver for UnsupportedConnectionReplacementResolver {
+        async fn resolve_task_connection(
+            &self,
+            _task: &dyn Task,
+            _hostname: &str,
+        ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError> {
+            Ok(None)
         }
     }
 
@@ -7063,6 +7106,25 @@ mod tests {
         };
 
         assert!(task.session_verification_config().is_none());
+    }
+
+    #[test]
+    fn task_connection_resolver_rejects_replacement_by_default() {
+        let resolver = UnsupportedConnectionReplacementResolver;
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+
+        let err = run_async(resolver.replace_task_connection(&task, "router1"))
+            .expect_err("default replacement hook should be unsupported");
+
+        assert!(matches!(err, crate::GenjaError::NotImplemented(_)));
+        assert!(
+            err.to_string()
+                .contains("task connection replacement is not supported")
+        );
     }
 
     #[test]
