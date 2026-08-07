@@ -31,6 +31,7 @@ Changed packages:
 - Added a Rust task connection resolver replacement hook and wired the built-in runtime resolver to recreate inventory-backed connections for future post-change session verification. Refs: #89
 - Added Rust runtime execution for post-change session verification after passed, changed task results, including bounded replacement attempts and host-scoped connection failures. Refs: #89
 - Added Rust `CheckAndVerify` integration so post-change idempotency verification runs through the replacement session when session verification is enabled. Refs: #89
+- Added Rust serial and threaded runner coverage for post-change session verification, including host-scoped failure continuation. Refs: #89
 
 ### Changed
 
