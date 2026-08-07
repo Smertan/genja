@@ -3364,6 +3364,160 @@ fn failed_verification_check_to_host_result(
     )
 }
 
+/// Build execution metadata for a requested session verification attempt.
+fn session_verification_metadata(
+    attempts: usize,
+    new_session_established: bool,
+) -> SessionVerificationMetadata {
+    SessionVerificationMetadata::new(true, attempts, new_session_established)
+}
+
+/// Build execution metadata for a requested verification that was rejected before attempts.
+fn session_verification_not_run_metadata() -> SessionVerificationMetadata {
+    session_verification_metadata(0, false)
+}
+
+/// Attach session verification metadata to an existing host result.
+fn with_session_verification_metadata(
+    mut host_result: HostTaskResult,
+    metadata: SessionVerificationMetadata,
+) -> HostTaskResult {
+    *host_result.execution_metadata_mut() = host_result
+        .execution_metadata()
+        .clone()
+        .with_session_verification(metadata);
+    host_result
+}
+
+/// Build the host-scoped connection failure returned after replacement attempts are exhausted.
+fn session_verification_connection_failure(
+    attempts: usize,
+    new_session_established: bool,
+) -> HostTaskResult {
+    HostTaskResult::failed(
+        TaskFailure::new(crate::GenjaError::Message(
+            "a new management session could not be established after applying the change; the original task may already have applied its change and automatic rollback is unavailable"
+                .to_string(),
+        ))
+        .with_kind(TaskFailureKind::Connection)
+        .with_retryable(false)
+        .with_details(json!({
+            "change_may_have_been_applied": true,
+            "session_verification_attempts": attempts,
+            "new_session_established": new_session_established,
+            "rollback_available": false,
+        })),
+    )
+}
+
+/// Build the host-scoped validation failure returned for invalid manual task metadata.
+fn session_verification_validation_failure(message: impl Into<String>) -> HostTaskResult {
+    with_session_verification_metadata(
+        HostTaskResult::failed(
+            TaskFailure::new(crate::GenjaError::Message(message.into()))
+                .with_kind(TaskFailureKind::Validation),
+        ),
+        session_verification_not_run_metadata(),
+    )
+}
+
+/// Validate session verification metadata that macro-authored tasks normally reject earlier.
+fn validate_session_verification_request(
+    task: &dyn Task,
+    connection_resolver: Option<&dyn TaskConnectionResolver>,
+    dry_run: bool,
+) -> Option<HostTaskResult> {
+    let config = task.session_verification_config()?;
+
+    if dry_run {
+        return None;
+    }
+
+    if config.max_attempts() == 0 {
+        return Some(session_verification_validation_failure(
+            "session verification max_attempts must be greater than 0",
+        ));
+    }
+
+    if task.connection_plugin_name().is_none() {
+        return Some(session_verification_validation_failure(
+            "session verification requires a connection plugin",
+        ));
+    }
+
+    if connection_resolver.is_none() {
+        return Some(session_verification_validation_failure(
+            "session verification requires a task connection resolver",
+        ));
+    }
+
+    None
+}
+
+/// Return whether the final task result requires post-change session verification.
+fn should_attempt_session_verification(
+    task: &dyn Task,
+    host_result: &HostTaskResult,
+    dry_run: bool,
+) -> bool {
+    task.session_verification_config().is_some()
+        && !dry_run
+        && host_result.is_passed()
+        && host_result
+            .success()
+            .map(TaskSuccess::changed)
+            .unwrap_or(false)
+}
+
+/// Replace the task connection until a fresh session is established or attempts are exhausted.
+async fn verify_replacement_session(
+    task: &dyn Task,
+    hostname: &str,
+    connection_resolver: &dyn TaskConnectionResolver,
+    config: &SessionVerificationConfig,
+) -> Result<SessionVerificationMetadata, HostTaskResult> {
+    let max_attempts = config.max_attempts();
+    let mut last_error = None;
+
+    for attempt in 1..=max_attempts {
+        match connection_resolver
+            .replace_task_connection(task, hostname)
+            .await
+        {
+            Ok(Some(_connection)) => {
+                return Ok(session_verification_metadata(attempt, true));
+            }
+            Ok(None) => {
+                last_error = Some(crate::GenjaError::Message(
+                    "task connection resolver did not return a replacement connection".to_string(),
+                ));
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
+        }
+
+        if attempt < max_attempts && config.delay_ms() > 0 {
+            sleep(Duration::from_millis(config.delay_ms())).await;
+        }
+    }
+
+    if let Some(error) = last_error {
+        warn!(
+            "session verification failed for task '{}' on host '{}' after {} attempt(s): {}",
+            task.name(),
+            hostname,
+            max_attempts,
+            error
+        );
+    }
+
+    Err(with_session_verification_metadata(
+        session_verification_connection_failure(max_attempts, false),
+        session_verification_metadata(max_attempts, false),
+    ))
+}
+
 /// Task metadata required for execution.
 ///
 /// Task authoring macros such as `#[genja_task(...)]` implement this trait
@@ -4421,6 +4575,32 @@ impl TaskDefinition {
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
 
+        if let Some(mut host_result) = validate_session_verification_request(
+            task.as_ref(),
+            connection_resolver,
+            run_options.dry_run(),
+        ) {
+            let finished_at = SystemTime::now();
+            let duration_ns = finished_at
+                .duration_since(started_at)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            results.record_execution_timing(started_at, finished_at);
+            host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
+            *host_result.execution_metadata_mut() = host_result
+                .execution_metadata()
+                .clone()
+                .with_attempts(1)
+                .with_retried(false)
+                .with_retry_exhausted(false)
+                .with_dry_run(run_options.dry_run());
+            for processor in &processors {
+                processor.on_instance_finish(&processor_context, &mut host_result)?;
+            }
+            results.insert_host_result(hostname, host_result);
+            return Ok(());
+        }
+
         let connection = if let Some(connection_resolver) = connection_resolver {
             match connection_resolver
                 .resolve_task_connection(task.as_ref(), hostname)
@@ -4648,6 +4828,25 @@ impl TaskDefinition {
 
             break host_result;
         };
+
+        let mut host_result = host_result;
+        if should_attempt_session_verification(task.as_ref(), &host_result, run_options.dry_run()) {
+            let config = task
+                .session_verification_config()
+                .expect("session verification config should exist when verification is required");
+            let connection_resolver = connection_resolver
+                .expect("session verification request validation should require a resolver");
+            match verify_replacement_session(task.as_ref(), hostname, connection_resolver, config)
+                .await
+            {
+                Ok(metadata) => {
+                    host_result = with_session_verification_metadata(host_result, metadata);
+                }
+                Err(failure_result) => {
+                    host_result = failure_result;
+                }
+            }
+        }
 
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
@@ -4980,6 +5179,14 @@ mod tests {
         config: SessionVerificationConfig,
     }
 
+    struct SessionVerificationRuntimeTask {
+        start_calls: Arc<AtomicUsize>,
+        result: HostTaskResult,
+        config: SessionVerificationConfig,
+        connection_plugin_name: Option<&'static str>,
+        supports_dry_run: bool,
+    }
+
     struct FlakyTask {
         name: &'static str,
         attempts: Arc<AtomicUsize>,
@@ -5030,6 +5237,12 @@ mod tests {
         start_result: HostTaskResult,
     }
 
+    struct RecordingSessionVerificationResolver {
+        resolve_calls: Arc<AtomicUsize>,
+        replace_calls: Arc<AtomicUsize>,
+        fail_until_attempt: usize,
+    }
+
     #[derive(Debug)]
     struct TestConnection {
         key: ConnectionKey,
@@ -5070,6 +5283,45 @@ mod tests {
             _hostname: &str,
         ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError> {
             Ok(None)
+        }
+    }
+
+    #[async_trait]
+    impl TaskConnectionResolver for RecordingSessionVerificationResolver {
+        async fn resolve_task_connection(
+            &self,
+            task: &dyn Task,
+            hostname: &str,
+        ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError> {
+            self.resolve_calls.fetch_add(1, Ordering::SeqCst);
+            let Some(key) = task.get_connection_key(hostname) else {
+                return Ok(None);
+            };
+            Ok(Some(Arc::new(tokio::sync::Mutex::new(TestConnection {
+                key,
+                alive: true,
+            }))))
+        }
+
+        async fn replace_task_connection(
+            &self,
+            task: &dyn Task,
+            hostname: &str,
+        ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError> {
+            let attempt = self.replace_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt <= self.fail_until_attempt {
+                return Err(crate::GenjaError::Message(format!(
+                    "replacement attempt {attempt} failed"
+                )));
+            }
+
+            let Some(key) = task.get_connection_key(hostname) else {
+                return Ok(None);
+            };
+            Ok(Some(Arc::new(tokio::sync::Mutex::new(TestConnection {
+                key,
+                alive: true,
+            }))))
         }
     }
 
@@ -5155,6 +5407,24 @@ mod tests {
         }
     }
 
+    impl TaskInfo for SessionVerificationRuntimeTask {
+        fn name(&self) -> &str {
+            "session-verification-runtime"
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            self.connection_plugin_name
+        }
+
+        fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+            Some(&self.config)
+        }
+
+        fn supports_dry_run(&self) -> bool {
+            self.supports_dry_run
+        }
+    }
+
     #[async_trait]
     impl Task for SessionVerificationInfoTask {
         async fn start_async(
@@ -5163,6 +5433,31 @@ mod tests {
             _context: &TaskRuntimeContext,
         ) -> Result<HostTaskResult, TaskError> {
             Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for SessionVerificationRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.result.clone())
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.result.clone())
         }
 
         fn execution_mode(&self) -> TaskExecutionMode {
@@ -7124,6 +7419,333 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("task connection replacement is not supported")
+        );
+    }
+
+    #[test]
+    fn session_verification_replaces_connection_after_changed_passed_result() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(1, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("session verification should succeed");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 1);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_passed());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            Some(SessionVerificationMetadata::new(true, 1, true))
+        );
+    }
+
+    #[test]
+    fn session_verification_does_not_replace_after_unchanged_result() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(false)),
+            config: SessionVerificationConfig::new(1, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("unchanged result should succeed without replacement");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_passed());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_verification_does_not_replace_after_failed_result() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::failed(
+                TaskFailure::new(crate::GenjaError::Message("apply failed".to_string()))
+                    .with_kind(TaskFailureKind::Command),
+            ),
+            config: SessionVerificationConfig::new(1, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("failed result should be preserved");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_failed());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_verification_does_not_replace_during_dry_run() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(1, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: true,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver_and_options(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            TaskRunOptions::new(0).with_dry_run(true),
+        ))
+        .expect("dry-run should not replace the connection");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_passed());
+        assert!(host_result.execution_metadata().dry_run());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_verification_succeeds_after_configured_retry_without_rerunning_task() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(2, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: 1,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("session verification should retry replacement");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 2);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_passed());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            Some(SessionVerificationMetadata::new(true, 2, true))
+        );
+    }
+
+    #[test]
+    fn session_verification_exhaustion_returns_connection_failure_without_rerunning_task() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(3, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: usize::MAX,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("session verification failure should be captured");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 3);
+        let host_result = results.host_result("router1").expect("host result");
+        let failure = host_result.failure().expect("host should fail");
+        assert!(matches!(failure.kind(), TaskFailureKind::Connection));
+        assert!(!failure.retryable());
+        assert!(failure.message().contains("may already have applied"));
+        assert!(
+            failure
+                .message()
+                .contains("automatic rollback is unavailable")
+        );
+        assert_eq!(
+            failure.details(),
+            Some(&json!({
+                "change_may_have_been_applied": true,
+                "session_verification_attempts": 3,
+                "new_session_established": false,
+                "rollback_available": false,
+            }))
+        );
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            Some(SessionVerificationMetadata::new(true, 3, false))
+        );
+    }
+
+    #[test]
+    fn session_verification_rejects_zero_max_attempts_before_task_execution() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(0, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::new(AtomicUsize::new(0)),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("invalid session verification metadata should be captured");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("host should fail validation");
+        assert!(matches!(failure.kind(), TaskFailureKind::Validation));
+        assert_eq!(
+            failure.message(),
+            "session verification max_attempts must be greater than 0"
+        );
+    }
+
+    #[test]
+    fn session_verification_rejects_missing_connection_before_task_execution() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(1, 0),
+            connection_plugin_name: None,
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::new(AtomicUsize::new(0)),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("invalid session verification metadata should be captured");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("host should fail validation");
+        assert!(matches!(failure.kind(), TaskFailureKind::Validation));
+        assert_eq!(
+            failure.message(),
+            "session verification requires a connection plugin"
         );
     }
 

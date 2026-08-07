@@ -29,6 +29,7 @@ Changed packages:
 - Added core Rust session verification configuration and host execution metadata APIs for future post-change new-session verification. Refs: #89
 - Added async-safe Rust connection replacement support in `ConnectionManager` for future post-change session verification. Refs: #89
 - Added a Rust task connection resolver replacement hook and wired the built-in runtime resolver to recreate inventory-backed connections for future post-change session verification. Refs: #89
+- Added Rust runtime execution for post-change session verification after passed, changed task results, including bounded replacement attempts and host-scoped connection failures. Refs: #89
 
 ### Changed
 
