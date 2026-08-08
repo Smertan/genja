@@ -1,15 +1,15 @@
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
-    HostTaskResult, IdempotencyCheck, IdempotencyMode, MessageLevel, RetryConfig, Task,
-    TaskConnectionResolver, TaskDefinition, TaskError, TaskExecutionMode, TaskFailure,
-    TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskRunOptions,
-    TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
+    HostTaskResult, IdempotencyCheck, IdempotencyMode, MessageLevel, RetryConfig,
+    SessionVerificationConfig, Task, TaskConnectionResolver, TaskDefinition, TaskError,
+    TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
+    TaskResultsSummary, TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
 };
 use async_trait::async_trait;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyBool, PyDict, PyModule};
 use pyo3_async_runtimes::tokio::future_into_py;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -116,6 +116,82 @@ impl PyIdempotencyMode {
         let py_mode = Self::from(mode);
 
         Ok(mode_class.getattr(py_mode.variant_name())?.unbind())
+    }
+}
+
+/// Python wrapper for post-change replacement session verification metadata.
+#[pyclass(name = "SessionVerificationConfig", eq, skip_from_py_object)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PySessionVerificationConfig {
+    inner: SessionVerificationConfig,
+}
+
+impl From<SessionVerificationConfig> for PySessionVerificationConfig {
+    fn from(inner: SessionVerificationConfig) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<PySessionVerificationConfig> for SessionVerificationConfig {
+    fn from(value: PySessionVerificationConfig) -> Self {
+        value.inner
+    }
+}
+
+#[pymethods]
+impl PySessionVerificationConfig {
+    /// Create post-change replacement session verification metadata.
+    ///
+    /// `max_attempts` defaults to 1 and must be greater than 0. `delay_ms`
+    /// defaults to 0 and must be greater than or equal to 0.
+    #[new]
+    #[pyo3(signature = (max_attempts=1, delay_ms=0))]
+    fn new(
+        #[pyo3(from_py_with = extract_max_attempts_argument)] max_attempts: i128,
+        #[pyo3(from_py_with = extract_delay_ms_argument)] delay_ms: i128,
+    ) -> PyResult<Self> {
+        if max_attempts < 1 {
+            return Err(PyValueError::new_err("max_attempts must be greater than 0"));
+        }
+        let max_attempts = usize::try_from(max_attempts)
+            .map_err(|_| PyValueError::new_err("max_attempts is too large"))?;
+
+        if delay_ms < 0 {
+            return Err(PyValueError::new_err(
+                "delay_ms must be greater than or equal to 0",
+            ));
+        }
+        let delay_ms =
+            u64::try_from(delay_ms).map_err(|_| PyValueError::new_err("delay_ms is too large"))?;
+
+        Ok(Self {
+            inner: SessionVerificationConfig::new(max_attempts, delay_ms),
+        })
+    }
+
+    /// Maximum total replacement session establishment attempts.
+    #[getter]
+    fn max_attempts(&self) -> usize {
+        self.inner.max_attempts()
+    }
+
+    /// Fixed delay between replacement session attempts in milliseconds.
+    #[getter]
+    fn delay_ms(&self) -> u64 {
+        self.inner.delay_ms()
+    }
+
+    /// Return the configuration as a JSON-compatible dictionary.
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_value_to_py(py, &session_verification_config_to_json(Some(&self.inner)))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SessionVerificationConfig(max_attempts={}, delay_ms={})",
+            self.inner.max_attempts(),
+            self.inner.delay_ms()
+        )
     }
 }
 
@@ -267,6 +343,7 @@ struct PythonTaskSpec {
     connection_plugin_name: Option<String>,
     processor_names: Vec<String>,
     retry_config: Option<RetryConfig>,
+    session_verification_config: Option<SessionVerificationConfig>,
     options: Option<Value>,
     supports_dry_run: bool,
     idempotency_mode: IdempotencyMode,
@@ -341,6 +418,10 @@ impl TaskInfo for PythonBackedTask {
 
     fn retry_config(&self) -> Option<&RetryConfig> {
         self.spec.retry_config.as_ref()
+    }
+
+    fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+        self.spec.session_verification_config.as_ref()
     }
 
     fn supports_dry_run(&self) -> bool {
@@ -750,6 +831,11 @@ impl PyTaskDefinition {
     #[getter]
     fn retry(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         retry_config_to_py_object(py, self.inner.retry_config())
+    }
+
+    #[getter]
+    fn session_verification(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        session_verification_config_to_py_object(py, self.inner.session_verification_config())
     }
 
     #[getter]
@@ -1207,6 +1293,7 @@ fn resolve_task_run_options(
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyHostTaskResult>()?;
     module.add_class::<PyIdempotencyMode>()?;
+    module.add_class::<PySessionVerificationConfig>()?;
     module.add_class::<PyIdempotencyCheckResult>()?;
     module.add_class::<PyTaskDefinition>()?;
     module.add_class::<PyTasks>()?;
@@ -1493,6 +1580,7 @@ fn task_to_json(task: &dyn Task) -> Value {
         "connection_plugin_name": task.connection_plugin_name(),
         "processors": task.processor_names(),
         "retry": retry_config_to_json(task.retry_config()),
+        "session_verification": session_verification_config_to_json(task.session_verification_config()),
         "options": task.options(),
         "supports_dry_run": task.supports_dry_run(),
         "idempotency": PyIdempotencyMode::from(task.idempotency_mode()).value_str(),
@@ -1505,6 +1593,16 @@ fn retry_config_to_json(retry_config: Option<&RetryConfig>) -> Value {
         Some(retry_config) => {
             serde_json::to_value(retry_config).expect("retry config should serialize")
         }
+        None => Value::Null,
+    }
+}
+
+fn session_verification_config_to_json(
+    session_verification_config: Option<&SessionVerificationConfig>,
+) -> Value {
+    match session_verification_config {
+        Some(session_verification_config) => serde_json::to_value(session_verification_config)
+            .expect("session verification config should serialize"),
         None => Value::Null,
     }
 }
@@ -1613,6 +1711,10 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     };
     reject_misplaced_retry_metadata(&info)?;
     let retry_config = extract_retry_config_from_metadata(&info)?;
+    let session_verification_config = extract_session_verification_config_from_metadata(
+        &info,
+        connection_plugin_name.as_deref(),
+    )?;
 
     let supports_dry_run = if let Some(value) = info.get_item("supports_dry_run")? {
         if value.is_none() {
@@ -1712,6 +1814,7 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         connection_plugin_name,
         processor_names,
         retry_config,
+        session_verification_config,
         options,
         supports_dry_run,
         idempotency_mode,
@@ -1742,6 +1845,7 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
         "connection_plugin_name": spec.connection_plugin_name,
         "processors": spec.processor_names,
         "retry": retry_config_to_json(spec.retry_config.as_ref()),
+        "session_verification": session_verification_config_to_json(spec.session_verification_config.as_ref()),
         "options": spec.options,
         "supports_dry_run": spec.supports_dry_run,
         "idempotency": PyIdempotencyMode::from(spec.idempotency_mode).value_str(),
@@ -1765,6 +1869,10 @@ fn python_task_spec_to_py_dict<'py>(
     task.set_item(
         "retry",
         retry_config_to_py_object(py, spec.retry_config.as_ref())?,
+    )?;
+    task.set_item(
+        "session_verification",
+        session_verification_config_to_py_object(py, spec.session_verification_config.as_ref())?,
     )?;
     task.set_item("supports_dry_run", spec.supports_dry_run)?;
     task.set_item(
@@ -1794,6 +1902,20 @@ fn retry_config_to_py_object(
     json_value_to_py(py, &value)
 }
 
+fn session_verification_config_to_py_object(
+    py: Python<'_>,
+    session_verification_config: Option<&SessionVerificationConfig>,
+) -> PyResult<Py<PyAny>> {
+    match session_verification_config {
+        Some(session_verification_config) => Py::new(
+            py,
+            PySessionVerificationConfig::from(*session_verification_config),
+        )
+        .map(|config| config.into_any()),
+        None => Ok(py.None()),
+    }
+}
+
 fn reject_misplaced_retry_metadata(info: &Bound<'_, PyDict>) -> PyResult<()> {
     if info.contains("allow_retries")? {
         return Err(PyValueError::new_err(
@@ -1811,6 +1933,54 @@ fn reject_misplaced_retry_metadata(info: &Bound<'_, PyDict>) -> PyResult<()> {
         ));
     }
     Ok(())
+}
+
+fn extract_integer_argument(
+    value: &Bound<'_, PyAny>,
+    field_name: &str,
+    expected: &str,
+) -> PyResult<i128> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(format!(
+            "{field_name} must be {expected}"
+        )));
+    }
+    value
+        .extract::<i128>()
+        .map_err(|_| PyValueError::new_err(format!("{field_name} must be {expected}")))
+}
+
+fn extract_max_attempts_argument(value: &Bound<'_, PyAny>) -> PyResult<i128> {
+    extract_integer_argument(value, "max_attempts", "an integer")
+}
+
+fn extract_delay_ms_argument(value: &Bound<'_, PyAny>) -> PyResult<i128> {
+    extract_integer_argument(value, "delay_ms", "an integer")
+}
+
+fn extract_session_verification_config_from_metadata(
+    info: &Bound<'_, PyDict>,
+    connection_plugin_name: Option<&str>,
+) -> PyResult<Option<SessionVerificationConfig>> {
+    let Some(value) = info.get_item("session_verification")? else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    let config = value
+        .extract::<PyRef<'_, PySessionVerificationConfig>>()
+        .map_err(|_| {
+            PyValueError::new_err(
+                "python task metadata field 'session_verification' must be SessionVerificationConfig or None",
+            )
+        })?;
+    if connection_plugin_name.is_none() {
+        return Err(PyValueError::new_err(
+            "python task metadata field 'session_verification' requires 'connection_plugin_name'",
+        ));
+    }
+    Ok(Some(config.inner))
 }
 
 fn extract_retry_config_from_metadata(info: &Bound<'_, PyDict>) -> PyResult<Option<RetryConfig>> {

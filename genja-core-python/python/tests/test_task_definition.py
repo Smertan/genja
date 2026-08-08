@@ -9,6 +9,7 @@ from genja.task import (
     IdempotencyCheckResult,
     IdempotencyMode,
     RetryConfig,
+    SessionVerificationConfig,
     TaskFailureResult,
     TaskRuntimeContext,
     TaskMessageLevel,
@@ -633,6 +634,141 @@ def test_task_decorator_stores_nested_retry_metadata():
         "max_attempts": 3,
         "delay_ms": 500,
     }
+
+
+def test_session_verification_config_accepts_valid_values():
+    config = SessionVerificationConfig(max_attempts=3, delay_ms=500)
+
+    assert config.max_attempts == 3
+    assert config.delay_ms == 500
+    assert config.to_dict() == {
+        "max_attempts": 3,
+        "delay_ms": 500,
+    }
+    assert SessionVerificationConfig().to_dict() == {
+        "max_attempts": 1,
+        "delay_ms": 0,
+    }
+
+
+def test_session_verification_config_rejects_invalid_values():
+    with pytest.raises(ValueError, match="max_attempts must be greater than 0"):
+        SessionVerificationConfig(max_attempts=0)
+
+    with pytest.raises(ValueError, match="delay_ms must be greater than or equal to 0"):
+        SessionVerificationConfig(delay_ms=-1)
+
+    with pytest.raises(ValueError, match="max_attempts must be an integer"):
+        SessionVerificationConfig(max_attempts=True)
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        SessionVerificationConfig(attempts=1)
+
+
+def test_task_decorator_stores_session_verification_metadata():
+    @task(
+        name="verified_backup",
+        connection_plugin_name="ssh",
+        session_verification=SessionVerificationConfig(max_attempts=3, delay_ms=500),
+    )
+    class SessionVerifiedTask:
+        def start(self, task, host, context):
+            assert task.session_verification == SessionVerificationConfig(
+                max_attempts=3,
+                delay_ms=500,
+            )
+            return TaskSuccessResult(summary="noop")
+
+    metadata = cast(type[GenjaTaskProtocol], SessionVerifiedTask).__genja_task_info__
+    assert metadata["session_verification"] == SessionVerificationConfig(
+        max_attempts=3,
+        delay_ms=500,
+    )
+
+    task_definition = genja.TaskDefinition.from_python_class(SessionVerifiedTask)
+    assert task_definition.session_verification == SessionVerificationConfig(
+        max_attempts=3,
+        delay_ms=500,
+    )
+    assert task_definition.session_verification.to_dict() == {
+        "max_attempts": 3,
+        "delay_ms": 500,
+    }
+    assert task_definition.to_dict()["session_verification"] == {
+        "max_attempts": 3,
+        "delay_ms": 500,
+    }
+
+
+def test_task_decorator_rejects_invalid_session_verification_type():
+    with pytest.raises(
+        TypeError,
+        match="session_verification must be SessionVerificationConfig or None",
+    ):
+
+        @task(
+            name="backup_config",
+            connection_plugin_name="ssh",
+            session_verification={"max_attempts": 1},
+        )
+        class InvalidTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
+def test_task_decorator_rejects_session_verification_without_connection():
+    with pytest.raises(
+        TypeError,
+        match="session_verification requires connection_plugin_name",
+    ):
+
+        @task(
+            name="backup_config",
+            session_verification=SessionVerificationConfig(),
+        )
+        class InvalidTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
+def test_task_definition_rejects_invalid_session_verification_metadata():
+    @task(
+        name="backup_config",
+        connection_plugin_name="ssh",
+        session_verification=SessionVerificationConfig(),
+    )
+    class InvalidTask:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="noop")
+
+    metadata = cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__
+    metadata["session_verification"] = {"max_attempts": 1, "delay_ms": 0}
+
+    with pytest.raises(
+        ValueError,
+        match="session_verification.*must be SessionVerificationConfig or None",
+    ):
+        genja.TaskDefinition.from_python_class(InvalidTask)
+
+
+def test_task_definition_rejects_session_verification_without_connection_in_metadata():
+    @task(
+        name="backup_config",
+        connection_plugin_name="ssh",
+        session_verification=SessionVerificationConfig(),
+    )
+    class InvalidTask:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="noop")
+
+    metadata = cast(type[GenjaTaskProtocol], InvalidTask).__genja_task_info__
+    metadata["connection_plugin_name"] = None
+
+    with pytest.raises(
+        ValueError,
+        match="session_verification.*requires 'connection_plugin_name'",
+    ):
+        genja.TaskDefinition.from_python_class(InvalidTask)
 
 
 def test_task_decorator_rejects_flat_retry_kwargs():
