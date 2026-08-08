@@ -146,9 +146,32 @@ The common macro options are:
 - `retry.allow`: optional task-level override for whether retries are allowed
 - `retry.max_attempts`: optional task-level override for total task attempts
 - `retry.delay_ms`: optional fixed in-process delay in milliseconds between retry attempts
+- `session_verification.max_attempts`: optional post-change new-session attempt count
+- `session_verification.delay_ms`: optional fixed delay in milliseconds between new-session attempts
 - `supports_dry_run`: opt into runtime dry-run dispatch
 - `idempotency`: opt into task-authored convergence checks with
   `IdempotencyMode::Check` or `IdempotencyMode::CheckAndVerify`
+
+**Grouped metadata** is written as nested macro arguments, not dotted keys:
+
+```rust
+#[genja_task(
+    name = "backup_config",
+    connection_plugin_name = "ssh",
+    retry(
+        allow = true,
+        max_attempts = 3,
+        delay_ms = 500
+    ),
+    session_verification(
+        max_attempts = 3,
+        delay_ms = 5000
+    )
+)]
+impl BackupConfig {
+    // task methods
+}
+```
 
 Define exactly one task entrypoint in the macro `impl` block:
 
@@ -211,6 +234,7 @@ Common decorator options:
 - `processors`: processor plugin names to run around task execution
 - `sub_tasks`: child tasks to execute beneath the current task
 - `retry`: optional grouped task-level retry overrides
+- `session_verification`: optional post-change new-session verification metadata
 - `supports_dry_run`: opt into runtime dry-run dispatch
 - `idempotency`: opt into task-authored convergence checks with
   `IdempotencyMode.CHECK` or `IdempotencyMode.CHECK_AND_VERIFY`
@@ -257,6 +281,85 @@ class RetryableBackup:
 These values override runner defaults for that task only, field by field.
 Retries still happen only when the returned failure result is explicitly marked
 `retryable`. `delay_ms` is a fixed local delay before retry attempts.
+
+## Session Verification
+
+Session verification is task-authored metadata for changes that can affect
+management access, such as ACLs, authentication, routing, interfaces, and
+control-plane configuration. It proves that Genja can close the existing
+management connection and establish a genuinely new authenticated session after
+the task applies a change.
+
+Session verification is separate from retry and idempotency:
+
+- retry controls whether a failed task application may run again
+- idempotency checks whether desired managed state is present
+- session verification checks whether a new management session can connect
+
+Session verification runs only when all of these are true:
+
+- the task declares session verification
+- execution is not dry-run
+- the task entrypoint returns a passed result
+- the passed result has `changed=true`
+
+It does not run after failed results, skipped results, unchanged passed results,
+or dry-run execution. Session establishment attempts are not task application
+retries; Genja does not call `start(...)` or `start_async(...)` again when a
+replacement session attempt fails.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    #[genja_task(
+        name = "replace_management_acl",
+        connection_plugin_name = "ssh",
+        session_verification(
+            max_attempts = 3,
+            delay_ms = 5000
+        )
+    )]
+    impl ReplaceManagementAcl {
+        // task methods
+    }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    from genja.task import SessionVerificationConfig, task
+
+
+    @task(
+        name="replace_management_acl",
+        connection_plugin_name="ssh",
+        session_verification=SessionVerificationConfig(
+            max_attempts=3,
+            delay_ms=5000,
+        ),
+    )
+    class ReplaceManagementAcl:
+        # task methods
+        ...
+    ```
+
+`max_attempts` defaults to `1` and must be greater than `0`. `delay_ms`
+defaults to `0` and must be greater than or equal to `0`. Session verification
+requires `connection_plugin_name` because there is no management connection to
+replace without a declared connection plugin.
+
+When session verification succeeds, Genja preserves the original passed task
+result and records session-verification execution metadata. When a new session
+cannot be established, Genja records a host-scoped connection failure. The
+failure states that the change may already have been applied and that automatic
+rollback is unavailable. Other hosts continue according to normal runner
+behavior.
+
+When `IdempotencyMode::CheckAndVerify` or
+`IdempotencyMode.CHECK_AND_VERIFY` is also enabled, Genja replaces the
+connection before running the post-application idempotency check. That post
+check therefore runs through the replacement session. With idempotency disabled,
+successful replacement session establishment is the verification.
 
 ## Task Inputs
 
