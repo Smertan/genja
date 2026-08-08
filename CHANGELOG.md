@@ -26,9 +26,9 @@ Changed packages:
 - Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
 - Added Rust `Genja::from_settings_async(...)` plus Python `Genja.from_settings_async(...)` and `Genja.from_settings_file_async(...)` for strict async inventory loading. Refs: #86
 - Added Rust `#[genja_task(...)]` session verification metadata with `session_verification(max_attempts = ..., delay_ms = ...)`. Refs: #89
-- Added core Rust session verification configuration and host execution metadata APIs for future post-change new-session verification. Refs: #89
-- Added async-safe Rust connection replacement support in `ConnectionManager` for future post-change session verification. Refs: #89
-- Added a Rust task connection resolver replacement hook and wired the built-in runtime resolver to recreate inventory-backed connections for future post-change session verification. Refs: #89
+- Added core Rust session verification configuration and host execution metadata APIs for post-change new-session verification. Refs: #89
+- Added async-safe Rust connection replacement support in `ConnectionManager` for post-change session verification. Refs: #89
+- Added a Rust task connection resolver replacement hook and wired the built-in runtime resolver to recreate inventory-backed connections for post-change session verification. Refs: #89
 - Added Rust runtime execution for post-change session verification after passed, changed task results, including bounded replacement attempts and host-scoped connection failures. Refs: #89
 - Added Rust `CheckAndVerify` integration so post-change idempotency verification runs through the replacement session when session verification is enabled. Refs: #89
 - Added Rust serial and threaded runner coverage for post-change session verification, including host-scoped failure continuation. Refs: #89
