@@ -43,6 +43,12 @@ Tasks choose a connection plugin by name.
 The named plugin must already be registered, and the host inventory must
 resolve the connection parameters that plugin needs.
 
+Tasks that change management access can also request post-change session
+verification. Genja then replaces the declared task connection after a passed,
+changed result and confirms that a new authenticated session can be established.
+See [Session Verification](tasks.md#session-verification) for the task metadata,
+execution conditions, and failure behavior.
+
 ## Inventory Connection Options
 
 Hosts, groups, and defaults may define `connection_options`. Genja merges these

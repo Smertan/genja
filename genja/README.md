@@ -205,6 +205,28 @@ task entrypoint. `CheckAndVerify` reruns the same check after a passed
 application result and records a validation failure if the host is still not
 converged.
 
+Tasks that change management access can opt into post-change session
+verification. Genja closes and replaces the declared connection after a passed,
+changed result and confirms that a new authenticated session can be established:
+
+```rust
+#[genja_task(
+    name = "replace_management_acl",
+    connection_plugin_name = "ssh",
+    session_verification(
+        max_attempts = 3,
+        delay_ms = 5000
+    )
+)]
+impl ReplaceManagementAcl {
+    // task methods
+}
+```
+
+Session verification is separate from retries and idempotency. When combined
+with `IdempotencyMode::CheckAndVerify`, the post-check runs through the
+replacement session.
+
 For async Rust applications, use `run_task_async(...)` instead of `run_task(...)`:
 
 ```rust

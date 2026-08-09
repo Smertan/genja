@@ -315,6 +315,27 @@ class IdempotencyCheckResult:
         """Return the check result as a dictionary."""
         ...
 
+class SessionVerificationConfig:
+    """Post-change replacement session verification metadata."""
+
+    def __init__(self, max_attempts: int = 1, delay_ms: int = 0) -> None:
+        """Create session verification metadata."""
+        ...
+
+    @property
+    def max_attempts(self) -> int:
+        """Maximum total replacement session establishment attempts."""
+        ...
+
+    @property
+    def delay_ms(self) -> int:
+        """Fixed delay between replacement session attempts in milliseconds."""
+        ...
+
+    def to_dict(self) -> dict[str, int]:
+        """Return the configuration as a JSON-compatible dictionary."""
+        ...
+
 class TaskConnectionResolver:
     """Connection resolver used by task execution internals."""
 
@@ -366,6 +387,10 @@ class TaskDefinition:
     @property
     def retry(self) -> dict[str, Any] | None:
         """Task retry metadata, if configured."""
+        ...
+    @property
+    def session_verification(self) -> SessionVerificationConfig | None:
+        """Post-change replacement session verification metadata, if configured."""
         ...
     @property
     def supports_dry_run(self) -> bool:

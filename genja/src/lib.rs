@@ -61,7 +61,9 @@
 pub use ::async_trait::async_trait;
 pub use genja_core;
 pub use genja_core::GenjaError;
-use genja_core::inventory::{Host, Hosts, Inventory};
+use genja_core::inventory::{
+    Connection, ConnectionKey, Host, Hosts, Inventory, ResolvedConnectionParams,
+};
 use genja_core::settings::RunnerConfig;
 pub use genja_core::task::TaskRunOptions;
 use genja_core::task::{
@@ -126,19 +128,24 @@ struct RuntimeTaskConnectionResolver {
 }
 
 impl RuntimeTaskConnectionResolver {
+    /// Create a resolver backed by the runtime inventory.
+    ///
+    /// The resolver uses the inventory for both connection parameter resolution and
+    /// access to the shared connection manager cache.
     fn new(inventory: Arc<Inventory>) -> Self {
         Self { inventory }
     }
-}
 
-#[async_trait]
-impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
-    async fn resolve_task_connection(
+    /// Resolve the task's connection key and current inventory parameters.
+    ///
+    /// Both normal connection opening and post-change connection replacement use this
+    /// helper so replacement re-reads the host's resolved connection parameters before
+    /// creating the new connection instance.
+    fn task_connection_key_and_params(
         &self,
         task: &dyn Task,
         hostname: &str,
-    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn genja_core::inventory::Connection>>>, GenjaError>
-    {
+    ) -> Result<Option<(ConnectionKey, ResolvedConnectionParams)>, GenjaError> {
         let Some(key) = task.get_connection_key(hostname) else {
             return Ok(None);
         };
@@ -153,9 +160,49 @@ impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
                 ))
             })?;
 
+        Ok(Some((key, params)))
+    }
+}
+
+#[async_trait]
+impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
+    /// Open or retrieve the task connection through the inventory connection manager.
+    ///
+    /// This preserves the normal runtime behavior of caching connections by
+    /// `ConnectionKey` while ensuring the returned connection has been opened.
+    async fn resolve_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, GenjaError> {
+        let Some((key, params)) = self.task_connection_key_and_params(task, hostname)? else {
+            return Ok(None);
+        };
+
         self.inventory
             .connections()
             .open_connection(&key, &params)
+            .await
+            .map_err(GenjaError::Message)
+    }
+
+    /// Replace the task connection through the inventory connection manager.
+    ///
+    /// This path is used by session verification after a changed task result. It
+    /// delegates cache eviction, old-connection close, new instance creation, and
+    /// authentication to `ConnectionManager::replace_connection`.
+    async fn replace_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, GenjaError> {
+        let Some((key, params)) = self.task_connection_key_and_params(task, hostname)? else {
+            return Ok(None);
+        };
+
+        self.inventory
+            .connections()
+            .replace_connection(&key, &params)
             .await
             .map_err(GenjaError::Message)
     }
@@ -1244,7 +1291,7 @@ impl Default for Genja {
 
 #[cfg(test)]
 mod tests {
-    use super::{Genja, GenjaError, TaskRunOptions, genja_task};
+    use super::{Genja, GenjaError, RuntimeTaskConnectionResolver, TaskRunOptions, genja_task};
     use async_trait::async_trait;
     use genja_core::Settings;
     use genja_core::inventory::{
@@ -1254,14 +1301,16 @@ mod tests {
     use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig, SSHConfig};
     use genja_core::task::RetryConfig;
     use genja_core::task::{
-        BlockingTaskRuntimeContext, HostTaskResult, Task, TaskDefinition, TaskError,
-        TaskExecutionMode, TaskFailure, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
+        BlockingTaskRuntimeContext, HostTaskResult, Task, TaskConnectionResolver, TaskDefinition,
+        TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskRuntimeContext,
+        TaskSuccess, Tasks,
     };
     use genja_plugin_manager::PluginManager;
     use genja_plugin_manager::plugin_types::{
         AsyncPluginInventory, Plugin, PluginConnection, Plugins,
     };
     use serde_json::{Value, json};
+    use std::collections::HashMap;
     use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1481,8 +1530,21 @@ mod tests {
         alive: bool,
     }
 
+    #[derive(Debug)]
+    struct SessionVerificationConnectionPlugin {
+        key: Option<ConnectionKey>,
+        open_counts: Arc<Mutex<HashMap<String, usize>>>,
+        close_count: Arc<AtomicUsize>,
+        fail_replacement_for_host: Option<&'static str>,
+        alive: bool,
+    }
+
     struct ConnectionAwareTask {
         saw_connection: Arc<AtomicBool>,
+    }
+
+    struct RuntimeSessionVerificationTask {
+        start_calls: Arc<AtomicUsize>,
     }
 
     struct UnsupportedDryRunTask {
@@ -1708,6 +1770,52 @@ mod tests {
         }
     }
 
+    impl Plugin for SessionVerificationConnectionPlugin {
+        fn name(&self) -> String {
+            "session-test".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl PluginConnection for SessionVerificationConnectionPlugin {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+            Box::new(Self {
+                key: Some(key.clone()),
+                open_counts: Arc::clone(&self.open_counts),
+                close_count: Arc::clone(&self.close_count),
+                fail_replacement_for_host: self.fail_replacement_for_host,
+                alive: false,
+            })
+        }
+
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            let key = self.key.as_ref().expect("connection key should be set");
+            let mut open_counts = self
+                .open_counts
+                .lock()
+                .expect("open counts lock should not be poisoned");
+            let count = open_counts.entry(key.hostname.clone()).or_default();
+            *count += 1;
+            if Some(key.hostname.as_str()) == self.fail_replacement_for_host && *count > 1 {
+                return Err("replacement session failed".to_string());
+            }
+            self.alive = true;
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.alive = false;
+            self.close_count.fetch_add(1, Ordering::SeqCst);
+            self.key
+                .clone()
+                .unwrap_or_else(|| ConnectionKey::new("", "session-test"))
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+    }
+
     impl TaskInfo for ConnectionAwareTask {
         fn name(&self) -> &str {
             "connection-aware"
@@ -1739,6 +1847,26 @@ mod tests {
 
         fn execution_mode(&self) -> TaskExecutionMode {
             TaskExecutionMode::Async
+        }
+    }
+
+    #[genja_task(
+        name = "runtime-session-verification",
+        connection_plugin_name = "session-test",
+        session_verification(max_attempts = 1)
+    )]
+    impl RuntimeSessionVerificationTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("changed"),
+            ))
         }
     }
 
@@ -1959,6 +2087,50 @@ mod tests {
         hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
 
         Inventory::builder().hosts(hosts).build()
+    }
+
+    fn session_verification_plugin_manager(
+        open_counts: Arc<Mutex<HashMap<String, usize>>>,
+        close_count: Arc<AtomicUsize>,
+        fail_replacement_for_host: Option<&'static str>,
+    ) -> PluginManager {
+        let mut plugin_manager = PluginManager::new();
+        plugin_manager.register_plugin(Plugins::Connection(Box::new(
+            SessionVerificationConnectionPlugin {
+                key: None,
+                open_counts,
+                close_count,
+                fail_replacement_for_host,
+                alive: false,
+            },
+        )));
+        plugin_manager
+    }
+
+    fn genja_with_session_verification_connection(
+        runner_plugin: &str,
+        open_counts: Arc<Mutex<HashMap<String, usize>>>,
+        close_count: Arc<AtomicUsize>,
+        fail_replacement_for_host: Option<&'static str>,
+    ) -> Genja {
+        let settings = Settings::builder()
+            .runner(
+                RunnerConfig::builder()
+                    .plugin(runner_plugin)
+                    .worker_count(2)
+                    .build(),
+            )
+            .build();
+
+        Genja::builder(test_inventory())
+            .with_settings(settings)
+            .with_plugin_manager(session_verification_plugin_manager(
+                open_counts,
+                close_count,
+                fail_replacement_for_host,
+            ))
+            .build()
+            .expect("genja should build with session verification connection plugin")
     }
 
     fn test_inventory_with_data() -> Inventory {
@@ -2564,6 +2736,108 @@ mod tests {
     }
 
     #[test]
+    fn run_verifies_replacement_sessions_across_serial_and_threaded_runners() {
+        for runner_plugin in ["serial", "threaded"] {
+            let open_counts = Arc::new(Mutex::new(HashMap::new()));
+            let close_count = Arc::new(AtomicUsize::new(0));
+            let start_calls = Arc::new(AtomicUsize::new(0));
+            let genja = genja_with_session_verification_connection(
+                runner_plugin,
+                Arc::clone(&open_counts),
+                Arc::clone(&close_count),
+                None,
+            );
+
+            let results = genja
+                .run_task(
+                    RuntimeSessionVerificationTask {
+                        start_calls: Arc::clone(&start_calls),
+                    },
+                    0,
+                )
+                .expect("session verification should succeed");
+
+            assert_eq!(results.passed_hosts().len(), 2);
+            assert_eq!(start_calls.load(Ordering::SeqCst), 2);
+            assert_eq!(close_count.load(Ordering::SeqCst), 2);
+            assert_eq!(
+                *open_counts
+                    .lock()
+                    .expect("open counts lock should not be poisoned"),
+                HashMap::from([("router1".to_string(), 2), ("router2".to_string(), 2),])
+            );
+
+            for hostname in ["router1", "router2"] {
+                let host_result = results.host_result(hostname).expect("host result");
+                assert!(host_result.is_passed(), "{runner_plugin} {hostname}");
+                let metadata = host_result
+                    .execution_metadata()
+                    .session_verification()
+                    .expect("session verification metadata should be recorded");
+                assert!(metadata.requested());
+                assert_eq!(metadata.attempts(), 1);
+                assert!(metadata.new_session_established());
+            }
+        }
+    }
+
+    #[test]
+    fn threaded_runner_continues_other_hosts_after_session_verification_failure() {
+        let open_counts = Arc::new(Mutex::new(HashMap::new()));
+        let close_count = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let genja = genja_with_session_verification_connection(
+            "threaded",
+            Arc::clone(&open_counts),
+            Arc::clone(&close_count),
+            Some("router1"),
+        );
+
+        let results = genja
+            .run_task(
+                RuntimeSessionVerificationTask {
+                    start_calls: Arc::clone(&start_calls),
+                },
+                0,
+            )
+            .expect("threaded runner should capture host-scoped verification failure");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(results.failed_hosts().len(), 1);
+        assert_eq!(results.passed_hosts().len(), 1);
+        assert_eq!(
+            *open_counts
+                .lock()
+                .expect("open counts lock should not be poisoned"),
+            HashMap::from([("router1".to_string(), 2), ("router2".to_string(), 2),])
+        );
+
+        let router1 = results.host_result("router1").expect("router1 result");
+        let failure = router1.failure().expect("router1 should fail");
+        assert!(matches!(failure.kind(), TaskFailureKind::Connection));
+        assert!(
+            failure
+                .message()
+                .contains("new management session could not be established")
+        );
+        let metadata = router1
+            .execution_metadata()
+            .session_verification()
+            .expect("failure should record verification metadata");
+        assert!(metadata.requested());
+        assert_eq!(metadata.attempts(), 1);
+        assert!(!metadata.new_session_established());
+
+        let router2 = results.host_result("router2").expect("router2 result");
+        assert!(router2.is_passed());
+        let metadata = router2
+            .execution_metadata()
+            .session_verification()
+            .expect("success should record verification metadata");
+        assert!(metadata.new_session_established());
+    }
+
+    #[test]
     fn run_task_with_options_dry_run_calls_async_dry_run_not_start() {
         let start_calls = Arc::new(AtomicUsize::new(0));
         let dry_run_calls = Arc::new(AtomicUsize::new(0));
@@ -2675,6 +2949,57 @@ mod tests {
         assert!(saw_connection.load(Ordering::SeqCst));
         assert!(saw_dry_run_context.load(Ordering::SeqCst));
         assert_eq!(results.passed_hosts().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn runtime_task_connection_resolver_replaces_cached_connection() {
+        let inventory = Arc::new(test_inventory());
+        let factory_calls = Arc::new(AtomicUsize::new(0));
+        let factory_calls_for_factory = Arc::clone(&factory_calls);
+        inventory
+            .connections()
+            .set_connection_factory(Arc::new(move |key: &ConnectionKey| {
+                factory_calls_for_factory.fetch_add(1, Ordering::SeqCst);
+                Some(Arc::new(tokio::sync::Mutex::new(TestRuntimeConnection {
+                    key: key.clone(),
+                    alive: false,
+                }))
+                    as Arc<tokio::sync::Mutex<dyn Connection>>)
+            }));
+
+        let resolver = RuntimeTaskConnectionResolver::new(Arc::clone(&inventory));
+        let task = ConnectionAwareTask {
+            saw_connection: Arc::new(AtomicBool::new(false)),
+        };
+        let key = ConnectionKey::new("router1", "test");
+
+        let first = resolver
+            .resolve_task_connection(&task, "router1")
+            .await
+            .expect("initial connection should resolve")
+            .expect("initial connection should exist");
+        let replacement = resolver
+            .replace_task_connection(&task, "router1")
+            .await
+            .expect("replacement should resolve")
+            .expect("replacement connection should exist");
+
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &inventory
+                .connections()
+                .get(&key)
+                .expect("replacement should be cached")
+        ));
+        assert_eq!(factory_calls.load(Ordering::SeqCst), 2);
+
+        let first = first.lock().await;
+        assert!(!first.is_alive());
+        drop(first);
+
+        let replacement = replacement.lock().await;
+        assert!(replacement.is_alive());
     }
 
     #[test]

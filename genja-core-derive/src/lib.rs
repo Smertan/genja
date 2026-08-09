@@ -152,6 +152,53 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// Generate `TaskInfo` and `Task` implementations for an inherent task `impl`
+/// block.
+///
+/// The macro requires `name = "..."` and exactly one task entrypoint:
+/// `fn start(...)` for blocking tasks or `async fn start_async(...)` for async
+/// tasks. Optional metadata includes:
+///
+/// - `connection_plugin_name = "..."`; defaults to no task-scoped connection.
+/// - `processors = ["..."]`; defaults to no processors.
+/// - `retry(allow = ..., max_attempts = ..., delay_ms = ...)`; omitted fields
+///   fall back to runner retry defaults, then built-in retry defaults.
+/// - `idempotency = IdempotencyMode::...`; defaults to
+///   `IdempotencyMode::Disabled`.
+/// - `supports_dry_run = true`; defaults to `false`.
+/// - `session_verification(max_attempts = ..., delay_ms = ...)`; defaults to
+///   disabled when the block is absent. Inside the block, omitted
+///   `max_attempts` defaults to `1` and omitted `delay_ms` defaults to `0`.
+///
+/// `session_verification(...)` requires `connection_plugin_name = "..."`,
+/// because post-change session verification must replace a declared task
+/// connection.
+///
+/// ```ignore
+/// use genja_core::genja_task;
+/// use genja_core::inventory::Host;
+/// use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+///
+/// struct ReplaceManagementAcl;
+///
+/// #[genja_task(
+///     name = "replace_management_acl",
+///     connection_plugin_name = "ssh",
+///     session_verification(
+///         max_attempts = 3,
+///         delay_ms = 5000
+///     )
+/// )]
+/// impl ReplaceManagementAcl {
+///     async fn start_async(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(TaskSuccess::new().with_changed(true)))
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn genja_task(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as GenjaTaskArgs);
@@ -171,6 +218,7 @@ struct GenjaTaskArgs {
     idempotency: Option<IdempotencyModeArg>,
     processors: Vec<LitStr>,
     retry: Option<RetryArgs>,
+    session_verification: Option<SessionVerificationArgs>,
 }
 
 #[derive(Clone, Copy)]
@@ -189,6 +237,12 @@ impl IdempotencyModeArg {
 #[derive(Default)]
 struct RetryArgs {
     allow: Option<LitBool>,
+    max_attempts: Option<LitInt>,
+    delay_ms: Option<LitInt>,
+}
+
+#[derive(Default)]
+struct SessionVerificationArgs {
     max_attempts: Option<LitInt>,
     delay_ms: Option<LitInt>,
 }
@@ -261,10 +315,21 @@ impl Parse for GenjaTaskArgs {
                     parenthesized!(content in input);
                     args.retry = Some(content.parse()?);
                 }
+                "session_verification" => {
+                    if args.session_verification.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate `session_verification`",
+                        ));
+                    }
+                    let content;
+                    parenthesized!(content in input);
+                    args.session_verification = Some(content.parse()?);
+                }
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "unsupported key; expected `name`, `connection_plugin_name`, `supports_dry_run`, `idempotency`, `processors`, or `retry(...)`",
+                        "unsupported key; expected `name`, `connection_plugin_name`, `supports_dry_run`, `idempotency`, `processors`, `retry(...)`, or `session_verification(...)`",
                     ));
                 }
             }
@@ -377,6 +442,68 @@ impl Parse for RetryArgs {
                     return Err(syn::Error::new_spanned(
                         key,
                         "unsupported retry key; expected `allow`, `max_attempts`, or `delay_ms`",
+                    ));
+                }
+            }
+
+            if input.is_empty() {
+                break;
+            }
+
+            input.parse::<Token![,]>()?;
+        }
+
+        Ok(args)
+    }
+}
+
+impl Parse for SessionVerificationArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut args = Self::default();
+
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+
+            match key.to_string().as_str() {
+                "max_attempts" => {
+                    if args.max_attempts.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate session_verification key `max_attempts`",
+                        ));
+                    }
+                    let max_attempts: LitInt = input.parse()?;
+                    let value = parse_usize_literal(
+                        &max_attempts,
+                        "`max_attempts` must be greater than 0",
+                    )?;
+                    if value == 0 {
+                        return Err(syn::Error::new_spanned(
+                            max_attempts,
+                            "`max_attempts` must be greater than 0",
+                        ));
+                    }
+                    args.max_attempts = Some(max_attempts);
+                }
+                "delay_ms" => {
+                    if args.delay_ms.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate session_verification key `delay_ms`",
+                        ));
+                    }
+                    let delay_ms: LitInt = input.parse()?;
+                    parse_non_negative_u64_literal(
+                        &delay_ms,
+                        "`delay_ms` must be a non-negative integer literal",
+                    )?;
+                    args.delay_ms = Some(delay_ms);
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "unsupported session_verification key; expected `max_attempts` or `delay_ms`",
                     ));
                 }
             }
@@ -575,6 +702,14 @@ fn expand_genja_task(
     let connection_plugin_name = args.connection_plugin_name;
     let processors = args.processors;
     let retry = args.retry;
+    let session_verification = args.session_verification;
+
+    if session_verification.is_some() && connection_plugin_name.is_none() {
+        return Err(syn::Error::new_spanned(
+            &item_impl.self_ty,
+            "`session_verification(...)` requires `connection_plugin_name = \"...\"`",
+        ));
+    }
 
     let connection_impl = match connection_plugin_name {
         Some(plugin_name) => quote! { Some(#plugin_name) },
@@ -639,6 +774,27 @@ fn expand_genja_task(
         quote! {
             fn supports_dry_run(&self) -> bool {
                 true
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let session_verification_config_impl = if let Some(session_verification) = session_verification
+    {
+        let max_attempts = match session_verification.max_attempts {
+            Some(max_attempts) => quote! { #max_attempts },
+            None => quote! { 1 },
+        };
+        let delay_ms = match session_verification.delay_ms {
+            Some(delay_ms) => quote! { #delay_ms },
+            None => quote! { 0 },
+        };
+        quote! {
+            fn session_verification_config(&self) -> Option<&genja_core::task::SessionVerificationConfig> {
+                static SESSION_VERIFICATION_CONFIG: genja_core::task::SessionVerificationConfig =
+                    genja_core::task::SessionVerificationConfig::new(#max_attempts, #delay_ms);
+                Some(&SESSION_VERIFICATION_CONFIG)
             }
         }
     } else {
@@ -785,6 +941,8 @@ fn expand_genja_task(
             #retry_config_impl
 
             #supports_dry_run_impl
+
+            #session_verification_config_impl
 
             #idempotency_mode_impl
         }

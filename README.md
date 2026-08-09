@@ -253,6 +253,8 @@ Notes:
 - `#[genja_task(...)]` owns static task metadata like name, processors, and connection plugin selection.
 - Tasks can opt into dry-run support and idempotency checks through
   `#[genja_task(...)]` metadata and matching task hooks.
+- Tasks that change management access can opt into post-change session
+  verification with `session_verification(...)` metadata.
 - `connection_plugin_name` is optional, but usually needed for real task execution.
 - Rich task output is split between semantic outcome payloads
   (`TaskSuccess`, `TaskFailure`, `TaskSkip`) and host-level execution metadata on

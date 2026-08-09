@@ -1,0 +1,19 @@
+error: `session_verification(...)` requires `connection_plugin_name = "..."`
+  --> tests/ui_genja_task/fail/session_verification_without_connection.rs:11:6
+   |
+11 | impl MissingConnectionTask {
+   |      ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `genja_core::inventory::Host`
+ --> tests/ui_genja_task/fail/session_verification_without_connection.rs:2:5
+  |
+2 | use genja_core::inventory::Host;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `HostTaskResult`, `TaskRuntimeContext`, and `TaskSuccess`
+ --> tests/ui_genja_task/fail/session_verification_without_connection.rs:3:24
+  |
+3 | use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+  |                        ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^

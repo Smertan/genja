@@ -131,6 +131,9 @@ Python task authoring rules:
   `idempotency=IdempotencyMode.CHECK_AND_VERIFY` with `check(...)` or
   `check_async(...)` when the task can inspect whether a host is already in
   the desired state.
+- Use `session_verification=SessionVerificationConfig(...)` with
+  `connection_plugin_name` when a changed task should prove that a new
+  authenticated management session can be established after the change.
 
 ```python
 from genja.task import (
@@ -166,6 +169,12 @@ class EnsureNtp:
 Dry-run dispatch does not automatically run idempotency checks. Task authors
 who want shared inspection behavior can call private helper code from both
 their dry-run hook and check hook.
+
+Session verification is independent from idempotency. When both
+`session_verification=SessionVerificationConfig(...)` and
+`idempotency=IdempotencyMode.CHECK_AND_VERIFY` are enabled, Genja replaces the
+connection before running the post-check, so the post-check uses the new
+session.
 
 ## Logging
 

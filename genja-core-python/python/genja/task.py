@@ -11,6 +11,7 @@ directly. The top-level package re-exports these names for compatibility, but
 - ``TaskFailureResult``
 - ``TaskSkipResult``
 - ``RetryConfig``
+- ``SessionVerificationConfig``
 - ``IdempotencyMode``
 - ``IdempotencyCheckResult``
 - task ``options`` metadata
@@ -27,6 +28,7 @@ The canonical authoring shape is:
         IdempotencyCheckResult,
         IdempotencyMode,
         RetryConfig,
+        SessionVerificationConfig,
         TaskInfo,
         TaskMessage,
         TaskMessageLevel,
@@ -40,6 +42,7 @@ The canonical authoring shape is:
         idempotency=IdempotencyMode.CHECK,
         processors=["audit"],
         retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
+        session_verification=SessionVerificationConfig(max_attempts=3, delay_ms=5000),
         options={"backup_path": "/tmp/configs", "compress": True},
     )
     class BackupConfigTask:
@@ -125,6 +128,7 @@ Task metadata comes from ``@task(...)``:
 - ``sub_tasks``: optional list of decorated task classes
 - ``processors``: optional list of processor plugin names
 - ``retry``: optional grouped retry metadata
+- ``session_verification``: optional post-change new-session verification metadata
 - ``idempotency``: optional task-authored convergence check mode
 - ``options``: optional JSON-serializable task options payload
 
@@ -148,7 +152,7 @@ from typing import Any, Awaitable, Literal, Protocol, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
-from .genja import IdempotencyCheckResult, IdempotencyMode
+from .genja import IdempotencyCheckResult, IdempotencyMode, SessionVerificationConfig
 
 _TaskClassT = TypeVar("_TaskClassT", bound=type)
 
@@ -390,6 +394,9 @@ class TaskInfo(_GenjaModel):
             processors are specified.
         retry (RetryConfig | None): Optional task-level retry overrides. If
             None, runner defaults apply.
+        session_verification (SessionVerificationConfig | None): Optional
+            post-change new-session verification configuration. If None,
+            session verification is disabled.
         supports_dry_run (bool): Whether the task declares a dry-run entrypoint
             that the runtime may call when dry-run execution is requested.
         idempotency (IdempotencyMode): Task-authored convergence check mode.
@@ -416,6 +423,10 @@ class TaskInfo(_GenjaModel):
         default=None,
         description="Optional grouped task retry overrides.",
     )
+    session_verification: SessionVerificationConfig | None = Field(
+        default=None,
+        description="Optional post-change new-session verification configuration.",
+    )
     supports_dry_run: bool = Field(
         default=False,
         description="Whether the task declares dry-run support.",
@@ -437,6 +448,14 @@ class TaskInfo(_GenjaModel):
     def _serialize_idempotency(self, value: IdempotencyMode) -> str:
         """Serialize the Rust-backed idempotency enum as its stable value."""
         return value.value
+
+    @field_serializer("session_verification")
+    def _serialize_session_verification(
+        self,
+        value: SessionVerificationConfig | None,
+    ) -> dict[str, Any] | None:
+        """Serialize the Rust-backed session verification config as a dict."""
+        return value.to_dict() if value is not None else None
 
 
 class Host(_GenjaModel):
@@ -675,6 +694,7 @@ def task(
     sub_tasks: list[type[GenjaTaskProtocol]] | None = None,
     processors: list[str] | None = None,
     retry: RetryConfig | None = None,
+    session_verification: SessionVerificationConfig | None = None,
     supports_dry_run: bool = False,
     idempotency: IdempotencyMode = IdempotencyMode.DISABLED,
     options: Any | None = None,
@@ -706,6 +726,9 @@ def task(
             overrides. This setting does not force retries by itself; the task
             must still return ``TaskFailureResult(..., retryable=True)``. Omitted
             retry fields fall back to runner defaults field by field.
+        session_verification (SessionVerificationConfig | None): Optional
+            post-change replacement session verification. When provided, the
+            task must also declare ``connection_plugin_name``. Defaults to None.
         supports_dry_run (bool): Declares that the task supports dry-run
             execution. Sync tasks must define ``dry_run(...)`` and async tasks
             must define ``dry_run_async(...)`` when this is True.
@@ -728,6 +751,8 @@ def task(
             not a non-empty string or None, if sub_tasks is not a list of
             @task-decorated classes or None, if processors is not a list of
             non-empty strings or None, if retry is not RetryConfig or None, if
+            session_verification is not SessionVerificationConfig or None, if
+            session_verification is provided without connection_plugin_name, if
             idempotency is not IdempotencyMode, if retry fields are passed
             outside RetryConfig, or if options is not JSON-serializable.
     """
@@ -872,6 +897,16 @@ def task(
             raise TypeError(
                 f"@task-decorated class '{cls.__name__}' retry must be RetryConfig or None"
             )
+        if session_verification is not None and not isinstance(
+            session_verification, SessionVerificationConfig
+        ):
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' session_verification must be SessionVerificationConfig or None"
+            )
+        if session_verification is not None and connection_plugin_name is None:
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' session_verification requires connection_plugin_name"
+            )
         _ensure_json_serializable(options, "options")
 
         task_cls = cast(type[GenjaTaskProtocol], cls)
@@ -880,6 +915,7 @@ def task(
             "connection_plugin_name": connection_plugin_name,
             "processors": list(processors or []),
             "retry": retry.to_dict() if retry is not None else None,
+            "session_verification": session_verification,
             "supports_dry_run": supports_dry_run,
             "idempotency": idempotency,
             "options": options,
@@ -1313,6 +1349,7 @@ __all__ = [
     "task",
     "GenjaTaskProtocol",
     "RetryConfig",
+    "SessionVerificationConfig",
     "IdempotencyMode",
     "IdempotencyCheckResult",
     "TaskInfo",
