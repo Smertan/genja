@@ -2637,6 +2637,35 @@ fn build_python_model<'py>(
     Ok(class.call((), Some(&kwargs))?.unbind())
 }
 
+fn python_traceback_message(py: Python<'_>, err: &PyErr) -> Option<String> {
+    let traceback = PyModule::import(py, "traceback").ok()?;
+    let lines: Vec<String> = traceback
+        .call_method1(
+            "format_exception",
+            (err.get_type(py), err.value(py), err.traceback(py)),
+        )
+        .ok()?
+        .extract()
+        .ok()?;
+    let message = lines.concat();
+    if message.trim().is_empty() {
+        None
+    } else {
+        Some(message)
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn python_plugin_hook_error_message(
+    py: Python<'_>,
+    plugin_name: &str,
+    hook_name: &str,
+    err: &PyErr,
+) -> String {
+    let details = python_traceback_message(py, err).unwrap_or_else(|| err.to_string());
+    format!("Python plugin '{plugin_name}' failed in {hook_name}:\n\n{details}")
+}
+
 /// Converts a Python error into a Genja core error.
 ///
 /// This function provides a simple conversion from PyO3's `PyErr` type to the
@@ -2793,6 +2822,22 @@ mod tests {
             modules
                 .set_item("genja.connection", &connection)
                 .expect("connection stub should register");
+        });
+    }
+
+    #[test]
+    fn python_plugin_hook_error_message_includes_context_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let fail = import_fixture_attr(py, "tests.fixtures.error_plugins", "raise_type_error")
+                .expect("error fixture should import");
+            let err = fail.call0().expect_err("error fixture should fail");
+
+            let message = python_plugin_hook_error_message(py, "broken_plugin", "run_task", &err);
+
+            assert!(message.starts_with("Python plugin 'broken_plugin' failed in run_task:"));
+            assert!(message.contains("Traceback (most recent call last):"));
+            assert!(message.contains("TypeError: bad hook shape"));
         });
     }
 
