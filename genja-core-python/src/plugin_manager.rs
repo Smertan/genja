@@ -887,9 +887,16 @@ impl PluginInventory for PyInventoryPlugin {
                     "load",
                     (settings_payload.bind(py), plugin_registry.bind(py)),
                 )
-                .map_err(|err| InventoryLoadError::from(err.to_string()))?;
-            let resolved = resolve_python_maybe_awaitable(py, result)
-                .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+                .map_err(|err| {
+                    InventoryLoadError::from(python_plugin_hook_string_error(
+                        py, &self.name, "load", err,
+                    ))
+                })?;
+            let resolved = resolve_python_maybe_awaitable(py, result).map_err(|err| {
+                InventoryLoadError::from(python_plugin_hook_string_error(
+                    py, &self.name, "load", err,
+                ))
+            })?;
             python_inventory_to_rust_inventory(resolved.bind(py).clone())
                 .map_err(|err| InventoryLoadError::from(err.to_string()))
         })
@@ -946,11 +953,21 @@ impl AsyncPluginInventory for PyAsyncInventoryPlugin {
                     (settings_payload.bind(py), plugin_registry.bind(py)),
                 )
                 .map(Bound::unbind)
-                .map_err(|err| InventoryLoadError::from(err.to_string()))
+                .map_err(|err| {
+                    InventoryLoadError::from(python_plugin_hook_string_error(
+                        py, &self.name, "load", err,
+                    ))
+                })
         })?;
         let resolved = resolve_python_awaitable_async(result)
             .await
-            .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+            .map_err(|err| {
+                Python::attach(|py| {
+                    InventoryLoadError::from(python_plugin_hook_string_error(
+                        py, &self.name, "load", err,
+                    ))
+                })
+            })?;
         Python::attach(|py| {
             python_inventory_to_rust_inventory(resolved.bind(py).clone())
                 .map_err(|err| InventoryLoadError::from(err.to_string()))
@@ -977,12 +994,14 @@ impl Plugin for PyTransformFunctionPlugin {
 impl PluginTransformFunction for PyTransformFunctionPlugin {
     fn transform_function(&self) -> TransformFunction {
         TransformFunction::new_full(PyTransformBridge {
+            name: self.name.clone(),
             plugin: Arc::clone(&self.plugin),
         })
     }
 }
 
 struct PyTransformBridge {
+    name: String,
     plugin: Arc<Py<PyAny>>,
 }
 
@@ -1011,9 +1030,9 @@ impl PyTransformBridge {
                     method_name,
                     (value_payload.bind(py), options_payload.bind(py)),
                 )
-                .map_err(|err| err.to_string())?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
+                .map_err(|err| python_plugin_hook_string_error(py, &self.name, method_name, err))?;
+            let resolved = resolve_python_maybe_awaitable(py, result)
+                .map_err(|err| python_plugin_hook_string_error(py, &self.name, method_name, err))?;
             python_payload_to_rust_value(resolved.bind(py), "invalid transform payload")
                 .map(Some)
                 .map_err(|err| err.to_string())
@@ -1120,11 +1139,13 @@ impl PluginRunner for PyRunnerPlugin {
                     ),
                 )
                 .map(Bound::unbind)
-                .map_err(python_processor_error)
+                .map_err(|err| python_plugin_hook_genja_error(py, &self.name, "run_task", err))
         })?;
         let resolved = resolve_python_maybe_awaitable_async(result)
             .await
-            .map_err(python_processor_error)?;
+            .map_err(|err| {
+                Python::attach(|py| python_plugin_hook_genja_error(py, &self.name, "run_task", err))
+            })?;
         Python::attach(|py| {
             python_result_to_task_results(resolved.bind(py).clone()).map_err(python_processor_error)
         })
@@ -1207,11 +1228,15 @@ impl PluginRunner for PyRunnerPlugin {
                     ),
                 )
                 .map(Bound::unbind)
-                .map_err(python_processor_error)
+                .map_err(|err| python_plugin_hook_genja_error(py, &self.name, "run_tasks", err))
         })?;
         let resolved = resolve_python_maybe_awaitable_async(result)
             .await
-            .map_err(python_processor_error)?;
+            .map_err(|err| {
+                Python::attach(|py| {
+                    python_plugin_hook_genja_error(py, &self.name, "run_tasks", err)
+                })
+            })?;
         Python::attach(|py| {
             let sequence = resolved
                 .bind(py)
@@ -1391,9 +1416,13 @@ impl PyConnectionInstance {
     ) -> Self {
         let created = Python::attach(|py| {
             let plugin = factory_plugin.bind(py);
-            let key_payload = build_python_connection_key(py, &key)?;
-            let created = plugin.call_method1("create", (key_payload,))?;
+            let key_payload =
+                build_python_connection_key(py, &key).map_err(|err| err.to_string())?;
+            let created = plugin
+                .call_method1("create", (key_payload,))
+                .map_err(|err| python_plugin_hook_string_error(py, &name, "create", err))?;
             resolve_python_maybe_awaitable(py, created)
+                .map_err(|err| python_plugin_hook_string_error(py, &name, "create", err))
         });
 
         match created {
@@ -1411,7 +1440,7 @@ impl PyConnectionInstance {
                 factory_plugin,
                 key,
                 connection: None,
-                create_error: Some(err.to_string()),
+                create_error: Some(err),
             },
         }
     }
@@ -1635,11 +1664,13 @@ impl PluginConnection for PyConnectionInstance {
             connection
                 .call_method1("open", (params_payload,))
                 .map(Bound::unbind)
-                .map_err(|err| err.to_string())
+                .map_err(|err| python_plugin_hook_string_error(py, &self.name, "open", err))
         })?;
         resolve_python_maybe_awaitable_async(result)
             .await
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| {
+                Python::attach(|py| python_plugin_hook_string_error(py, &self.name, "open", err))
+            })?;
         Ok(())
     }
 
@@ -1688,11 +1719,17 @@ impl PluginConnection for PyConnectionInstance {
             connection
                 .call_method1("execute_command", (command,))
                 .map(Bound::unbind)
-                .map_err(|err| err.to_string())
+                .map_err(|err| {
+                    python_plugin_hook_string_error(py, &self.name, "execute_command", err)
+                })
         })?;
         let resolved = resolve_python_maybe_awaitable_async(result)
             .await
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| {
+                Python::attach(|py| {
+                    python_plugin_hook_string_error(py, &self.name, "execute_command", err)
+                })
+            })?;
         Python::attach(|py| {
             resolved
                 .bind(py)
@@ -1867,6 +1904,7 @@ fn extract_plugin_identity_value(
 impl PluginProcessor for PyProcessorPlugin {
     fn processor(&self) -> Arc<dyn TaskProcessor> {
         Arc::new(PyTaskProcessor {
+            name: self.name.clone(),
             processor: Arc::clone(&self.processor),
         })
     }
@@ -1894,6 +1932,7 @@ impl PluginProcessor for PyProcessorPlugin {
 ///   all task processing operations and allows the processor to maintain state between
 ///   lifecycle events.
 struct PyTaskProcessor {
+    name: String,
     processor: Arc<Py<PyAny>>,
 }
 
@@ -1997,7 +2036,9 @@ impl TaskProcessor for PyTaskProcessor {
                 build_python_processor_context(py, context).map_err(python_processor_error)?;
             processor
                 .call_method1("on_instance_start", (context_payload,))
-                .map_err(python_processor_error)?;
+                .map_err(|err| {
+                    python_plugin_hook_genja_error(py, &self.name, "on_instance_start", err)
+                })?;
             Ok(())
         })
     }
@@ -2054,7 +2095,9 @@ impl TaskProcessor for PyTaskProcessor {
                     "on_instance_finish",
                     (context_payload, result_payload.bind(py)),
                 )
-                .map_err(python_processor_error)?;
+                .map_err(|err| {
+                    python_plugin_hook_genja_error(py, &self.name, "on_instance_finish", err)
+                })?;
             if !replacement.is_none() {
                 *result = python_result_to_host_task_result(replacement)
                     .map_err(python_processor_error)?;
@@ -2122,7 +2165,7 @@ impl PyTaskProcessor {
             .map_err(python_processor_error)?;
             let replacement = processor
                 .call_method1(method_name, (context_payload, results_payload.bind(py)))
-                .map_err(python_processor_error)?;
+                .map_err(|err| python_plugin_hook_genja_error(py, &self.name, method_name, err))?;
             if !replacement.is_none() {
                 *results =
                     python_result_to_task_results(replacement).map_err(python_processor_error)?;
@@ -2655,7 +2698,6 @@ fn python_traceback_message(py: Python<'_>, err: &PyErr) -> Option<String> {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn python_plugin_hook_error_message(
     py: Python<'_>,
     plugin_name: &str,
@@ -2664,6 +2706,29 @@ pub(crate) fn python_plugin_hook_error_message(
 ) -> String {
     let details = python_traceback_message(py, err).unwrap_or_else(|| err.to_string());
     format!("Python plugin '{plugin_name}' failed in {hook_name}:\n\n{details}")
+}
+
+fn python_plugin_hook_string_error(
+    py: Python<'_>,
+    plugin_name: &str,
+    hook_name: &str,
+    err: PyErr,
+) -> String {
+    python_plugin_hook_error_message(py, plugin_name, hook_name, &err)
+}
+
+fn python_plugin_hook_genja_error(
+    py: Python<'_>,
+    plugin_name: &str,
+    hook_name: &str,
+    err: PyErr,
+) -> genja_core::GenjaError {
+    genja_core::GenjaError::Message(python_plugin_hook_string_error(
+        py,
+        plugin_name,
+        hook_name,
+        err,
+    ))
 }
 
 /// Converts a Python error into a Genja core error.

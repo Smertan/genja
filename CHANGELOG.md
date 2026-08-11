@@ -7,7 +7,7 @@ All notable changes to this workspace should be documented in this file.
 Changed packages:
 
 - Rust crates: `genja`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`
-- Python package: `genja-py`
+- Python package: `genja-py`, `genja-core-python`
 
 ### Added
 
@@ -46,6 +46,7 @@ Changed packages:
 ### Fixed
 
 - Improved Python dry-run task decorator validation errors so missing dry-run methods identify the task execution mode and required method signature. Refs: #80
+- Improved Python plugin hook failures so errors identify the plugin and hook and include the original Python traceback when available.
 - Settings files now allow partial `inventory` sections, with omitted inventory fields falling back to their defaults. Refs: #86
 
 ## 0.3.0 - 2026-07-14
