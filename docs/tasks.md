@@ -807,6 +807,10 @@ If the second check still reports `ChangeRequired`, Genja records a validation
 failure. Verification only runs after the normal task entrypoint returns a
 passed result.
 
+If session verification is also enabled, Genja replaces the task connection
+before running the `CheckAndVerify` post-check. The post-check therefore proves
+state convergence through the newly established management session.
+
 Idempotency checks should be read-only. They may open declared connections,
 run inspection commands, normalize current state, calculate diffs, and return
 diagnostic details. They should not apply configuration, save configuration,
@@ -935,10 +939,50 @@ the prerequisite state. Task authors who want dry-run to reuse idempotency logic
 can call their check hook from their dry-run hook, but dependent sub-tasks should
 account for parent dry-run behavior explicitly.
 
+Dry-run also does not run session verification. Session verification proves
+post-change access after an applied change, and dry-run reports planned behavior
+without applying that change.
+
 If dry-run is requested for a task that does not declare support, Genja records a
 clear host failure before calling `start(...)` or `start_async(...)`. Declaring
 dry-run support without the matching dry-run method fails during macro expansion
 or Python task decoration.
+
+## Task Lifecycle Composition
+
+Retry, idempotency, dry-run, and session verification are independent controls
+that answer different questions during task execution:
+
+| Feature | Question it answers |
+| --- | --- |
+| Retry | Should a retryable failed application attempt run again? |
+| Idempotency | Is the desired managed state already present? |
+| Dry-run | What would the task do without applying a change? |
+| Session verification | Can a new management session connect after an applied change? |
+
+For normal execution, Genja composes these controls in a fixed order:
+
+1. Run the idempotency pre-check, if enabled.
+2. Skip the task entrypoint if the pre-check reports convergence.
+3. Run the task entrypoint.
+4. Retry only when retry policy allows it and the task result is retryable.
+5. If session verification is enabled and the application result is passed with
+   `changed=true`, replace the task connection.
+6. If `CheckAndVerify` is enabled, run the post-check. When session verification
+   is also enabled, this post-check runs through the replacement session.
+
+Dry-run uses a different lifecycle:
+
+1. Resolve and open any declared task connection.
+2. Run only `dry_run(...)` or `dry_run_async(...)`.
+3. Do not run idempotency checks.
+4. Do not run session verification.
+5. Return the planned result without applying a change.
+
+The controls do not imply each other. Retry does not prove convergence or
+new-session access. Idempotency does not prove that a new management session can
+connect. Session verification does not rerun task application. Dry-run reports
+planned behavior and does not trigger post-change checks.
 
 ## Inspect Results
 
