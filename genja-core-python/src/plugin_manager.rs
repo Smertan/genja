@@ -2916,6 +2916,56 @@ mod tests {
         module.getattr(attr_name)
     }
 
+    fn register_error_fixture_plugin(py: Python<'_>, manager: &PyPluginManager, class_name: &str) {
+        let plugin_class = import_fixture_attr(py, "tests.fixtures.error_plugins", class_name)
+            .expect("error fixture plugin class should import");
+        let plugin = plugin_class
+            .call0()
+            .expect("error fixture plugin instance should build");
+        manager
+            .register_plugin(plugin)
+            .expect("error fixture plugin should register");
+    }
+
+    fn assert_contextual_plugin_error(
+        message: &str,
+        plugin_name: &str,
+        hook_name: &str,
+        exception: &str,
+    ) {
+        assert!(
+            message.contains(&format!(
+                "Python plugin '{plugin_name}' failed in {hook_name}:"
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains("Traceback (most recent call last):"),
+            "{message}"
+        );
+        assert!(message.contains(exception), "{message}");
+    }
+
+    fn test_hosts() -> genja_core::inventory::Hosts {
+        let mut hosts = genja_core::inventory::Hosts::new();
+        hosts.add_host(
+            "router1",
+            Host::builder().hostname("10.0.0.1").platform("ios").build(),
+        );
+        hosts
+    }
+
+    fn test_connection_params() -> ResolvedConnectionParams {
+        ResolvedConnectionParams {
+            hostname: "10.0.0.1".to_string(),
+            port: Some(22),
+            username: Some("admin".to_string()),
+            password: Some("secret".to_string()),
+            platform: Some("ios".to_string()),
+            extras: None,
+        }
+    }
+
     fn temp_test_dir(name: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3681,6 +3731,241 @@ audit = { path = "processor_plugins:MinimalAuditProcessor" }
             assert_eq!(results[1].task_name(), "task_b");
             assert_eq!(results[0].passed_hosts().len(), 2);
             assert_eq!(results[1].passed_hosts().len(), 2);
+        });
+    }
+
+    #[test]
+    fn inventory_plugin_hook_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "FailingInventoryPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let inventory = inner
+                .get_inventory_plugin("failing_inventory")
+                .expect("inventory plugin should exist");
+
+            let err = inventory
+                .load(&Settings::default(), &inner)
+                .expect_err("inventory load should fail");
+            let message = err.to_string();
+
+            assert_contextual_plugin_error(
+                &message,
+                "failing_inventory",
+                "load",
+                "RuntimeError: inventory load exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn runner_plugin_run_task_hook_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "FailingRunnerPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let runner = inner
+                .get_runner_plugin("failing_runner")
+                .expect("runner plugin should exist");
+            let hosts = test_hosts();
+
+            let err = run_async(runner.run_task(
+                &TaskDefinition::new(TestTask {
+                    name: "failing_runner_task".to_string(),
+                }),
+                &hosts,
+                None,
+                &RunnerConfig::builder().plugin("failing_runner").build(),
+                genja_core::task::TaskRunOptions::new(0),
+            ))
+            .expect_err("runner run_task should fail");
+            let message = err.to_string();
+
+            assert_contextual_plugin_error(
+                &message,
+                "failing_runner",
+                "run_task",
+                "TypeError: runner run_task exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn awaited_runner_plugin_run_task_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "AsyncFailingRunnerPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let runner = inner
+                .get_runner_plugin("async_failing_runner")
+                .expect("runner plugin should exist");
+            let hosts = test_hosts();
+
+            let err = run_async(
+                runner.run_task(
+                    &TaskDefinition::new(TestTask {
+                        name: "async_failing_runner_task".to_string(),
+                    }),
+                    &hosts,
+                    None,
+                    &RunnerConfig::builder()
+                        .plugin("async_failing_runner")
+                        .build(),
+                    genja_core::task::TaskRunOptions::new(0),
+                ),
+            )
+            .expect_err("async runner run_task should fail");
+            let message = err.to_string();
+
+            assert_contextual_plugin_error(
+                &message,
+                "async_failing_runner",
+                "run_task",
+                "RuntimeError: async runner run_task exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn awaited_runner_plugin_run_tasks_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "AsyncFailingBatchRunnerPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let runner = inner
+                .get_runner_plugin("async_failing_batch_runner")
+                .expect("runner plugin should exist");
+            let hosts = test_hosts();
+            let mut tasks = Tasks::new();
+            tasks.add_task(TestTask {
+                name: "batch_a".to_string(),
+            });
+
+            let err = run_async(
+                runner.run_tasks(
+                    &tasks,
+                    &hosts,
+                    None,
+                    &RunnerConfig::builder()
+                        .plugin("async_failing_batch_runner")
+                        .build(),
+                    genja_core::task::TaskRunOptions::new(0),
+                ),
+            )
+            .expect_err("async runner run_tasks should fail");
+            let message = err.to_string();
+
+            assert_contextual_plugin_error(
+                &message,
+                "async_failing_batch_runner",
+                "run_tasks",
+                "RuntimeError: async runner run_tasks exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn connection_execute_command_hook_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "FailingCommandConnectionPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let factory = inner
+                .get_connection_plugin("failing_command")
+                .expect("connection plugin should exist");
+            let key = ConnectionKey::new("router1", "failing_command");
+            let mut connection = factory.create(&key);
+            run_async(connection.open(&test_connection_params()))
+                .expect("connection open should succeed");
+
+            let err = run_async(connection.execute_command("show version"))
+                .expect_err("execute_command should fail");
+
+            assert_contextual_plugin_error(
+                &err,
+                "failing_command",
+                "execute_command",
+                "RuntimeError: connection command exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn processor_hook_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "FailingProcessorPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let processor = inner
+                .get_processor_plugin("failing_processor")
+                .expect("processor plugin should exist")
+                .processor();
+            let context = TaskProcessorContext::new("backup", None::<&str>, 0, None::<&str>);
+            let mut results = TaskResults::new("backup");
+
+            let err = processor
+                .on_task_start(&context, &mut results)
+                .expect_err("processor hook should fail");
+            let message = err.to_string();
+
+            assert_contextual_plugin_error(
+                &message,
+                "failing_processor",
+                "on_task_start",
+                "RuntimeError: processor on_task_start exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn conversion_error_after_successful_runner_hook_is_not_hook_wrapped() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "InvalidResultRunnerPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let runner = inner
+                .get_runner_plugin("invalid_result_runner")
+                .expect("runner plugin should exist");
+            let hosts = test_hosts();
+
+            let err = run_async(
+                runner.run_task(
+                    &TaskDefinition::new(TestTask {
+                        name: "invalid_result_task".to_string(),
+                    }),
+                    &hosts,
+                    None,
+                    &RunnerConfig::builder()
+                        .plugin("invalid_result_runner")
+                        .build(),
+                    genja_core::task::TaskRunOptions::new(0),
+                ),
+            )
+            .expect_err("invalid runner result should fail conversion");
+            let message = err.to_string();
+
+            assert!(!message.contains("Python plugin 'invalid_result_runner' failed in run_task"));
         });
     }
 
