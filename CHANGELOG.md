@@ -46,7 +46,8 @@ Changed packages:
 ### Fixed
 
 - Improved Python dry-run task decorator validation errors so missing dry-run methods identify the task execution mode and required method signature. Refs: #80
-- Improved Python plugin hook failures so errors identify the plugin and hook and include the original Python traceback when available.
+- Improved Python plugin hook failures so errors identify the plugin and hook and include the original Python traceback when available. Refs: #105
+- Improved Python `TaskRunOptions(max_depth=...)` constructor errors for boolean values and accidentally nested `TaskRunOptions` objects. Refs: #105
 - Settings files now allow partial `inventory` sections, with omitted inventory fields falling back to their defaults. Refs: #86
 
 ## 0.3.0 - 2026-07-14
