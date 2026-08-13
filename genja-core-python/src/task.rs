@@ -907,8 +907,12 @@ impl PyTaskRunOptions {
     /// Create runtime task execution options.
     #[new]
     #[pyo3(signature = (max_depth=None, dry_run=false))]
-    fn new(max_depth: Option<usize>, dry_run: bool) -> Self {
-        Self { max_depth, dry_run }
+    fn new(max_depth: Option<Bound<'_, PyAny>>, dry_run: bool) -> PyResult<Self> {
+        let max_depth = match max_depth {
+            Some(value) => Some(extract_task_run_options_max_depth(&value)?),
+            None => None,
+        };
+        Ok(Self { max_depth, dry_run })
     }
 
     /// Return the maximum nested sub-task depth override, if configured.
@@ -1266,6 +1270,34 @@ pub fn run_tasks_async(
             .collect::<Vec<_>>())
     })
     .map(Bound::unbind)
+}
+
+fn task_run_options_max_depth_type_error(type_name: &str) -> PyErr {
+    PyValueError::new_err(format!(
+        "TaskRunOptions(max_depth=...) expected int | None, got {type_name}"
+    ))
+}
+
+fn extract_task_run_options_max_depth(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    if value.is_none() {
+        return Err(task_run_options_max_depth_type_error("NoneType"));
+    }
+    if value.is_instance_of::<PyBool>() {
+        return Err(task_run_options_max_depth_type_error("bool"));
+    }
+    if value.extract::<PyRef<'_, PyTaskRunOptions>>().is_ok() {
+        return Err(PyValueError::new_err(
+            "TaskRunOptions(max_depth=...) expected int | None, got TaskRunOptions. Did you pass an existing TaskRunOptions object as max_depth? Runner plugins receive run_options as their fifth argument, not max_depth.",
+        ));
+    }
+    value.extract::<usize>().map_err(|_| {
+        let type_name = value
+            .get_type()
+            .name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "unknown".to_string());
+        task_run_options_max_depth_type_error(&type_name)
+    })
 }
 
 fn resolve_task_run_options(
@@ -2435,6 +2467,52 @@ mod tests {
         }
 
         type_fn.call1((name, bases, attrs))
+    }
+
+    #[test]
+    fn task_run_options_rejects_bool_max_depth() {
+        init_python();
+        Python::attach(|py| {
+            let value = PyBool::new(py, true).to_owned().into_any();
+            let err = match PyTaskRunOptions::new(Some(value), false) {
+                Ok(_) => panic!("bool max_depth should fail"),
+                Err(err) => err,
+            };
+
+            assert_eq!(
+                err.to_string(),
+                "ValueError: TaskRunOptions(max_depth=...) expected int | None, got bool"
+            );
+        });
+    }
+
+    #[test]
+    fn task_run_options_rejects_nested_task_run_options_max_depth() {
+        init_python();
+        Python::attach(|py| {
+            let nested = Py::new(
+                py,
+                PyTaskRunOptions {
+                    max_depth: Some(1),
+                    dry_run: false,
+                },
+            )
+            .expect("nested run options should build");
+            let err = match PyTaskRunOptions::new(Some(nested.bind(py).clone().into_any()), false) {
+                Ok(_) => panic!("nested TaskRunOptions max_depth should fail"),
+                Err(err) => err,
+            };
+
+            let message = err.to_string();
+            assert!(
+                message.contains(
+                    "TaskRunOptions(max_depth=...) expected int | None, got TaskRunOptions"
+                )
+            );
+            assert!(message.contains(
+                "Runner plugins receive run_options as their fifth argument, not max_depth"
+            ));
+        });
     }
 
     #[test]

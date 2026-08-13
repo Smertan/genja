@@ -887,9 +887,16 @@ impl PluginInventory for PyInventoryPlugin {
                     "load",
                     (settings_payload.bind(py), plugin_registry.bind(py)),
                 )
-                .map_err(|err| InventoryLoadError::from(err.to_string()))?;
-            let resolved = resolve_python_maybe_awaitable(py, result)
-                .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+                .map_err(|err| {
+                    InventoryLoadError::from(python_plugin_hook_string_error(
+                        py, &self.name, "load", err,
+                    ))
+                })?;
+            let resolved = resolve_python_maybe_awaitable(py, result).map_err(|err| {
+                InventoryLoadError::from(python_plugin_hook_string_error(
+                    py, &self.name, "load", err,
+                ))
+            })?;
             python_inventory_to_rust_inventory(resolved.bind(py).clone())
                 .map_err(|err| InventoryLoadError::from(err.to_string()))
         })
@@ -946,11 +953,21 @@ impl AsyncPluginInventory for PyAsyncInventoryPlugin {
                     (settings_payload.bind(py), plugin_registry.bind(py)),
                 )
                 .map(Bound::unbind)
-                .map_err(|err| InventoryLoadError::from(err.to_string()))
+                .map_err(|err| {
+                    InventoryLoadError::from(python_plugin_hook_string_error(
+                        py, &self.name, "load", err,
+                    ))
+                })
         })?;
         let resolved = resolve_python_awaitable_async(result)
             .await
-            .map_err(|err| InventoryLoadError::from(err.to_string()))?;
+            .map_err(|err| {
+                Python::attach(|py| {
+                    InventoryLoadError::from(python_plugin_hook_string_error(
+                        py, &self.name, "load", err,
+                    ))
+                })
+            })?;
         Python::attach(|py| {
             python_inventory_to_rust_inventory(resolved.bind(py).clone())
                 .map_err(|err| InventoryLoadError::from(err.to_string()))
@@ -977,12 +994,14 @@ impl Plugin for PyTransformFunctionPlugin {
 impl PluginTransformFunction for PyTransformFunctionPlugin {
     fn transform_function(&self) -> TransformFunction {
         TransformFunction::new_full(PyTransformBridge {
+            name: self.name.clone(),
             plugin: Arc::clone(&self.plugin),
         })
     }
 }
 
 struct PyTransformBridge {
+    name: String,
     plugin: Arc<Py<PyAny>>,
 }
 
@@ -1011,9 +1030,9 @@ impl PyTransformBridge {
                     method_name,
                     (value_payload.bind(py), options_payload.bind(py)),
                 )
-                .map_err(|err| err.to_string())?;
-            let resolved =
-                resolve_python_maybe_awaitable(py, result).map_err(|err| err.to_string())?;
+                .map_err(|err| python_plugin_hook_string_error(py, &self.name, method_name, err))?;
+            let resolved = resolve_python_maybe_awaitable(py, result)
+                .map_err(|err| python_plugin_hook_string_error(py, &self.name, method_name, err))?;
             python_payload_to_rust_value(resolved.bind(py), "invalid transform payload")
                 .map(Some)
                 .map_err(|err| err.to_string())
@@ -1120,11 +1139,13 @@ impl PluginRunner for PyRunnerPlugin {
                     ),
                 )
                 .map(Bound::unbind)
-                .map_err(python_processor_error)
+                .map_err(|err| python_plugin_hook_genja_error(py, &self.name, "run_task", err))
         })?;
         let resolved = resolve_python_maybe_awaitable_async(result)
             .await
-            .map_err(python_processor_error)?;
+            .map_err(|err| {
+                Python::attach(|py| python_plugin_hook_genja_error(py, &self.name, "run_task", err))
+            })?;
         Python::attach(|py| {
             python_result_to_task_results(resolved.bind(py).clone()).map_err(python_processor_error)
         })
@@ -1207,11 +1228,15 @@ impl PluginRunner for PyRunnerPlugin {
                     ),
                 )
                 .map(Bound::unbind)
-                .map_err(python_processor_error)
+                .map_err(|err| python_plugin_hook_genja_error(py, &self.name, "run_tasks", err))
         })?;
         let resolved = resolve_python_maybe_awaitable_async(result)
             .await
-            .map_err(python_processor_error)?;
+            .map_err(|err| {
+                Python::attach(|py| {
+                    python_plugin_hook_genja_error(py, &self.name, "run_tasks", err)
+                })
+            })?;
         Python::attach(|py| {
             let sequence = resolved
                 .bind(py)
@@ -1391,9 +1416,13 @@ impl PyConnectionInstance {
     ) -> Self {
         let created = Python::attach(|py| {
             let plugin = factory_plugin.bind(py);
-            let key_payload = build_python_connection_key(py, &key)?;
-            let created = plugin.call_method1("create", (key_payload,))?;
+            let key_payload =
+                build_python_connection_key(py, &key).map_err(|err| err.to_string())?;
+            let created = plugin
+                .call_method1("create", (key_payload,))
+                .map_err(|err| python_plugin_hook_string_error(py, &name, "create", err))?;
             resolve_python_maybe_awaitable(py, created)
+                .map_err(|err| python_plugin_hook_string_error(py, &name, "create", err))
         });
 
         match created {
@@ -1411,7 +1440,7 @@ impl PyConnectionInstance {
                 factory_plugin,
                 key,
                 connection: None,
-                create_error: Some(err.to_string()),
+                create_error: Some(err),
             },
         }
     }
@@ -1635,11 +1664,13 @@ impl PluginConnection for PyConnectionInstance {
             connection
                 .call_method1("open", (params_payload,))
                 .map(Bound::unbind)
-                .map_err(|err| err.to_string())
+                .map_err(|err| python_plugin_hook_string_error(py, &self.name, "open", err))
         })?;
         resolve_python_maybe_awaitable_async(result)
             .await
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| {
+                Python::attach(|py| python_plugin_hook_string_error(py, &self.name, "open", err))
+            })?;
         Ok(())
     }
 
@@ -1688,11 +1719,17 @@ impl PluginConnection for PyConnectionInstance {
             connection
                 .call_method1("execute_command", (command,))
                 .map(Bound::unbind)
-                .map_err(|err| err.to_string())
+                .map_err(|err| {
+                    python_plugin_hook_string_error(py, &self.name, "execute_command", err)
+                })
         })?;
         let resolved = resolve_python_maybe_awaitable_async(result)
             .await
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| {
+                Python::attach(|py| {
+                    python_plugin_hook_string_error(py, &self.name, "execute_command", err)
+                })
+            })?;
         Python::attach(|py| {
             resolved
                 .bind(py)
@@ -1867,6 +1904,7 @@ fn extract_plugin_identity_value(
 impl PluginProcessor for PyProcessorPlugin {
     fn processor(&self) -> Arc<dyn TaskProcessor> {
         Arc::new(PyTaskProcessor {
+            name: self.name.clone(),
             processor: Arc::clone(&self.processor),
         })
     }
@@ -1894,6 +1932,7 @@ impl PluginProcessor for PyProcessorPlugin {
 ///   all task processing operations and allows the processor to maintain state between
 ///   lifecycle events.
 struct PyTaskProcessor {
+    name: String,
     processor: Arc<Py<PyAny>>,
 }
 
@@ -1997,7 +2036,9 @@ impl TaskProcessor for PyTaskProcessor {
                 build_python_processor_context(py, context).map_err(python_processor_error)?;
             processor
                 .call_method1("on_instance_start", (context_payload,))
-                .map_err(python_processor_error)?;
+                .map_err(|err| {
+                    python_plugin_hook_genja_error(py, &self.name, "on_instance_start", err)
+                })?;
             Ok(())
         })
     }
@@ -2054,7 +2095,9 @@ impl TaskProcessor for PyTaskProcessor {
                     "on_instance_finish",
                     (context_payload, result_payload.bind(py)),
                 )
-                .map_err(python_processor_error)?;
+                .map_err(|err| {
+                    python_plugin_hook_genja_error(py, &self.name, "on_instance_finish", err)
+                })?;
             if !replacement.is_none() {
                 *result = python_result_to_host_task_result(replacement)
                     .map_err(python_processor_error)?;
@@ -2122,7 +2165,7 @@ impl PyTaskProcessor {
             .map_err(python_processor_error)?;
             let replacement = processor
                 .call_method1(method_name, (context_payload, results_payload.bind(py)))
-                .map_err(python_processor_error)?;
+                .map_err(|err| python_plugin_hook_genja_error(py, &self.name, method_name, err))?;
             if !replacement.is_none() {
                 *results =
                     python_result_to_task_results(replacement).map_err(python_processor_error)?;
@@ -2637,6 +2680,57 @@ fn build_python_model<'py>(
     Ok(class.call((), Some(&kwargs))?.unbind())
 }
 
+fn python_traceback_message(py: Python<'_>, err: &PyErr) -> Option<String> {
+    let traceback = PyModule::import(py, "traceback").ok()?;
+    let lines: Vec<String> = traceback
+        .call_method1(
+            "format_exception",
+            (err.get_type(py), err.value(py), err.traceback(py)),
+        )
+        .ok()?
+        .extract()
+        .ok()?;
+    let message = lines.concat();
+    if message.trim().is_empty() {
+        None
+    } else {
+        Some(message)
+    }
+}
+
+pub(crate) fn python_plugin_hook_error_message(
+    py: Python<'_>,
+    plugin_name: &str,
+    hook_name: &str,
+    err: &PyErr,
+) -> String {
+    let details = python_traceback_message(py, err).unwrap_or_else(|| err.to_string());
+    format!("Python plugin '{plugin_name}' failed in {hook_name}:\n\n{details}")
+}
+
+fn python_plugin_hook_string_error(
+    py: Python<'_>,
+    plugin_name: &str,
+    hook_name: &str,
+    err: PyErr,
+) -> String {
+    python_plugin_hook_error_message(py, plugin_name, hook_name, &err)
+}
+
+fn python_plugin_hook_genja_error(
+    py: Python<'_>,
+    plugin_name: &str,
+    hook_name: &str,
+    err: PyErr,
+) -> genja_core::GenjaError {
+    genja_core::GenjaError::Message(python_plugin_hook_string_error(
+        py,
+        plugin_name,
+        hook_name,
+        err,
+    ))
+}
+
 /// Converts a Python error into a Genja core error.
 ///
 /// This function provides a simple conversion from PyO3's `PyErr` type to the
@@ -2796,6 +2890,22 @@ mod tests {
         });
     }
 
+    #[test]
+    fn python_plugin_hook_error_message_includes_context_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let fail = import_fixture_attr(py, "tests.fixtures.error_plugins", "raise_type_error")
+                .expect("error fixture should import");
+            let err = fail.call0().expect_err("error fixture should fail");
+
+            let message = python_plugin_hook_error_message(py, "broken_plugin", "run_task", &err);
+
+            assert!(message.starts_with("Python plugin 'broken_plugin' failed in run_task:"));
+            assert!(message.contains("Traceback (most recent call last):"));
+            assert!(message.contains("TypeError: bad hook shape"));
+        });
+    }
+
     fn import_fixture_attr<'py>(
         py: Python<'py>,
         module_name: &str,
@@ -2804,6 +2914,56 @@ mod tests {
         let importlib = PyModule::import(py, "importlib")?;
         let module = importlib.call_method1("import_module", (module_name,))?;
         module.getattr(attr_name)
+    }
+
+    fn register_error_fixture_plugin(py: Python<'_>, manager: &PyPluginManager, class_name: &str) {
+        let plugin_class = import_fixture_attr(py, "tests.fixtures.error_plugins", class_name)
+            .expect("error fixture plugin class should import");
+        let plugin = plugin_class
+            .call0()
+            .expect("error fixture plugin instance should build");
+        manager
+            .register_plugin(plugin)
+            .expect("error fixture plugin should register");
+    }
+
+    fn assert_contextual_plugin_error(
+        message: &str,
+        plugin_name: &str,
+        hook_name: &str,
+        exception: &str,
+    ) {
+        assert!(
+            message.contains(&format!(
+                "Python plugin '{plugin_name}' failed in {hook_name}:"
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains("Traceback (most recent call last):"),
+            "{message}"
+        );
+        assert!(message.contains(exception), "{message}");
+    }
+
+    fn test_hosts() -> genja_core::inventory::Hosts {
+        let mut hosts = genja_core::inventory::Hosts::new();
+        hosts.add_host(
+            "router1",
+            Host::builder().hostname("10.0.0.1").platform("ios").build(),
+        );
+        hosts
+    }
+
+    fn test_connection_params() -> ResolvedConnectionParams {
+        ResolvedConnectionParams {
+            hostname: "10.0.0.1".to_string(),
+            port: Some(22),
+            username: Some("admin".to_string()),
+            password: Some("secret".to_string()),
+            platform: Some("ios".to_string()),
+            extras: None,
+        }
     }
 
     fn temp_test_dir(name: &str) -> PathBuf {
@@ -3571,6 +3731,241 @@ audit = { path = "processor_plugins:MinimalAuditProcessor" }
             assert_eq!(results[1].task_name(), "task_b");
             assert_eq!(results[0].passed_hosts().len(), 2);
             assert_eq!(results[1].passed_hosts().len(), 2);
+        });
+    }
+
+    #[test]
+    fn inventory_plugin_hook_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "FailingInventoryPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let inventory = inner
+                .get_inventory_plugin("failing_inventory")
+                .expect("inventory plugin should exist");
+
+            let err = inventory
+                .load(&Settings::default(), &inner)
+                .expect_err("inventory load should fail");
+            let message = err.to_string();
+
+            assert_contextual_plugin_error(
+                &message,
+                "failing_inventory",
+                "load",
+                "RuntimeError: inventory load exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn runner_plugin_run_task_hook_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "FailingRunnerPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let runner = inner
+                .get_runner_plugin("failing_runner")
+                .expect("runner plugin should exist");
+            let hosts = test_hosts();
+
+            let err = run_async(runner.run_task(
+                &TaskDefinition::new(TestTask {
+                    name: "failing_runner_task".to_string(),
+                }),
+                &hosts,
+                None,
+                &RunnerConfig::builder().plugin("failing_runner").build(),
+                genja_core::task::TaskRunOptions::new(0),
+            ))
+            .expect_err("runner run_task should fail");
+            let message = err.to_string();
+
+            assert_contextual_plugin_error(
+                &message,
+                "failing_runner",
+                "run_task",
+                "TypeError: runner run_task exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn awaited_runner_plugin_run_task_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "AsyncFailingRunnerPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let runner = inner
+                .get_runner_plugin("async_failing_runner")
+                .expect("runner plugin should exist");
+            let hosts = test_hosts();
+
+            let err = run_async(
+                runner.run_task(
+                    &TaskDefinition::new(TestTask {
+                        name: "async_failing_runner_task".to_string(),
+                    }),
+                    &hosts,
+                    None,
+                    &RunnerConfig::builder()
+                        .plugin("async_failing_runner")
+                        .build(),
+                    genja_core::task::TaskRunOptions::new(0),
+                ),
+            )
+            .expect_err("async runner run_task should fail");
+            let message = err.to_string();
+
+            assert_contextual_plugin_error(
+                &message,
+                "async_failing_runner",
+                "run_task",
+                "RuntimeError: async runner run_task exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn awaited_runner_plugin_run_tasks_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "AsyncFailingBatchRunnerPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let runner = inner
+                .get_runner_plugin("async_failing_batch_runner")
+                .expect("runner plugin should exist");
+            let hosts = test_hosts();
+            let mut tasks = Tasks::new();
+            tasks.add_task(TestTask {
+                name: "batch_a".to_string(),
+            });
+
+            let err = run_async(
+                runner.run_tasks(
+                    &tasks,
+                    &hosts,
+                    None,
+                    &RunnerConfig::builder()
+                        .plugin("async_failing_batch_runner")
+                        .build(),
+                    genja_core::task::TaskRunOptions::new(0),
+                ),
+            )
+            .expect_err("async runner run_tasks should fail");
+            let message = err.to_string();
+
+            assert_contextual_plugin_error(
+                &message,
+                "async_failing_batch_runner",
+                "run_tasks",
+                "RuntimeError: async runner run_tasks exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn connection_execute_command_hook_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "FailingCommandConnectionPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let factory = inner
+                .get_connection_plugin("failing_command")
+                .expect("connection plugin should exist");
+            let key = ConnectionKey::new("router1", "failing_command");
+            let mut connection = factory.create(&key);
+            run_async(connection.open(&test_connection_params()))
+                .expect("connection open should succeed");
+
+            let err = run_async(connection.execute_command("show version"))
+                .expect_err("execute_command should fail");
+
+            assert_contextual_plugin_error(
+                &err,
+                "failing_command",
+                "execute_command",
+                "RuntimeError: connection command exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn processor_hook_failure_includes_plugin_hook_and_traceback() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "FailingProcessorPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let processor = inner
+                .get_processor_plugin("failing_processor")
+                .expect("processor plugin should exist")
+                .processor();
+            let context = TaskProcessorContext::new("backup", None::<&str>, 0, None::<&str>);
+            let mut results = TaskResults::new("backup");
+
+            let err = processor
+                .on_task_start(&context, &mut results)
+                .expect_err("processor hook should fail");
+            let message = err.to_string();
+
+            assert_contextual_plugin_error(
+                &message,
+                "failing_processor",
+                "on_task_start",
+                "RuntimeError: processor on_task_start exploded",
+            );
+        });
+    }
+
+    #[test]
+    fn conversion_error_after_successful_runner_hook_is_not_hook_wrapped() {
+        init_python();
+        Python::attach(|py| {
+            let manager = PyPluginManager::new();
+            register_error_fixture_plugin(py, &manager, "InvalidResultRunnerPlugin");
+            let inner = manager
+                .take_inner()
+                .expect("plugin manager should be consumable");
+            let runner = inner
+                .get_runner_plugin("invalid_result_runner")
+                .expect("runner plugin should exist");
+            let hosts = test_hosts();
+
+            let err = run_async(
+                runner.run_task(
+                    &TaskDefinition::new(TestTask {
+                        name: "invalid_result_task".to_string(),
+                    }),
+                    &hosts,
+                    None,
+                    &RunnerConfig::builder()
+                        .plugin("invalid_result_runner")
+                        .build(),
+                    genja_core::task::TaskRunOptions::new(0),
+                ),
+            )
+            .expect_err("invalid runner result should fail conversion");
+            let message = err.to_string();
+
+            assert!(!message.contains("Python plugin 'invalid_result_runner' failed in run_task"));
         });
     }
 
