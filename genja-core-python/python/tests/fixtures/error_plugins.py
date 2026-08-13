@@ -29,7 +29,9 @@ class AsyncFailingRunnerPlugin:
 
     group = "RunnerPlugin"
 
-    async def run_task(self, task, hosts, connection_resolver, runner_config, run_options):
+    async def run_task(
+        self, task, hosts, connection_resolver, runner_config, run_options
+    ):
         await _yield_once()
         raise RuntimeError("async runner run_task exploded")
 
@@ -39,14 +41,18 @@ class AsyncFailingBatchRunnerPlugin:
 
     group = "RunnerPlugin"
 
-    async def run_task(self, task, hosts, connection_resolver, runner_config, run_options):
+    async def run_task(
+        self, task, hosts, connection_resolver, runner_config, run_options
+    ):
         return task.run_on_hosts(
             hosts,
             connection_resolver=connection_resolver,
             run_options=run_options,
         )
 
-    async def run_tasks(self, tasks, hosts, connection_resolver, runner_config, run_options):
+    async def run_tasks(
+        self, tasks, hosts, connection_resolver, runner_config, run_options
+    ):
         await _yield_once()
         raise RuntimeError("async runner run_tasks exploded")
 
