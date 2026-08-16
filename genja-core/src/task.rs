@@ -645,6 +645,9 @@ use tokio::sync::Mutex;
 use tokio::task;
 use tokio::time::{Duration, sleep};
 
+pub mod registration;
+pub use registration::{TaskDescriptor, TaskIdSource};
+
 /// Optional retry metadata for a task or runner.
 ///
 /// Each field is optional so task-level metadata can override runner defaults
@@ -3631,7 +3634,8 @@ pub trait TaskInfo {
 }
 
 /// Sub-task provider interface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskExecutionMode {
     Blocking,
     Async,

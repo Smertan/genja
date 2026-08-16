@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added core Rust task discovery descriptor types for serializing generated and explicit task registration metadata.
 - Added core Rust dry-run task capability, context, trait, and execution metadata APIs. Refs: #80
 - Added Rust `#[genja_task(...)]` dry-run metadata with `supports_dry_run = true`. Refs: #80
 - Added Rust task idempotency mode metadata with `IdempotencyMode` and `TaskInfo::idempotency_mode()`, defaulting to disabled. Refs: #88
