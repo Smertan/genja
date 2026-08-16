@@ -62,31 +62,118 @@ pub struct TaskDescriptor {
     pub constructible: bool,
 }
 
+impl TaskDescriptor {
+    /// Build a descriptor for a task discovered from implementation metadata.
+    ///
+    /// Generated descriptors are useful for local listing and inspection, but
+    /// their IDs are derived from implementation details and should not be
+    /// treated as stable public contracts.
+    pub fn generated(
+        id: impl Into<String>,
+        version: impl Into<String>,
+        metadata: TaskDescriptorMetadata,
+    ) -> Self {
+        Self::from_parts(id, TaskIdSource::Generated, version, metadata, None, false)
+    }
+
+    /// Build a descriptor for a task with an explicitly authored stable ID.
+    ///
+    /// Explicit descriptors represent the stable registration path used by
+    /// future provider manifests, remote catalogs, MCP tooling, and JSON input
+    /// construction.
+    pub fn explicit(
+        id: impl Into<String>,
+        version: impl Into<String>,
+        metadata: TaskDescriptorMetadata,
+        input_schema: Option<Value>,
+        constructible: bool,
+    ) -> Self {
+        Self::from_parts(
+            id,
+            TaskIdSource::Explicit,
+            version,
+            metadata,
+            input_schema,
+            constructible,
+        )
+    }
+
+    fn from_parts(
+        id: impl Into<String>,
+        id_source: TaskIdSource,
+        version: impl Into<String>,
+        metadata: TaskDescriptorMetadata,
+        input_schema: Option<Value>,
+        constructible: bool,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            id_source,
+            name: metadata.name,
+            version: version.into(),
+            description: metadata.description,
+            execution_mode: metadata.execution_mode,
+            connection_plugin_name: metadata.connection_plugin_name,
+            processor_names: metadata.processor_names,
+            retry: metadata.retry,
+            input_schema,
+            constructible,
+        }
+    }
+}
+
+/// Task metadata shared by task runtime metadata and discovery descriptors.
+///
+/// `TaskDescriptorMetadata` keeps descriptor construction aligned with macro
+/// generated [`super::TaskInfo`] metadata. Future macro metadata fields that are
+/// part of task discovery should flow through this struct before they are mapped
+/// into generated or explicit [`TaskDescriptor`] values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskDescriptorMetadata {
+    /// Human-readable task name reused from task metadata.
+    pub name: String,
+    /// Optional human-readable task description.
+    pub description: Option<String>,
+    /// Whether the task uses blocking or async execution.
+    pub execution_mode: TaskExecutionMode,
+    /// Connection plugin required by the task, if any.
+    pub connection_plugin_name: Option<String>,
+    /// Processor plugins selected by the task.
+    pub processor_names: Vec<String>,
+    /// Task-specific retry metadata, if configured.
+    pub retry: Option<RetryConfig>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn descriptor_serializes_to_canonical_field_names() {
-        let descriptor = TaskDescriptor {
-            id: "acme.network.configure_acl".to_string(),
-            id_source: TaskIdSource::Explicit,
+    fn descriptor_metadata() -> TaskDescriptorMetadata {
+        TaskDescriptorMetadata {
             name: "configure_acl".to_string(),
-            version: "2.0.0".to_string(),
             description: Some("Configures an ACL on a network device".to_string()),
             execution_mode: TaskExecutionMode::Async,
             connection_plugin_name: Some("ssh".to_string()),
             processor_names: vec!["audit".to_string()],
             retry: Some(RetryConfig::builder().allow(true).max_attempts(3).build()),
-            input_schema: Some(json!({
+        }
+    }
+
+    #[test]
+    fn descriptor_serializes_to_canonical_field_names() {
+        let descriptor = TaskDescriptor::explicit(
+            "acme.network.configure_acl",
+            "2.0.0",
+            descriptor_metadata(),
+            Some(json!({
                 "type": "object",
                 "properties": {
                     "acl_name": { "type": "string" }
                 }
             })),
-            constructible: true,
-        };
+            true,
+        );
 
         let serialized = serde_json::to_value(&descriptor).expect("descriptor serializes");
 
@@ -119,19 +206,18 @@ mod tests {
 
     #[test]
     fn descriptor_serializes_empty_optional_metadata_as_nulls_and_lists() {
-        let descriptor = TaskDescriptor {
-            id: "auto:acme_network_tasks::network::ConfigureAcl".to_string(),
-            id_source: TaskIdSource::Generated,
-            name: "configure_acl".to_string(),
-            version: "2.0.0".to_string(),
-            description: None,
-            execution_mode: TaskExecutionMode::Blocking,
-            connection_plugin_name: None,
-            processor_names: Vec::new(),
-            retry: None,
-            input_schema: None,
-            constructible: false,
-        };
+        let descriptor = TaskDescriptor::generated(
+            "auto:acme_network_tasks::network::ConfigureAcl",
+            "2.0.0",
+            TaskDescriptorMetadata {
+                name: "configure_acl".to_string(),
+                description: None,
+                execution_mode: TaskExecutionMode::Blocking,
+                connection_plugin_name: None,
+                processor_names: Vec::new(),
+                retry: None,
+            },
+        );
 
         let serialized = serde_json::to_value(&descriptor).expect("descriptor serializes");
 
@@ -150,6 +236,99 @@ mod tests {
                 "input_schema": null,
                 "constructible": false
             })
+        );
+    }
+
+    #[test]
+    fn descriptor_constructors_map_shared_metadata() {
+        let metadata = descriptor_metadata();
+
+        let descriptor = TaskDescriptor::explicit(
+            "acme.network.configure_acl",
+            "2.0.0",
+            metadata.clone(),
+            None,
+            true,
+        );
+
+        assert_eq!(descriptor.id, "acme.network.configure_acl");
+        assert_eq!(descriptor.id_source, TaskIdSource::Explicit);
+        assert_eq!(descriptor.version, "2.0.0");
+        assert_eq!(descriptor.name, metadata.name);
+        assert_eq!(descriptor.description, metadata.description);
+        assert_eq!(descriptor.execution_mode, metadata.execution_mode);
+        assert_eq!(
+            descriptor.connection_plugin_name,
+            metadata.connection_plugin_name
+        );
+        assert_eq!(descriptor.processor_names, metadata.processor_names);
+        assert_eq!(descriptor.retry, metadata.retry);
+        assert_eq!(descriptor.input_schema, None);
+        assert!(descriptor.constructible);
+    }
+
+    #[test]
+    fn generated_descriptor_is_not_constructible() {
+        let descriptor = TaskDescriptor::generated(
+            "auto:acme_network_tasks::network::ConfigureAcl",
+            "2.0.0",
+            descriptor_metadata(),
+        );
+
+        assert_eq!(descriptor.id_source, TaskIdSource::Generated);
+        assert_eq!(descriptor.input_schema, None);
+        assert!(!descriptor.constructible);
+    }
+
+    #[test]
+    fn explicit_descriptor_keeps_schema_and_constructible_flag() {
+        let input_schema = json!({
+            "type": "object",
+            "properties": {
+                "acl_name": { "type": "string" }
+            }
+        });
+        let descriptor = TaskDescriptor::explicit(
+            "acme.network.configure_acl",
+            "2.0.0",
+            descriptor_metadata(),
+            Some(input_schema.clone()),
+            true,
+        );
+
+        assert_eq!(descriptor.id_source, TaskIdSource::Explicit);
+        assert_eq!(descriptor.input_schema, Some(input_schema));
+        assert!(descriptor.constructible);
+    }
+
+    #[test]
+    fn descriptor_metadata_can_be_destructured_by_macro_generated_code() {
+        let metadata = TaskDescriptorMetadata {
+            name: "configure_acl".to_string(),
+            description: None,
+            execution_mode: TaskExecutionMode::Async,
+            connection_plugin_name: Some("ssh".to_string()),
+            processor_names: vec!["audit".to_string()],
+            retry: None,
+        };
+
+        assert_eq!(
+            (
+                metadata.name.as_str(),
+                metadata.description.as_deref(),
+                metadata.execution_mode,
+                metadata.connection_plugin_name.as_deref(),
+                metadata.processor_names.as_slice(),
+                metadata.retry,
+            ),
+            (
+                "configure_acl",
+                None,
+                TaskExecutionMode::Async,
+                Some("ssh"),
+                &["audit".to_string()][..],
+                None,
+            )
         );
     }
 }
