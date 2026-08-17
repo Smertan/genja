@@ -5,11 +5,13 @@
 //! Python registration integrations. The descriptor is metadata only; local
 //! construction from JSON input is handled by later factory registry APIs.
 
-use super::{RetryConfig, TaskExecutionMode};
+use super::{RetryConfig, TaskDefinition, TaskExecutionMode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 /// Errors returned by task registration, discovery, and construction APIs.
 ///
@@ -301,6 +303,241 @@ pub fn validate_task_version(version: &str) -> Result<(), TaskRegistrationError>
     Ok(())
 }
 
+/// Read-only catalog of task descriptors.
+///
+/// Catalog implementations provide metadata listing and lookup. They do not
+/// need access to local Rust factories, which lets future SQLite, provider
+/// manifest, remote catalog, and MCP metadata sources implement this trait
+/// without supporting in-process task construction.
+pub trait TaskCatalog {
+    /// Return all known task descriptors in deterministic order.
+    fn list(&self) -> Result<Vec<TaskDescriptor>, TaskRegistrationError>;
+
+    /// Look up a descriptor by ID and optional version.
+    ///
+    /// When `version` is `None`, the lookup succeeds only if exactly one
+    /// version exists for `id`; multiple matches return
+    /// [`TaskRegistrationError::AmbiguousVersion`].
+    fn get(&self, id: &str, version: Option<&str>)
+    -> Result<TaskDescriptor, TaskRegistrationError>;
+}
+
+/// Local factory registry for constructing tasks from JSON-compatible input.
+///
+/// This trait is intentionally separate from [`TaskCatalog`] because persistent
+/// catalogs can store descriptors but cannot store Rust function pointers or
+/// closures.
+pub trait TaskFactoryRegistry {
+    /// Construct a local task definition by ID, optional version, and input.
+    fn create(
+        &self,
+        id: &str,
+        version: Option<&str>,
+        input: Value,
+    ) -> Result<TaskDefinition, TaskRegistrationError>;
+}
+
+/// Type-erased factory for one registered task.
+///
+/// Macro-generated registrations will implement this trait for each
+/// constructible task. The registry only calls this common interface; the
+/// factory implementation owns the task-specific construction strategy.
+pub trait RegisteredTaskFactory: Send + Sync {
+    /// Return the descriptor for the task this factory constructs.
+    fn descriptor(&self) -> &TaskDescriptor;
+
+    /// Construct a task definition from JSON-compatible input.
+    fn create(&self, input: Value) -> Result<TaskDefinition, TaskRegistrationError>;
+}
+
+#[derive(Clone)]
+enum InMemoryTaskEntry {
+    Descriptor(Box<TaskDescriptor>),
+    Factory(Arc<dyn RegisteredTaskFactory>),
+}
+
+impl InMemoryTaskEntry {
+    fn descriptor(&self) -> &TaskDescriptor {
+        match self {
+            Self::Descriptor(descriptor) => descriptor,
+            Self::Factory(factory) => factory.descriptor(),
+        }
+    }
+}
+
+/// In-memory task catalog and local factory registry.
+///
+/// `InMemoryTaskRegistry` is useful for tests, manually assembled local
+/// registries, and as the behavior model for the future compiled registry. It
+/// stores descriptor-only entries as well as factory-backed constructible
+/// entries, rejects duplicate `id + version` pairs, and performs deterministic
+/// version lookup.
+#[derive(Clone, Default)]
+pub struct InMemoryTaskRegistry {
+    entries: BTreeMap<(String, String), InMemoryTaskEntry>,
+}
+
+impl InMemoryTaskRegistry {
+    /// Create an empty in-memory task registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Build a registry from descriptor-only entries.
+    pub fn from_descriptors<I>(descriptors: I) -> Result<Self, TaskRegistrationError>
+    where
+        I: IntoIterator<Item = TaskDescriptor>,
+    {
+        let mut registry = Self::new();
+        for descriptor in descriptors {
+            registry.register_descriptor(descriptor)?;
+        }
+        Ok(registry)
+    }
+
+    /// Add a descriptor-only task entry.
+    ///
+    /// Descriptor-only entries can be listed and looked up but cannot be
+    /// constructed through [`TaskFactoryRegistry::create`].
+    pub fn register_descriptor(
+        &mut self,
+        descriptor: TaskDescriptor,
+    ) -> Result<(), TaskRegistrationError> {
+        validate_descriptor(&descriptor)?;
+        self.insert_entry(InMemoryTaskEntry::Descriptor(Box::new(descriptor)))
+    }
+
+    /// Add a constructible factory-backed task entry.
+    pub fn register_factory<F>(&mut self, factory: F) -> Result<(), TaskRegistrationError>
+    where
+        F: RegisteredTaskFactory + 'static,
+    {
+        self.register_factory_arc(Arc::new(factory))
+    }
+
+    /// Add a shared constructible factory-backed task entry.
+    pub fn register_factory_arc(
+        &mut self,
+        factory: Arc<dyn RegisteredTaskFactory>,
+    ) -> Result<(), TaskRegistrationError> {
+        validate_descriptor(factory.descriptor())?;
+        self.insert_entry(InMemoryTaskEntry::Factory(factory))
+    }
+
+    fn insert_entry(&mut self, entry: InMemoryTaskEntry) -> Result<(), TaskRegistrationError> {
+        let descriptor = entry.descriptor();
+        let key = (descriptor.id.clone(), descriptor.version.clone());
+
+        if self.entries.contains_key(&key) {
+            return Err(TaskRegistrationError::DuplicateRegistration {
+                id: key.0,
+                version: key.1,
+            });
+        }
+
+        self.entries.insert(key, entry);
+        Ok(())
+    }
+
+    fn resolve_entry(
+        &self,
+        id: &str,
+        version: Option<&str>,
+    ) -> Result<&InMemoryTaskEntry, TaskRegistrationError> {
+        if let Some(version) = version {
+            return self
+                .entries
+                .get(&(id.to_string(), version.to_string()))
+                .ok_or_else(|| TaskRegistrationError::NotFound {
+                    id: id.to_string(),
+                    version: Some(version.to_string()),
+                });
+        }
+
+        let mut matches = self
+            .entries
+            .iter()
+            .filter(|((entry_id, _), _)| entry_id == id)
+            .map(|((_, entry_version), entry)| (entry_version.clone(), entry));
+
+        let Some((first_version, first_entry)) = matches.next() else {
+            return Err(TaskRegistrationError::NotFound {
+                id: id.to_string(),
+                version: None,
+            });
+        };
+
+        let mut versions = vec![first_version];
+        for (entry_version, _) in matches {
+            versions.push(entry_version);
+        }
+
+        if versions.len() > 1 {
+            return Err(TaskRegistrationError::AmbiguousVersion {
+                id: id.to_string(),
+                versions,
+            });
+        }
+
+        Ok(first_entry)
+    }
+}
+
+impl TaskCatalog for InMemoryTaskRegistry {
+    fn list(&self) -> Result<Vec<TaskDescriptor>, TaskRegistrationError> {
+        Ok(self
+            .entries
+            .values()
+            .map(|entry| entry.descriptor().clone())
+            .collect())
+    }
+
+    fn get(
+        &self,
+        id: &str,
+        version: Option<&str>,
+    ) -> Result<TaskDescriptor, TaskRegistrationError> {
+        Ok(self.resolve_entry(id, version)?.descriptor().clone())
+    }
+}
+
+impl TaskFactoryRegistry for InMemoryTaskRegistry {
+    fn create(
+        &self,
+        id: &str,
+        version: Option<&str>,
+        input: Value,
+    ) -> Result<TaskDefinition, TaskRegistrationError> {
+        let entry = self.resolve_entry(id, version)?;
+        let descriptor = entry.descriptor();
+
+        if !descriptor.constructible {
+            return Err(TaskRegistrationError::NotConstructible {
+                id: descriptor.id.clone(),
+                version: descriptor.version.clone(),
+            });
+        }
+
+        match entry {
+            InMemoryTaskEntry::Descriptor(descriptor) => {
+                Err(TaskRegistrationError::NotConstructible {
+                    id: descriptor.id.clone(),
+                    version: descriptor.version.clone(),
+                })
+            }
+            InMemoryTaskEntry::Factory(factory) => factory.create(input),
+        }
+    }
+}
+
+fn validate_descriptor(descriptor: &TaskDescriptor) -> Result<(), TaskRegistrationError> {
+    if descriptor.id_source == TaskIdSource::Explicit {
+        validate_explicit_task_id(&descriptor.id)?;
+    }
+    validate_task_version(&descriptor.version)?;
+    Ok(())
+}
+
 /// Indicates how a task descriptor's `id` was chosen.
 ///
 /// Generated IDs are useful for local discovery but are derived from Rust
@@ -439,6 +676,12 @@ pub struct TaskDescriptorMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::async_trait;
+    use crate::inventory::Host;
+    use crate::task::{
+        BlockingTaskRuntimeContext, HostTaskResult, Task, TaskError, TaskInfo, TaskRuntimeContext,
+        TaskSuccess,
+    };
     use serde_json::json;
 
     fn descriptor_metadata() -> TaskDescriptorMetadata {
@@ -449,6 +692,79 @@ mod tests {
             connection_plugin_name: Some("ssh".to_string()),
             processor_names: vec!["audit".to_string()],
             retry: Some(RetryConfig::builder().allow(true).max_attempts(3).build()),
+        }
+    }
+
+    fn explicit_descriptor(id: &str, version: &str, constructible: bool) -> TaskDescriptor {
+        TaskDescriptor::explicit(id, version, descriptor_metadata(), None, constructible)
+    }
+
+    fn generated_descriptor(id: &str, version: &str) -> TaskDescriptor {
+        TaskDescriptor::generated(id, version, descriptor_metadata())
+    }
+
+    struct RegistryTestTask {
+        name: &'static str,
+    }
+
+    impl TaskInfo for RegistryTestTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+    }
+
+    #[async_trait]
+    impl Task for RegistryTestTask {
+        fn start(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    struct RegistryTestFactory {
+        descriptor: TaskDescriptor,
+    }
+
+    impl RegistryTestFactory {
+        fn new(id: &str, version: &str) -> Self {
+            Self {
+                descriptor: explicit_descriptor(id, version, true),
+            }
+        }
+    }
+
+    impl RegisteredTaskFactory for RegistryTestFactory {
+        fn descriptor(&self) -> &TaskDescriptor {
+            &self.descriptor
+        }
+
+        fn create(&self, input: Value) -> Result<TaskDefinition, TaskRegistrationError> {
+            if input != json!({ "ok": true }) {
+                return Err(TaskRegistrationError::InvalidInput {
+                    id: self.descriptor.id.clone(),
+                    version: self.descriptor.version.clone(),
+                    message: "expected ok flag".to_string(),
+                });
+            }
+
+            Ok(TaskDefinition::new(RegistryTestTask {
+                name: "registry_test_task",
+            }))
         }
     }
 
@@ -802,6 +1118,217 @@ mod tests {
             }
             .to_string(),
             "registered task `acme.network.configure_acl` has multiple versions: 1.0.0, 2.0.0"
+        );
+    }
+
+    #[test]
+    fn in_memory_registry_lists_descriptors_in_deterministic_order() {
+        let registry = InMemoryTaskRegistry::from_descriptors([
+            explicit_descriptor("zeta.task", "1.0.0", false),
+            explicit_descriptor("acme.task", "2.0.0", false),
+            explicit_descriptor("acme.task", "1.0.0", false),
+        ])
+        .expect("descriptors should register");
+
+        let listed = registry.list().expect("list should succeed");
+        let identities = listed
+            .iter()
+            .map(|descriptor| format!("{}@{}", descriptor.id, descriptor.version))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            identities,
+            vec!["acme.task@1.0.0", "acme.task@2.0.0", "zeta.task@1.0.0"]
+        );
+    }
+
+    #[test]
+    fn in_memory_registry_gets_exact_version() {
+        let registry = InMemoryTaskRegistry::from_descriptors([
+            explicit_descriptor("acme.task", "1.0.0", false),
+            explicit_descriptor("acme.task", "2.0.0", false),
+        ])
+        .expect("descriptors should register");
+
+        let descriptor = registry
+            .get("acme.task", Some("2.0.0"))
+            .expect("descriptor should exist");
+
+        assert_eq!(descriptor.id, "acme.task");
+        assert_eq!(descriptor.version, "2.0.0");
+    }
+
+    #[test]
+    fn in_memory_registry_get_without_version_succeeds_for_single_match() {
+        let registry = InMemoryTaskRegistry::from_descriptors([
+            explicit_descriptor("acme.task", "1.0.0", false),
+            explicit_descriptor("zeta.task", "1.0.0", false),
+        ])
+        .expect("descriptors should register");
+
+        let descriptor = registry
+            .get("acme.task", None)
+            .expect("single version should resolve");
+
+        assert_eq!(descriptor.id, "acme.task");
+        assert_eq!(descriptor.version, "1.0.0");
+    }
+
+    #[test]
+    fn in_memory_registry_get_without_version_rejects_ambiguity() {
+        let registry = InMemoryTaskRegistry::from_descriptors([
+            explicit_descriptor("acme.task", "1.0.0", false),
+            explicit_descriptor("acme.task", "2.0.0", false),
+        ])
+        .expect("descriptors should register");
+
+        let error = registry
+            .get("acme.task", None)
+            .expect_err("multiple versions should be ambiguous");
+
+        assert_eq!(
+            error,
+            TaskRegistrationError::AmbiguousVersion {
+                id: "acme.task".to_string(),
+                versions: vec!["1.0.0".to_string(), "2.0.0".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn in_memory_registry_get_returns_not_found() {
+        let registry = InMemoryTaskRegistry::from_descriptors([explicit_descriptor(
+            "acme.task",
+            "1.0.0",
+            false,
+        )])
+        .expect("descriptors should register");
+
+        assert_eq!(
+            registry
+                .get("missing.task", None)
+                .expect_err("missing id should fail"),
+            TaskRegistrationError::NotFound {
+                id: "missing.task".to_string(),
+                version: None,
+            }
+        );
+        assert_eq!(
+            registry
+                .get("acme.task", Some("2.0.0"))
+                .expect_err("missing version should fail"),
+            TaskRegistrationError::NotFound {
+                id: "acme.task".to_string(),
+                version: Some("2.0.0".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn in_memory_registry_rejects_duplicate_id_and_version() {
+        let error = InMemoryTaskRegistry::from_descriptors([
+            explicit_descriptor("acme.task", "1.0.0", false),
+            explicit_descriptor("acme.task", "1.0.0", false),
+        ])
+        .err()
+        .expect("duplicate descriptors should fail");
+
+        assert_eq!(
+            error,
+            TaskRegistrationError::DuplicateRegistration {
+                id: "acme.task".to_string(),
+                version: "1.0.0".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn in_memory_registry_validates_explicit_descriptors_only_as_explicit_ids() {
+        let generated =
+            generated_descriptor("auto:acme_network_tasks::network::ConfigureAcl", "1.0.0");
+        InMemoryTaskRegistry::from_descriptors([generated])
+            .expect("generated ids should not use explicit id validation");
+
+        let explicit = explicit_descriptor(
+            "auto:acme_network_tasks::network::ConfigureAcl",
+            "1.0.0",
+            false,
+        );
+        assert!(matches!(
+            InMemoryTaskRegistry::from_descriptors([explicit]),
+            Err(TaskRegistrationError::InvalidId { .. })
+        ));
+    }
+
+    #[test]
+    fn in_memory_registry_validates_descriptor_versions() {
+        let descriptor =
+            generated_descriptor("auto:acme_network_tasks::network::ConfigureAcl", "latest");
+
+        assert!(matches!(
+            InMemoryTaskRegistry::from_descriptors([descriptor]),
+            Err(TaskRegistrationError::InvalidVersion { .. })
+        ));
+    }
+
+    #[test]
+    fn in_memory_registry_creates_factory_backed_task() {
+        let mut registry = InMemoryTaskRegistry::new();
+        registry
+            .register_factory(RegistryTestFactory::new("acme.task", "1.0.0"))
+            .expect("factory should register");
+
+        let task = registry
+            .create("acme.task", None, json!({ "ok": true }))
+            .expect("factory should create task");
+
+        assert_eq!(task.as_task().name(), "registry_test_task");
+    }
+
+    #[test]
+    fn in_memory_registry_propagates_factory_errors_without_raw_input() {
+        let mut registry = InMemoryTaskRegistry::new();
+        registry
+            .register_factory(RegistryTestFactory::new("acme.task", "1.0.0"))
+            .expect("factory should register");
+
+        let error = registry
+            .create("acme.task", Some("1.0.0"), json!({ "secret": "value" }))
+            .err()
+            .expect("factory should reject input");
+
+        assert_eq!(
+            error,
+            TaskRegistrationError::InvalidInput {
+                id: "acme.task".to_string(),
+                version: "1.0.0".to_string(),
+                message: "expected ok flag".to_string(),
+            }
+        );
+        assert!(!error.to_string().contains("secret"));
+        assert!(!error.to_string().contains("value"));
+    }
+
+    #[test]
+    fn in_memory_registry_rejects_descriptor_only_create() {
+        let registry = InMemoryTaskRegistry::from_descriptors([explicit_descriptor(
+            "acme.task",
+            "1.0.0",
+            false,
+        )])
+        .expect("descriptor should register");
+
+        let error = registry
+            .create("acme.task", None, Value::Null)
+            .err()
+            .expect("descriptor-only entry is not constructible");
+
+        assert_eq!(
+            error,
+            TaskRegistrationError::NotConstructible {
+                id: "acme.task".to_string(),
+                version: "1.0.0".to_string(),
+            }
         );
     }
 }

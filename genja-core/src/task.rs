@@ -647,7 +647,8 @@ use tokio::time::{Duration, sleep};
 
 pub mod registration;
 pub use registration::{
-    TaskDescriptor, TaskDescriptorMetadata, TaskIdSource, TaskRegistrationError,
+    InMemoryTaskRegistry, RegisteredTaskFactory, TaskCatalog, TaskDescriptor,
+    TaskDescriptorMetadata, TaskFactoryRegistry, TaskIdSource, TaskRegistrationError,
     TaskRegistrationKey, validate_explicit_task_id, validate_task_version,
 };
 
