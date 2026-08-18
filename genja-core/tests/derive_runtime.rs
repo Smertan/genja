@@ -4,8 +4,8 @@ use genja_core::genja_task;
 use genja_core::inventory::{BaseBuilderHost, Host};
 use genja_core::task::{
     BlockingTaskRuntimeContext, HostTaskResult, IdempotencyCheck, IdempotencyMode, Task,
-    TaskCatalog, TaskExecutionMode, TaskIdSource, TaskInfo, TaskRuntimeContext, TaskSuccess,
-    compiled_task_registry, get_compiled_task_descriptor,
+    TaskCatalog, TaskExecutionMode, TaskFactoryRegistry, TaskIdSource, TaskInfo,
+    TaskRuntimeContext, TaskSuccess, compiled_task_registry, get_compiled_task_descriptor,
 };
 use serde_json::{Value, json};
 
@@ -171,6 +171,51 @@ impl BlockingDryRunTask {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct RegisteredSerdeTask {
+    options: Value,
+}
+
+#[genja_task(
+    name = "registered_serde_task",
+    processors = ["audit"],
+    registration(
+        id = "acme.tests.derive_runtime.registered_serde_task",
+        version = "1.2.3",
+        description = "Constructs a task from JSON input"
+    )
+)]
+impl RegisteredSerdeTask {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
+    }
+
+    fn options(&self) -> Option<&Value> {
+        Some(&self.options)
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RegisteredDefaultVersionTask;
+
+#[genja_task(
+    name = "registered_default_version_task",
+    registration(id = "acme.tests.derive_runtime.registered_default_version_task")
+)]
+impl RegisteredDefaultVersionTask {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
+    }
+}
+
 #[test]
 fn genja_task_generates_task_info_from_metadata() {
     let task = AsyncTask {
@@ -195,6 +240,72 @@ fn genja_task_generates_task_info_from_metadata() {
     assert!(task.helper());
     assert!(!task.supports_dry_run());
     assert_eq!(task.idempotency_mode(), IdempotencyMode::Disabled);
+}
+
+#[test]
+fn genja_task_submits_explicit_constructible_registration() {
+    let descriptor = get_compiled_task_descriptor(
+        "acme.tests.derive_runtime.registered_serde_task",
+        Some("1.2.3"),
+    )
+    .expect("explicit descriptor should be registered");
+
+    assert_eq!(
+        descriptor.id,
+        "acme.tests.derive_runtime.registered_serde_task"
+    );
+    assert_eq!(descriptor.id_source, TaskIdSource::Explicit);
+    assert_eq!(descriptor.name, "registered_serde_task");
+    assert_eq!(descriptor.version, "1.2.3");
+    assert_eq!(
+        descriptor.description.as_deref(),
+        Some("Constructs a task from JSON input")
+    );
+    assert_eq!(descriptor.execution_mode, TaskExecutionMode::Async);
+    assert_eq!(descriptor.processor_names, vec!["audit"]);
+    assert_eq!(descriptor.input_schema, None);
+    assert!(descriptor.constructible);
+}
+
+#[test]
+fn genja_task_compiled_registry_creates_registered_task_from_json() {
+    let registry = compiled_task_registry().expect("compiled registry should build");
+    let task = registry
+        .create(
+            "acme.tests.derive_runtime.registered_serde_task",
+            Some("1.2.3"),
+            json!({ "options": { "source": "json" } }),
+        )
+        .expect("registered serde factory should create task");
+
+    assert_eq!(task.name(), "registered_serde_task");
+    assert_eq!(task.options(), Some(&json!({ "source": "json" })));
+
+    let error = match registry.create(
+        "acme.tests.derive_runtime.registered_serde_task",
+        Some("1.2.3"),
+        json!({ "unexpected": true }),
+    ) {
+        Ok(_) => panic!("serde factory should reject invalid input"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        genja_core::task::TaskRegistrationError::InvalidInput { .. }
+    ));
+}
+
+#[test]
+fn genja_task_registration_version_defaults_to_package_version() {
+    let descriptor = get_compiled_task_descriptor(
+        "acme.tests.derive_runtime.registered_default_version_task",
+        Some(env!("CARGO_PKG_VERSION")),
+    )
+    .expect("explicit descriptor should be registered with package version");
+
+    assert_eq!(descriptor.id_source, TaskIdSource::Explicit);
+    assert_eq!(descriptor.version, env!("CARGO_PKG_VERSION"));
+    assert!(descriptor.constructible);
 }
 
 #[test]

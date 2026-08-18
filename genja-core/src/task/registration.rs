@@ -2,8 +2,9 @@
 //!
 //! This module defines the serializable task descriptor contract used by
 //! local Rust task discovery and future catalog, provider manifest, MCP, and
-//! Python registration integrations. The descriptor is metadata only; local
-//! construction from JSON input is handled by later factory registry APIs.
+//! Python registration integrations. Descriptors can be stored by themselves
+//! for discovery-only catalogs or paired with factories that construct local
+//! task instances from JSON-compatible input.
 
 use super::{RetryConfig, TaskDefinition, TaskExecutionMode};
 use serde::{Deserialize, Serialize};
@@ -311,6 +312,7 @@ pub fn validate_task_version(version: &str) -> Result<(), TaskRegistrationError>
 /// `String`, `Vec`, and JSON values without requiring const allocation.
 pub struct CompiledTaskRegistration {
     descriptor: fn() -> TaskDescriptor,
+    create: Option<fn(Value) -> Result<TaskDefinition, TaskRegistrationError>>,
 }
 
 impl CompiledTaskRegistration {
@@ -319,7 +321,25 @@ impl CompiledTaskRegistration {
     /// Descriptor-only registrations are discoverable through [`TaskCatalog`]
     /// but are not constructible through [`TaskFactoryRegistry`].
     pub const fn descriptor_only(descriptor: fn() -> TaskDescriptor) -> Self {
-        Self { descriptor }
+        Self {
+            descriptor,
+            create: None,
+        }
+    }
+
+    /// Create a constructible compiled task registration.
+    ///
+    /// Constructible registrations are discoverable through [`TaskCatalog`] and
+    /// can be created from JSON-compatible input through
+    /// [`TaskFactoryRegistry::create`].
+    pub const fn constructible(
+        descriptor: fn() -> TaskDescriptor,
+        create: fn(Value) -> Result<TaskDefinition, TaskRegistrationError>,
+    ) -> Self {
+        Self {
+            descriptor,
+            create: Some(create),
+        }
     }
 
     /// Build this registration's task descriptor.
@@ -330,6 +350,21 @@ impl CompiledTaskRegistration {
 
 inventory_crate::collect!(CompiledTaskRegistration);
 
+struct CompiledTaskFactory {
+    descriptor: TaskDescriptor,
+    create: fn(Value) -> Result<TaskDefinition, TaskRegistrationError>,
+}
+
+impl RegisteredTaskFactory for CompiledTaskFactory {
+    fn descriptor(&self) -> &TaskDescriptor {
+        &self.descriptor
+    }
+
+    fn create(&self, input: Value) -> Result<TaskDefinition, TaskRegistrationError> {
+        (self.create)(input)
+    }
+}
+
 /// Build an in-memory registry from all task registrations linked into this process.
 ///
 /// The resulting registry validates descriptor versions, validates explicit
@@ -338,7 +373,12 @@ inventory_crate::collect!(CompiledTaskRegistration);
 pub fn compiled_task_registry() -> Result<InMemoryTaskRegistry, TaskRegistrationError> {
     let mut registry = InMemoryTaskRegistry::new();
     for registration in inventory_crate::iter::<CompiledTaskRegistration> {
-        registry.register_descriptor(registration.descriptor())?;
+        let descriptor = registration.descriptor();
+        if let Some(create) = registration.create {
+            registry.register_factory(CompiledTaskFactory { descriptor, create })?;
+        } else {
+            registry.register_descriptor(descriptor)?;
+        }
     }
     Ok(registry)
 }

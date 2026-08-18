@@ -1,0 +1,5 @@
+error: invalid registration `id`: id segments must start with an ASCII lowercase letter or digit
+ --> tests/ui_genja_task/fail/invalid_registration_id.rs:8:23
+  |
+8 |     registration(id = "Acme.Tests.BadTask")
+  |                       ^^^^^^^^^^^^^^^^^^^^

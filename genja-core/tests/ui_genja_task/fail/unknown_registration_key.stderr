@@ -1,0 +1,5 @@
+error: unsupported registration key; expected `id`, `version`, `description`, or `factory`
+  --> tests/ui_genja_task/fail/unknown_registration_key.rs:10:9
+   |
+10 |         owner = "network"
+   |         ^^^^^

@@ -68,6 +68,10 @@ pub mod types;
 pub use ::async_trait::async_trait;
 #[doc(hidden)]
 pub use ::inventory_crate as __inventory;
+#[doc(hidden)]
+pub use ::serde as __serde;
+#[doc(hidden)]
+pub use ::serde_json as __serde_json;
 pub use errors::{
     ConfigLoadError, GenjaError, InventoryFileKind, InventoryLoadError, SshConfigError,
 };
