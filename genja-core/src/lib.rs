@@ -66,6 +66,8 @@ pub mod task;
 pub mod types;
 
 pub use ::async_trait::async_trait;
+#[doc(hidden)]
+pub use ::inventory_crate as __inventory;
 pub use errors::{
     ConfigLoadError, GenjaError, InventoryFileKind, InventoryLoadError, SshConfigError,
 };

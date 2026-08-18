@@ -4,10 +4,11 @@
 //! implementations for tuple-wrapper types.
 //!
 //! `genja_task` is the public task-authoring macro. It generates both
-//! `TaskInfo` and `Task` implementations from an inherent `impl` block and
-//! infers execution mode from `fn start(...)` versus `async fn start_async(...)`.
-//! The optional `retry(...)` block emits static `genja_core::task::RetryConfig`
-//! metadata for task-level retry overrides.
+//! `TaskInfo` and `Task` implementations from an inherent `impl` block, submits
+//! local discovery metadata to the compiled task registry, and infers execution
+//! mode from `fn start(...)` versus `async fn start_async(...)`. The optional
+//! `retry(...)` block emits static `genja_core::task::RetryConfig` metadata for
+//! task-level retry overrides.
 //!
 //! # Task Authoring Example
 //! ```ignore
@@ -152,8 +153,8 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// Generate `TaskInfo` and `Task` implementations for an inherent task `impl`
-/// block.
+/// Generate `TaskInfo`, `Task`, and local discovery metadata for an inherent
+/// task `impl` block.
 ///
 /// The macro requires `name = "..."` and exactly one task entrypoint:
 /// `fn start(...)` for blocking tasks or `async fn start_async(...)` for async
@@ -169,6 +170,10 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// - `session_verification(max_attempts = ..., delay_ms = ...)`; defaults to
 ///   disabled when the block is absent. Inside the block, omitted
 ///   `max_attempts` defaults to `1` and omitted `delay_ms` defaults to `0`.
+///
+/// Every annotated task is discoverable through the compiled task registry with
+/// a generated local-only ID derived from the Rust type path. Generated
+/// discovery metadata does not make the task constructible from JSON input.
 ///
 /// `session_verification(...)` requires `connection_plugin_name = "..."`,
 /// because post-change session verification must replace a declared task
@@ -711,7 +716,7 @@ fn expand_genja_task(
         ));
     }
 
-    let connection_impl = match connection_plugin_name {
+    let connection_impl = match &connection_plugin_name {
         Some(plugin_name) => quote! { Some(#plugin_name) },
         None => quote! { None },
     };
@@ -746,23 +751,27 @@ fn expand_genja_task(
         }
     };
 
-    let retry_config_impl = if let Some(retry) = retry {
+    let retry_config_value = retry.as_ref().map(|retry| {
         let allow = match retry.allow {
-            Some(allow) => quote! { Some(#allow) },
+            Some(ref allow) => quote! { Some(#allow) },
             None => quote! { None },
         };
         let max_attempts = match retry.max_attempts {
-            Some(max_attempts) => quote! { Some(#max_attempts) },
+            Some(ref max_attempts) => quote! { Some(#max_attempts) },
             None => quote! { None },
         };
         let delay_ms = match retry.delay_ms {
-            Some(delay_ms) => quote! { Some(#delay_ms) },
+            Some(ref delay_ms) => quote! { Some(#delay_ms) },
             None => quote! { None },
         };
+        quote! { genja_core::task::RetryConfig::new(#allow, #max_attempts, #delay_ms) }
+    });
+
+    let retry_config_impl = if let Some(retry_config_value) = &retry_config_value {
         quote! {
             fn retry_config(&self) -> Option<&genja_core::task::RetryConfig> {
                 static RETRY_CONFIG: genja_core::task::RetryConfig =
-                    genja_core::task::RetryConfig::new(#allow, #max_attempts, #delay_ms);
+                    #retry_config_value;
                 Some(&RETRY_CONFIG)
             }
         }
@@ -822,6 +831,43 @@ fn expand_genja_task(
         quote! {}
     };
 
+    let execution_mode = if has_start {
+        quote! { genja_core::task::TaskExecutionMode::Blocking }
+    } else {
+        quote! { genja_core::task::TaskExecutionMode::Async }
+    };
+
+    let descriptor_connection_plugin_name = match &connection_plugin_name {
+        Some(plugin_name) => quote! { Some(#plugin_name.to_string()) },
+        None => quote! { None },
+    };
+    let descriptor_retry = match &retry_config_value {
+        Some(retry_config_value) => quote! { Some(#retry_config_value) },
+        None => quote! { None },
+    };
+    let descriptor_registration = quote! {
+        const _: () = {
+            fn __genja_task_descriptor() -> genja_core::task::TaskDescriptor {
+                genja_core::task::TaskDescriptor::generated(
+                    format!("auto:{}", std::any::type_name::<#self_ty>()),
+                    env!("CARGO_PKG_VERSION"),
+                    genja_core::task::TaskDescriptorMetadata {
+                        name: #name.to_string(),
+                        description: None,
+                        execution_mode: #execution_mode,
+                        connection_plugin_name: #descriptor_connection_plugin_name,
+                        processor_names: vec![#(#processors.to_string()),*],
+                        retry: #descriptor_retry,
+                    },
+                )
+            }
+
+            genja_core::__inventory::submit! {
+                genja_core::task::CompiledTaskRegistration::descriptor_only(__genja_task_descriptor)
+            }
+        };
+    };
+
     let task_impl = if has_start {
         let dry_run_impl = if has_dry_run {
             quote! {
@@ -867,7 +913,7 @@ fn expand_genja_task(
                 #sub_tasks_impl
 
                 fn execution_mode(&self) -> genja_core::task::TaskExecutionMode {
-                    genja_core::task::TaskExecutionMode::Blocking
+                    #execution_mode
                 }
             }
         }
@@ -916,7 +962,7 @@ fn expand_genja_task(
                 #sub_tasks_impl
 
                 fn execution_mode(&self) -> genja_core::task::TaskExecutionMode {
-                    genja_core::task::TaskExecutionMode::Async
+                    #execution_mode
                 }
             }
         }
@@ -948,6 +994,8 @@ fn expand_genja_task(
         }
 
         #task_impl
+
+        #descriptor_registration
     })
 }
 

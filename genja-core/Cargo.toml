@@ -14,6 +14,7 @@ categories = ["development-tools", "asynchronous", "network-programming"]
 [dependencies]
 async-recursion = "1.1.1"
 async-trait = "0.1.89"
+inventory_crate = { package = "inventory", version = "0.3.24" }
 log = "0.4.27"
 natord = "1.0.9"
 genja-core-derive = { version = "0.3.0", path = "../genja-core-derive" }

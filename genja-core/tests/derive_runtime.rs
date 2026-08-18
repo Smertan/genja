@@ -4,7 +4,8 @@ use genja_core::genja_task;
 use genja_core::inventory::{BaseBuilderHost, Host};
 use genja_core::task::{
     BlockingTaskRuntimeContext, HostTaskResult, IdempotencyCheck, IdempotencyMode, Task,
-    TaskExecutionMode, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    TaskCatalog, TaskExecutionMode, TaskIdSource, TaskInfo, TaskRuntimeContext, TaskSuccess,
+    compiled_task_registry, get_compiled_task_descriptor,
 };
 use serde_json::{Value, json};
 
@@ -194,6 +195,49 @@ fn genja_task_generates_task_info_from_metadata() {
     assert!(task.helper());
     assert!(!task.supports_dry_run());
     assert_eq!(task.idempotency_mode(), IdempotencyMode::Disabled);
+}
+
+#[test]
+fn genja_task_submits_generated_discovery_descriptor() {
+    let task_id = format!("auto:{}", std::any::type_name::<AsyncTask>());
+    let descriptor = get_compiled_task_descriptor(&task_id, Some(env!("CARGO_PKG_VERSION")))
+        .expect("generated descriptor should be registered");
+
+    assert_eq!(descriptor.id, task_id);
+    assert_eq!(descriptor.id_source, TaskIdSource::Generated);
+    assert_eq!(descriptor.name, "async_task");
+    assert_eq!(descriptor.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(descriptor.description, None);
+    assert_eq!(descriptor.execution_mode, TaskExecutionMode::Async);
+    assert_eq!(descriptor.connection_plugin_name.as_deref(), Some("ssh"));
+    assert_eq!(descriptor.processor_names, vec!["audit", "metrics"]);
+    assert_eq!(descriptor.input_schema, None);
+    assert!(!descriptor.constructible);
+
+    let retry_config = descriptor
+        .retry
+        .expect("retry metadata should be included in descriptor");
+    assert_eq!(retry_config.allow(), Some(true));
+    assert_eq!(retry_config.max_attempts(), Some(3));
+    assert_eq!(retry_config.delay_ms(), Some(500));
+}
+
+#[test]
+fn genja_task_compiled_registry_lists_generated_descriptors_deterministically() {
+    let registry = compiled_task_registry().expect("compiled registry should build");
+    let descriptors = registry.list().expect("compiled descriptors should list");
+    let task_id = format!("auto:{}", std::any::type_name::<BlockingTask>());
+
+    assert!(descriptors.windows(2).all(|window| {
+        (&window[0].id, &window[0].version) <= (&window[1].id, &window[1].version)
+    }));
+    assert!(descriptors.iter().any(|descriptor| {
+        descriptor.id == task_id
+            && descriptor.version == env!("CARGO_PKG_VERSION")
+            && descriptor.id_source == TaskIdSource::Generated
+            && descriptor.execution_mode == TaskExecutionMode::Blocking
+            && !descriptor.constructible
+    }));
 }
 
 #[test]

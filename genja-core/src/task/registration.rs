@@ -303,6 +303,62 @@ pub fn validate_task_version(version: &str) -> Result<(), TaskRegistrationError>
     Ok(())
 }
 
+/// A task registration entry collected from compiled Rust code.
+///
+/// `#[genja_task]` uses this type to submit descriptor builders into the
+/// process-wide compiled task inventory. It stores function pointers rather
+/// than fully built descriptors so macro-generated descriptors can use owned
+/// `String`, `Vec`, and JSON values without requiring const allocation.
+pub struct CompiledTaskRegistration {
+    descriptor: fn() -> TaskDescriptor,
+}
+
+impl CompiledTaskRegistration {
+    /// Create a descriptor-only compiled task registration.
+    ///
+    /// Descriptor-only registrations are discoverable through [`TaskCatalog`]
+    /// but are not constructible through [`TaskFactoryRegistry`].
+    pub const fn descriptor_only(descriptor: fn() -> TaskDescriptor) -> Self {
+        Self { descriptor }
+    }
+
+    /// Build this registration's task descriptor.
+    pub fn descriptor(&self) -> TaskDescriptor {
+        (self.descriptor)()
+    }
+}
+
+inventory_crate::collect!(CompiledTaskRegistration);
+
+/// Build an in-memory registry from all task registrations linked into this process.
+///
+/// The resulting registry validates descriptor versions, validates explicit
+/// IDs, rejects duplicate `id + version` pairs, and returns deterministic
+/// listing/lookup behavior. Inventory iteration order is intentionally ignored.
+pub fn compiled_task_registry() -> Result<InMemoryTaskRegistry, TaskRegistrationError> {
+    let mut registry = InMemoryTaskRegistry::new();
+    for registration in inventory_crate::iter::<CompiledTaskRegistration> {
+        registry.register_descriptor(registration.descriptor())?;
+    }
+    Ok(registry)
+}
+
+/// List descriptors for all task registrations linked into this process.
+pub fn list_compiled_tasks() -> Result<Vec<TaskDescriptor>, TaskRegistrationError> {
+    compiled_task_registry()?.list()
+}
+
+/// Look up a compiled task descriptor by ID and optional version.
+///
+/// When `version` is omitted, lookup succeeds only if exactly one version is
+/// available for `id`.
+pub fn get_compiled_task_descriptor(
+    id: &str,
+    version: Option<&str>,
+) -> Result<TaskDescriptor, TaskRegistrationError> {
+    compiled_task_registry()?.get(id, version)
+}
+
 /// Read-only catalog of task descriptors.
 ///
 /// Catalog implementations provide metadata listing and lookup. They do not
