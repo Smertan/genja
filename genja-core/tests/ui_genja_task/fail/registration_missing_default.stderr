@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `BadTask: Default` is not satisfied
+  --> tests/ui_genja_task/fail/registration_missing_default.rs:12:6
+   |
+12 | impl BadTask {
+   |      ^^^^^^^ the trait `Default` is not implemented for `BadTask`
+   |
+help: consider annotating `BadTask` with `#[derive(Default)]`
+   |
+3  + #[derive(Default)]
+4  | struct BadTask;
+   |

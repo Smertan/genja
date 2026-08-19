@@ -216,6 +216,71 @@ impl RegisteredDefaultVersionTask {
     }
 }
 
+#[derive(Default)]
+struct RegisteredDefaultFactoryTask;
+
+#[genja_task(
+    name = "registered_default_factory_task",
+    registration(
+        id = "acme.tests.derive_runtime.registered_default_factory_task",
+        factory = "default"
+    )
+)]
+impl RegisteredDefaultFactoryTask {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
+    }
+}
+
+struct RegisteredCustomFactoryTask {
+    options: Value,
+}
+
+fn create_registered_custom_factory_task(
+    input: Value,
+) -> Result<RegisteredCustomFactoryTask, genja_core::task::TaskRegistrationError> {
+    let encoded = input
+        .get("encoded")
+        .and_then(Value::as_str)
+        .ok_or_else(|| genja_core::task::TaskRegistrationError::InvalidInput {
+            id: "acme.tests.derive_runtime.registered_custom_factory_task".to_string(),
+            version: "2.1.0".to_string(),
+            message: "`encoded` is required".to_string(),
+        })?;
+    let decoded: String = encoded.chars().rev().collect();
+
+    Ok(RegisteredCustomFactoryTask {
+        options: json!({ "decoded": decoded }),
+    })
+}
+
+#[genja_task(
+    name = "registered_custom_factory_task",
+    registration(
+        id = "acme.tests.derive_runtime.registered_custom_factory_task",
+        version = "2.1.0",
+        description = "Prepares obfuscated input before constructing the task",
+        factory = custom(create_registered_custom_factory_task)
+    )
+)]
+impl RegisteredCustomFactoryTask {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
+    }
+
+    fn options(&self) -> Option<&Value> {
+        Some(&self.options)
+    }
+}
+
 #[test]
 fn genja_task_generates_task_info_from_metadata() {
     let task = AsyncTask {
@@ -306,6 +371,61 @@ fn genja_task_registration_version_defaults_to_package_version() {
     assert_eq!(descriptor.id_source, TaskIdSource::Explicit);
     assert_eq!(descriptor.version, env!("CARGO_PKG_VERSION"));
     assert!(descriptor.constructible);
+}
+
+#[test]
+fn genja_task_compiled_registry_creates_default_factory_task_from_empty_input() {
+    let registry = compiled_task_registry().expect("compiled registry should build");
+    let task = registry
+        .create(
+            "acme.tests.derive_runtime.registered_default_factory_task",
+            Some(env!("CARGO_PKG_VERSION")),
+            json!({}),
+        )
+        .expect("registered default factory should create task from empty object");
+
+    assert_eq!(task.name(), "registered_default_factory_task");
+
+    let error = match registry.create(
+        "acme.tests.derive_runtime.registered_default_factory_task",
+        Some(env!("CARGO_PKG_VERSION")),
+        json!({ "unexpected": true }),
+    ) {
+        Ok(_) => panic!("default factory should reject non-empty input"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        genja_core::task::TaskRegistrationError::InvalidInput { .. }
+    ));
+}
+
+#[test]
+fn genja_task_compiled_registry_creates_custom_factory_task_from_prepared_input() {
+    let registry = compiled_task_registry().expect("compiled registry should build");
+    let task = registry
+        .create(
+            "acme.tests.derive_runtime.registered_custom_factory_task",
+            Some("2.1.0"),
+            json!({ "encoded": "terces" }),
+        )
+        .expect("registered custom factory should create task");
+
+    assert_eq!(task.name(), "registered_custom_factory_task");
+    assert_eq!(task.options(), Some(&json!({ "decoded": "secret" })));
+
+    let error = match registry.create(
+        "acme.tests.derive_runtime.registered_custom_factory_task",
+        Some("2.1.0"),
+        json!({}),
+    ) {
+        Ok(_) => panic!("custom factory should reject invalid input"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        genja_core::task::TaskRegistrationError::InvalidInput { .. }
+    ));
 }
 
 #[test]

@@ -7,8 +7,8 @@
 //! `TaskInfo` and `Task` implementations from an inherent `impl` block, submits
 //! local discovery metadata to the compiled task registry, and infers execution
 //! mode from `fn start(...)` versus `async fn start_async(...)`. The optional
-//! `registration(...)` block gives a task a stable catalog ID and serde-backed
-//! JSON construction factory.
+//! `registration(...)` block gives a task a stable catalog ID and JSON
+//! construction factory.
 //!
 //! # Task Authoring Example
 //! ```ignore
@@ -72,9 +72,9 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     DeriveInput, Expr, ExprArray, ExprLit, FnArg, GenericArgument, ImplItem, ItemImpl, Lit,
-    LitBool, LitInt, LitStr, PathArguments, ReturnType, Token, Type, TypePath, parenthesized,
+    LitBool, LitInt, LitStr, Path, PathArguments, ReturnType, Token, Type, TypePath, parenthesized,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, token,
 };
 
 /// Generates an implementation of the `Deref` trait for the given type.
@@ -171,11 +171,22 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///   disabled when the block is absent. Inside the block, omitted
 ///   `max_attempts` defaults to `1` and omitted `delay_ms` defaults to `0`.
 /// - `registration(id = "...", version = "...", description = "...")`; opts
-///   into stable task registration and JSON construction. `id` is required,
-///   `version` defaults to `env!("CARGO_PKG_VERSION")`, and `factory = "serde"`
-///   may be supplied explicitly but is the default and only supported factory
-///   for this phase. Registered task types must implement
-///   `serde::de::DeserializeOwned`.
+///   into stable task registration and JSON construction. `id` is required and
+///   `version` defaults to `env!("CARGO_PKG_VERSION")`.
+///
+/// Registered tasks support three construction strategies:
+///
+/// - Omit `factory` or use `factory = "serde"` to deserialize JSON input into
+///   the task type. The task type must implement `serde::de::DeserializeOwned`.
+/// - Use `factory = "default"` for no-input tasks. The task type must implement
+///   `Default`; input must be `null` or `{}`.
+/// - Use `factory = custom(path::to::function)` for advanced input
+///   preparation. The function receives `serde_json::Value` and must return
+///   `Result<Self, genja_core::task::TaskRegistrationError>`, where `Self` is
+///   the task type. Custom factories are intended for validation,
+///   normalization, shorthand expansion, and carefully controlled
+///   de-obfuscation before constructing the task. Error messages should avoid
+///   exposing raw or decoded secret values.
 ///
 /// Every annotated task is discoverable through the compiled task registry with
 /// either an explicit stable ID from `registration(...)` or a generated
@@ -240,6 +251,67 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///     }
 /// }
 /// ```
+///
+/// Custom factories can keep the public JSON contract separate from the
+/// internal Rust struct. This is useful when task input needs preparation before
+/// execution, such as expanding shorthand or decoding obfuscated values.
+///
+/// ```ignore
+/// use genja_core::genja_task;
+/// use genja_core::inventory::Host;
+/// use genja_core::task::{
+///     HostTaskResult, TaskRegistrationError, TaskRuntimeContext, TaskSuccess,
+/// };
+///
+/// struct ConfigureAcl {
+///     acl_name: String,
+///     secret_token: String,
+/// }
+///
+/// fn create_configure_acl(
+///     input: serde_json::Value,
+/// ) -> Result<ConfigureAcl, TaskRegistrationError> {
+///     let acl_name = input
+///         .get("acl")
+///         .and_then(serde_json::Value::as_str)
+///         .ok_or_else(|| TaskRegistrationError::InvalidInput {
+///             id: "acme.network.configure_acl".to_string(),
+///             version: "2.0.0".to_string(),
+///             message: "`acl` is required".to_string(),
+///         })?;
+///     let token = input
+///         .get("token_obfuscated")
+///         .and_then(serde_json::Value::as_str)
+///         .ok_or_else(|| TaskRegistrationError::InvalidInput {
+///             id: "acme.network.configure_acl".to_string(),
+///             version: "2.0.0".to_string(),
+///             message: "`token_obfuscated` is required".to_string(),
+///         })?;
+///
+///     Ok(ConfigureAcl {
+///         acl_name: acl_name.to_string(),
+///         secret_token: token.chars().rev().collect(),
+///     })
+/// }
+///
+/// #[genja_task(
+///     name = "configure_acl",
+///     registration(
+///         id = "acme.network.configure_acl",
+///         version = "2.0.0",
+///         factory = custom(create_configure_acl)
+///     )
+/// )]
+/// impl ConfigureAcl {
+///     async fn start_async(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(TaskSuccess::new()))
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn genja_task(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as GenjaTaskArgs);
@@ -288,7 +360,13 @@ struct RegistrationArgs {
     id: Option<LitStr>,
     version: Option<LitStr>,
     description: Option<LitStr>,
-    factory: Option<LitStr>,
+    factory: Option<RegistrationFactoryArg>,
+}
+
+enum RegistrationFactoryArg {
+    Serde,
+    Default,
+    Custom(Path),
 }
 
 #[derive(Default)]
@@ -494,14 +572,7 @@ impl Parse for RegistrationArgs {
                             "duplicate registration key `factory`",
                         ));
                     }
-                    let factory: LitStr = input.parse()?;
-                    if factory.value() != "serde" {
-                        return Err(syn::Error::new_spanned(
-                            factory,
-                            "`registration(factory = ...)` currently supports only `\"serde\"`; omit `factory` to use serde",
-                        ));
-                    }
-                    args.factory = Some(factory);
+                    args.factory = Some(parse_registration_factory_arg(input)?);
                 }
                 _ => {
                     return Err(syn::Error::new_spanned(
@@ -527,6 +598,50 @@ impl Parse for RegistrationArgs {
 
         Ok(args)
     }
+}
+
+fn parse_registration_factory_arg(input: ParseStream<'_>) -> syn::Result<RegistrationFactoryArg> {
+    if input.peek(LitStr) {
+        let factory: LitStr = input.parse()?;
+        return match factory.value().as_str() {
+            "serde" => Ok(RegistrationFactoryArg::Serde),
+            "default" => Ok(RegistrationFactoryArg::Default),
+            "custom" => Err(syn::Error::new_spanned(
+                factory,
+                "use `factory = custom(path)` to configure a custom registration factory",
+            )),
+            _ => Err(syn::Error::new_spanned(
+                factory,
+                "`registration(factory = ...)` supports `\"serde\"`, `\"default\"`, or `custom(path)`",
+            )),
+        };
+    }
+
+    let factory: syn::Ident = input.parse()?;
+    if factory != "custom" {
+        return Err(syn::Error::new_spanned(
+            factory,
+            "`registration(factory = ...)` supports `\"serde\"`, `\"default\"`, or `custom(path)`",
+        ));
+    }
+
+    if !input.peek(token::Paren) {
+        return Err(syn::Error::new_spanned(
+            factory,
+            "`factory = custom(...)` requires a factory function path",
+        ));
+    }
+
+    let content;
+    parenthesized!(content in input);
+    let factory_path: Path = content.parse()?;
+    if !content.is_empty() {
+        return Err(syn::Error::new_spanned(
+            factory_path,
+            "`factory = custom(...)` accepts exactly one factory function path",
+        ));
+    }
+    Ok(RegistrationFactoryArg::Custom(factory_path))
 }
 
 fn validate_registration_id_literal(id: &LitStr) -> syn::Result<()> {
@@ -1051,6 +1166,43 @@ fn expand_genja_task(
             Some(description) => quote! { Some(#description.to_string()) },
             None => quote! { None },
         };
+        let registration_create = match registration
+            .factory
+            .as_ref()
+            .unwrap_or(&RegistrationFactoryArg::Serde)
+        {
+            RegistrationFactoryArg::Serde => quote! {
+                let task: #self_ty =
+                    genja_core::__serde_json::from_value(input).map_err(|error| {
+                        genja_core::task::TaskRegistrationError::InvalidInput {
+                            id: #registration_id.to_string(),
+                            version: #registration_version.to_string(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                Ok(genja_core::task::TaskDefinition::new(task))
+            },
+            RegistrationFactoryArg::Default => quote! {
+                if !input.is_null()
+                    && !input
+                        .as_object()
+                        .is_some_and(|object| object.is_empty())
+                {
+                    return Err(genja_core::task::TaskRegistrationError::InvalidInput {
+                        id: #registration_id.to_string(),
+                        version: #registration_version.to_string(),
+                        message: "default factory expects empty input (`null` or `{}`)".to_string(),
+                    });
+                }
+
+                let task: #self_ty = <#self_ty as std::default::Default>::default();
+                Ok(genja_core::task::TaskDefinition::new(task))
+            },
+            RegistrationFactoryArg::Custom(factory_path) => quote! {
+                let task: #self_ty = #factory_path(input)?;
+                Ok(genja_core::task::TaskDefinition::new(task))
+            },
+        };
 
         quote! {
             const _: () = {
@@ -1074,15 +1226,7 @@ fn expand_genja_task(
                 fn __genja_task_create(
                     input: genja_core::__serde_json::Value,
                 ) -> Result<genja_core::task::TaskDefinition, genja_core::task::TaskRegistrationError> {
-                    let task: #self_ty =
-                        genja_core::__serde_json::from_value(input).map_err(|error| {
-                            genja_core::task::TaskRegistrationError::InvalidInput {
-                                id: #registration_id.to_string(),
-                                version: #registration_version.to_string(),
-                                message: error.to_string(),
-                            }
-                        })?;
-                    Ok(genja_core::task::TaskDefinition::new(task))
+                    #registration_create
                 }
 
                 genja_core::__inventory::submit! {

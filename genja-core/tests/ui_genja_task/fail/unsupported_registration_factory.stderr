@@ -1,4 +1,4 @@
-error: `registration(factory = ...)` currently supports only `"serde"`; omit `factory` to use serde
+error: use `factory = custom(path)` to configure a custom registration factory
   --> tests/ui_genja_task/fail/unsupported_registration_factory.rs:10:19
    |
 10 |         factory = "custom"
