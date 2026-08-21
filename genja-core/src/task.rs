@@ -650,7 +650,8 @@ pub use registration::{
     CompiledTaskRegistration, InMemoryTaskRegistry, RegisteredTaskFactory, TaskCatalog,
     TaskDescriptor, TaskDescriptorMetadata, TaskFactoryRegistry, TaskIdSource,
     TaskRegistrationError, TaskRegistrationKey, compiled_task_registry,
-    get_compiled_task_descriptor, list_compiled_tasks, validate_explicit_task_id,
+    create_compiled_task_by_identity, get_compiled_task_descriptor,
+    get_compiled_task_descriptor_by_identity, list_compiled_tasks, validate_explicit_task_id,
     validate_task_version,
 };
 

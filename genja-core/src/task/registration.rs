@@ -399,6 +399,21 @@ pub fn get_compiled_task_descriptor(
     compiled_task_registry()?.get(id, version)
 }
 
+/// Look up a compiled task descriptor by rendered `<task-id>@<task-version>` identity.
+pub fn get_compiled_task_descriptor_by_identity(
+    identity: &str,
+) -> Result<TaskDescriptor, TaskRegistrationError> {
+    compiled_task_registry()?.get_by_identity(identity)
+}
+
+/// Construct a compiled task by rendered `<task-id>@<task-version>` identity.
+pub fn create_compiled_task_by_identity(
+    identity: &str,
+    input: Value,
+) -> Result<TaskDefinition, TaskRegistrationError> {
+    compiled_task_registry()?.create_by_identity(identity, input)
+}
+
 /// Read-only catalog of task descriptors.
 ///
 /// Catalog implementations provide metadata listing and lookup. They do not
@@ -416,6 +431,20 @@ pub trait TaskCatalog {
     /// [`TaskRegistrationError::AmbiguousVersion`].
     fn get(&self, id: &str, version: Option<&str>)
     -> Result<TaskDescriptor, TaskRegistrationError>;
+
+    /// Look up a descriptor by validated task registration key.
+    fn get_by_key(
+        &self,
+        key: &TaskRegistrationKey,
+    ) -> Result<TaskDescriptor, TaskRegistrationError> {
+        self.get(key.id(), Some(key.version()))
+    }
+
+    /// Parse `<task-id>@<task-version>` and look up the matching descriptor.
+    fn get_by_identity(&self, identity: &str) -> Result<TaskDescriptor, TaskRegistrationError> {
+        let key = TaskRegistrationKey::parse(identity)?;
+        self.get_by_key(&key)
+    }
 }
 
 /// Local factory registry for constructing tasks from JSON-compatible input.
@@ -431,6 +460,25 @@ pub trait TaskFactoryRegistry {
         version: Option<&str>,
         input: Value,
     ) -> Result<TaskDefinition, TaskRegistrationError>;
+
+    /// Construct a local task definition by validated task registration key.
+    fn create_by_key(
+        &self,
+        key: &TaskRegistrationKey,
+        input: Value,
+    ) -> Result<TaskDefinition, TaskRegistrationError> {
+        self.create(key.id(), Some(key.version()), input)
+    }
+
+    /// Parse `<task-id>@<task-version>` and construct the matching task.
+    fn create_by_identity(
+        &self,
+        identity: &str,
+        input: Value,
+    ) -> Result<TaskDefinition, TaskRegistrationError> {
+        let key = TaskRegistrationKey::parse(identity)?;
+        self.create_by_key(&key, input)
+    }
 }
 
 /// Type-erased factory for one registered task.
@@ -1321,6 +1369,43 @@ mod tests {
     }
 
     #[test]
+    fn in_memory_registry_get_by_identity_parses_task_key() {
+        let registry = InMemoryTaskRegistry::from_descriptors([explicit_descriptor(
+            "acme.task",
+            "1.0.0",
+            false,
+        )])
+        .expect("descriptors should register");
+
+        let descriptor = registry
+            .get_by_identity("acme.task@1.0.0")
+            .expect("identity lookup should succeed");
+
+        assert_eq!(descriptor.id, "acme.task");
+        assert_eq!(descriptor.version, "1.0.0");
+    }
+
+    #[test]
+    fn in_memory_registry_get_by_identity_rejects_invalid_identity() {
+        let registry = InMemoryTaskRegistry::from_descriptors([explicit_descriptor(
+            "acme.task",
+            "1.0.0",
+            false,
+        )])
+        .expect("descriptors should register");
+
+        assert_eq!(
+            registry
+                .get_by_identity("acme.task")
+                .expect_err("invalid identity should fail"),
+            TaskRegistrationError::InvalidIdentity {
+                identity: "acme.task".to_string(),
+                reason: "identity must contain exactly one `@` separator".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn in_memory_registry_rejects_duplicate_id_and_version() {
         let error = InMemoryTaskRegistry::from_descriptors([
             explicit_descriptor("acme.task", "1.0.0", false),
@@ -1377,6 +1462,20 @@ mod tests {
         let task = registry
             .create("acme.task", None, json!({ "ok": true }))
             .expect("factory should create task");
+
+        assert_eq!(task.as_task().name(), "registry_test_task");
+    }
+
+    #[test]
+    fn in_memory_registry_create_by_identity_parses_task_key() {
+        let mut registry = InMemoryTaskRegistry::new();
+        registry
+            .register_factory(RegistryTestFactory::new("acme.task", "1.0.0"))
+            .expect("factory should register");
+
+        let task = registry
+            .create_by_identity("acme.task@1.0.0", json!({ "ok": true }))
+            .expect("identity create should succeed");
 
         assert_eq!(task.as_task().name(), "registry_test_task");
     }

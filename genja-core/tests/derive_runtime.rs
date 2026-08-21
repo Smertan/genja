@@ -5,7 +5,8 @@ use genja_core::inventory::{BaseBuilderHost, Host};
 use genja_core::task::{
     BlockingTaskRuntimeContext, HostTaskResult, IdempotencyCheck, IdempotencyMode, Task,
     TaskCatalog, TaskExecutionMode, TaskFactoryRegistry, TaskIdSource, TaskInfo,
-    TaskRuntimeContext, TaskSuccess, compiled_task_registry, get_compiled_task_descriptor,
+    TaskRuntimeContext, TaskSuccess, compiled_task_registry, create_compiled_task_by_identity,
+    get_compiled_task_descriptor, get_compiled_task_descriptor_by_identity,
 };
 use serde_json::{Value, json};
 
@@ -396,6 +397,60 @@ fn genja_task_compiled_registry_creates_registered_task_from_json() {
         error,
         genja_core::task::TaskRegistrationError::InvalidInput { .. }
     ));
+}
+
+#[test]
+fn genja_task_compiled_registry_supports_identity_descriptor_lookup() {
+    let descriptor = get_compiled_task_descriptor_by_identity(
+        "acme.tests.derive_runtime.registered_serde_task@1.2.3",
+    )
+    .expect("identity descriptor lookup should succeed");
+
+    assert_eq!(
+        descriptor.id,
+        "acme.tests.derive_runtime.registered_serde_task"
+    );
+    assert_eq!(descriptor.version, "1.2.3");
+    assert!(descriptor.constructible);
+}
+
+#[test]
+fn genja_task_compiled_registry_supports_identity_task_creation() {
+    let task = create_compiled_task_by_identity(
+        "acme.tests.derive_runtime.registered_serde_task@1.2.3",
+        json!({ "options": { "source": "identity" } }),
+    )
+    .expect("identity create should succeed");
+
+    assert_eq!(task.name(), "registered_serde_task");
+    assert_eq!(task.options(), Some(&json!({ "source": "identity" })));
+}
+
+#[test]
+fn genja_task_compiled_descriptor_serializes_to_json_contract() {
+    let descriptor = get_compiled_task_descriptor(
+        "acme.tests.derive_runtime.registered_serde_task",
+        Some("1.2.3"),
+    )
+    .expect("explicit descriptor should be registered");
+    let serialized = serde_json::to_value(&descriptor).expect("descriptor should serialize");
+
+    assert_eq!(
+        serialized,
+        json!({
+            "id": "acme.tests.derive_runtime.registered_serde_task",
+            "id_source": "explicit",
+            "name": "registered_serde_task",
+            "version": "1.2.3",
+            "description": "Constructs a task from JSON input",
+            "execution_mode": "async",
+            "connection_plugin_name": null,
+            "processor_names": ["audit"],
+            "retry": null,
+            "input_schema": null,
+            "constructible": true
+        })
+    );
 }
 
 #[test]
