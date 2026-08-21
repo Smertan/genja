@@ -281,6 +281,44 @@ impl RegisteredCustomFactoryTask {
     }
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct RegisteredSchemaTask {
+    acl_name: String,
+    rules: Vec<RegisteredSchemaRule>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct RegisteredSchemaRule {
+    action: String,
+    cidr: String,
+}
+
+#[genja_task(
+    name = "registered_schema_task",
+    registration(
+        id = "acme.tests.derive_runtime.registered_schema_task",
+        version = "3.0.0",
+        description = "Exposes a JSON Schema for task input",
+        schema = "schemars"
+    )
+)]
+impl RegisteredSchemaTask {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        let first_rule = self
+            .rules
+            .first()
+            .map(|rule| format!("{}:{}", rule.action, rule.cidr))
+            .unwrap_or_else(|| "none".to_string());
+        Ok(HostTaskResult::passed(TaskSuccess::new().with_summary(
+            format!("{}:{}:{}", self.acl_name, self.rules.len(), first_rule),
+        )))
+    }
+}
+
 #[test]
 fn genja_task_generates_task_info_from_metadata() {
     let task = AsyncTask {
@@ -371,6 +409,30 @@ fn genja_task_registration_version_defaults_to_package_version() {
     assert_eq!(descriptor.id_source, TaskIdSource::Explicit);
     assert_eq!(descriptor.version, env!("CARGO_PKG_VERSION"));
     assert!(descriptor.constructible);
+}
+
+#[test]
+fn genja_task_submits_input_schema_when_registration_opts_in() {
+    let descriptor = get_compiled_task_descriptor(
+        "acme.tests.derive_runtime.registered_schema_task",
+        Some("3.0.0"),
+    )
+    .expect("explicit descriptor should be registered");
+    let schema = descriptor
+        .input_schema
+        .expect("schemars input schema should be included");
+
+    assert!(descriptor.constructible);
+    assert_eq!(schema["title"], "RegisteredSchemaTask");
+    assert_eq!(schema["type"], "object");
+    assert_eq!(schema["required"], json!(["acl_name", "rules"]));
+    assert_eq!(schema["properties"]["acl_name"]["type"], "string");
+    assert_eq!(schema["properties"]["rules"]["type"], "array");
+    assert!(
+        schema["properties"]["rules"]["items"]["$ref"]
+            .as_str()
+            .is_some_and(|reference| reference.contains("RegisteredSchemaRule"))
+    );
 }
 
 #[test]

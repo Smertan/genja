@@ -172,7 +172,10 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///   `max_attempts` defaults to `1` and omitted `delay_ms` defaults to `0`.
 /// - `registration(id = "...", version = "...", description = "...")`; opts
 ///   into stable task registration and JSON construction. `id` is required and
-///   `version` defaults to `env!("CARGO_PKG_VERSION")`.
+///   `version` defaults to `env!("CARGO_PKG_VERSION")`. Use
+///   `schema = "schemars"` to include a JSON Schema for the task input in the
+///   descriptor. Schema generation requires the task type, and any nested field
+///   types, to implement `schemars::JsonSchema`.
 ///
 /// Registered tasks support three construction strategies:
 ///
@@ -187,6 +190,11 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///   normalization, shorthand expansion, and carefully controlled
 ///   de-obfuscation before constructing the task. Error messages should avoid
 ///   exposing raw or decoded secret values.
+///
+/// With custom factories, `schema = "schemars"` describes `Self`. If the custom
+/// factory accepts a public JSON shape that differs from the task struct, omit
+/// schema generation for now or keep the custom input contract documented
+/// separately until a dedicated input-type schema option is added.
 ///
 /// Every annotated task is discoverable through the compiled task registry with
 /// either an explicit stable ID from `registration(...)` or a generated
@@ -228,7 +236,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// use genja_core::inventory::Host;
 /// use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
 ///
-/// #[derive(serde::Deserialize)]
+/// #[derive(serde::Deserialize, schemars::JsonSchema)]
 /// struct ConfigureAcl {
 ///     acl_name: String,
 /// }
@@ -238,7 +246,8 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///     registration(
 ///         id = "acme.network.configure_acl",
 ///         version = "2.0.0",
-///         description = "Configures an ACL on a network device"
+///         description = "Configures an ACL on a network device",
+///         schema = "schemars"
 ///     )
 /// )]
 /// impl ConfigureAcl {
@@ -361,12 +370,17 @@ struct RegistrationArgs {
     version: Option<LitStr>,
     description: Option<LitStr>,
     factory: Option<RegistrationFactoryArg>,
+    schema: Option<RegistrationSchemaArg>,
 }
 
 enum RegistrationFactoryArg {
     Serde,
     Default,
     Custom(Path),
+}
+
+enum RegistrationSchemaArg {
+    Schemars,
 }
 
 #[derive(Default)]
@@ -574,10 +588,19 @@ impl Parse for RegistrationArgs {
                     }
                     args.factory = Some(parse_registration_factory_arg(input)?);
                 }
+                "schema" => {
+                    if args.schema.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate registration key `schema`",
+                        ));
+                    }
+                    args.schema = Some(parse_registration_schema_arg(input)?);
+                }
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "unsupported registration key; expected `id`, `version`, `description`, or `factory`",
+                        "unsupported registration key; expected `id`, `version`, `description`, `factory`, or `schema`",
                     ));
                 }
             }
@@ -597,6 +620,17 @@ impl Parse for RegistrationArgs {
         }
 
         Ok(args)
+    }
+}
+
+fn parse_registration_schema_arg(input: ParseStream<'_>) -> syn::Result<RegistrationSchemaArg> {
+    let schema: LitStr = input.parse()?;
+    match schema.value().as_str() {
+        "schemars" => Ok(RegistrationSchemaArg::Schemars),
+        _ => Err(syn::Error::new_spanned(
+            schema,
+            "`registration(schema = ...)` supports only `\"schemars\"`",
+        )),
     }
 }
 
@@ -1166,6 +1200,17 @@ fn expand_genja_task(
             Some(description) => quote! { Some(#description.to_string()) },
             None => quote! { None },
         };
+        let registration_input_schema = match &registration.schema {
+            Some(RegistrationSchemaArg::Schemars) => quote! {
+                Some(
+                    genja_core::__serde_json::to_value(
+                        genja_core::__schemars::schema_for!(#self_ty)
+                    )
+                    .expect("schemars schema should serialize to JSON")
+                )
+            },
+            None => quote! { None },
+        };
         let registration_create = match registration
             .factory
             .as_ref()
@@ -1218,7 +1263,7 @@ fn expand_genja_task(
                             processor_names: vec![#(#processors.to_string()),*],
                             retry: #descriptor_retry,
                         },
-                        None,
+                        #registration_input_schema,
                         true,
                     )
                 }
