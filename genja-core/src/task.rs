@@ -655,7 +655,7 @@ pub use registration::{
     get_compiled_task_descriptor_by_identity, list_compiled_tasks, validate_explicit_task_id,
     validate_task_version,
 };
-pub use spec::{TaskSpec, TaskSpecError};
+pub use spec::{TaskSpec, TaskSpecError, TaskSpecFormat};
 
 /// Optional retry metadata for a task or runner.
 ///
