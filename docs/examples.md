@@ -33,6 +33,8 @@ cargo run -p genja --example filter_hosts
 cargo run -p genja --example run_task
 cargo run -p genja --example run_task_tree
 cargo run -p genja --example async_inventory_plugin
+cargo run -p genja --example task_registration
+cargo run -p genja --example task_registration_custom_factory
 ```
 
 | Example | Demonstrates |
@@ -43,6 +45,8 @@ cargo run -p genja --example async_inventory_plugin
 | `idempotent_task.rs` | Defining a task-authored convergence check that skips already-converged hosts. |
 | `run_task_tree.rs` | Defining sub-tasks and running a task tree with depth control. |
 | `async_inventory_plugin.rs` | Implementing an async Rust inventory plugin and building a runtime from generated inventory. |
+| `task_registration.rs` | Registering a Rust task, listing compiled descriptors, printing schema JSON, and constructing by `<id>@<version>`. |
+| `task_registration_custom_factory.rs` | Registering a Rust task with a custom factory for prepared JSON input and sanitized validation errors. |
 
 Use the Rust examples when you want to see the public `genja` crate, the
 `#[genja_task]` macro, and Rust plugin traits in context.
@@ -87,4 +91,5 @@ For fuller explanations, see:
 - [Quickstart](quickstart.md)
 - [Inventory](inventory.md)
 - [Tasks](tasks.md)
+- [Rust Task Registration](task-registration.md)
 - [Plugins](plugins/index.md)

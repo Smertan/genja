@@ -107,6 +107,10 @@ use genja::genja_task;
 
 The macro applies to an inherent `impl` block. It generates the task metadata
 and the `Task` implementation from the methods and attributes on that block.
+Most task authors work with the task struct and `#[genja_task]` implementation
+directly. `TaskDefinition` is Genja's runtime wrapper around a task instance; it
+is mainly used by registry, task-list, and lower-level runtime APIs rather than
+ordinary task authoring code.
 
 ```rust
 use genja::genja_core::inventory::Host;
@@ -181,6 +185,9 @@ Define exactly one task entrypoint in the macro `impl` block:
 The macro can also read optional helper methods from the same `impl` block, such
 as `options(...)` and `sub_tasks(...)`. Use those helpers when a task needs
 dynamic JSON options or child tasks in a task tree.
+
+For stable discovery and JSON construction by task ID, see
+[Rust Task Registration](task-registration.md).
 
 ### Rust Retry Overrides
 
