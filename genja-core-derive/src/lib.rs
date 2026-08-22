@@ -7,8 +7,8 @@
 //! `TaskInfo` and `Task` implementations from an inherent `impl` block, submits
 //! local discovery metadata to the compiled task registry, and infers execution
 //! mode from `fn start(...)` versus `async fn start_async(...)`. The optional
-//! `registration(...)` block gives a task a stable catalog ID and JSON
-//! construction factory.
+//! `registration(...)` block gives a task a stable catalog ID and local JSON
+//! construction factory for CLI, MCP, provider manifest, and catalog workflows.
 //!
 //! # Task Authoring Example
 //! ```ignore
@@ -177,6 +177,20 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///   descriptor. Schema generation requires the task type, and any nested field
 ///   types, to implement `schemars::JsonSchema`.
 ///
+/// # Discovery and registration
+///
+/// Every annotated task is submitted to the compiled task registry. Tasks
+/// without `registration(...)` use a generated `auto:...` ID derived from the
+/// Rust type path. Generated IDs are useful for local listing, but they are not
+/// stable public contracts and are not constructible from JSON input.
+///
+/// Tasks with `registration(id = "...")` use an explicit stable ID. Their
+/// public identity is `<task-id>@<task-version>`, for example
+/// `acme.network.configure_acl@2.0.0`. Explicit IDs are validated as
+/// namespace-friendly lowercase identifiers and versions are validated as
+/// semantic versions. Duplicate `id + version` registrations are rejected when
+/// the compiled registry is built.
+///
 /// Registered tasks support three construction strategies:
 ///
 /// - Omit `factory` or use `factory = "serde"` to deserialize JSON input into
@@ -195,11 +209,6 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// factory accepts a public JSON shape that differs from the task struct, omit
 /// schema generation for now or keep the custom input contract documented
 /// separately until a dedicated input-type schema option is added.
-///
-/// Every annotated task is discoverable through the compiled task registry with
-/// either an explicit stable ID from `registration(...)` or a generated
-/// local-only ID derived from the Rust type path. Generated discovery metadata
-/// does not make the task constructible from JSON input.
 ///
 /// `session_verification(...)` requires `connection_plugin_name = "..."`,
 /// because post-change session verification must replace a declared task
@@ -231,6 +240,41 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
+/// The default registered-task path uses serde construction. This is the
+/// common path for tasks that should be created from user-provided JSON input.
+///
+/// ```ignore
+/// use genja_core::genja_task;
+/// use genja_core::inventory::Host;
+/// use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+///
+/// #[derive(serde::Deserialize)]
+/// struct BackupConfig {
+///     backup_path: String,
+///     compress: bool,
+/// }
+///
+/// #[genja_task(
+///     name = "backup_config",
+///     connection_plugin_name = "ssh",
+///     registration(id = "acme.backup.backup_config")
+/// )]
+/// impl BackupConfig {
+///     async fn start_async(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(
+///             TaskSuccess::new().with_summary(format!(
+///                 "backing up to {}",
+///                 self.backup_path
+///             )),
+///         ))
+///     }
+/// }
+/// ```
+///
 /// ```ignore
 /// use genja_core::genja_task;
 /// use genja_core::inventory::Host;
@@ -251,6 +295,35 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///     )
 /// )]
 /// impl ConfigureAcl {
+///     async fn start_async(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(TaskSuccess::new()))
+///     }
+/// }
+/// ```
+///
+/// No-input tasks can use the default factory. The task type must implement
+/// `Default`, and callers must pass `null` or `{}` as construction input.
+///
+/// ```ignore
+/// use genja_core::genja_task;
+/// use genja_core::inventory::Host;
+/// use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+///
+/// #[derive(Default)]
+/// struct CollectFacts;
+///
+/// #[genja_task(
+///     name = "collect_facts",
+///     registration(
+///         id = "acme.inventory.collect_facts",
+///         factory = "default"
+///     )
+/// )]
+/// impl CollectFacts {
 ///     async fn start_async(
 ///         &self,
 ///         _host: &Host,

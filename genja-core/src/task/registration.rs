@@ -5,6 +5,125 @@
 //! Python registration integrations. Descriptors can be stored by themselves
 //! for discovery-only catalogs or paired with factories that construct local
 //! task instances from JSON-compatible input.
+//!
+//! # Registration model
+//!
+//! Task discovery is descriptor-first. A [`TaskDescriptor`] contains the
+//! language-neutral metadata needed to list and inspect a task without running
+//! it. A [`RegisteredTaskFactory`] is optional local code that can construct a
+//! [`TaskDefinition`] from JSON-compatible input. [`TaskCatalog`] covers the
+//! descriptor-only side; [`TaskFactoryRegistry`] covers local construction.
+//!
+//! Rust tasks normally enter the compiled registry through the
+//! `#[genja_task]` macro. A task without `registration(...)` is still
+//! discoverable with a generated local ID, but it is not constructible from
+//! JSON input. A task with `registration(id = "...")` gets an explicit stable
+//! ID and a generated factory.
+//!
+//! # Task identity
+//!
+//! A registered task's public identity is:
+//!
+//! ```text
+//! <task-id>@<task-version>
+//! ```
+//!
+//! For example:
+//!
+//! ```text
+//! acme.network.configure_acl@2.0.0
+//! ```
+//!
+//! Explicit task IDs are namespace-friendly strings made of `.` separated
+//! segments. Versions must be semantic versions. When a macro registration
+//! omits `version`, it uses the provider crate's `CARGO_PKG_VERSION`.
+//! Duplicate `id + version` registrations are rejected while the registry is
+//! built.
+//!
+//! # Listing compiled tasks
+//!
+//! ```no_run
+//! use genja_core::task::list_compiled_tasks;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! for descriptor in list_compiled_tasks()? {
+//!     println!(
+//!         "{}@{} {}",
+//!         descriptor.id,
+//!         descriptor.version,
+//!         descriptor.name
+//!     );
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Generated IDs start with `auto:` and are intended for local discovery only.
+//! Provider manifests, CLIs, MCP servers, and remote catalogs should use
+//! explicit IDs from `registration(id = "...")`.
+//!
+//! # Looking up and constructing a compiled task
+//!
+//! Use descriptor lookup when you only need metadata:
+//!
+//! ```no_run
+//! use genja_core::task::get_compiled_task_descriptor_by_identity;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let descriptor =
+//!     get_compiled_task_descriptor_by_identity("acme.network.configure_acl@2.0.0")?;
+//!
+//! if let Some(schema) = &descriptor.input_schema {
+//!     println!("{}", serde_json::to_string_pretty(schema)?);
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Use the factory registry path when a caller supplied JSON input and you need
+//! a runnable [`TaskDefinition`]:
+//!
+//! ```no_run
+//! use genja_core::task::{TaskInfo, create_compiled_task_by_identity};
+//! use serde_json::json;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let task = create_compiled_task_by_identity(
+//!     "acme.network.configure_acl@2.0.0",
+//!     json!({
+//!         "acl_name": "edge-inbound",
+//!         "rules": []
+//!     }),
+//! )?;
+//!
+//! assert_eq!(task.name(), "configure_acl");
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Factory and validation errors identify the affected task identity but should
+//! not expose raw input values or decoded secret material.
+//!
+//! # Descriptor JSON
+//!
+//! Descriptors serialize with stable field names suitable for future provider
+//! manifests and cross-language compatibility tests:
+//!
+//! ```json
+//! {
+//!   "id": "acme.network.configure_acl",
+//!   "id_source": "explicit",
+//!   "name": "configure_acl",
+//!   "version": "2.0.0",
+//!   "description": "Configures an ACL on a network device",
+//!   "execution_mode": "async",
+//!   "connection_plugin_name": "ssh",
+//!   "processor_names": [],
+//!   "retry": null,
+//!   "input_schema": null,
+//!   "constructible": true
+//! }
+//! ```
 
 use super::{RetryConfig, TaskDefinition, TaskExecutionMode};
 use serde::{Deserialize, Serialize};
@@ -400,6 +519,10 @@ pub fn get_compiled_task_descriptor(
 }
 
 /// Look up a compiled task descriptor by rendered `<task-id>@<task-version>` identity.
+///
+/// This is the most convenient lookup form for CLIs and APIs that accept a
+/// single task identity string. The identity is parsed with
+/// [`TaskRegistrationKey::parse`] before querying the compiled catalog.
 pub fn get_compiled_task_descriptor_by_identity(
     identity: &str,
 ) -> Result<TaskDescriptor, TaskRegistrationError> {
@@ -407,6 +530,11 @@ pub fn get_compiled_task_descriptor_by_identity(
 }
 
 /// Construct a compiled task by rendered `<task-id>@<task-version>` identity.
+///
+/// This helper validates the identity, finds the compiled factory, and passes
+/// `input` to the task's selected construction strategy. Descriptor-only tasks
+/// and generated local discovery entries return
+/// [`TaskRegistrationError::NotConstructible`].
 pub fn create_compiled_task_by_identity(
     identity: &str,
     input: Value,
@@ -422,6 +550,9 @@ pub fn create_compiled_task_by_identity(
 /// without supporting in-process task construction.
 pub trait TaskCatalog {
     /// Return all known task descriptors in deterministic order.
+    ///
+    /// Implementations should order descriptors by task ID and version so CLI,
+    /// manifest, and test output is stable.
     fn list(&self) -> Result<Vec<TaskDescriptor>, TaskRegistrationError>;
 
     /// Look up a descriptor by ID and optional version.
@@ -433,6 +564,9 @@ pub trait TaskCatalog {
     -> Result<TaskDescriptor, TaskRegistrationError>;
 
     /// Look up a descriptor by validated task registration key.
+    ///
+    /// Use this when the caller has already parsed or validated
+    /// `<task-id>@<task-version>`.
     fn get_by_key(
         &self,
         key: &TaskRegistrationKey,
@@ -441,6 +575,9 @@ pub trait TaskCatalog {
     }
 
     /// Parse `<task-id>@<task-version>` and look up the matching descriptor.
+    ///
+    /// Use this form for user-facing inputs such as CLI arguments and MCP tool
+    /// parameters.
     fn get_by_identity(&self, identity: &str) -> Result<TaskDescriptor, TaskRegistrationError> {
         let key = TaskRegistrationKey::parse(identity)?;
         self.get_by_key(&key)
@@ -451,9 +588,14 @@ pub trait TaskCatalog {
 ///
 /// This trait is intentionally separate from [`TaskCatalog`] because persistent
 /// catalogs can store descriptors but cannot store Rust function pointers or
-/// closures.
+/// closures. Local registries, including the compiled registry, can implement
+/// both traits.
 pub trait TaskFactoryRegistry {
     /// Construct a local task definition by ID, optional version, and input.
+    ///
+    /// When `version` is `None`, construction succeeds only if exactly one
+    /// version exists for `id`. If the descriptor is present but not backed by
+    /// a factory, the registry returns [`TaskRegistrationError::NotConstructible`].
     fn create(
         &self,
         id: &str,
@@ -462,6 +604,8 @@ pub trait TaskFactoryRegistry {
     ) -> Result<TaskDefinition, TaskRegistrationError>;
 
     /// Construct a local task definition by validated task registration key.
+    ///
+    /// Use this when the caller already has a [`TaskRegistrationKey`].
     fn create_by_key(
         &self,
         key: &TaskRegistrationKey,
@@ -471,6 +615,9 @@ pub trait TaskFactoryRegistry {
     }
 
     /// Parse `<task-id>@<task-version>` and construct the matching task.
+    ///
+    /// This is the most direct form for CLI, MCP, and API entrypoints that
+    /// receive a task identity string plus JSON input.
     fn create_by_identity(
         &self,
         identity: &str,
@@ -485,12 +632,19 @@ pub trait TaskFactoryRegistry {
 ///
 /// Macro-generated registrations will implement this trait for each
 /// constructible task. The registry only calls this common interface; the
-/// factory implementation owns the task-specific construction strategy.
+/// factory implementation owns the task-specific construction strategy. Manual
+/// implementations should validate input without including raw secrets in
+/// returned error messages.
 pub trait RegisteredTaskFactory: Send + Sync {
     /// Return the descriptor for the task this factory constructs.
     fn descriptor(&self) -> &TaskDescriptor;
 
     /// Construct a task definition from JSON-compatible input.
+    ///
+    /// Implementations should return [`TaskRegistrationError::InvalidInput`]
+    /// for caller-supplied input that does not match the task contract and
+    /// [`TaskRegistrationError::FactoryFailed`] for construction failures after
+    /// input validation.
     fn create(&self, input: Value) -> Result<TaskDefinition, TaskRegistrationError>;
 }
 
