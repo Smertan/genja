@@ -646,6 +646,7 @@ use tokio::task;
 use tokio::time::{Duration, sleep};
 
 pub mod registration;
+pub mod spec;
 pub use registration::{
     CompiledTaskRegistration, InMemoryTaskRegistry, RegisteredTaskFactory, TaskCatalog,
     TaskDescriptor, TaskDescriptorMetadata, TaskFactoryRegistry, TaskIdSource,
@@ -654,6 +655,7 @@ pub use registration::{
     get_compiled_task_descriptor_by_identity, list_compiled_tasks, validate_explicit_task_id,
     validate_task_version,
 };
+pub use spec::{TaskSpec, TaskSpecError};
 
 /// Optional retry metadata for a task or runner.
 ///
