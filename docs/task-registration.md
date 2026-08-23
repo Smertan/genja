@@ -299,8 +299,8 @@ APIs can store and execute different task types through one interface.
 
 Use `TaskSpec` when the caller supplies a single task invocation as text, such
 as a CLI file, API request, or MCP tool payload. A task spec contains the
-registered task identity and the JSON-compatible input passed to that task's
-factory.
+registered task identity, the JSON-compatible input passed to that task's
+factory, and optional runtime policy overrides.
 
 YAML:
 
@@ -312,6 +312,14 @@ input:
   rules:
     - path: /etc/network
       recursive: true
+overrides:
+  retry:
+    allow: true
+    max_attempts: 3
+    delay_ms: 500
+  session_verification:
+    max_attempts: 2
+    delay_ms: 1000
 ```
 
 JSON:
@@ -328,6 +336,17 @@ JSON:
         "recursive": true
       }
     ]
+  },
+  "overrides": {
+    "retry": {
+      "allow": true,
+      "max_attempts": 3,
+      "delay_ms": 500
+    },
+    "session_verification": {
+      "max_attempts": 2,
+      "delay_ms": 1000
+    }
   }
 }
 ```
@@ -353,12 +372,27 @@ println!("created task {}", task.name());
 
 `parse_auto(...)` tries JSON first, then YAML. If neither parser accepts the
 input, Genja returns an auto-parse error that includes both parser messages. If
-the text parses but is not an object with `task` and optional `input`, Genja
-returns a task-spec shape error instead of treating it as a registry failure.
+the text parses but is not an object with `task`, optional `input`, and optional
+`overrides`, Genja returns a task-spec shape error instead of treating it as a
+registry failure.
 
-This is a single-task construction spec. It is not a workflow DSL, task list,
-or execution override model. Future work can build those features on top of the
-same registered task identity and JSON-compatible input contract.
+Overrides are narrow per-run runtime policy controls. The first supported
+fields are:
+
+| Override | Effect |
+| --- | --- |
+| `retry` | Overrides the constructed task's retry policy for this run. |
+| `session_verification` | Overrides post-change session verification policy for this run. |
+
+Overrides do not rewrite authored task behavior. The spec intentionally does
+not support overriding processors, connection plugin names, execution mode,
+task identity, factory strategy, schema, or registration metadata. In
+particular, processor overrides are rejected because processors can affect
+startup hooks, result handling, and side effects selected by the task author.
+
+This is a single-task construction spec. It is not a workflow DSL or task list.
+Future work can build those features on top of the same registered task
+identity and JSON-compatible input contract.
 
 Run the complete task spec example from the repository root:
 

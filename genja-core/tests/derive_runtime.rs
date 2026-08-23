@@ -321,6 +321,36 @@ impl RegisteredSchemaTask {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct RegisteredOverrideMetadataTask {
+    options: Value,
+}
+
+#[genja_task(
+    name = "registered_override_metadata_task",
+    connection_plugin_name = "ssh",
+    retry(allow = true, max_attempts = 3, delay_ms = 500),
+    session_verification(max_attempts = 3, delay_ms = 2000),
+    registration(
+        id = "acme.tests.derive_runtime.registered_override_metadata_task",
+        version = "1.0.0",
+        description = "Provides authored runtime metadata for override tests"
+    )
+)]
+impl RegisteredOverrideMetadataTask {
+    async fn start_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+        Ok(HostTaskResult::passed(TaskSuccess::new()))
+    }
+
+    fn options(&self) -> Option<&Value> {
+        Some(&self.options)
+    }
+}
+
 #[test]
 fn genja_task_generates_task_info_from_metadata() {
     let task = AsyncTask {
@@ -462,6 +492,87 @@ fn genja_task_compiled_registry_creates_task_from_json_spec() {
 
     assert_eq!(task.name(), "registered_serde_task");
     assert_eq!(task.options(), Some(&json!({ "source": "json-spec" })));
+}
+
+#[test]
+fn genja_task_compiled_registry_applies_task_spec_runtime_overrides() {
+    let task = create_compiled_task_from_spec_str(
+        r#"
+task: acme.tests.derive_runtime.registered_override_metadata_task@1.0.0
+input:
+  options:
+    source: overrides
+overrides:
+  retry:
+    allow: false
+    max_attempts: 2
+    delay_ms: 250
+  session_verification:
+    max_attempts: 2
+    delay_ms: 1000
+"#,
+    )
+    .expect("task spec with runtime overrides should construct task");
+
+    assert_eq!(task.name(), "registered_override_metadata_task");
+    assert_eq!(task.options(), Some(&json!({ "source": "overrides" })));
+    let retry = task
+        .retry_config()
+        .expect("retry override should be present");
+    assert_eq!(retry.allow(), Some(false));
+    assert_eq!(retry.max_attempts(), Some(2));
+    assert_eq!(retry.delay_ms(), Some(250));
+    let session_verification = task
+        .session_verification_config()
+        .expect("session verification override should be present");
+    assert_eq!(session_verification.max_attempts(), 2);
+    assert_eq!(session_verification.delay_ms(), 1000);
+}
+
+#[test]
+fn genja_task_compiled_registry_preserves_authored_metadata_without_spec_overrides() {
+    let task = create_compiled_task_from_spec_str(
+        r#"
+task: acme.tests.derive_runtime.registered_override_metadata_task@1.0.0
+input:
+  options:
+    source: authored
+"#,
+    )
+    .expect("task spec without runtime overrides should construct task");
+
+    let retry = task
+        .retry_config()
+        .expect("authored retry config should be present");
+    assert_eq!(retry.allow(), Some(true));
+    assert_eq!(retry.max_attempts(), Some(3));
+    assert_eq!(retry.delay_ms(), Some(500));
+    let session_verification = task
+        .session_verification_config()
+        .expect("authored session verification should be present");
+    assert_eq!(session_verification.max_attempts(), 3);
+    assert_eq!(session_verification.delay_ms(), 2000);
+}
+
+#[test]
+fn genja_task_compiled_registry_rejects_invalid_task_spec_override() {
+    let error = create_compiled_task_from_spec_str(
+        r#"
+task: acme.tests.derive_runtime.registered_override_metadata_task@1.0.0
+input:
+  options: {}
+overrides:
+  processors: ["audit"]
+"#,
+    )
+    .expect_err("unsupported override should be rejected");
+
+    assert!(matches!(
+        error,
+        genja_core::task::TaskSpecConstructionError::InvalidSpec(
+            genja_core::task::TaskSpecError::InvalidOverride { .. }
+        )
+    ));
 }
 
 #[test]
