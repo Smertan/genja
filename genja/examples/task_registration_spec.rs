@@ -62,6 +62,14 @@ input:
   rules:
     - path: /etc/network
       recursive: true
+overrides:
+  retry:
+    allow: true
+    max_attempts: 2
+    delay_ms: 250
+  session_verification:
+    max_attempts: 2
+    delay_ms: 1000
 "#;
 
     let spec = TaskSpec::parse_auto(yaml_spec)?;
@@ -69,6 +77,21 @@ input:
 
     let yaml_task = create_compiled_task_from_spec_str(yaml_spec)?;
     println!("Created from YAML spec: {}", yaml_task.name());
+    if let Some(retry) = yaml_task.retry_config() {
+        println!(
+            "Retry override: allow={:?} max_attempts={:?} delay_ms={:?}",
+            retry.allow(),
+            retry.max_attempts(),
+            retry.delay_ms()
+        );
+    }
+    if let Some(session_verification) = yaml_task.session_verification_config() {
+        println!(
+            "Session verification override: max_attempts={} delay_ms={}",
+            session_verification.max_attempts(),
+            session_verification.delay_ms()
+        );
+    }
 
     let json_spec = r#"
 {

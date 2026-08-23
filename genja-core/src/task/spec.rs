@@ -1,12 +1,14 @@
 //! Declarative task invocation specs.
 //!
 //! `TaskSpec` is the minimal data model for constructing one registered task
-//! from a stable task identity and JSON-compatible input. It intentionally does
-//! not run tasks, define task lists, apply execution overrides, or provide a
-//! workflow language.
+//! from a stable task identity and JSON-compatible input. It can also carry
+//! narrow per-run runtime policy overrides for retry and session verification.
+//! It intentionally does not run tasks, define task lists, change processors,
+//! or provide a workflow language.
 
 use super::{
-    TaskDefinition, TaskRegistrationError, TaskRegistrationKey, create_compiled_task_by_identity,
+    RetryConfig, SessionVerificationConfig, TaskDefinition, TaskRegistrationError,
+    TaskRegistrationKey, create_compiled_task_by_identity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -50,6 +52,16 @@ pub enum TaskSpecError {
         /// Human-readable shape failure.
         message: String,
     },
+    /// A task spec override is unsupported or invalid.
+    ///
+    /// Only `retry` and `session_verification` are currently supported under
+    /// `overrides`.
+    InvalidOverride {
+        /// Override field path.
+        field: String,
+        /// Human-readable validation failure.
+        message: String,
+    },
     /// The `task` identity failed `<task-id>@<task-version>` validation.
     InvalidTaskIdentity {
         /// Invalid identity value.
@@ -79,6 +91,9 @@ impl fmt::Display for TaskSpecError {
             }
             Self::InvalidShape { message } => {
                 write!(f, "invalid task spec: {message}")
+            }
+            Self::InvalidOverride { field, message } => {
+                write!(f, "invalid task spec override `{field}`: {message}")
             }
             Self::InvalidTaskIdentity { identity, reason } => {
                 write!(f, "invalid task spec identity `{identity}`: {reason}")
@@ -128,12 +143,46 @@ impl From<TaskRegistrationError> for TaskSpecConstructionError {
     }
 }
 
+/// Per-run runtime policy overrides for a declarative task spec.
+///
+/// Overrides are intentionally narrow. They can tune runtime policy for a
+/// single constructed task, but they do not rewrite authored task behavior,
+/// change processors, change connection plugins, or alter registration
+/// metadata. The supported fields are `retry` and `session_verification`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskSpecOverrides {
+    /// Optional retry policy override for this task construction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryConfig>,
+    /// Optional post-change session verification override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_verification: Option<SessionVerificationConfig>,
+}
+
+impl TaskSpecOverrides {
+    /// Validate override values.
+    pub fn validate(&self) -> Result<(), TaskSpecError> {
+        if let Some(config) = self.session_verification
+            && config.max_attempts() == 0
+        {
+            return Err(TaskSpecError::InvalidOverride {
+                field: "overrides.session_verification.max_attempts".to_string(),
+                message: "must be greater than 0".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
 /// Declarative spec for constructing one registered task.
 ///
 /// `task` must be a rendered registration identity in
 /// `<task-id>@<task-version>` form. `input` is passed to the registered task
 /// factory as JSON-compatible construction input. When `input` is omitted, it
-/// defaults to an empty object.
+/// defaults to an empty object. `overrides` can tune narrow runtime policy for
+/// the constructed task without changing the authored task behavior.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskSpec {
@@ -142,6 +191,9 @@ pub struct TaskSpec {
     /// JSON-compatible task construction input.
     #[serde(default = "empty_input")]
     pub input: Value,
+    /// Optional per-run runtime policy overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<TaskSpecOverrides>,
 }
 
 impl TaskSpec {
@@ -150,6 +202,7 @@ impl TaskSpec {
         let spec = Self {
             task: task.into(),
             input,
+            overrides: None,
         };
         spec.validate()?;
         Ok(spec)
@@ -207,9 +260,12 @@ impl TaskSpec {
         let object = value.as_object().ok_or_else(expected_shape_error)?;
         if !object.contains_key("task") {
             return Err(TaskSpecError::InvalidShape {
-                message: "missing required field `task`; expected an object with `task` and optional `input`".to_string(),
+                message:
+                    "missing required field `task`; expected an object with `task`, optional `input`, and optional `overrides`"
+                        .to_string(),
             });
         }
+        validate_overrides_shape(object)?;
 
         let spec: Self =
             serde_json::from_value(value).map_err(|error| TaskSpecError::InvalidShape {
@@ -227,6 +283,9 @@ impl TaskSpec {
                 reason: error.to_string(),
             }
         })?;
+        if let Some(overrides) = &self.overrides {
+            overrides.validate()?;
+        }
         Ok(())
     }
 }
@@ -241,8 +300,32 @@ fn parse_yaml_value(source: &str) -> Result<Value, String> {
 
 fn expected_shape_error() -> TaskSpecError {
     TaskSpecError::InvalidShape {
-        message: "expected an object with `task` and optional `input`".to_string(),
+        message: "expected an object with `task`, optional `input`, and optional `overrides`"
+            .to_string(),
     }
+}
+
+fn validate_overrides_shape(object: &Map<String, Value>) -> Result<(), TaskSpecError> {
+    let Some(overrides) = object.get("overrides") else {
+        return Ok(());
+    };
+    let overrides = overrides
+        .as_object()
+        .ok_or_else(|| TaskSpecError::InvalidOverride {
+            field: "overrides".to_string(),
+            message: "expected an object".to_string(),
+        })?;
+
+    for key in overrides.keys() {
+        if key != "retry" && key != "session_verification" {
+            return Err(TaskSpecError::InvalidOverride {
+                field: format!("overrides.{key}"),
+                message: "unsupported override field".to_string(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 impl FromStr for TaskSpec {
@@ -263,7 +346,8 @@ impl FromStr for TaskSpec {
 pub fn create_compiled_task_from_spec(
     spec: TaskSpec,
 ) -> Result<TaskDefinition, TaskSpecConstructionError> {
-    create_compiled_task_by_identity(&spec.task, spec.input).map_err(Into::into)
+    let task = create_compiled_task_by_identity(&spec.task, spec.input)?;
+    Ok(apply_overrides(task, spec.overrides))
 }
 
 /// Parse a task spec string with auto JSON/YAML parsing and construct its task.
@@ -283,6 +367,22 @@ pub fn create_compiled_task_from_spec_str_with_format(
 
 fn empty_input() -> Value {
     Value::Object(Map::new())
+}
+
+fn apply_overrides(task: TaskDefinition, overrides: Option<TaskSpecOverrides>) -> TaskDefinition {
+    let Some(overrides) = overrides else {
+        return task;
+    };
+    let task = if let Some(retry) = overrides.retry {
+        task.with_retry_config_override(retry)
+    } else {
+        task
+    };
+    if let Some(session_verification) = overrides.session_verification {
+        task.with_session_verification_config_override(session_verification)
+    } else {
+        task
+    }
 }
 
 #[cfg(test)]
@@ -489,7 +589,9 @@ input:
         assert_eq!(
             error,
             TaskSpecError::InvalidShape {
-                message: "expected an object with `task` and optional `input`".to_string(),
+                message:
+                    "expected an object with `task`, optional `input`, and optional `overrides`"
+                        .to_string(),
             }
         );
     }
@@ -502,7 +604,82 @@ input:
         assert_eq!(
             error,
             TaskSpecError::InvalidShape {
-                message: "missing required field `task`; expected an object with `task` and optional `input`".to_string(),
+                message:
+                    "missing required field `task`; expected an object with `task`, optional `input`, and optional `overrides`"
+                        .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn task_spec_parses_retry_and_session_verification_overrides() {
+        let spec = TaskSpec::from_yaml_str(
+            r#"
+task: acme.examples.backup_config@1.0.0
+input:
+  backup_path: /tmp/configs
+overrides:
+  retry:
+    allow: true
+    max_attempts: 4
+    delay_ms: 250
+  session_verification:
+    max_attempts: 2
+    delay_ms: 1000
+"#,
+        )
+        .expect("task spec overrides should parse");
+
+        let overrides = spec.overrides.expect("overrides should be present");
+        let retry = overrides.retry.expect("retry override should be present");
+        assert_eq!(retry.allow(), Some(true));
+        assert_eq!(retry.max_attempts(), Some(4));
+        assert_eq!(retry.delay_ms(), Some(250));
+        let session_verification = overrides
+            .session_verification
+            .expect("session verification override should be present");
+        assert_eq!(session_verification.max_attempts(), 2);
+        assert_eq!(session_verification.delay_ms(), 1000);
+    }
+
+    #[test]
+    fn task_spec_rejects_unsupported_processor_override() {
+        let error = TaskSpec::from_yaml_str(
+            r#"
+task: acme.examples.backup_config@1.0.0
+overrides:
+  processors: ["audit"]
+"#,
+        )
+        .expect_err("processor override should be unsupported");
+
+        assert_eq!(
+            error,
+            TaskSpecError::InvalidOverride {
+                field: "overrides.processors".to_string(),
+                message: "unsupported override field".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn task_spec_rejects_invalid_session_verification_override() {
+        let error = TaskSpec::from_yaml_str(
+            r#"
+task: acme.examples.backup_config@1.0.0
+overrides:
+  session_verification:
+    max_attempts: 0
+    delay_ms: 1000
+"#,
+        )
+        .expect_err("invalid session verification override should be rejected");
+
+        assert_eq!(
+            error,
+            TaskSpecError::InvalidOverride {
+                field: "overrides.session_verification.max_attempts".to_string(),
+                message: "must be greater than 0".to_string(),
             }
         );
     }
@@ -531,6 +708,8 @@ input:
 
         assert_eq!(yaml.input, json!({}));
         assert_eq!(json.input, json!({}));
+        assert_eq!(yaml.overrides, None);
+        assert_eq!(json.overrides, None);
     }
 
     #[test]
@@ -582,10 +761,10 @@ input:
         let error = serde_json::from_value::<TaskSpec>(json!({
             "task": "acme.examples.backup_config@1.0.0",
             "input": {},
-            "overrides": {},
+            "metadata": {},
         }))
         .expect_err("unknown fields should be rejected");
 
-        assert!(error.to_string().contains("unknown field `overrides`"));
+        assert!(error.to_string().contains("unknown field `metadata`"));
     }
 }

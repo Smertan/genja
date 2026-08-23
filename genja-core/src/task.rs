@@ -656,7 +656,7 @@ pub use registration::{
     validate_task_version,
 };
 pub use spec::{
-    TaskSpec, TaskSpecConstructionError, TaskSpecError, TaskSpecFormat,
+    TaskSpec, TaskSpecConstructionError, TaskSpecError, TaskSpecFormat, TaskSpecOverrides,
     create_compiled_task_from_spec, create_compiled_task_from_spec_str,
     create_compiled_task_from_spec_str_with_format,
 };
@@ -4270,6 +4270,8 @@ pub struct TaskDefinition {
     inner: Arc<dyn Task>,
     processor_resolver: Option<Arc<dyn TaskProcessorResolver>>,
     processor_names: Arc<Vec<String>>,
+    retry_config_override: Option<RetryConfig>,
+    session_verification_config_override: Option<SessionVerificationConfig>,
 }
 
 impl fmt::Debug for TaskDefinition {
@@ -4280,6 +4282,11 @@ impl fmt::Debug for TaskDefinition {
             .field("connection_plugin_name", &self.connection_plugin_name())
             .field("processor_names", &self.processor_names())
             .field("has_processor_resolver", &self.processor_resolver.is_some())
+            .field("retry_config_override", &self.retry_config_override)
+            .field(
+                "session_verification_config_override",
+                &self.session_verification_config_override,
+            )
             .finish()
     }
 }
@@ -4291,6 +4298,8 @@ impl TaskDefinition {
             inner: Arc::new(task),
             processor_resolver: None,
             processor_names: Arc::new(Vec::new()),
+            retry_config_override: None,
+            session_verification_config_override: None,
         }
     }
 
@@ -4325,6 +4334,27 @@ impl TaskDefinition {
         processor_resolver: Arc<dyn TaskProcessorResolver>,
     ) -> Self {
         self.processor_resolver = Some(processor_resolver);
+        self
+    }
+
+    /// Override the root task's retry policy for this task definition.
+    ///
+    /// This is a per-definition runtime policy override. It does not mutate the
+    /// authored task metadata and does not apply to sub-tasks.
+    pub fn with_retry_config_override(mut self, retry_config: RetryConfig) -> Self {
+        self.retry_config_override = Some(retry_config);
+        self
+    }
+
+    /// Override the root task's post-change session verification policy.
+    ///
+    /// This is a per-definition runtime policy override. It does not mutate the
+    /// authored task metadata and does not apply to sub-tasks.
+    pub fn with_session_verification_config_override(
+        mut self,
+        session_verification_config: SessionVerificationConfig,
+    ) -> Self {
+        self.session_verification_config_override = Some(session_verification_config);
         self
     }
 
@@ -5136,11 +5166,15 @@ impl TaskInfo for TaskDefinition {
     }
 
     fn retry_config(&self) -> Option<&RetryConfig> {
-        self.inner.retry_config()
+        self.retry_config_override
+            .as_ref()
+            .or_else(|| self.inner.retry_config())
     }
 
     fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
-        self.inner.session_verification_config()
+        self.session_verification_config_override
+            .as_ref()
+            .or_else(|| self.inner.session_verification_config())
     }
 
     fn supports_dry_run(&self) -> bool {
@@ -8123,6 +8157,50 @@ mod tests {
         let task = TaskDefinition::new(DryRunInfoTask);
 
         assert!(task.supports_dry_run());
+    }
+
+    #[test]
+    fn task_definition_retry_override_wins_over_authored_metadata() {
+        let task = TaskDefinition::new(RetryConfiguredFlakyTask {
+            inner: FlakyTask {
+                name: "retry-override",
+                attempts: Arc::new(AtomicUsize::new(0)),
+                succeed_on_attempt: 1,
+            },
+            retry_config: RetryConfig::builder()
+                .allow(true)
+                .max_attempts(3)
+                .delay_ms(100)
+                .build(),
+        })
+        .with_retry_config_override(
+            RetryConfig::builder()
+                .allow(false)
+                .max_attempts(2)
+                .delay_ms(250)
+                .build(),
+        );
+
+        let retry_config = task
+            .retry_config()
+            .expect("retry override should be present");
+        assert_eq!(retry_config.allow(), Some(false));
+        assert_eq!(retry_config.max_attempts(), Some(2));
+        assert_eq!(retry_config.delay_ms(), Some(250));
+    }
+
+    #[test]
+    fn task_definition_session_verification_override_wins_over_authored_metadata() {
+        let task = TaskDefinition::new(SessionVerificationInfoTask {
+            config: SessionVerificationConfig::new(3, 5_000),
+        })
+        .with_session_verification_config_override(SessionVerificationConfig::new(2, 1_000));
+
+        let config = task
+            .session_verification_config()
+            .expect("session verification override should be present");
+        assert_eq!(config.max_attempts(), 2);
+        assert_eq!(config.delay_ms(), 1_000);
     }
 
     #[test]
