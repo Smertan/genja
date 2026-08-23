@@ -6,6 +6,7 @@ use genja_core::task::{
     BlockingTaskRuntimeContext, HostTaskResult, IdempotencyCheck, IdempotencyMode, Task,
     TaskCatalog, TaskExecutionMode, TaskFactoryRegistry, TaskIdSource, TaskInfo,
     TaskRuntimeContext, TaskSuccess, compiled_task_registry, create_compiled_task_by_identity,
+    create_compiled_task_from_spec_str, create_compiled_task_from_spec_str_with_format,
     get_compiled_task_descriptor, get_compiled_task_descriptor_by_identity,
 };
 use serde_json::{Value, json};
@@ -424,6 +425,81 @@ fn genja_task_compiled_registry_supports_identity_task_creation() {
 
     assert_eq!(task.name(), "registered_serde_task");
     assert_eq!(task.options(), Some(&json!({ "source": "identity" })));
+}
+
+#[test]
+fn genja_task_compiled_registry_creates_task_from_yaml_spec() {
+    let task = create_compiled_task_from_spec_str(
+        r#"
+task: acme.tests.derive_runtime.registered_serde_task@1.2.3
+input:
+  options:
+    source: yaml-spec
+"#,
+    )
+    .expect("YAML task spec should construct task");
+
+    assert_eq!(task.name(), "registered_serde_task");
+    assert_eq!(task.options(), Some(&json!({ "source": "yaml-spec" })));
+}
+
+#[test]
+fn genja_task_compiled_registry_creates_task_from_json_spec() {
+    let task = create_compiled_task_from_spec_str_with_format(
+        r#"
+{
+  "task": "acme.tests.derive_runtime.registered_serde_task@1.2.3",
+  "input": {
+    "options": {
+      "source": "json-spec"
+    }
+  }
+}
+"#,
+        genja_core::task::TaskSpecFormat::Json,
+    )
+    .expect("JSON task spec should construct task");
+
+    assert_eq!(task.name(), "registered_serde_task");
+    assert_eq!(task.options(), Some(&json!({ "source": "json-spec" })));
+}
+
+#[test]
+fn genja_task_compiled_registry_preserves_spec_parse_errors() {
+    let error = create_compiled_task_from_spec_str(
+        r#"
+## Starting
+
+* bullets garbage
+* points dnd
+"#,
+    )
+    .expect_err("invalid spec text should be rejected");
+
+    assert!(matches!(
+        error,
+        genja_core::task::TaskSpecConstructionError::InvalidSpec(
+            genja_core::task::TaskSpecError::InvalidAuto { .. }
+        )
+    ));
+}
+
+#[test]
+fn genja_task_compiled_registry_preserves_unknown_task_errors_from_spec() {
+    let error = create_compiled_task_from_spec_str(
+        r#"
+task: acme.tests.derive_runtime.missing_task@1.0.0
+input: {}
+"#,
+    )
+    .expect_err("unknown task should be rejected by registry");
+
+    assert!(matches!(
+        error,
+        genja_core::task::TaskSpecConstructionError::Registration(
+            genja_core::task::TaskRegistrationError::NotFound { .. }
+        )
+    ));
 }
 
 #[test]

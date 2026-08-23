@@ -1643,8 +1643,7 @@ mod tests {
 
         let error = registry
             .create("acme.task", Some("1.0.0"), json!({ "secret": "value" }))
-            .err()
-            .expect("factory should reject input");
+            .expect_err("factory should reject input");
 
         assert_eq!(
             error,
@@ -1669,8 +1668,7 @@ mod tests {
 
         let error = registry
             .create("acme.task", None, Value::Null)
-            .err()
-            .expect("descriptor-only entry is not constructible");
+            .expect_err("descriptor-only entry is not constructible");
 
         assert_eq!(
             error,

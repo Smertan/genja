@@ -257,6 +257,21 @@ Lookup by ID without a version succeeds only when exactly one version exists.
 If multiple versions are registered for the same ID, Genja returns an ambiguous
 version error so callers do not accidentally run the wrong contract.
 
+## Choosing A Construction API
+
+The compiled registry exposes two construction paths. Use the direct registry
+path when application code already has a task identity and JSON value. Use a
+task spec when the caller supplies a YAML or JSON text payload that includes
+both the task identity and input.
+
+| Use case | API |
+| --- | --- |
+| List compiled task descriptors | `list_compiled_tasks()` |
+| Inspect one descriptor by identity | `get_compiled_task_descriptor_by_identity(...)` |
+| Construct from identity plus JSON value | `create_compiled_task_by_identity(...)` |
+| Parse a YAML/JSON task spec without constructing | `TaskSpec::parse_auto(...)` |
+| Construct from a YAML/JSON task spec string | `create_compiled_task_from_spec_str(...)` |
+
 ## Constructing Tasks From JSON
 
 Use `create_compiled_task_by_identity(...)` when the caller supplies JSON input:
@@ -279,6 +294,77 @@ println!("created task {}", task.name());
 Construction returns a `TaskDefinition`. Most task authors do not need to build
 or inspect this wrapper directly; it exists so registry, task-list, and runtime
 APIs can store and execute different task types through one interface.
+
+## Declarative Task Specs
+
+Use `TaskSpec` when the caller supplies a single task invocation as text, such
+as a CLI file, API request, or MCP tool payload. A task spec contains the
+registered task identity and the JSON-compatible input passed to that task's
+factory.
+
+YAML:
+
+```yaml
+task: acme.examples.backup_config@1.0.0
+input:
+  backup_path: /tmp/configs
+  compress: true
+  rules:
+    - path: /etc/network
+      recursive: true
+```
+
+JSON:
+
+```json
+{
+  "task": "acme.examples.backup_config@1.0.0",
+  "input": {
+    "backup_path": "/tmp/configs",
+    "compress": true,
+    "rules": [
+      {
+        "path": "/etc/network",
+        "recursive": true
+      }
+    ]
+  }
+}
+```
+
+Parse a spec without constructing the task when you need to inspect or validate
+the request first:
+
+```rust
+use genja::genja_core::task::TaskSpec;
+
+let spec = TaskSpec::parse_auto(source)?;
+println!("requested task {}", spec.task);
+```
+
+Construct directly from a spec string when the caller wants the registered task:
+
+```rust
+use genja::genja_core::task::{TaskInfo, create_compiled_task_from_spec_str};
+
+let task = create_compiled_task_from_spec_str(source)?;
+println!("created task {}", task.name());
+```
+
+`parse_auto(...)` tries JSON first, then YAML. If neither parser accepts the
+input, Genja returns an auto-parse error that includes both parser messages. If
+the text parses but is not an object with `task` and optional `input`, Genja
+returns a task-spec shape error instead of treating it as a registry failure.
+
+This is a single-task construction spec. It is not a workflow DSL, task list,
+or execution override model. Future work can build those features on top of the
+same registered task identity and JSON-compatible input contract.
+
+Run the complete task spec example from the repository root:
+
+```bash
+cargo run -p genja --example task_registration_spec
+```
 
 ## Default Factory
 
@@ -396,8 +482,12 @@ the Rust registration path.
 
 ## Related Examples
 
-- `genja/examples/task_registration.rs`
-- `genja/examples/task_registration_custom_factory.rs`
+- `genja/examples/task_registration.rs` shows the baseline registration,
+  descriptor listing, schema, and direct construction path.
+- `genja/examples/task_registration_custom_factory.rs` shows a custom factory
+  for prepared JSON input and sanitized validation errors.
+- `genja/examples/task_registration_spec.rs` shows YAML/JSON task spec parsing
+  and construction.
 
 ## Related Guides
 

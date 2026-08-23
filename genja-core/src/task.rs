@@ -646,6 +646,7 @@ use tokio::task;
 use tokio::time::{Duration, sleep};
 
 pub mod registration;
+pub mod spec;
 pub use registration::{
     CompiledTaskRegistration, InMemoryTaskRegistry, RegisteredTaskFactory, TaskCatalog,
     TaskDescriptor, TaskDescriptorMetadata, TaskFactoryRegistry, TaskIdSource,
@@ -653,6 +654,11 @@ pub use registration::{
     create_compiled_task_by_identity, get_compiled_task_descriptor,
     get_compiled_task_descriptor_by_identity, list_compiled_tasks, validate_explicit_task_id,
     validate_task_version,
+};
+pub use spec::{
+    TaskSpec, TaskSpecConstructionError, TaskSpecError, TaskSpecFormat,
+    create_compiled_task_from_spec, create_compiled_task_from_spec_str,
+    create_compiled_task_from_spec_str_with_format,
 };
 
 /// Optional retry metadata for a task or runner.
@@ -4264,6 +4270,18 @@ pub struct TaskDefinition {
     inner: Arc<dyn Task>,
     processor_resolver: Option<Arc<dyn TaskProcessorResolver>>,
     processor_names: Arc<Vec<String>>,
+}
+
+impl fmt::Debug for TaskDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskDefinition")
+            .field("name", &self.name())
+            .field("execution_mode", &self.inner.execution_mode())
+            .field("connection_plugin_name", &self.connection_plugin_name())
+            .field("processor_names", &self.processor_names())
+            .field("has_processor_resolver", &self.processor_resolver.is_some())
+            .finish()
+    }
 }
 
 impl TaskDefinition {
@@ -8105,6 +8123,22 @@ mod tests {
         let task = TaskDefinition::new(DryRunInfoTask);
 
         assert!(task.supports_dry_run());
+    }
+
+    #[test]
+    fn task_definition_debug_includes_metadata_only() {
+        let task = TaskDefinition::new(ProcessorTask {
+            name: "processor-root",
+            processors: vec!["audit".to_string()],
+        });
+
+        let debug = format!("{task:?}");
+
+        assert!(debug.contains("TaskDefinition"));
+        assert!(debug.contains("processor-root"));
+        assert!(debug.contains("Async"));
+        assert!(debug.contains("audit"));
+        assert!(debug.contains("has_processor_resolver: false"));
     }
 
     #[test]
