@@ -2,8 +2,9 @@
 //!
 //! `TaskSpec` is the minimal data model for constructing one registered task
 //! from a stable task identity and JSON-compatible input. It can also carry
-//! narrow per-run runtime policy overrides. It intentionally does not run tasks,
-//! define task lists, or provide a workflow language.
+//! narrow per-run runtime policy overrides for retry and session verification.
+//! It intentionally does not run tasks, define task lists, change processors,
+//! or provide a workflow language.
 
 use super::{
     RetryConfig, SessionVerificationConfig, TaskDefinition, TaskRegistrationError,
@@ -52,6 +53,9 @@ pub enum TaskSpecError {
         message: String,
     },
     /// A task spec override is unsupported or invalid.
+    ///
+    /// Only `retry` and `session_verification` are currently supported under
+    /// `overrides`.
     InvalidOverride {
         /// Override field path.
         field: String,
@@ -144,7 +148,7 @@ impl From<TaskRegistrationError> for TaskSpecConstructionError {
 /// Overrides are intentionally narrow. They can tune runtime policy for a
 /// single constructed task, but they do not rewrite authored task behavior,
 /// change processors, change connection plugins, or alter registration
-/// metadata.
+/// metadata. The supported fields are `retry` and `session_verification`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskSpecOverrides {
