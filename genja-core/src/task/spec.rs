@@ -5,7 +5,9 @@
 //! not run tasks, define task lists, apply execution overrides, or provide a
 //! workflow language.
 
-use super::TaskRegistrationKey;
+use super::{
+    TaskDefinition, TaskRegistrationError, TaskRegistrationKey, create_compiled_task_by_identity,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::error::Error;
@@ -86,6 +88,45 @@ impl fmt::Display for TaskSpecError {
 }
 
 impl Error for TaskSpecError {}
+
+/// Errors returned while constructing a compiled task from a declarative spec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskSpecConstructionError {
+    /// The task spec could not be parsed or validated.
+    InvalidSpec(TaskSpecError),
+    /// The spec was valid, but compiled task lookup or construction failed.
+    Registration(TaskRegistrationError),
+}
+
+impl fmt::Display for TaskSpecConstructionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidSpec(error) => write!(f, "{error}"),
+            Self::Registration(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl Error for TaskSpecConstructionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidSpec(error) => Some(error),
+            Self::Registration(error) => Some(error),
+        }
+    }
+}
+
+impl From<TaskSpecError> for TaskSpecConstructionError {
+    fn from(error: TaskSpecError) -> Self {
+        Self::InvalidSpec(error)
+    }
+}
+
+impl From<TaskRegistrationError> for TaskSpecConstructionError {
+    fn from(error: TaskRegistrationError) -> Self {
+        Self::Registration(error)
+    }
+}
 
 /// Declarative spec for constructing one registered task.
 ///
@@ -212,6 +253,32 @@ impl FromStr for TaskSpec {
     fn from_str(source: &str) -> Result<Self, Self::Err> {
         Self::parse_auto(source)
     }
+}
+
+/// Construct a compiled task from a validated declarative task spec.
+///
+/// This helper uses the compiled task registry and passes the spec's
+/// JSON-compatible `input` to the registered task factory selected by
+/// `spec.task`.
+pub fn create_compiled_task_from_spec(
+    spec: TaskSpec,
+) -> Result<TaskDefinition, TaskSpecConstructionError> {
+    create_compiled_task_by_identity(&spec.task, spec.input).map_err(Into::into)
+}
+
+/// Parse a task spec string with auto JSON/YAML parsing and construct its task.
+pub fn create_compiled_task_from_spec_str(
+    source: &str,
+) -> Result<TaskDefinition, TaskSpecConstructionError> {
+    create_compiled_task_from_spec(TaskSpec::parse_auto(source)?)
+}
+
+/// Parse a task spec string with an explicit format and construct its task.
+pub fn create_compiled_task_from_spec_str_with_format(
+    source: &str,
+    format: TaskSpecFormat,
+) -> Result<TaskDefinition, TaskSpecConstructionError> {
+    create_compiled_task_from_spec(TaskSpec::parse(source, format)?)
 }
 
 fn empty_input() -> Value {
