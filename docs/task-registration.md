@@ -520,8 +520,8 @@ the Rust registration path.
   descriptor listing, schema, and direct construction path.
 - `genja/examples/task_registration_custom_factory.rs` shows a custom factory
   for prepared JSON input and sanitized validation errors.
-- `genja/examples/task_registration_spec.rs` shows YAML/JSON task spec parsing
-  and construction.
+- `genja/examples/task_registration_spec.rs` shows YAML/JSON task spec parsing,
+  construction, and retry/session verification overrides.
 
 ## Related Guides
 
