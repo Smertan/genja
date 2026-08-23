@@ -11,6 +11,17 @@ Changed packages:
 
 ### Added
 
+- Added core Rust task discovery descriptor types for serializing generated and explicit task registration metadata. Refs: #91
+- Added core Rust task registration identity validation with semver-backed task versions. Refs: #91
+- Added core Rust task catalog and factory registry abstractions with an in-memory implementation for deterministic descriptor lookup and local task construction. Refs: #91
+- Added generated Rust task discovery for `#[genja_task(...)]` tasks through the compiled task registry. Refs: #91
+- Added explicit Rust `#[genja_task(..., registration(...))]` task registration with serde-backed JSON construction. Refs: #91
+- Added Rust task registration `default` and `custom(...)` factory strategies for no-input tasks and advanced input preparation. Refs: #91
+- Added opt-in Rust task registration input schemas with `registration(schema = "schemars")`. Refs: #91
+- Added Rust task registration identity helper APIs for looking up and constructing compiled tasks from `<task-id>@<task-version>` strings. Refs: #91
+- Added runnable Rust examples for task registration schema output and custom factory construction. Refs: #91
+- Added core Rust `TaskSpec` APIs for single-task declarative construction specs with explicit and auto-detected JSON/YAML parsing and compiled task construction helpers. Refs: #109
+- Added Rust task spec runtime policy overrides for retry and session verification during compiled task construction. Refs: #110
 - Added core Rust dry-run task capability, context, trait, and execution metadata APIs. Refs: #80
 - Added Rust `#[genja_task(...)]` dry-run metadata with `supports_dry_run = true`. Refs: #80
 - Added Rust task idempotency mode metadata with `IdempotencyMode` and `TaskInfo::idempotency_mode()`, defaulting to disabled. Refs: #88

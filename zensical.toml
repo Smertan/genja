@@ -13,7 +13,10 @@ nav = [
   {"Settings" = "settings.md"},
   {"API Surface" = "api-surface.md"},
   {"Inventory" = "inventory.md"},
-  {"Tasks" = "tasks.md"},
+  {"Tasks" = [
+    "tasks.md",
+    {"Rust Task Registration" = "task-registration.md"},
+  ]},
   {"Runners" = "runners.md"},
   {"Plugins" = [
     "plugins/index.md",

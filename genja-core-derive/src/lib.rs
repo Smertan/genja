@@ -4,10 +4,11 @@
 //! implementations for tuple-wrapper types.
 //!
 //! `genja_task` is the public task-authoring macro. It generates both
-//! `TaskInfo` and `Task` implementations from an inherent `impl` block and
-//! infers execution mode from `fn start(...)` versus `async fn start_async(...)`.
-//! The optional `retry(...)` block emits static `genja_core::task::RetryConfig`
-//! metadata for task-level retry overrides.
+//! `TaskInfo` and `Task` implementations from an inherent `impl` block, submits
+//! local discovery metadata to the compiled task registry, and infers execution
+//! mode from `fn start(...)` versus `async fn start_async(...)`. The optional
+//! `registration(...)` block gives a task a stable catalog ID and local JSON
+//! construction factory for CLI, MCP, provider manifest, and catalog workflows.
 //!
 //! # Task Authoring Example
 //! ```ignore
@@ -71,9 +72,9 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     DeriveInput, Expr, ExprArray, ExprLit, FnArg, GenericArgument, ImplItem, ItemImpl, Lit,
-    LitBool, LitInt, LitStr, PathArguments, ReturnType, Token, Type, TypePath, parenthesized,
+    LitBool, LitInt, LitStr, Path, PathArguments, ReturnType, Token, Type, TypePath, parenthesized,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, token,
 };
 
 /// Generates an implementation of the `Deref` trait for the given type.
@@ -152,8 +153,8 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// Generate `TaskInfo` and `Task` implementations for an inherent task `impl`
-/// block.
+/// Generate `TaskInfo`, `Task`, and local discovery metadata for an inherent
+/// task `impl` block.
 ///
 /// The macro requires `name = "..."` and exactly one task entrypoint:
 /// `fn start(...)` for blocking tasks or `async fn start_async(...)` for async
@@ -169,6 +170,45 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// - `session_verification(max_attempts = ..., delay_ms = ...)`; defaults to
 ///   disabled when the block is absent. Inside the block, omitted
 ///   `max_attempts` defaults to `1` and omitted `delay_ms` defaults to `0`.
+/// - `registration(id = "...", version = "...", description = "...")`; opts
+///   into stable task registration and JSON construction. `id` is required and
+///   `version` defaults to `env!("CARGO_PKG_VERSION")`. Use
+///   `schema = "schemars"` to include a JSON Schema for the task input in the
+///   descriptor. Schema generation requires the task type, and any nested field
+///   types, to implement `schemars::JsonSchema`.
+///
+/// # Discovery and registration
+///
+/// Every annotated task is submitted to the compiled task registry. Tasks
+/// without `registration(...)` use a generated `auto:...` ID derived from the
+/// Rust type path. Generated IDs are useful for local listing, but they are not
+/// stable public contracts and are not constructible from JSON input.
+///
+/// Tasks with `registration(id = "...")` use an explicit stable ID. Their
+/// public identity is `<task-id>@<task-version>`, for example
+/// `acme.network.configure_acl@2.0.0`. Explicit IDs are validated as
+/// namespace-friendly lowercase identifiers and versions are validated as
+/// semantic versions. Duplicate `id + version` registrations are rejected when
+/// the compiled registry is built.
+///
+/// Registered tasks support three construction strategies:
+///
+/// - Omit `factory` or use `factory = "serde"` to deserialize JSON input into
+///   the task type. The task type must implement `serde::de::DeserializeOwned`.
+/// - Use `factory = "default"` for no-input tasks. The task type must implement
+///   `Default`; input must be `null` or `{}`.
+/// - Use `factory = custom(path::to::function)` for advanced input
+///   preparation. The function receives `serde_json::Value` and must return
+///   `Result<Self, genja_core::task::TaskRegistrationError>`, where `Self` is
+///   the task type. Custom factories are intended for validation,
+///   normalization, shorthand expansion, and carefully controlled
+///   de-obfuscation before constructing the task. Error messages should avoid
+///   exposing raw or decoded secret values.
+///
+/// With custom factories, `schema = "schemars"` describes `Self`. If the custom
+/// factory accepts a public JSON shape that differs from the task struct, omit
+/// schema generation for now or keep the custom input contract documented
+/// separately until a dedicated input-type schema option is added.
 ///
 /// `session_verification(...)` requires `connection_plugin_name = "..."`,
 /// because post-change session verification must replace a declared task
@@ -199,6 +239,161 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///     }
 /// }
 /// ```
+///
+/// The default registered-task path uses serde construction. This is the
+/// common path for tasks that should be created from user-provided JSON input.
+///
+/// ```ignore
+/// use genja_core::genja_task;
+/// use genja_core::inventory::Host;
+/// use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+///
+/// #[derive(serde::Deserialize)]
+/// struct BackupConfig {
+///     backup_path: String,
+///     compress: bool,
+/// }
+///
+/// #[genja_task(
+///     name = "backup_config",
+///     connection_plugin_name = "ssh",
+///     registration(id = "acme.backup.backup_config")
+/// )]
+/// impl BackupConfig {
+///     async fn start_async(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(
+///             TaskSuccess::new().with_summary(format!(
+///                 "backing up to {}",
+///                 self.backup_path
+///             )),
+///         ))
+///     }
+/// }
+/// ```
+///
+/// ```ignore
+/// use genja_core::genja_task;
+/// use genja_core::inventory::Host;
+/// use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+///
+/// #[derive(serde::Deserialize, schemars::JsonSchema)]
+/// struct ConfigureAcl {
+///     acl_name: String,
+/// }
+///
+/// #[genja_task(
+///     name = "configure_acl",
+///     registration(
+///         id = "acme.network.configure_acl",
+///         version = "2.0.0",
+///         description = "Configures an ACL on a network device",
+///         schema = "schemars"
+///     )
+/// )]
+/// impl ConfigureAcl {
+///     async fn start_async(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(TaskSuccess::new()))
+///     }
+/// }
+/// ```
+///
+/// No-input tasks can use the default factory. The task type must implement
+/// `Default`, and callers must pass `null` or `{}` as construction input.
+///
+/// ```ignore
+/// use genja_core::genja_task;
+/// use genja_core::inventory::Host;
+/// use genja_core::task::{HostTaskResult, TaskRuntimeContext, TaskSuccess};
+///
+/// #[derive(Default)]
+/// struct CollectFacts;
+///
+/// #[genja_task(
+///     name = "collect_facts",
+///     registration(
+///         id = "acme.inventory.collect_facts",
+///         factory = "default"
+///     )
+/// )]
+/// impl CollectFacts {
+///     async fn start_async(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(TaskSuccess::new()))
+///     }
+/// }
+/// ```
+///
+/// Custom factories can keep the public JSON contract separate from the
+/// internal Rust struct. This is useful when task input needs preparation before
+/// execution, such as expanding shorthand or decoding obfuscated values.
+///
+/// ```ignore
+/// use genja_core::genja_task;
+/// use genja_core::inventory::Host;
+/// use genja_core::task::{
+///     HostTaskResult, TaskRegistrationError, TaskRuntimeContext, TaskSuccess,
+/// };
+///
+/// struct ConfigureAcl {
+///     acl_name: String,
+///     secret_token: String,
+/// }
+///
+/// fn create_configure_acl(
+///     input: serde_json::Value,
+/// ) -> Result<ConfigureAcl, TaskRegistrationError> {
+///     let acl_name = input
+///         .get("acl")
+///         .and_then(serde_json::Value::as_str)
+///         .ok_or_else(|| TaskRegistrationError::InvalidInput {
+///             id: "acme.network.configure_acl".to_string(),
+///             version: "2.0.0".to_string(),
+///             message: "`acl` is required".to_string(),
+///         })?;
+///     let token = input
+///         .get("token_obfuscated")
+///         .and_then(serde_json::Value::as_str)
+///         .ok_or_else(|| TaskRegistrationError::InvalidInput {
+///             id: "acme.network.configure_acl".to_string(),
+///             version: "2.0.0".to_string(),
+///             message: "`token_obfuscated` is required".to_string(),
+///         })?;
+///
+///     Ok(ConfigureAcl {
+///         acl_name: acl_name.to_string(),
+///         secret_token: token.chars().rev().collect(),
+///     })
+/// }
+///
+/// #[genja_task(
+///     name = "configure_acl",
+///     registration(
+///         id = "acme.network.configure_acl",
+///         version = "2.0.0",
+///         factory = custom(create_configure_acl)
+///     )
+/// )]
+/// impl ConfigureAcl {
+///     async fn start_async(
+///         &self,
+///         _host: &Host,
+///         _context: &TaskRuntimeContext,
+///     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+///         Ok(HostTaskResult::passed(TaskSuccess::new()))
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn genja_task(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as GenjaTaskArgs);
@@ -218,6 +413,7 @@ struct GenjaTaskArgs {
     idempotency: Option<IdempotencyModeArg>,
     processors: Vec<LitStr>,
     retry: Option<RetryArgs>,
+    registration: Option<RegistrationArgs>,
     session_verification: Option<SessionVerificationArgs>,
 }
 
@@ -239,6 +435,25 @@ struct RetryArgs {
     allow: Option<LitBool>,
     max_attempts: Option<LitInt>,
     delay_ms: Option<LitInt>,
+}
+
+#[derive(Default)]
+struct RegistrationArgs {
+    id: Option<LitStr>,
+    version: Option<LitStr>,
+    description: Option<LitStr>,
+    factory: Option<RegistrationFactoryArg>,
+    schema: Option<RegistrationSchemaArg>,
+}
+
+enum RegistrationFactoryArg {
+    Serde,
+    Default,
+    Custom(Path),
+}
+
+enum RegistrationSchemaArg {
+    Schemars,
 }
 
 #[derive(Default)]
@@ -315,6 +530,14 @@ impl Parse for GenjaTaskArgs {
                     parenthesized!(content in input);
                     args.retry = Some(content.parse()?);
                 }
+                "registration" => {
+                    if args.registration.is_some() {
+                        return Err(syn::Error::new_spanned(key, "duplicate `registration`"));
+                    }
+                    let content;
+                    parenthesized!(content in input);
+                    args.registration = Some(content.parse()?);
+                }
                 "session_verification" => {
                     if args.session_verification.is_some() {
                         return Err(syn::Error::new_spanned(
@@ -329,7 +552,7 @@ impl Parse for GenjaTaskArgs {
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "unsupported key; expected `name`, `connection_plugin_name`, `supports_dry_run`, `idempotency`, `processors`, `retry(...)`, or `session_verification(...)`",
+                        "unsupported key; expected `name`, `connection_plugin_name`, `supports_dry_run`, `idempotency`, `processors`, `retry(...)`, `registration(...)`, or `session_verification(...)`",
                     ));
                 }
             }
@@ -387,6 +610,205 @@ fn parse_idempotency_mode_expr(expr: &Expr) -> syn::Result<IdempotencyModeArg> {
             "`idempotency` must be IdempotencyMode::Disabled, IdempotencyMode::Check, or IdempotencyMode::CheckAndVerify",
         )),
     }
+}
+
+impl Parse for RegistrationArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut args = Self::default();
+
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+
+            match key.to_string().as_str() {
+                "id" => {
+                    if args.id.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate registration key `id`",
+                        ));
+                    }
+                    let id: LitStr = input.parse()?;
+                    validate_registration_id_literal(&id)?;
+                    args.id = Some(id);
+                }
+                "version" => {
+                    if args.version.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate registration key `version`",
+                        ));
+                    }
+                    let version: LitStr = input.parse()?;
+                    validate_registration_version_literal(&version)?;
+                    args.version = Some(version);
+                }
+                "description" => {
+                    if args.description.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate registration key `description`",
+                        ));
+                    }
+                    args.description = Some(input.parse()?);
+                }
+                "factory" => {
+                    if args.factory.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate registration key `factory`",
+                        ));
+                    }
+                    args.factory = Some(parse_registration_factory_arg(input)?);
+                }
+                "schema" => {
+                    if args.schema.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate registration key `schema`",
+                        ));
+                    }
+                    args.schema = Some(parse_registration_schema_arg(input)?);
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        "unsupported registration key; expected `id`, `version`, `description`, `factory`, or `schema`",
+                    ));
+                }
+            }
+
+            if input.is_empty() {
+                break;
+            }
+
+            input.parse::<Token![,]>()?;
+        }
+
+        if args.id.is_none() {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "`registration(...)` requires `id = \"...\"`",
+            ));
+        }
+
+        Ok(args)
+    }
+}
+
+fn parse_registration_schema_arg(input: ParseStream<'_>) -> syn::Result<RegistrationSchemaArg> {
+    let schema: LitStr = input.parse()?;
+    match schema.value().as_str() {
+        "schemars" => Ok(RegistrationSchemaArg::Schemars),
+        _ => Err(syn::Error::new_spanned(
+            schema,
+            "`registration(schema = ...)` supports only `\"schemars\"`",
+        )),
+    }
+}
+
+fn parse_registration_factory_arg(input: ParseStream<'_>) -> syn::Result<RegistrationFactoryArg> {
+    if input.peek(LitStr) {
+        let factory: LitStr = input.parse()?;
+        return match factory.value().as_str() {
+            "serde" => Ok(RegistrationFactoryArg::Serde),
+            "default" => Ok(RegistrationFactoryArg::Default),
+            "custom" => Err(syn::Error::new_spanned(
+                factory,
+                "use `factory = custom(path)` to configure a custom registration factory",
+            )),
+            _ => Err(syn::Error::new_spanned(
+                factory,
+                "`registration(factory = ...)` supports `\"serde\"`, `\"default\"`, or `custom(path)`",
+            )),
+        };
+    }
+
+    let factory: syn::Ident = input.parse()?;
+    if factory != "custom" {
+        return Err(syn::Error::new_spanned(
+            factory,
+            "`registration(factory = ...)` supports `\"serde\"`, `\"default\"`, or `custom(path)`",
+        ));
+    }
+
+    if !input.peek(token::Paren) {
+        return Err(syn::Error::new_spanned(
+            factory,
+            "`factory = custom(...)` requires a factory function path",
+        ));
+    }
+
+    let content;
+    parenthesized!(content in input);
+    let factory_path: Path = content.parse()?;
+    if !content.is_empty() {
+        return Err(syn::Error::new_spanned(
+            factory_path,
+            "`factory = custom(...)` accepts exactly one factory function path",
+        ));
+    }
+    Ok(RegistrationFactoryArg::Custom(factory_path))
+}
+
+fn validate_registration_id_literal(id: &LitStr) -> syn::Result<()> {
+    let value = id.value();
+    let invalid =
+        |reason: &str| syn::Error::new_spanned(id, format!("invalid registration `id`: {reason}"));
+
+    if value.is_empty() {
+        return Err(invalid("id must not be empty"));
+    }
+
+    if value.trim() != value {
+        return Err(invalid("id must not have leading or trailing whitespace"));
+    }
+
+    if value.contains('@') {
+        return Err(invalid("id must not contain `@`"));
+    }
+
+    for segment in value.split('.') {
+        if segment.is_empty() {
+            return Err(invalid("id segments must not be empty"));
+        }
+
+        let first = segment
+            .bytes()
+            .next()
+            .expect("segment is known to be non-empty");
+        if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+            return Err(invalid(
+                "id segments must start with an ASCII lowercase letter or digit",
+            ));
+        }
+
+        if !segment.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
+        }) {
+            return Err(invalid(
+                "id segments may contain only ASCII lowercase letters, digits, `_`, or `-`",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_registration_version_literal(version: &LitStr) -> syn::Result<()> {
+    let value = version.value();
+    if value.is_empty() {
+        return Err(syn::Error::new_spanned(
+            version,
+            "invalid registration `version`: version must not be empty",
+        ));
+    }
+
+    semver::Version::parse(&value).map_err(|error| {
+        syn::Error::new_spanned(version, format!("invalid registration `version`: {error}"))
+    })?;
+
+    Ok(())
 }
 
 impl Parse for RetryArgs {
@@ -702,6 +1124,7 @@ fn expand_genja_task(
     let connection_plugin_name = args.connection_plugin_name;
     let processors = args.processors;
     let retry = args.retry;
+    let registration = args.registration;
     let session_verification = args.session_verification;
 
     if session_verification.is_some() && connection_plugin_name.is_none() {
@@ -711,14 +1134,14 @@ fn expand_genja_task(
         ));
     }
 
-    let connection_impl = match connection_plugin_name {
+    let connection_impl = match &connection_plugin_name {
         Some(plugin_name) => quote! { Some(#plugin_name) },
         None => quote! { None },
     };
 
     let options_impl = if has_options {
         quote! {
-            fn options(&self) -> Option<&serde_json::Value> {
+            fn options(&self) -> Option<&genja_core::__serde_json::Value> {
                 #self_ty::options(self)
             }
         }
@@ -746,23 +1169,27 @@ fn expand_genja_task(
         }
     };
 
-    let retry_config_impl = if let Some(retry) = retry {
+    let retry_config_value = retry.as_ref().map(|retry| {
         let allow = match retry.allow {
-            Some(allow) => quote! { Some(#allow) },
+            Some(ref allow) => quote! { Some(#allow) },
             None => quote! { None },
         };
         let max_attempts = match retry.max_attempts {
-            Some(max_attempts) => quote! { Some(#max_attempts) },
+            Some(ref max_attempts) => quote! { Some(#max_attempts) },
             None => quote! { None },
         };
         let delay_ms = match retry.delay_ms {
-            Some(delay_ms) => quote! { Some(#delay_ms) },
+            Some(ref delay_ms) => quote! { Some(#delay_ms) },
             None => quote! { None },
         };
+        quote! { genja_core::task::RetryConfig::new(#allow, #max_attempts, #delay_ms) }
+    });
+
+    let retry_config_impl = if let Some(retry_config_value) = &retry_config_value {
         quote! {
             fn retry_config(&self) -> Option<&genja_core::task::RetryConfig> {
                 static RETRY_CONFIG: genja_core::task::RetryConfig =
-                    genja_core::task::RetryConfig::new(#allow, #max_attempts, #delay_ms);
+                    #retry_config_value;
                 Some(&RETRY_CONFIG)
             }
         }
@@ -822,6 +1249,137 @@ fn expand_genja_task(
         quote! {}
     };
 
+    let execution_mode = if has_start {
+        quote! { genja_core::task::TaskExecutionMode::Blocking }
+    } else {
+        quote! { genja_core::task::TaskExecutionMode::Async }
+    };
+
+    let descriptor_connection_plugin_name = match &connection_plugin_name {
+        Some(plugin_name) => quote! { Some(#plugin_name.to_string()) },
+        None => quote! { None },
+    };
+    let descriptor_retry = match &retry_config_value {
+        Some(retry_config_value) => quote! { Some(#retry_config_value) },
+        None => quote! { None },
+    };
+    let descriptor_registration = if let Some(registration) = &registration {
+        let registration_id = registration.id.as_ref().expect("validated by parser");
+        let registration_version = match &registration.version {
+            Some(version) => quote! { #version },
+            None => quote! { env!("CARGO_PKG_VERSION") },
+        };
+        let registration_description = match &registration.description {
+            Some(description) => quote! { Some(#description.to_string()) },
+            None => quote! { None },
+        };
+        let registration_input_schema = match &registration.schema {
+            Some(RegistrationSchemaArg::Schemars) => quote! {
+                Some(
+                    genja_core::__serde_json::to_value(
+                        genja_core::__schemars::schema_for!(#self_ty)
+                    )
+                    .expect("schemars schema should serialize to JSON")
+                )
+            },
+            None => quote! { None },
+        };
+        let registration_create = match registration
+            .factory
+            .as_ref()
+            .unwrap_or(&RegistrationFactoryArg::Serde)
+        {
+            RegistrationFactoryArg::Serde => quote! {
+                let task: #self_ty =
+                    genja_core::__serde_json::from_value(input).map_err(|error| {
+                        genja_core::task::TaskRegistrationError::InvalidInput {
+                            id: #registration_id.to_string(),
+                            version: #registration_version.to_string(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                Ok(genja_core::task::TaskDefinition::new(task))
+            },
+            RegistrationFactoryArg::Default => quote! {
+                if !input.is_null()
+                    && !input
+                        .as_object()
+                        .is_some_and(|object| object.is_empty())
+                {
+                    return Err(genja_core::task::TaskRegistrationError::InvalidInput {
+                        id: #registration_id.to_string(),
+                        version: #registration_version.to_string(),
+                        message: "default factory expects empty input (`null` or `{}`)".to_string(),
+                    });
+                }
+
+                let task: #self_ty = <#self_ty as std::default::Default>::default();
+                Ok(genja_core::task::TaskDefinition::new(task))
+            },
+            RegistrationFactoryArg::Custom(factory_path) => quote! {
+                let task: #self_ty = #factory_path(input)?;
+                Ok(genja_core::task::TaskDefinition::new(task))
+            },
+        };
+
+        quote! {
+            const _: () = {
+                fn __genja_task_descriptor() -> genja_core::task::TaskDescriptor {
+                    genja_core::task::TaskDescriptor::explicit(
+                        #registration_id,
+                        #registration_version,
+                        genja_core::task::TaskDescriptorMetadata {
+                            name: #name.to_string(),
+                            description: #registration_description,
+                            execution_mode: #execution_mode,
+                            connection_plugin_name: #descriptor_connection_plugin_name,
+                            processor_names: vec![#(#processors.to_string()),*],
+                            retry: #descriptor_retry,
+                        },
+                        #registration_input_schema,
+                        true,
+                    )
+                }
+
+                fn __genja_task_create(
+                    input: genja_core::__serde_json::Value,
+                ) -> Result<genja_core::task::TaskDefinition, genja_core::task::TaskRegistrationError> {
+                    #registration_create
+                }
+
+                genja_core::__inventory::submit! {
+                    genja_core::task::CompiledTaskRegistration::constructible(
+                        __genja_task_descriptor,
+                        __genja_task_create,
+                    )
+                }
+            };
+        }
+    } else {
+        quote! {
+            const _: () = {
+                fn __genja_task_descriptor() -> genja_core::task::TaskDescriptor {
+                    genja_core::task::TaskDescriptor::generated(
+                        format!("auto:{}", std::any::type_name::<#self_ty>()),
+                        env!("CARGO_PKG_VERSION"),
+                        genja_core::task::TaskDescriptorMetadata {
+                            name: #name.to_string(),
+                            description: None,
+                            execution_mode: #execution_mode,
+                            connection_plugin_name: #descriptor_connection_plugin_name,
+                            processor_names: vec![#(#processors.to_string()),*],
+                            retry: #descriptor_retry,
+                        },
+                    )
+                }
+
+                genja_core::__inventory::submit! {
+                    genja_core::task::CompiledTaskRegistration::descriptor_only(__genja_task_descriptor)
+                }
+            };
+        }
+    };
+
     let task_impl = if has_start {
         let dry_run_impl = if has_dry_run {
             quote! {
@@ -867,7 +1425,7 @@ fn expand_genja_task(
                 #sub_tasks_impl
 
                 fn execution_mode(&self) -> genja_core::task::TaskExecutionMode {
-                    genja_core::task::TaskExecutionMode::Blocking
+                    #execution_mode
                 }
             }
         }
@@ -916,7 +1474,7 @@ fn expand_genja_task(
                 #sub_tasks_impl
 
                 fn execution_mode(&self) -> genja_core::task::TaskExecutionMode {
-                    genja_core::task::TaskExecutionMode::Async
+                    #execution_mode
                 }
             }
         }
@@ -948,6 +1506,8 @@ fn expand_genja_task(
         }
 
         #task_impl
+
+        #descriptor_registration
     })
 }
 

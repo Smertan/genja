@@ -1,0 +1,5 @@
+error: invalid registration `version`: unexpected character 'l' while parsing major version number
+  --> tests/ui_genja_task/fail/invalid_registration_version.rs:10:19
+   |
+10 |         version = "latest"
+   |                   ^^^^^^^^

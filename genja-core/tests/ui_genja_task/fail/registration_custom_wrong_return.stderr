@@ -1,0 +1,13 @@
+error[E0308]: `?` operator has incompatible types
+  --> tests/ui_genja_task/fail/registration_custom_wrong_return.rs:10:1
+   |
+10 | / #[genja_task(
+11 | |     name = "bad_task",
+12 | |     registration(
+13 | |         id = "acme.tests.bad_custom_return_task",
+...  |
+16 | | )]
+   | |__^ expected `BadTask`, found `()`
+   |
+   = note: `?` operator cannot convert from `()` to `BadTask`
+   = note: this error originates in the attribute macro `genja_task` (in Nightly builds, run with -Z macro-backtrace for more info)
