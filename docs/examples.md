@@ -35,6 +35,7 @@ cargo run -p genja --example run_task_tree
 cargo run -p genja --example async_inventory_plugin
 cargo run -p genja --example task_registration
 cargo run -p genja --example task_registration_custom_factory
+cargo run -p genja --example task_registration_spec
 ```
 
 | Example | Demonstrates |
@@ -47,6 +48,7 @@ cargo run -p genja --example task_registration_custom_factory
 | `async_inventory_plugin.rs` | Implementing an async Rust inventory plugin and building a runtime from generated inventory. |
 | `task_registration.rs` | Registering a Rust task, listing compiled descriptors, printing schema JSON, and constructing by `<id>@<version>`. |
 | `task_registration_custom_factory.rs` | Registering a Rust task with a custom factory for prepared JSON input and sanitized validation errors. |
+| `task_registration_spec.rs` | Constructing a registered Rust task from YAML and JSON task spec strings. |
 
 Use the Rust examples when you want to see the public `genja` crate, the
 `#[genja_task]` macro, and Rust plugin traits in context.
