@@ -151,7 +151,6 @@ from enum import Enum
 import inspect
 from importlib import metadata as importlib_metadata
 import json
-import re
 from types import MappingProxyType
 from typing import Any, Awaitable, Literal, Protocol, TypeAlias, TypeVar, cast
 
@@ -164,20 +163,18 @@ from pydantic import (
     model_validator,
 )
 
-from .genja import IdempotencyCheckResult, IdempotencyMode, SessionVerificationConfig
+from .genja import (
+    IdempotencyCheckResult,
+    IdempotencyMode,
+    SessionVerificationConfig,
+    _validate_task_id as _rust_validate_task_id,
+    _validate_task_version as _rust_validate_task_version,
+)
 
 _TaskClassT = TypeVar("_TaskClassT", bound=type)
 _TaskFactoryCallable: TypeAlias = Callable[[Mapping[str, Any]], Any]
 TaskFactoryStrategy: TypeAlias = Literal["kwargs", "default", "custom"]
 TaskExecutionMode: TypeAlias = Literal["blocking", "async"]
-
-_SEMVER_RE = re.compile(
-    r"^(0|[1-9]\d*)\."
-    r"(0|[1-9]\d*)\."
-    r"(0|[1-9]\d*)"
-    r"(?:-((?:0|[1-9A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9A-Za-z-][0-9A-Za-z-]*))*))?"
-    r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
-)
 
 
 @dataclass(frozen=True)
@@ -580,47 +577,20 @@ def validate_task_id(task_id: str) -> None:
     """Validate an explicit stable task ID using the Rust registration rules."""
     if not isinstance(task_id, str):
         raise TaskRegistrationError("invalid task id: id must be a string")
-    if not task_id:
-        raise TaskRegistrationError("invalid task id ``: id must not be empty")
-    if task_id.strip() != task_id:
-        raise TaskRegistrationError(
-            f"invalid task id `{task_id}`: id must not have leading or trailing whitespace"
-        )
-    if "@" in task_id:
-        raise TaskRegistrationError(
-            f"invalid task id `{task_id}`: id must not contain `@`"
-        )
-    for segment in task_id.split("."):
-        if not segment:
-            raise TaskRegistrationError(
-                f"invalid task id `{task_id}`: id segments must not be empty"
-            )
-        first = segment[0]
-        if not (first.isascii() and (first.islower() or first.isdigit())):
-            raise TaskRegistrationError(
-                f"invalid task id `{task_id}`: id segments must start with an ASCII lowercase letter or digit"
-            )
-        if not all(
-            char.isascii() and (char.islower() or char.isdigit() or char in {"_", "-"})
-            for char in segment
-        ):
-            raise TaskRegistrationError(
-                f"invalid task id `{task_id}`: id segments may contain only ASCII lowercase letters, digits, `_`, or `-`"
-            )
+    try:
+        _rust_validate_task_id(task_id)
+    except ValueError as err:
+        raise TaskRegistrationError(str(err)) from err
 
 
 def validate_task_version(version: str) -> None:
     """Validate a task contract version as a semantic version."""
     if not isinstance(version, str):
         raise TaskRegistrationError("invalid task version: version must be a string")
-    if not version:
-        raise TaskRegistrationError(
-            "invalid task version ``: version must not be empty"
-        )
-    if _SEMVER_RE.fullmatch(version) is None:
-        raise TaskRegistrationError(
-            f"invalid task version `{version}`: version must be a semantic version"
-        )
+    try:
+        _rust_validate_task_version(version)
+    except ValueError as err:
+        raise TaskRegistrationError(str(err)) from err
 
 
 def parse_task_identity(identity: str) -> TaskRegistrationKey:
