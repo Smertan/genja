@@ -338,7 +338,11 @@ class TaskDescriptor(_GenjaModel):
     shape.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        extra="forbid",
+        populate_by_name=True,
+    )
 
     id: str = Field(description="Stable or generated task identifier.")
     id_source: Literal["generated", "explicit"] = Field(
@@ -406,13 +410,10 @@ class TaskRegistration(_GenjaModel):
         default=None,
         description="Callable used when factory='custom'.",
     )
-    input_schema: dict[str, Any] | None = Field(
+    registration_schema: dict[str, Any] | type[BaseModel] | None = Field(
         default=None,
-        description="Optional explicit JSON Schema for construction input.",
-    )
-    input_model: type[BaseModel] | None = Field(
-        default=None,
-        description="Optional Pydantic model class used to derive input schema.",
+        alias="schema",
+        description="Optional explicit JSON Schema or Pydantic model class for construction input.",
     )
 
     @model_validator(mode="after")
@@ -436,15 +437,15 @@ class TaskRegistration(_GenjaModel):
             raise ValueError("custom_factory is required when factory='custom'")
         if self.factory != "custom" and self.custom_factory is not None:
             raise ValueError("custom_factory requires factory='custom'")
-        if self.input_schema is not None:
-            _ensure_json_serializable(self.input_schema, "registration.input_schema")
-        if self.input_model is not None:
-            if not isinstance(self.input_model, type) or not issubclass(
-                self.input_model, BaseModel
+        if isinstance(self.registration_schema, dict):
+            _ensure_json_serializable(self.registration_schema, "registration.schema")
+        elif self.registration_schema is not None:
+            if not isinstance(self.registration_schema, type) or not issubclass(
+                self.registration_schema, BaseModel
             ):
-                raise ValueError("input_model must be a Pydantic BaseModel subclass")
-            if self.input_schema is not None:
-                raise ValueError("input_schema and input_model are mutually exclusive")
+                raise ValueError(
+                    "schema must be a JSON Schema mapping, Pydantic BaseModel subclass, or None"
+                )
         return self
 
     @property
@@ -461,11 +462,11 @@ class TaskRegistration(_GenjaModel):
 
     def resolved_input_schema(self) -> dict[str, Any] | None:
         """Return the explicit or Pydantic-derived construction input schema."""
-        if self.input_schema is not None:
-            return dict(self.input_schema)
-        if self.input_model is not None:
-            schema = self.input_model.model_json_schema()
-            _ensure_json_serializable(schema, "registration.input_model schema")
+        if isinstance(self.registration_schema, dict):
+            return dict(self.registration_schema)
+        if self.registration_schema is not None:
+            schema = self.registration_schema.model_json_schema()
+            _ensure_json_serializable(schema, "registration.schema")
             return cast(dict[str, Any], schema)
         return None
 

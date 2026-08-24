@@ -135,7 +135,7 @@ def test_registered_python_task_descriptor_matches_rust_contract_shape():
             "version": "1.0.0",
             "description": "Registered descriptor shape test",
             "factory": "default",
-            "input_schema": {
+            "schema": {
                 "type": "object",
                 "additionalProperties": False,
             },
