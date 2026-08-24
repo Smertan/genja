@@ -145,7 +145,7 @@ Genja does not infer whether a task is safe to repeat, mutable, or idempotent.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
 from enum import Enum
 import inspect
@@ -494,7 +494,86 @@ class _RegisteredPythonTask:
     factory: _TaskFactoryCallable | None
 
 
-_PYTHON_TASK_REGISTRY: dict[tuple[str, str], _RegisteredPythonTask] = {}
+@dataclass
+class _PythonTaskRegistry:
+    _entries: dict[tuple[str, str], _RegisteredPythonTask] = dataclass_field(
+        default_factory=dict
+    )
+
+    def register(self, entry: _RegisteredPythonTask) -> None:
+        key = (entry.descriptor.id, entry.descriptor.version)
+        if key in self._entries:
+            raise TaskRegistrationError(
+                f"duplicate task registration `{entry.descriptor.identity}`"
+            )
+        self._entries[key] = entry
+
+    def list(self) -> list[TaskDescriptor]:
+        return [
+            entry.descriptor
+            for _, entry in sorted(self._entries.items(), key=lambda item: item[0])
+        ]
+
+    def get(
+        self,
+        task_id: str,
+        version: str | None = None,
+    ) -> _RegisteredPythonTask:
+        validate_task_id(task_id)
+        if version is not None:
+            validate_task_version(version)
+            key = (task_id, version)
+            try:
+                return self._entries[key]
+            except KeyError as err:
+                raise TaskRegistrationError(
+                    f"registered task `{task_id}@{version}` was not found"
+                ) from err
+
+        matches = [
+            entry
+            for (registered_id, _), entry in self._entries.items()
+            if registered_id == task_id
+        ]
+        if not matches:
+            raise TaskRegistrationError(f"registered task `{task_id}` was not found")
+        if len(matches) > 1:
+            versions = sorted(entry.descriptor.version for entry in matches)
+            raise TaskRegistrationError(
+                f"registered task `{task_id}` has multiple versions: {', '.join(versions)}"
+            )
+        return matches[0]
+
+    def get_descriptor(
+        self,
+        task_id: str,
+        version: str | None = None,
+    ) -> TaskDescriptor:
+        return self.get(task_id, version).descriptor
+
+    def get_descriptor_by_identity(self, identity: str) -> TaskDescriptor:
+        key = parse_task_identity(identity)
+        return self.get_descriptor(key.id, key.version)
+
+    def create(
+        self,
+        task_id: str,
+        input: Mapping[str, Any] | None = None,
+        version: str | None = None,
+    ):
+        entry = self.get(task_id, version)
+        return _create_registered_task_definition(entry, input)
+
+    def create_by_identity(
+        self,
+        identity: str,
+        input: Mapping[str, Any] | None = None,
+    ):
+        key = parse_task_identity(identity)
+        return self.create(key.id, input, key.version)
+
+
+_PYTHON_TASK_REGISTRY = _PythonTaskRegistry()
 
 
 def validate_task_id(task_id: str) -> None:
@@ -572,10 +651,7 @@ def parse_task_identity(identity: str) -> TaskRegistrationKey:
 
 def list_registered_tasks() -> list[TaskDescriptor]:
     """Return descriptors for imported registered Python tasks."""
-    return [
-        entry.descriptor
-        for _, entry in sorted(_PYTHON_TASK_REGISTRY.items(), key=lambda item: item[0])
-    ]
+    return _PYTHON_TASK_REGISTRY.list()
 
 
 def get_registered_task_descriptor(
@@ -583,14 +659,12 @@ def get_registered_task_descriptor(
     version: str | None = None,
 ) -> TaskDescriptor:
     """Look up an imported registered Python task descriptor by ID and version."""
-    entry = _get_registered_python_task(task_id, version)
-    return entry.descriptor
+    return _PYTHON_TASK_REGISTRY.get_descriptor(task_id, version)
 
 
 def get_registered_task_descriptor_by_identity(identity: str) -> TaskDescriptor:
     """Look up an imported registered Python task descriptor by rendered identity."""
-    key = parse_task_identity(identity)
-    return get_registered_task_descriptor(key.id, key.version)
+    return _PYTHON_TASK_REGISTRY.get_descriptor_by_identity(identity)
 
 
 def create_registered_task(
@@ -599,8 +673,7 @@ def create_registered_task(
     version: str | None = None,
 ):
     """Construct a registered Python task definition from JSON-compatible input."""
-    entry = _get_registered_python_task(task_id, version)
-    return _create_registered_task_definition(entry, input)
+    return _PYTHON_TASK_REGISTRY.create(task_id, input, version)
 
 
 def create_registered_task_by_identity(
@@ -608,38 +681,7 @@ def create_registered_task_by_identity(
     input: Mapping[str, Any] | None = None,
 ):
     """Construct a registered Python task definition from a rendered identity."""
-    key = parse_task_identity(identity)
-    return create_registered_task(key.id, input, key.version)
-
-
-def _get_registered_python_task(
-    task_id: str,
-    version: str | None,
-) -> _RegisteredPythonTask:
-    validate_task_id(task_id)
-    if version is not None:
-        validate_task_version(version)
-        key = (task_id, version)
-        try:
-            return _PYTHON_TASK_REGISTRY[key]
-        except KeyError as err:
-            raise TaskRegistrationError(
-                f"registered task `{task_id}@{version}` was not found"
-            ) from err
-
-    matches = [
-        entry
-        for (registered_id, _), entry in _PYTHON_TASK_REGISTRY.items()
-        if registered_id == task_id
-    ]
-    if not matches:
-        raise TaskRegistrationError(f"registered task `{task_id}` was not found")
-    if len(matches) > 1:
-        versions = sorted(entry.descriptor.version for entry in matches)
-        raise TaskRegistrationError(
-            f"registered task `{task_id}` has multiple versions: {', '.join(versions)}"
-        )
-    return matches[0]
+    return _PYTHON_TASK_REGISTRY.create_by_identity(identity, input)
 
 
 class RetryConfig(_GenjaModel):
@@ -1109,19 +1151,13 @@ def _register_python_task(
         input_schema=input_schema,
         constructible=True,
     )
-    key = (descriptor.id, descriptor.version)
-    if key in _PYTHON_TASK_REGISTRY:
-        raise TaskRegistrationError(
-            f"duplicate task registration `{descriptor.identity}`"
-        )
-
     entry = _RegisteredPythonTask(
         descriptor=descriptor,
         task_class=task_cls,
         strategy=registration.strategy,
         factory=registration.factory_callable,
     )
-    _PYTHON_TASK_REGISTRY[key] = entry
+    _PYTHON_TASK_REGISTRY.register(entry)
     task_cls.__genja_task_registration__ = {
         "descriptor": descriptor.to_dict(),
         "factory": registration.strategy,
