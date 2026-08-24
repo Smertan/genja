@@ -4,6 +4,8 @@ from typing import cast
 import genja
 import pytest
 from genja.task import (
+    CustomTaskFactory,
+    ExplicitInputSchema,
     Host,
     GenjaTaskProtocol,
     IdempotencyCheckResult,
@@ -11,11 +13,13 @@ from genja.task import (
     RetryConfig,
     SessionVerificationConfig,
     TaskDescriptor,
+    TaskFactory,
     TaskFailureResult,
     TaskRuntimeContext,
     TaskMessageLevel,
     TaskInfo,
     TaskMessage,
+    TaskRegistration,
     TaskRegistrationError,
     TaskStatus,
     TaskSuccessResult,
@@ -130,16 +134,18 @@ def test_registered_python_task_descriptor_matches_rust_contract_shape():
         connection_plugin_name="ssh",
         processors=["audit"],
         retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
-        registration={
-            "id": "acme.tests.registered_descriptor_shape",
-            "version": "1.0.0",
-            "description": "Registered descriptor shape test",
-            "factory": "default",
-            "schema": {
-                "type": "object",
-                "additionalProperties": False,
-            },
-        },
+        registration=TaskRegistration(
+            id="acme.tests.registered_descriptor_shape",
+            version="1.0.0",
+            description="Registered descriptor shape test",
+            factory=TaskFactory.DEFAULT,
+            schema=ExplicitInputSchema(
+                value={
+                    "type": "object",
+                    "additionalProperties": False,
+                }
+            ),
+        ),
     )
     class RegisteredDescriptorShapeTask:
         def start(self, task, host, context):
@@ -179,11 +185,11 @@ def test_registered_python_task_descriptor_matches_rust_contract_shape():
 def test_registered_python_tasks_can_be_listed_and_looked_up():
     @task(
         name="registered_lookup",
-        registration={
-            "id": "acme.tests.registered_lookup",
-            "version": "2.0.0",
-            "factory": "default",
-        },
+        registration=TaskRegistration(
+            id="acme.tests.registered_lookup",
+            version="2.0.0",
+            factory=TaskFactory.DEFAULT,
+        ),
     )
     class RegisteredLookupTask:
         """Lookup task docstring."""
@@ -208,11 +214,11 @@ def test_registered_python_tasks_can_be_listed_and_looked_up():
 def test_registered_python_task_rejects_duplicate_id_and_version():
     @task(
         name="duplicate_registration_a",
-        registration={
-            "id": "acme.tests.duplicate_registration",
-            "version": "1.0.0",
-            "factory": "default",
-        },
+        registration=TaskRegistration(
+            id="acme.tests.duplicate_registration",
+            version="1.0.0",
+            factory=TaskFactory.DEFAULT,
+        ),
     )
     class DuplicateRegistrationTaskA:
         def start(self, task, host, context):
@@ -225,11 +231,11 @@ def test_registered_python_task_rejects_duplicate_id_and_version():
 
         @task(
             name="duplicate_registration_b",
-            registration={
-                "id": "acme.tests.duplicate_registration",
-                "version": "1.0.0",
-                "factory": "default",
-            },
+            registration=TaskRegistration(
+                id="acme.tests.duplicate_registration",
+                version="1.0.0",
+                factory=TaskFactory.DEFAULT,
+            ),
         )
         class DuplicateRegistrationTaskB:
             def start(self, task, host, context):
@@ -239,11 +245,11 @@ def test_registered_python_task_rejects_duplicate_id_and_version():
 def test_registered_python_task_kwargs_factory_constructs_from_input():
     @task(
         name="kwargs_registered",
-        registration={
-            "id": "acme.tests.kwargs_registered",
-            "version": "1.0.0",
-            "factory": "kwargs",
-        },
+        registration=TaskRegistration(
+            id="acme.tests.kwargs_registered",
+            version="1.0.0",
+            factory=TaskFactory.KWARGS,
+        ),
     )
     class KwargsRegisteredTask:
         def __init__(self, acl_name: str, rules: list[dict[str, object]]) -> None:
@@ -270,11 +276,11 @@ def test_registered_python_task_kwargs_factory_constructs_from_input():
 def test_registered_python_task_default_factory_rejects_input():
     @task(
         name="default_registered",
-        registration={
-            "id": "acme.tests.default_registered",
-            "version": "1.0.0",
-            "factory": "default",
-        },
+        registration=TaskRegistration(
+            id="acme.tests.default_registered",
+            version="1.0.0",
+            factory=TaskFactory.DEFAULT,
+        ),
     )
     class DefaultRegisteredTask:
         def start(self, task, host, context):
@@ -304,11 +310,11 @@ def test_registered_python_task_custom_factory_errors_include_identity():
 
     @task(
         name="custom_registered",
-        registration={
-            "id": "acme.tests.custom_registered",
-            "version": "1.0.0",
-            "factory": custom_factory,
-        },
+        registration=TaskRegistration(
+            id="acme.tests.custom_registered",
+            version="1.0.0",
+            factory=CustomTaskFactory(callable=custom_factory),
+        ),
     )
     class CustomRegisteredTask:
         def start(self, task, host, context):

@@ -173,7 +173,8 @@ from .genja import (
 
 _TaskClassT = TypeVar("_TaskClassT", bound=type)
 _TaskFactoryCallable: TypeAlias = Callable[[Mapping[str, Any]], Any]
-TaskFactoryStrategy: TypeAlias = Literal["kwargs", "default", "custom"]
+TaskFactoryStrategy: TypeAlias = Literal["kwargs", "default"]
+_NormalizedTaskFactoryStrategy: TypeAlias = Literal["kwargs", "default", "custom"]
 TaskExecutionMode: TypeAlias = Literal["blocking", "async"]
 
 
@@ -330,6 +331,52 @@ class TaskRegistrationError(ValueError):
     """Error raised by Python task registration, lookup, or construction APIs."""
 
 
+class TaskFactory(str, Enum):
+    """Built-in Python task construction strategies."""
+
+    KWARGS = "kwargs"
+    DEFAULT = "default"
+
+
+class CustomTaskFactory(_GenjaModel):
+    """Custom Python task construction factory.
+
+    The callable receives the JSON-compatible input mapping and must return an
+    instance of the registered task class.
+    """
+
+    callable: _TaskFactoryCallable = Field(
+        description="Callable used to construct a registered Python task instance."
+    )
+
+
+class ExplicitInputSchema(_GenjaModel):
+    """Explicit JSON Schema for registered task input."""
+
+    value: dict[str, Any] = Field(
+        description="JSON Schema describing the registered task input payload."
+    )
+
+    @model_validator(mode="after")
+    def _validate_schema(self) -> ExplicitInputSchema:
+        _ensure_json_serializable(self.value, "registration.schema")
+        return self
+
+
+class PydanticInputSchema(_GenjaModel):
+    """Input schema derived from a Pydantic model class."""
+
+    model: type[BaseModel] = Field(
+        description="Pydantic BaseModel subclass used to derive JSON Schema."
+    )
+
+    @model_validator(mode="after")
+    def _validate_model(self) -> PydanticInputSchema:
+        if not isinstance(self.model, type) or not issubclass(self.model, BaseModel):
+            raise ValueError("model must be a Pydantic BaseModel subclass")
+        return self
+
+
 class TaskDescriptor(_GenjaModel):
     """Language-neutral descriptor for a registered Python task.
 
@@ -402,18 +449,14 @@ class TaskRegistration(_GenjaModel):
         default=None,
         description="Optional task description. If omitted, the class docstring is used when present.",
     )
-    factory: TaskFactoryStrategy | _TaskFactoryCallable = Field(
-        default="kwargs",
-        description="Construction strategy: 'kwargs', 'default', or a custom callable.",
+    factory: TaskFactory | CustomTaskFactory = Field(
+        default=TaskFactory.KWARGS,
+        description="Construction strategy used to build registered Python task instances.",
     )
-    custom_factory: _TaskFactoryCallable | None = Field(
-        default=None,
-        description="Callable used when factory='custom'.",
-    )
-    registration_schema: dict[str, Any] | type[BaseModel] | None = Field(
+    registration_schema: ExplicitInputSchema | PydanticInputSchema | None = Field(
         default=None,
         alias="schema",
-        description="Optional explicit JSON Schema or Pydantic model class for construction input.",
+        description="Optional input schema metadata for construction input.",
     )
 
     @model_validator(mode="after")
@@ -421,51 +464,28 @@ class TaskRegistration(_GenjaModel):
         validate_task_id(self.id)
         if self.version is not None:
             validate_task_version(self.version)
-        if isinstance(self.factory, str) and self.factory not in {
-            "kwargs",
-            "default",
-            "custom",
-        }:
-            raise ValueError(
-                "factory must be 'kwargs', 'default', 'custom', or a callable"
-            )
-        if callable(self.factory) and self.custom_factory is not None:
-            raise ValueError(
-                "custom_factory must not be supplied when factory is a callable"
-            )
-        if self.factory == "custom" and self.custom_factory is None:
-            raise ValueError("custom_factory is required when factory='custom'")
-        if self.factory != "custom" and self.custom_factory is not None:
-            raise ValueError("custom_factory requires factory='custom'")
-        if isinstance(self.registration_schema, dict):
-            _ensure_json_serializable(self.registration_schema, "registration.schema")
-        elif self.registration_schema is not None:
-            if not isinstance(self.registration_schema, type) or not issubclass(
-                self.registration_schema, BaseModel
-            ):
-                raise ValueError(
-                    "schema must be a JSON Schema mapping, Pydantic BaseModel subclass, or None"
-                )
         return self
 
     @property
-    def strategy(self) -> TaskFactoryStrategy:
+    def strategy(self) -> _NormalizedTaskFactoryStrategy:
         """Return the normalized construction strategy."""
-        return "custom" if callable(self.factory) else self.factory
+        if isinstance(self.factory, CustomTaskFactory):
+            return "custom"
+        return cast(TaskFactoryStrategy, self.factory.value)
 
     @property
     def factory_callable(self) -> _TaskFactoryCallable | None:
         """Return the custom construction callable, if configured."""
-        if callable(self.factory):
-            return self.factory
-        return self.custom_factory
+        if isinstance(self.factory, CustomTaskFactory):
+            return self.factory.callable
+        return None
 
     def resolved_input_schema(self) -> dict[str, Any] | None:
         """Return the explicit or Pydantic-derived construction input schema."""
-        if isinstance(self.registration_schema, dict):
-            return dict(self.registration_schema)
-        if self.registration_schema is not None:
-            schema = self.registration_schema.model_json_schema()
+        if isinstance(self.registration_schema, ExplicitInputSchema):
+            return dict(self.registration_schema.value)
+        if isinstance(self.registration_schema, PydanticInputSchema):
+            schema = self.registration_schema.model.model_json_schema()
             _ensure_json_serializable(schema, "registration.schema")
             return cast(dict[str, Any], schema)
         return None
@@ -488,7 +508,7 @@ class TaskRegistrationKey:
 class _RegisteredPythonTask:
     descriptor: TaskDescriptor
     task_class: type[GenjaTaskProtocol]
-    strategy: TaskFactoryStrategy
+    strategy: _NormalizedTaskFactoryStrategy
     factory: _TaskFactoryCallable | None
 
 
@@ -1039,23 +1059,16 @@ def _validate_sub_tasks(
 
 
 def _normalize_task_registration(
-    registration: TaskRegistration | Mapping[str, Any] | None,
+    registration: TaskRegistration | None,
     cls: type[GenjaTaskProtocol],
 ) -> TaskRegistration | None:
     if registration is None:
         return None
     if isinstance(registration, TaskRegistration):
         normalized = registration
-    elif isinstance(registration, Mapping):
-        try:
-            normalized = TaskRegistration(**dict(registration))
-        except Exception as err:
-            raise TypeError(
-                f"@task-decorated class '{cls.__name__}' registration is invalid: {err}"
-            ) from err
     else:
         raise TypeError(
-            f"@task-decorated class '{cls.__name__}' registration must be a mapping, TaskRegistration, or None"
+            f"@task-decorated class '{cls.__name__}' registration must be TaskRegistration or None"
         )
 
     if normalized.version is None:
@@ -1261,7 +1274,7 @@ def task(
     supports_dry_run: bool = False,
     idempotency: IdempotencyMode = IdempotencyMode.DISABLED,
     options: Any | None = None,
-    registration: TaskRegistration | Mapping[str, Any] | None = None,
+    registration: TaskRegistration | None = None,
     **kwargs: Any,
 ):
     """Attach Genja task metadata to a Python task class.
@@ -1302,9 +1315,9 @@ def task(
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure. If None, no options are provided to the task.
-        registration (TaskRegistration | Mapping[str, Any] | None): Optional
-            stable catalog registration metadata. When supplied, the decorated
-            class is automatically added to the imported Python task registry.
+        registration (TaskRegistration | None): Optional stable catalog
+            registration metadata. When supplied, the decorated class is
+            automatically added to the imported Python task registry.
 
     Returns:
         Callable[[_TaskClassT], _TaskClassT]: A decorator function that accepts
@@ -1921,10 +1934,14 @@ class TaskSkipResult(_GenjaModel):
 
 __all__ = [
     "task",
+    "CustomTaskFactory",
+    "ExplicitInputSchema",
     "GenjaTaskProtocol",
+    "PydanticInputSchema",
     "RetryConfig",
     "TaskDescriptor",
     "TaskExecutionMode",
+    "TaskFactory",
     "TaskFactoryStrategy",
     "TaskRegistration",
     "TaskRegistrationError",
