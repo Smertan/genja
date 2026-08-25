@@ -359,7 +359,7 @@ class ExplicitInputSchema(_GenjaModel):
 
     @model_validator(mode="after")
     def _validate_schema(self) -> ExplicitInputSchema:
-        _ensure_json_serializable(self.value, "registration.schema")
+        _ensure_json_serializable(self.value, "registration.input_schema")
         return self
 
 
@@ -453,9 +453,8 @@ class TaskRegistration(_GenjaModel):
         default=TaskFactory.KWARGS,
         description="Construction strategy used to build registered Python task instances.",
     )
-    registration_schema: ExplicitInputSchema | PydanticInputSchema | None = Field(
+    input_schema: ExplicitInputSchema | PydanticInputSchema | None = Field(
         default=None,
-        alias="schema",
         description="Optional input schema metadata for construction input.",
     )
 
@@ -482,11 +481,11 @@ class TaskRegistration(_GenjaModel):
 
     def resolved_input_schema(self) -> dict[str, Any] | None:
         """Return the explicit or Pydantic-derived construction input schema."""
-        if isinstance(self.registration_schema, ExplicitInputSchema):
-            return dict(self.registration_schema.value)
-        if isinstance(self.registration_schema, PydanticInputSchema):
-            schema = self.registration_schema.model.model_json_schema()
-            _ensure_json_serializable(schema, "registration.schema")
+        if isinstance(self.input_schema, ExplicitInputSchema):
+            return dict(self.input_schema.value)
+        if isinstance(self.input_schema, PydanticInputSchema):
+            schema = self.input_schema.model.model_json_schema()
+            _ensure_json_serializable(schema, "registration.input_schema")
             return cast(dict[str, Any], schema)
         return None
 

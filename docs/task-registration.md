@@ -189,7 +189,7 @@ If the JSON does not match the struct fields, construction fails with
 
 ## Input Schemas
 
-Add `schema = "schemars"` when callers should be able to inspect the expected
+Add `input_schema = "schemars"` when callers should be able to inspect the expected
 JSON input shape.
 
 ```rust
@@ -203,7 +203,7 @@ struct BackupConfig {
     name = "backup_config",
     registration(
         id = "acme.examples.backup_config",
-        schema = "schemars"
+        input_schema = "schemars"
     )
 )]
 impl BackupConfig {
@@ -211,7 +211,7 @@ impl BackupConfig {
 }
 ```
 
-`schema = "schemars"` requires the task type and any nested input types to
+`input_schema = "schemars"` requires the task type and any nested input types to
 implement `schemars::JsonSchema`.
 
 The generated schema is stored in `TaskDescriptor::input_schema`:

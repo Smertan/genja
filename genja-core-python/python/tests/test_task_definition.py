@@ -141,7 +141,7 @@ def test_registered_python_task_descriptor_matches_rust_contract_shape():
             version="1.0.0",
             description="Registered descriptor shape test",
             factory=TaskFactory.DEFAULT,
-            schema=ExplicitInputSchema(
+            input_schema=ExplicitInputSchema(
                 value={
                     "type": "object",
                     "additionalProperties": False,
@@ -384,7 +384,7 @@ def test_registered_python_task_uses_pydantic_input_schema():
             id="acme.tests.pydantic_schema_registered",
             version="1.0.0",
             factory=TaskFactory.KWARGS,
-            schema=PydanticInputSchema(model=ConfigureAclInput),
+            input_schema=PydanticInputSchema(model=ConfigureAclInput),
         ),
     )
     class PydanticSchemaRegisteredTask:

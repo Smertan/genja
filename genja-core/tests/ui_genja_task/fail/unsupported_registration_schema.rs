@@ -7,7 +7,7 @@ struct BadTask;
     name = "bad_task",
     registration(
         id = "acme.tests.bad_schema_task",
-        schema = "jsonschema"
+        input_schema = "jsonschema"
     )
 )]
 impl BadTask {

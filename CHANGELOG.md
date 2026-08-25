@@ -17,7 +17,7 @@ Changed packages:
 - Added generated Rust task discovery for `#[genja_task(...)]` tasks through the compiled task registry. Refs: #91
 - Added explicit Rust `#[genja_task(..., registration(...))]` task registration with serde-backed JSON construction. Refs: #91
 - Added Rust task registration `default` and `custom(...)` factory strategies for no-input tasks and advanced input preparation. Refs: #91
-- Added opt-in Rust task registration input schemas with `registration(schema = "schemars")`. Refs: #91
+- Added opt-in Rust task registration input schemas with `registration(input_schema = "schemars")`. Refs: #91
 - Added Rust task registration identity helper APIs for looking up and constructing compiled tasks from `<task-id>@<task-version>` strings. Refs: #91
 - Added runnable Rust examples for task registration schema output and custom factory construction. Refs: #91
 - Added core Rust `TaskSpec` APIs for single-task declarative construction specs with explicit and auto-detected JSON/YAML parsing and compiled task construction helpers. Refs: #109

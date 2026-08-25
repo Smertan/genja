@@ -39,7 +39,7 @@ def build_custom_task(input: Mapping[str, Any]) -> CustomRegisteredTask:
         id="acme.typecheck.registered_kwargs",
         version="1.0.0",
         factory=TaskFactory.KWARGS,
-        schema=PydanticInputSchema(model=RegisteredInput),
+        input_schema=PydanticInputSchema(model=RegisteredInput),
     ),
 )
 class KwargsRegisteredTask:
@@ -57,7 +57,7 @@ class KwargsRegisteredTask:
         id="acme.typecheck.registered_default",
         version="1.0.0",
         factory=TaskFactory.DEFAULT,
-        schema=ExplicitInputSchema(value={"type": "object"}),
+        input_schema=ExplicitInputSchema(value={"type": "object"}),
     ),
 )
 class DefaultRegisteredTask:

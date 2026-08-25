@@ -17,7 +17,7 @@ struct SchemaRule {
     name = "schema_task",
     registration(
         id = "acme.tests.schema_task",
-        schema = "schemars"
+        input_schema = "schemars"
     )
 )]
 impl SchemaTask {

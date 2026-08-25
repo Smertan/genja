@@ -27,7 +27,7 @@ struct BackupConfig {
         id = "acme.examples.backup_config",
         version = "1.0.0",
         description = "Backs up selected paths from a network device",
-        schema = "schemars"
+        input_schema = "schemars"
     )
 )]
 impl BackupConfig {
