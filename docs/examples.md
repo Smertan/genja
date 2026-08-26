@@ -93,5 +93,5 @@ For fuller explanations, see:
 - [Quickstart](quickstart.md)
 - [Inventory](inventory.md)
 - [Tasks](tasks.md)
-- [Rust Task Registration](task-registration.md)
+- [Task Registration](task-registration.md)
 - [Plugins](plugins/index.md)
