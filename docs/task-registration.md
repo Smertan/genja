@@ -894,6 +894,8 @@ CLIs, UIs, and catalog tooling can present expected input fields.
   for prepared JSON input and sanitized validation errors.
 - `genja/examples/task_registration_spec.rs` shows YAML/JSON task spec parsing,
   construction, and retry/session verification overrides.
+- `genja/examples/python/task_registration.py` shows Python imported-module
+  registration, descriptor listing, and construction by `<id>@<version>`.
 
 ## Related Guides
 

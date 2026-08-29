@@ -70,6 +70,7 @@ python genja/examples/python/basic_runtime.py
 python genja/examples/python/filter_hosts.py
 python genja/examples/python/run_task.py
 python genja/examples/python/run_task_tree.py
+python genja/examples/python/task_registration.py
 ```
 
 | Example | Demonstrates |
@@ -78,6 +79,7 @@ python genja/examples/python/run_task_tree.py
 | `filter_hosts.py` | Filtering selected hosts with `filter_by_key_value(...)`. |
 | `run_task.py` | Defining a Python task with `@task`, running it, and printing JSON results. |
 | `run_task_tree.py` | Defining Python sub-tasks and running a task tree with `max_depth`. |
+| `task_registration.py` | Importing a module with registered Python tasks, listing descriptors, and constructing by `<id>@<version>`. |
 
 See `genja/examples/python/README.md` for the local Python setup notes that live
 beside the examples.
