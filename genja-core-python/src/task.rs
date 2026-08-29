@@ -5,6 +5,7 @@ use ::genja_core::task::{
     SessionVerificationConfig, Task, TaskConnectionResolver, TaskDefinition, TaskError,
     TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
     TaskResultsSummary, TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
+    validate_explicit_task_id, validate_task_version,
 };
 use async_trait::async_trait;
 use pyo3::exceptions::PyValueError;
@@ -1332,7 +1333,21 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTaskConnectionResolver>()?;
     module.add_class::<PyTaskRunOptions>()?;
     module.add_class::<PyTaskResults>()?;
+    module.add_function(wrap_pyfunction!(validate_registered_task_id, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_registered_task_version, module)?)?;
     Ok(())
+}
+
+#[pyfunction(name = "_validate_task_id")]
+/// Validate an explicit task registration ID with the Rust core contract.
+fn validate_registered_task_id(task_id: &str) -> PyResult<()> {
+    validate_explicit_task_id(task_id).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+#[pyfunction(name = "_validate_task_version")]
+/// Validate a task registration version with the Rust core semver parser.
+fn validate_registered_task_version(version: &str) -> PyResult<()> {
+    validate_task_version(version).map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 pub(crate) fn python_result_to_host_task_result(obj: Bound<'_, PyAny>) -> PyResult<HostTaskResult> {

@@ -173,7 +173,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// - `registration(id = "...", version = "...", description = "...")`; opts
 ///   into stable task registration and JSON construction. `id` is required and
 ///   `version` defaults to `env!("CARGO_PKG_VERSION")`. Use
-///   `schema = "schemars"` to include a JSON Schema for the task input in the
+///   `input_schema = "schemars"` to include a JSON Schema for the task input in the
 ///   descriptor. Schema generation requires the task type, and any nested field
 ///   types, to implement `schemars::JsonSchema`.
 ///
@@ -205,9 +205,9 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///   de-obfuscation before constructing the task. Error messages should avoid
 ///   exposing raw or decoded secret values.
 ///
-/// With custom factories, `schema = "schemars"` describes `Self`. If the custom
+/// With custom factories, `input_schema = "schemars"` describes `Self`. If the custom
 /// factory accepts a public JSON shape that differs from the task struct, omit
-/// schema generation for now or keep the custom input contract documented
+/// input schema generation for now or keep the custom input contract documented
 /// separately until a dedicated input-type schema option is added.
 ///
 /// `session_verification(...)` requires `connection_plugin_name = "..."`,
@@ -291,7 +291,7 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///         id = "acme.network.configure_acl",
 ///         version = "2.0.0",
 ///         description = "Configures an ACL on a network device",
-///         schema = "schemars"
+///         input_schema = "schemars"
 ///     )
 /// )]
 /// impl ConfigureAcl {
@@ -661,11 +661,11 @@ impl Parse for RegistrationArgs {
                     }
                     args.factory = Some(parse_registration_factory_arg(input)?);
                 }
-                "schema" => {
+                "input_schema" => {
                     if args.schema.is_some() {
                         return Err(syn::Error::new_spanned(
                             key,
-                            "duplicate registration key `schema`",
+                            "duplicate registration key `input_schema`",
                         ));
                     }
                     args.schema = Some(parse_registration_schema_arg(input)?);
@@ -673,7 +673,7 @@ impl Parse for RegistrationArgs {
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "unsupported registration key; expected `id`, `version`, `description`, `factory`, or `schema`",
+                        "unsupported registration key; expected `id`, `version`, `description`, `factory`, or `input_schema`",
                     ));
                 }
             }
@@ -702,7 +702,7 @@ fn parse_registration_schema_arg(input: ParseStream<'_>) -> syn::Result<Registra
         "schemars" => Ok(RegistrationSchemaArg::Schemars),
         _ => Err(syn::Error::new_spanned(
             schema,
-            "`registration(schema = ...)` supports only `\"schemars\"`",
+            "`registration(input_schema = ...)` supports only `\"schemars\"`",
         )),
     }
 }

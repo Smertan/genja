@@ -187,7 +187,7 @@ as `options(...)` and `sub_tasks(...)`. Use those helpers when a task needs
 dynamic JSON options or child tasks in a task tree.
 
 For stable discovery and JSON construction by task ID, see
-[Rust Task Registration](task-registration.md).
+[Task Registration](task-registration.md).
 
 ### Rust Retry Overrides
 
@@ -245,6 +245,8 @@ Common decorator options:
 - `supports_dry_run`: opt into runtime dry-run dispatch
 - `idempotency`: opt into task-authored convergence checks with
   `IdempotencyMode.CHECK` or `IdempotencyMode.CHECK_AND_VERIFY`
+- `registration`: optional stable task catalog metadata; see
+  [Task Registration](task-registration.md)
 
 ### Python Retry Overrides
 

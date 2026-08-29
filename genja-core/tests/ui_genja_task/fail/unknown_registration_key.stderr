@@ -1,4 +1,4 @@
-error: unsupported registration key; expected `id`, `version`, `description`, `factory`, or `schema`
+error: unsupported registration key; expected `id`, `version`, `description`, `factory`, or `input_schema`
   --> tests/ui_genja_task/fail/unknown_registration_key.rs:10:9
    |
 10 |         owner = "network"

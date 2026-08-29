@@ -4,6 +4,9 @@ from typing import Any, Awaitable, Callable, ClassVar
 
 from .task import GenjaTaskProtocol
 
+def _validate_task_id(task_id: str) -> None: ...
+def _validate_task_version(version: str) -> None: ...
+
 class PluginManager:
     """Registry for Python and Rust plugins used by a Genja runtime."""
 

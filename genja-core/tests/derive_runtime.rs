@@ -301,7 +301,7 @@ struct RegisteredSchemaRule {
         id = "acme.tests.derive_runtime.registered_schema_task",
         version = "3.0.0",
         description = "Exposes a JSON Schema for task input",
-        schema = "schemars"
+        input_schema = "schemars"
     )
 )]
 impl RegisteredSchemaTask {

@@ -9,7 +9,7 @@ struct BadTask {
     name = "bad_task",
     registration(
         id = "acme.tests.bad_schema_task",
-        schema = "schemars"
+        input_schema = "schemars"
     )
 )]
 impl BadTask {

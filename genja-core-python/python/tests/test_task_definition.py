@@ -4,22 +4,35 @@ from typing import cast
 import genja
 import pytest
 from genja.task import (
+    CustomTaskFactory,
+    ExplicitInputSchema,
     Host,
     GenjaTaskProtocol,
     IdempotencyCheckResult,
     IdempotencyMode,
+    PydanticInputSchema,
     RetryConfig,
     SessionVerificationConfig,
+    TaskDescriptor,
+    TaskFactory,
     TaskFailureResult,
     TaskRuntimeContext,
     TaskMessageLevel,
     TaskInfo,
     TaskMessage,
+    TaskRegistration,
+    TaskRegistrationError,
     TaskStatus,
     TaskSuccessResult,
+    create_registered_task,
+    create_registered_task_by_identity,
+    get_registered_task_descriptor,
+    get_registered_task_descriptor_by_identity,
+    list_registered_tasks,
+    parse_task_identity,
     task,
 )
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 
 @task(
@@ -115,6 +128,362 @@ def test_task_definition_from_python_class_extracts_metadata():
     }
     assert task_definition.sub_tasks[0].to_dict()["processors"] == ["audit"]
     assert task_definition.sub_tasks[0].to_dict()["options"] == {"mode": "strict"}
+
+
+def test_registered_python_task_descriptor_matches_rust_contract_shape():
+    @task(
+        name="registered_descriptor_shape",
+        connection_plugin_name="ssh",
+        processors=["audit"],
+        retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
+        registration=TaskRegistration(
+            id="acme.tests.registered_descriptor_shape",
+            version="1.0.0",
+            description="Registered descriptor shape test",
+            factory=TaskFactory.DEFAULT,
+            input_schema=ExplicitInputSchema(
+                value={
+                    "type": "object",
+                    "additionalProperties": False,
+                }
+            ),
+        ),
+    )
+    class RegisteredDescriptorShapeTask:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="registered")
+
+    descriptor = get_registered_task_descriptor_by_identity(
+        "acme.tests.registered_descriptor_shape@1.0.0"
+    )
+
+    assert isinstance(descriptor, TaskDescriptor)
+    assert descriptor.to_dict() == {
+        "id": "acme.tests.registered_descriptor_shape",
+        "id_source": "explicit",
+        "name": "registered_descriptor_shape",
+        "version": "1.0.0",
+        "description": "Registered descriptor shape test",
+        "execution_mode": "blocking",
+        "connection_plugin_name": "ssh",
+        "processor_names": ["audit"],
+        "retry": {
+            "allow": True,
+            "max_attempts": 3,
+            "delay_ms": 500,
+        },
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+        },
+        "constructible": True,
+    }
+    assert (
+        RegisteredDescriptorShapeTask.__genja_task_registration__["descriptor"]
+        == descriptor.to_dict()
+    )
+
+
+def test_registered_python_tasks_can_be_listed_and_looked_up():
+    @task(
+        name="registered_lookup",
+        registration=TaskRegistration(
+            id="acme.tests.registered_lookup",
+            version="2.0.0",
+            factory=TaskFactory.DEFAULT,
+        ),
+    )
+    class RegisteredLookupTask:
+        """Lookup task docstring."""
+
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="lookup")
+
+    descriptor = get_registered_task_descriptor(
+        "acme.tests.registered_lookup",
+        "2.0.0",
+    )
+    listed = list_registered_tasks()
+    key = parse_task_identity("acme.tests.registered_lookup@2.0.0")
+
+    assert descriptor.description == "Lookup task docstring."
+    assert descriptor.identity == "acme.tests.registered_lookup@2.0.0"
+    assert key.id == "acme.tests.registered_lookup"
+    assert key.version == "2.0.0"
+    assert descriptor in listed
+
+
+def test_registered_python_task_rejects_duplicate_id_and_version():
+    @task(
+        name="duplicate_registration_a",
+        registration=TaskRegistration(
+            id="acme.tests.duplicate_registration",
+            version="1.0.0",
+            factory=TaskFactory.DEFAULT,
+        ),
+    )
+    class DuplicateRegistrationTaskA:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="duplicate-a")
+
+    with pytest.raises(
+        TaskRegistrationError,
+        match="duplicate task registration `acme.tests.duplicate_registration@1.0.0`",
+    ):
+
+        @task(
+            name="duplicate_registration_b",
+            registration=TaskRegistration(
+                id="acme.tests.duplicate_registration",
+                version="1.0.0",
+                factory=TaskFactory.DEFAULT,
+            ),
+        )
+        class DuplicateRegistrationTaskB:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="duplicate-b")
+
+
+def test_registered_python_task_kwargs_factory_constructs_from_input():
+    @task(
+        name="kwargs_registered",
+        registration=TaskRegistration(
+            id="acme.tests.kwargs_registered",
+            version="1.0.0",
+            factory=TaskFactory.KWARGS,
+        ),
+    )
+    class KwargsRegisteredTask:
+        def __init__(self, acl_name: str, rules: list[dict[str, object]]) -> None:
+            self.acl_name = acl_name
+            self.rules = rules
+
+        def start(self, task, host, context):
+            return TaskSuccessResult(
+                changed=True,
+                summary=f"{self.acl_name}:{len(self.rules)}",
+            )
+
+    task_definition = create_registered_task_by_identity(
+        "acme.tests.kwargs_registered@1.0.0",
+        {"acl_name": "edge-inbound", "rules": [{"action": "permit"}]},
+    )
+
+    result = task_definition.run_on_host(Host(hostname="router1"))
+    assert result.to_dict()["hosts"]["router1"]["outcome"]["Passed"]["summary"] == (
+        "edge-inbound:1"
+    )
+
+
+def test_registered_python_task_default_factory_rejects_input():
+    @task(
+        name="default_registered",
+        registration=TaskRegistration(
+            id="acme.tests.default_registered",
+            version="1.0.0",
+            factory=TaskFactory.DEFAULT,
+        ),
+    )
+    class DefaultRegisteredTask:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="default")
+
+    task_definition = create_registered_task_by_identity(
+        "acme.tests.default_registered@1.0.0"
+    )
+    result = task_definition.run_on_host(Host(hostname="router1"))
+
+    assert result.to_dict()["hosts"]["router1"]["outcome"]["Passed"]["summary"] == (
+        "default"
+    )
+    with pytest.raises(
+        TaskRegistrationError,
+        match="default factory does not accept input",
+    ):
+        create_registered_task_by_identity(
+            "acme.tests.default_registered@1.0.0",
+            {"unexpected": True},
+        )
+
+
+def test_registered_python_task_custom_factory_errors_include_identity():
+    def custom_factory(input):
+        raise RuntimeError("boom")
+
+    @task(
+        name="custom_registered",
+        registration=TaskRegistration(
+            id="acme.tests.custom_registered",
+            version="1.0.0",
+            factory=CustomTaskFactory(callable=custom_factory),
+        ),
+    )
+    class CustomRegisteredTask:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="custom")
+
+    with pytest.raises(
+        TaskRegistrationError,
+        match="factory failed for registered task `acme.tests.custom_registered@1.0.0`: boom",
+    ):
+        create_registered_task_by_identity(
+            "acme.tests.custom_registered@1.0.0",
+            {"value": 1},
+        )
+
+
+def test_task_registration_rejects_invalid_metadata():
+    with pytest.raises(ValidationError, match="invalid task id"):
+        TaskRegistration(
+            id="Acme.Tests.Invalid",
+            version="1.0.0",
+            factory=TaskFactory.DEFAULT,
+        )
+
+    with pytest.raises(ValidationError, match="invalid task version"):
+        TaskRegistration(
+            id="acme.tests.invalid_version",
+            version="1.0",
+            factory=TaskFactory.DEFAULT,
+        )
+
+    with pytest.raises(ValidationError, match="factory"):
+        TaskRegistration(
+            id="acme.tests.invalid_factory",
+            version="1.0.0",
+            factory="custom",
+        )
+
+    with pytest.raises(ValidationError, match="model"):
+        PydanticInputSchema(model=object)
+
+    with pytest.raises(
+        TypeError, match="registration must be TaskRegistration or None"
+    ):
+
+        @task(
+            name="plain_mapping_registration",
+            registration={
+                "id": "acme.tests.plain_mapping_registration",
+                "version": "1.0.0",
+            },
+        )
+        class PlainMappingRegistrationTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="plain mapping")
+
+
+def test_registered_python_task_uses_pydantic_input_schema():
+    class ConfigureAclInput(BaseModel):
+        acl_name: str
+        rules: list[dict[str, object]]
+
+    @task(
+        name="pydantic_schema_registered",
+        registration=TaskRegistration(
+            id="acme.tests.pydantic_schema_registered",
+            version="1.0.0",
+            factory=TaskFactory.KWARGS,
+            input_schema=PydanticInputSchema(model=ConfigureAclInput),
+        ),
+    )
+    class PydanticSchemaRegisteredTask:
+        def __init__(self, acl_name: str, rules: list[dict[str, object]]) -> None:
+            self.acl_name = acl_name
+            self.rules = rules
+
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary=self.acl_name)
+
+    descriptor = get_registered_task_descriptor_by_identity(
+        "acme.tests.pydantic_schema_registered@1.0.0"
+    )
+    schema = descriptor.to_dict()["input_schema"]
+
+    assert schema["type"] == "object"
+    assert schema["required"] == ["acl_name", "rules"]
+    assert schema["properties"]["acl_name"]["type"] == "string"
+    assert schema["properties"]["rules"]["type"] == "array"
+
+
+def test_registered_python_task_lookup_reports_ambiguous_and_missing_tasks():
+    @task(
+        name="ambiguous_registered_v1",
+        registration=TaskRegistration(
+            id="acme.tests.ambiguous_registered",
+            version="1.0.0",
+            factory=TaskFactory.DEFAULT,
+        ),
+    )
+    class AmbiguousRegisteredTaskV1:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="v1")
+
+    @task(
+        name="ambiguous_registered_v2",
+        registration=TaskRegistration(
+            id="acme.tests.ambiguous_registered",
+            version="2.0.0",
+            factory=TaskFactory.DEFAULT,
+        ),
+    )
+    class AmbiguousRegisteredTaskV2:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="v2")
+
+    with pytest.raises(
+        TaskRegistrationError,
+        match="registered task `acme.tests.ambiguous_registered` has multiple versions",
+    ):
+        get_registered_task_descriptor("acme.tests.ambiguous_registered")
+
+    with pytest.raises(
+        TaskRegistrationError,
+        match="registered task `acme.tests.missing_registered` was not found",
+    ):
+        get_registered_task_descriptor("acme.tests.missing_registered")
+
+    with pytest.raises(
+        TaskRegistrationError,
+        match="registered task `acme.tests.ambiguous_registered@3.0.0` was not found",
+    ):
+        get_registered_task_descriptor("acme.tests.ambiguous_registered", "3.0.0")
+
+
+def test_registered_python_task_rejects_invalid_construction_input():
+    @task(
+        name="invalid_input_registered",
+        registration=TaskRegistration(
+            id="acme.tests.invalid_input_registered",
+            version="1.0.0",
+            factory=TaskFactory.KWARGS,
+        ),
+    )
+    class InvalidInputRegisteredTask:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary=self.value)
+
+    with pytest.raises(
+        TaskRegistrationError,
+        match="input must be a mapping",
+    ):
+        create_registered_task(
+            "acme.tests.invalid_input_registered",
+            ["not", "a", "mapping"],
+            "1.0.0",
+        )
+
+    with pytest.raises(
+        TaskRegistrationError,
+        match="input must be JSON-serializable",
+    ):
+        create_registered_task_by_identity(
+            "acme.tests.invalid_input_registered@1.0.0",
+            {"value": object()},
+        )
 
 
 def test_task_definition_run_on_host_executes_python_body():

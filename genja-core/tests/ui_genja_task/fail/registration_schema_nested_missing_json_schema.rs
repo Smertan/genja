@@ -14,7 +14,7 @@ struct BadRule {
     name = "bad_task",
     registration(
         id = "acme.tests.bad_nested_schema_task",
-        schema = "schemars"
+        input_schema = "schemars"
     )
 )]
 impl BadTask {

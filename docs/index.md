@@ -46,7 +46,7 @@ the quickstart to load inventory and run your first task.
 - [Concepts](concepts.md)
 - [Inventory](inventory.md)
 - [Tasks](tasks.md)
-- [Rust Task Registration](task-registration.md)
+- [Task Registration](task-registration.md)
 
 ## Reference
 

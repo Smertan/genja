@@ -144,17 +144,38 @@ Genja does not infer whether a task is safe to repeat, mutable, or idempotent.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
 from enum import Enum
+import inspect
+from importlib import metadata as importlib_metadata
 import json
-from typing import Any, Awaitable, Literal, Protocol, TypeVar, cast
+from types import MappingProxyType
+from typing import Any, Awaitable, Literal, Protocol, TypeAlias, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
-from .genja import IdempotencyCheckResult, IdempotencyMode, SessionVerificationConfig
+from .genja import (
+    IdempotencyCheckResult,
+    IdempotencyMode,
+    SessionVerificationConfig,
+    _validate_task_id as _rust_validate_task_id,
+    _validate_task_version as _rust_validate_task_version,
+)
 
 _TaskClassT = TypeVar("_TaskClassT", bound=type)
+_TaskFactoryCallable: TypeAlias = Callable[[Mapping[str, Any]], Any]
+TaskFactoryStrategy: TypeAlias = Literal["kwargs", "default"]
+_NormalizedTaskFactoryStrategy: TypeAlias = Literal["kwargs", "default", "custom"]
+TaskExecutionMode: TypeAlias = Literal["blocking", "async"]
 
 
 @dataclass(frozen=True)
@@ -304,6 +325,353 @@ class _GenjaModel(BaseModel):
             return getattr(self, key)
         except AttributeError as err:
             raise KeyError(key) from err
+
+
+class TaskRegistrationError(ValueError):
+    """Error raised by Python task registration, lookup, or construction APIs."""
+
+
+class TaskFactory(str, Enum):
+    """Built-in Python task construction strategies."""
+
+    KWARGS = "kwargs"
+    DEFAULT = "default"
+
+
+class CustomTaskFactory(_GenjaModel):
+    """Custom Python task construction factory.
+
+    The callable receives the JSON-compatible input mapping and must return an
+    instance of the registered task class.
+    """
+
+    callable: _TaskFactoryCallable = Field(
+        description="Callable used to construct a registered Python task instance."
+    )
+
+
+class ExplicitInputSchema(_GenjaModel):
+    """Explicit JSON Schema for registered task input."""
+
+    value: dict[str, Any] = Field(
+        description="JSON Schema describing the registered task input payload."
+    )
+
+    @model_validator(mode="after")
+    def _validate_schema(self) -> ExplicitInputSchema:
+        _ensure_json_serializable(self.value, "registration.input_schema")
+        return self
+
+
+class PydanticInputSchema(_GenjaModel):
+    """Input schema derived from a Pydantic model class."""
+
+    model: type[BaseModel] = Field(
+        description="Pydantic BaseModel subclass used to derive JSON Schema."
+    )
+
+    @model_validator(mode="after")
+    def _validate_model(self) -> PydanticInputSchema:
+        if not isinstance(self.model, type) or not issubclass(self.model, BaseModel):
+            raise ValueError("model must be a Pydantic BaseModel subclass")
+        return self
+
+
+class TaskDescriptor(_GenjaModel):
+    """Language-neutral descriptor for a registered Python task.
+
+    The JSON representation matches the Rust ``TaskDescriptor`` contract so
+    task catalogs can consume Python and Rust task metadata with the same
+    shape.
+    """
+
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    id: str = Field(description="Stable or generated task identifier.")
+    id_source: Literal["generated", "explicit"] = Field(
+        description="Whether the task ID was generated or explicitly authored."
+    )
+    name: str = Field(description="Human-readable task name.")
+    version: str = Field(description="Task contract version.")
+    description: str | None = Field(
+        default=None,
+        description="Optional human-readable task description.",
+    )
+    execution_mode: TaskExecutionMode = Field(
+        description="Whether the task uses blocking or async execution."
+    )
+    connection_plugin_name: str | None = Field(
+        default=None,
+        description="Connection plugin required by the task, if any.",
+    )
+    processor_names: list[str] = Field(
+        default_factory=list,
+        description="Processor plugins selected by the task.",
+    )
+    retry: dict[str, Any] | None = Field(
+        default=None,
+        description="Task-specific retry metadata, if configured.",
+    )
+    input_schema: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional JSON Schema describing accepted construction input.",
+    )
+    constructible: bool = Field(
+        description="Whether this process can construct the task from JSON-compatible input."
+    )
+
+    @property
+    def identity(self) -> str:
+        """Return the rendered ``<task-id>@<task-version>`` identity."""
+        return f"{self.id}@{self.version}"
+
+
+class TaskRegistration(_GenjaModel):
+    """Configuration accepted by ``@task(..., registration=...)``.
+
+    Registration is opt-in. When supplied, a decorated Python task class is
+    automatically added to the in-process Python task registry as soon as its
+    module is imported.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    id: str = Field(description="Stable task ID.")
+    version: str | None = Field(
+        default=None,
+        description="Task contract version. If omitted, Genja resolves the containing package version when unambiguous.",
+    )
+    description: str | None = Field(
+        default=None,
+        description="Optional task description. If omitted, the class docstring is used when present.",
+    )
+    factory: TaskFactory | CustomTaskFactory = Field(
+        default=TaskFactory.KWARGS,
+        description="Construction strategy used to build registered Python task instances.",
+    )
+    input_schema: ExplicitInputSchema | PydanticInputSchema | None = Field(
+        default=None,
+        description="Optional input schema metadata for construction input.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_registration(self) -> TaskRegistration:
+        validate_task_id(self.id)
+        if self.version is not None:
+            validate_task_version(self.version)
+        return self
+
+    @property
+    def strategy(self) -> _NormalizedTaskFactoryStrategy:
+        """Return the normalized construction strategy."""
+        if isinstance(self.factory, CustomTaskFactory):
+            return "custom"
+        return cast(TaskFactoryStrategy, self.factory.value)
+
+    @property
+    def factory_callable(self) -> _TaskFactoryCallable | None:
+        """Return the custom construction callable, if configured."""
+        if isinstance(self.factory, CustomTaskFactory):
+            return self.factory.callable
+        return None
+
+    def resolved_input_schema(self) -> dict[str, Any] | None:
+        """Return the explicit or Pydantic-derived construction input schema."""
+        if isinstance(self.input_schema, ExplicitInputSchema):
+            return dict(self.input_schema.value)
+        if isinstance(self.input_schema, PydanticInputSchema):
+            schema = self.input_schema.model.model_json_schema()
+            _ensure_json_serializable(schema, "registration.input_schema")
+            return cast(dict[str, Any], schema)
+        return None
+
+
+@dataclass(frozen=True)
+class TaskRegistrationKey:
+    """Validated Python task registration key."""
+
+    id: str
+    version: str
+
+    @property
+    def identity(self) -> str:
+        """Return the rendered ``<task-id>@<task-version>`` identity."""
+        return f"{self.id}@{self.version}"
+
+
+@dataclass(frozen=True)
+class _RegisteredPythonTask:
+    descriptor: TaskDescriptor
+    task_class: type[GenjaTaskProtocol]
+    strategy: _NormalizedTaskFactoryStrategy
+    factory: _TaskFactoryCallable | None
+
+
+@dataclass
+class _PythonTaskRegistry:
+    _entries: dict[tuple[str, str], _RegisteredPythonTask] = dataclass_field(
+        default_factory=dict
+    )
+
+    def register(self, entry: _RegisteredPythonTask) -> None:
+        key = (entry.descriptor.id, entry.descriptor.version)
+        if key in self._entries:
+            raise TaskRegistrationError(
+                f"duplicate task registration `{entry.descriptor.identity}`"
+            )
+        self._entries[key] = entry
+
+    def list(self) -> list[TaskDescriptor]:
+        return [
+            entry.descriptor
+            for _, entry in sorted(self._entries.items(), key=lambda item: item[0])
+        ]
+
+    def get(
+        self,
+        task_id: str,
+        version: str | None = None,
+    ) -> _RegisteredPythonTask:
+        validate_task_id(task_id)
+        if version is not None:
+            validate_task_version(version)
+            key = (task_id, version)
+            try:
+                return self._entries[key]
+            except KeyError as err:
+                raise TaskRegistrationError(
+                    f"registered task `{task_id}@{version}` was not found"
+                ) from err
+
+        matches = [
+            entry
+            for (registered_id, _), entry in self._entries.items()
+            if registered_id == task_id
+        ]
+        if not matches:
+            raise TaskRegistrationError(f"registered task `{task_id}` was not found")
+        if len(matches) > 1:
+            versions = sorted(entry.descriptor.version for entry in matches)
+            raise TaskRegistrationError(
+                f"registered task `{task_id}` has multiple versions: {', '.join(versions)}"
+            )
+        return matches[0]
+
+    def get_descriptor(
+        self,
+        task_id: str,
+        version: str | None = None,
+    ) -> TaskDescriptor:
+        return self.get(task_id, version).descriptor
+
+    def get_descriptor_by_identity(self, identity: str) -> TaskDescriptor:
+        key = parse_task_identity(identity)
+        return self.get_descriptor(key.id, key.version)
+
+    def create(
+        self,
+        task_id: str,
+        input: Mapping[str, Any] | None = None,
+        version: str | None = None,
+    ):
+        entry = self.get(task_id, version)
+        return _create_registered_task_definition(entry, input)
+
+    def create_by_identity(
+        self,
+        identity: str,
+        input: Mapping[str, Any] | None = None,
+    ):
+        key = parse_task_identity(identity)
+        return self.create(key.id, input, key.version)
+
+
+_PYTHON_TASK_REGISTRY = _PythonTaskRegistry()
+
+
+def validate_task_id(task_id: str) -> None:
+    """Validate an explicit stable task ID using the Rust registration rules."""
+    if not isinstance(task_id, str):
+        raise TaskRegistrationError("invalid task id: id must be a string")
+    try:
+        _rust_validate_task_id(task_id)
+    except ValueError as err:
+        raise TaskRegistrationError(str(err)) from err
+
+
+def validate_task_version(version: str) -> None:
+    """Validate a task contract version as a semantic version."""
+    if not isinstance(version, str):
+        raise TaskRegistrationError("invalid task version: version must be a string")
+    try:
+        _rust_validate_task_version(version)
+    except ValueError as err:
+        raise TaskRegistrationError(str(err)) from err
+
+
+def parse_task_identity(identity: str) -> TaskRegistrationKey:
+    """Parse and validate a ``<task-id>@<task-version>`` identity."""
+    if not isinstance(identity, str):
+        raise TaskRegistrationError("invalid task identity: identity must be a string")
+    if not identity:
+        raise TaskRegistrationError(
+            "invalid task identity ``: identity must not be empty"
+        )
+    if identity.count("@") != 1:
+        raise TaskRegistrationError(
+            f"invalid task identity `{identity}`: identity must contain exactly one `@` separator"
+        )
+    task_id, version = identity.split("@", 1)
+    if not task_id:
+        raise TaskRegistrationError(
+            f"invalid task identity `{identity}`: identity must include a task id before `@`"
+        )
+    if not version:
+        raise TaskRegistrationError(
+            f"invalid task identity `{identity}`: identity must include a task version after `@`"
+        )
+    validate_task_id(task_id)
+    validate_task_version(version)
+    return TaskRegistrationKey(task_id, version)
+
+
+def list_registered_tasks() -> list[TaskDescriptor]:
+    """Return descriptors for imported registered Python tasks."""
+    return _PYTHON_TASK_REGISTRY.list()
+
+
+def get_registered_task_descriptor(
+    task_id: str,
+    version: str | None = None,
+) -> TaskDescriptor:
+    """Look up an imported registered Python task descriptor by ID and version."""
+    return _PYTHON_TASK_REGISTRY.get_descriptor(task_id, version)
+
+
+def get_registered_task_descriptor_by_identity(identity: str) -> TaskDescriptor:
+    """Look up an imported registered Python task descriptor by rendered identity."""
+    return _PYTHON_TASK_REGISTRY.get_descriptor_by_identity(identity)
+
+
+def create_registered_task(
+    task_id: str,
+    input: Mapping[str, Any] | None = None,
+    version: str | None = None,
+):
+    """Construct a registered Python task definition from JSON-compatible input."""
+    return _PYTHON_TASK_REGISTRY.create(task_id, input, version)
+
+
+def create_registered_task_by_identity(
+    identity: str,
+    input: Mapping[str, Any] | None = None,
+):
+    """Construct a registered Python task definition from a rendered identity."""
+    return _PYTHON_TASK_REGISTRY.create_by_identity(identity, input)
 
 
 class RetryConfig(_GenjaModel):
@@ -580,6 +948,7 @@ class GenjaTaskProtocol(Protocol):
     """
 
     __genja_task_info__: dict[str, Any]
+    __genja_task_registration__: dict[str, Any]
 
     def start(
         self,
@@ -688,6 +1057,212 @@ def _validate_sub_tasks(
     return validated
 
 
+def _normalize_task_registration(
+    registration: TaskRegistration | None,
+    cls: type[GenjaTaskProtocol],
+) -> TaskRegistration | None:
+    if registration is None:
+        return None
+    if isinstance(registration, TaskRegistration):
+        normalized = registration
+    else:
+        raise TypeError(
+            f"@task-decorated class '{cls.__name__}' registration must be TaskRegistration or None"
+        )
+
+    if normalized.version is None:
+        resolved = _resolve_task_version(cls)
+        normalized = normalized.model_copy(update={"version": resolved})
+
+    return normalized
+
+
+def _resolve_task_version(cls: type[GenjaTaskProtocol]) -> str:
+    module_name = getattr(cls, "__module__", "")
+    top_level_package = module_name.split(".", 1)[0]
+    distributions = importlib_metadata.packages_distributions().get(
+        top_level_package,
+        [],
+    )
+    if len(distributions) != 1:
+        raise TaskRegistrationError(
+            f"@task-decorated class '{cls.__name__}' registration.version is required because package version resolution is ambiguous"
+        )
+
+    try:
+        version = importlib_metadata.version(distributions[0])
+    except importlib_metadata.PackageNotFoundError as err:
+        raise TaskRegistrationError(
+            f"@task-decorated class '{cls.__name__}' registration.version is required because package version could not be resolved"
+        ) from err
+
+    validate_task_version(version)
+    return version
+
+
+def _task_description(
+    registration: TaskRegistration,
+    cls: type[GenjaTaskProtocol],
+) -> str | None:
+    if registration.description is not None:
+        return registration.description
+    doc = inspect.getdoc(cls)
+    return doc or None
+
+
+def _register_python_task(
+    task_cls: type[GenjaTaskProtocol],
+    registration: TaskRegistration,
+    *,
+    execution_mode: TaskExecutionMode,
+) -> None:
+    version = cast(str, registration.version)
+    info = task_cls.__genja_task_info__
+    retry = info.get("retry")
+    retry_payload = retry.to_dict() if isinstance(retry, RetryConfig) else retry
+    input_schema = registration.resolved_input_schema()
+    descriptor = TaskDescriptor(
+        id=registration.id,
+        id_source="explicit",
+        name=cast(str, info["name"]),
+        version=version,
+        description=_task_description(registration, task_cls),
+        execution_mode=execution_mode,
+        connection_plugin_name=cast(str | None, info.get("connection_plugin_name")),
+        processor_names=list(cast(list[str], info.get("processors", []))),
+        retry=retry_payload,
+        input_schema=input_schema,
+        constructible=True,
+    )
+    entry = _RegisteredPythonTask(
+        descriptor=descriptor,
+        task_class=task_cls,
+        strategy=registration.strategy,
+        factory=registration.factory_callable,
+    )
+    _PYTHON_TASK_REGISTRY.register(entry)
+    task_cls.__genja_task_registration__ = {
+        "descriptor": descriptor.to_dict(),
+        "factory": registration.strategy,
+    }
+
+
+def _input_mapping_for_task(
+    descriptor: TaskDescriptor,
+    input: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if input is None:
+        return {}
+    if not isinstance(input, Mapping):
+        raise TaskRegistrationError(
+            f"invalid input for registered task `{descriptor.identity}`: input must be a mapping"
+        )
+    payload = dict(input)
+    try:
+        _ensure_json_serializable(payload, "input")
+    except TypeError as err:
+        raise TaskRegistrationError(
+            f"invalid input for registered task `{descriptor.identity}`: input must be JSON-serializable"
+        ) from err
+    return payload
+
+
+def _create_registered_task_definition(
+    entry: _RegisteredPythonTask,
+    input: Mapping[str, Any] | None,
+):
+    from .genja import TaskDefinition
+
+    payload = _input_mapping_for_task(entry.descriptor, input)
+    task_instance = _construct_registered_task_instance(entry, payload)
+    wrapper_cls = _registered_task_wrapper_class(entry, task_instance)
+    return TaskDefinition.from_python_class(wrapper_cls)
+
+
+def _construct_registered_task_instance(
+    entry: _RegisteredPythonTask,
+    payload: dict[str, Any],
+) -> GenjaTaskProtocol:
+    descriptor = entry.descriptor
+    try:
+        if entry.strategy == "kwargs":
+            instance = entry.task_class(**payload)
+        elif entry.strategy == "default":
+            if payload:
+                raise TaskRegistrationError(
+                    f"invalid input for registered task `{descriptor.identity}`: default factory does not accept input"
+                )
+            instance = entry.task_class()
+        else:
+            if entry.factory is None:
+                raise TaskRegistrationError(
+                    f"factory failed for registered task `{descriptor.identity}`: custom factory is missing"
+                )
+            instance = entry.factory(MappingProxyType(payload))
+    except TaskRegistrationError:
+        raise
+    except TypeError as err:
+        raise TaskRegistrationError(
+            f"invalid input for registered task `{descriptor.identity}`: {err}"
+        ) from err
+    except Exception as err:
+        raise TaskRegistrationError(
+            f"factory failed for registered task `{descriptor.identity}`: {err}"
+        ) from err
+
+    if not isinstance(instance, entry.task_class):
+        raise TaskRegistrationError(
+            f"factory failed for registered task `{descriptor.identity}`: factory must return an instance of {entry.task_class.__name__}"
+        )
+    return cast(GenjaTaskProtocol, instance)
+
+
+def _registered_task_wrapper_class(
+    entry: _RegisteredPythonTask,
+    task_instance: GenjaTaskProtocol,
+) -> type[GenjaTaskProtocol]:
+    original_cls = entry.task_class
+
+    def __init__(self) -> None:
+        self.__genja_wrapped_task_instance__ = task_instance
+
+    attrs: dict[str, Any] = {
+        "__module__": original_cls.__module__,
+        "__doc__": original_cls.__doc__,
+        "__genja_task_info__": dict(original_cls.__genja_task_info__),
+        "__genja_task_registration__": {
+            "descriptor": entry.descriptor.to_dict(),
+            "factory": entry.strategy,
+        },
+        "__init__": __init__,
+    }
+
+    for method_name in (
+        "start",
+        "start_async",
+        "dry_run",
+        "dry_run_async",
+        "check",
+        "check_async",
+    ):
+        if callable(vars(original_cls).get(method_name)):
+            attrs[method_name] = _delegate_to_registered_instance(method_name)
+
+    wrapper_name = f"{original_cls.__name__}RegisteredTask"
+    return cast(type[GenjaTaskProtocol], type(wrapper_name, (), attrs))
+
+
+def _delegate_to_registered_instance(method_name: str) -> Callable[..., Any]:
+    def delegated(self: Any, *args: Any, **kwargs: Any) -> Any:
+        instance = self.__genja_wrapped_task_instance__
+        method = getattr(instance, method_name)
+        return method(*args, **kwargs)
+
+    delegated.__name__ = method_name
+    delegated.__qualname__ = method_name
+    return delegated
+
+
 def task(
     name: str,
     connection_plugin_name: str | None = None,
@@ -698,6 +1273,7 @@ def task(
     supports_dry_run: bool = False,
     idempotency: IdempotencyMode = IdempotencyMode.DISABLED,
     options: Any | None = None,
+    registration: TaskRegistration | None = None,
     **kwargs: Any,
 ):
     """Attach Genja task metadata to a Python task class.
@@ -738,6 +1314,9 @@ def task(
         options (Any | None): Optional JSON-serializable payload containing
             task-specific configuration options. Can be any JSON-compatible
             data structure. If None, no options are provided to the task.
+        registration (TaskRegistration | None): Optional stable catalog
+            registration metadata. When supplied, the decorated class is
+            automatically added to the imported Python task registry.
 
     Returns:
         Callable[[_TaskClassT], _TaskClassT]: A decorator function that accepts
@@ -921,6 +1500,13 @@ def task(
             "options": options,
             "sub_tasks": validated_sub_tasks,
         }
+        normalized_registration = _normalize_task_registration(registration, task_cls)
+        if normalized_registration is not None:
+            _register_python_task(
+                task_cls,
+                normalized_registration,
+                execution_mode="blocking" if has_start else "async",
+            )
         return cls
 
     return wrap
@@ -1347,8 +1933,26 @@ class TaskSkipResult(_GenjaModel):
 
 __all__ = [
     "task",
+    "CustomTaskFactory",
+    "ExplicitInputSchema",
     "GenjaTaskProtocol",
+    "PydanticInputSchema",
     "RetryConfig",
+    "TaskDescriptor",
+    "TaskExecutionMode",
+    "TaskFactory",
+    "TaskFactoryStrategy",
+    "TaskRegistration",
+    "TaskRegistrationError",
+    "TaskRegistrationKey",
+    "create_registered_task",
+    "create_registered_task_by_identity",
+    "get_registered_task_descriptor",
+    "get_registered_task_descriptor_by_identity",
+    "list_registered_tasks",
+    "parse_task_identity",
+    "validate_task_id",
+    "validate_task_version",
     "SessionVerificationConfig",
     "IdempotencyMode",
     "IdempotencyCheckResult",
