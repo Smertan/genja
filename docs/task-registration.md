@@ -822,6 +822,38 @@ Provider manifests, entry points, or task-directory discovery can import known
 task modules automatically in future features; this API only lists Python tasks
 that are already imported in the current process.
 
+## Python Design Constraints
+
+Python registration is automatic after import, not automatic from files on disk.
+This follows from how Python creates classes and applies decorators.
+
+Keep these constraints in mind when designing Python providers, CLIs, or task
+catalog tooling:
+
+- The Python registry is in-process. Each process that wants to list, inspect,
+  or construct Python registered tasks must import the task modules first.
+- Importing a package only executes that package's `__init__.py`. It does not
+  automatically import every module below the package unless `__init__.py`
+  imports those modules.
+- A Rust or PyO3 implementation of the Python decorator would not remove the
+  import requirement. Rust `inventory` can collect compiled Rust registration
+  records, but Python task classes are created dynamically when Python executes
+  their modules.
+- Python `version` inference only works when the decorated class's top-level
+  module maps to exactly one installed Python distribution with readable
+  package metadata. Scripts, loose modules, tests, and ambiguous package
+  layouts should set `version` explicitly.
+- Python task bodies still execute as Python code. Rust and Tokio can
+  coordinate the surrounding Genja runtime, but `start(...)` and
+  `start_async(...)` run through the Python runtime.
+- `input_schema` is descriptor metadata. It describes JSON-compatible
+  construction input for CLIs, UIs, MCP tools, and catalogs; it is not a
+  separate task invocation format.
+
+Future provider manifests, package entry points, or explicit CLI flags can
+solve discovery by declaring which Python modules to import before reading the
+registry.
+
 ## Python Factories
 
 Python registration supports three construction strategies:
