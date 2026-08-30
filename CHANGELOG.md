@@ -4,7 +4,9 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
-Changed packages:
+## 0.4.0 - 2026-08-30
+
+Released packages:
 
 - Rust crates: `genja`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`
 - Python package: `genja-py`, `genja-core-python`
