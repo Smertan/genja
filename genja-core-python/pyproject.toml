@@ -1,6 +1,6 @@
 [project]
 name = "genja-py"
-version = "0.3.0"
+version = "0.4.0"
 description = "Python bindings for the Genja runtime"
 authors = [
     {name = "Andre Bowen-Brown", email = "contact@genja.co.uk"},
