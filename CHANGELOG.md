@@ -4,7 +4,7 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
-## 0.4.0 - 2026-08-30
+## 0.4.0 - 2026-08-31
 
 Released packages:
 
