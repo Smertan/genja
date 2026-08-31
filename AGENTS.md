@@ -13,6 +13,9 @@ Repository-specific instructions for AI coding agents working in this workspace.
 ### Format
 
 - Add entries under `Unreleased`.
+- Keep an `Unreleased` changed-package list when modifying release packages, using the existing release-section style:
+  - `Rust crates: ...`
+  - `Python package: ...`
 - Use user-facing headings such as:
   - `Added`
   - `Changed`
@@ -51,6 +54,8 @@ Repository-specific instructions for AI coding agents working in this workspace.
 - Use:
   - `pdm run lint`
   - `pdm run typecheck`
+  - `pdm run check-stubs`
+- Run `pdm run check-stubs` when changing Rust/PyO3-exposed Python APIs, `.pyi` stubs, Python API docstrings, or top-level Python re-exports.
 
 ### Python Rust-Backed Tests
 
@@ -110,3 +115,14 @@ Repository-specific instructions for AI coding agents working in this workspace.
 - Update module-level documentation when a change alters the module's public concepts, vocabulary, behavior, or examples.
 - Keep rustdoc and doc examples aligned with the current public API during the same branch as the code change.
 - For Python public API changes, update affected module docstrings, class/function docstrings, type annotations, exported symbols, and stub/typecheck fixtures when applicable.
+
+### Python Typing And Stubs
+
+- For Rust/PyO3-exposed Python APIs, keep the corresponding `.pyi` stubs aligned with the exported runtime API.
+- Public user-facing classes, functions, methods, and properties in `.pyi` stubs should include useful docstrings.
+- For pure Python modules, prefer inline type annotations and docstrings in the `.py` source file instead of creating a new `.pyi` file.
+- Do not create new `.pyi` files for pure Python modules unless there is a specific reason to separate implementation from typing.
+- Keep `genja/__init__.pyi` aligned with public re-exports from `genja/__init__.py`.
+- `pdm run check-stubs` requires every top-level `python/genja/*.pyi` stub to be listed in `STUBS_REQUIRING_DOCSTRINGS` in `genja-core-python/scripts/check_python_api_docs.py`. When adding a stub, document its public API and add it to that list during the same change.
+- For Rust/PyO3 classes re-exported from `genja/__init__.py`, keep the class shape aligned between `genja.pyi` and `__init__.pyi`. When another duplicated top-level class is brought under the documentation standard, add it to `DUPLICATED_TOP_LEVEL_CLASSES` in `check_python_api_docs.py`.
+- When adding Rust/PyO3 doc comments for another binding source file, extend `genja-core-python/scripts/check_python_api_docs.py` so `pdm run check-stubs` prevents regressions for that file or scoped impl block.

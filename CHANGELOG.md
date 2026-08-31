@@ -4,6 +4,67 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+## 0.4.0 - 2026-08-31
+
+Released packages:
+
+- Rust crates: `genja`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`
+- Python package: `genja-py`, `genja-core-python`
+
+### Added
+
+- Added core Rust task discovery descriptor types for serializing generated and explicit task registration metadata. Refs: #91
+- Added core Rust task registration identity validation with semver-backed task versions. Refs: #91
+- Added core Rust task catalog and factory registry abstractions with an in-memory implementation for deterministic descriptor lookup and local task construction. Refs: #91
+- Added generated Rust task discovery for `#[genja_task(...)]` tasks through the compiled task registry. Refs: #91
+- Added explicit Rust `#[genja_task(..., registration(...))]` task registration with serde-backed JSON construction. Refs: #91
+- Added Rust task registration `default` and `custom(...)` factory strategies for no-input tasks and advanced input preparation. Refs: #91
+- Added opt-in Rust task registration input schemas with `registration(input_schema = "schemars")`. Refs: #91
+- Added Rust task registration identity helper APIs for looking up and constructing compiled tasks from `<task-id>@<task-version>` strings. Refs: #91
+- Added runnable Rust examples for task registration schema output and custom factory construction. Refs: #91
+- Added opt-in Python task registration with imported-module discovery, descriptor lookup, typed factory construction strategies, and descriptor-compatible input schemas. Refs: #91
+- Added a runnable Python task registration example for imported-module discovery, descriptor listing, and identity-based construction. Refs: #91
+- Added core Rust `TaskSpec` APIs for single-task declarative construction specs with explicit and auto-detected JSON/YAML parsing and compiled task construction helpers. Refs: #109
+- Added Rust task spec runtime policy overrides for retry and session verification during compiled task construction. Refs: #110
+- Added core Rust dry-run task capability, context, trait, and execution metadata APIs. Refs: #80
+- Added Rust `#[genja_task(...)]` dry-run metadata with `supports_dry_run = true`. Refs: #80
+- Added Rust task idempotency mode metadata with `IdempotencyMode` and `TaskInfo::idempotency_mode()`, defaulting to disabled. Refs: #88
+- Added Rust `#[genja_task(...)]` idempotency metadata with `idempotency = IdempotencyMode::...`. Refs: #88
+- Added Rust idempotency check result and default task check hooks for blocking and async tasks. Refs: #88
+- Added Rust `#[genja_task(...)]` validation and delegation for idempotency check hooks. Refs: #88
+- Added Rust runtime pre-check execution for idempotent tasks, preserving dry-run dispatch without automatic idempotency checks. Refs: #88
+- Added Rust `CheckAndVerify` post-application convergence verification with validation failures for remaining changes. Refs: #88
+- Added Rust idempotency retry convergence results as `PassedWithWarnings` when a later pre-check finds convergence after a retryable failure. Refs: #88
+- Added Python task idempotency support with `IdempotencyMode`, `IdempotencyCheckResult`, `@task(..., idempotency=...)`, and blocking or async check hooks. Refs: #88
+- Added Rust runtime task execution options with dry-run support through `Genja::run_task_with_options(...)`, `Genja::run_task_with_options_async(...)`, `Genja::run_tasks_with_options(...)`, and `Genja::run_tasks_with_options_async(...)`. Refs: #80
+- Added Python dry-run task support with `@genja.task(..., supports_dry_run=True)`, `dry_run` / `dry_run_async` task methods, `TaskRunOptions` via `run_options=...`, and `TaskRuntimeContext.dry_run`. Refs: #80
+- Added Python `Genja.filter_hosts(...)` for predicate-based host filtering with Python callables. Refs: #85
+- Added Rust `Genja::from_settings_async(...)` plus Python `Genja.from_settings_async(...)` and `Genja.from_settings_file_async(...)` for strict async inventory loading. Refs: #86
+- Added Rust `#[genja_task(...)]` session verification metadata with `session_verification(max_attempts = ..., delay_ms = ...)`. Refs: #89
+- Added core Rust session verification configuration and host execution metadata APIs for post-change new-session verification. Refs: #89
+- Added async-safe Rust connection replacement support in `ConnectionManager` for post-change session verification. Refs: #89
+- Added a Rust task connection resolver replacement hook and wired the built-in runtime resolver to recreate inventory-backed connections for post-change session verification. Refs: #89
+- Added Rust runtime execution for post-change session verification after passed, changed task results, including bounded replacement attempts and host-scoped connection failures. Refs: #89
+- Added Rust `CheckAndVerify` integration so post-change idempotency verification runs through the replacement session when session verification is enabled. Refs: #89
+- Added Rust serial and threaded runner coverage for post-change session verification, including host-scoped failure continuation. Refs: #89
+- Added Python `SessionVerificationConfig` and `@task(..., session_verification=...)` support for post-change new-session verification. Refs: #89
+
+### Changed
+
+- **Breaking:** Added `PassedWithWarnings` as a new host task outcome for successful results that carry important warnings. Update exhaustive Rust matches on `HostTaskOutcome` and serialized result parsers to handle `PassedWithWarnings` alongside `Passed`, `Failed`, and `Skipped`. Refs: #99
+- **Breaking:** Rust runner plugins now receive `TaskRunOptions` instead of a bare `max_depth` in `PluginRunner::run_task(...)` and `PluginRunner::run_tasks(...)`. Update runner plugin implementations to accept `run_options: TaskRunOptions` and read recursion depth with `run_options.max_depth()`. Refs: #80
+- **Breaking:** Python runner plugins now receive `run_options: TaskRunOptions` instead of a bare `max_depth` in `run_task(...)` and `run_tasks(...)`. Update runner plugin implementations to accept `run_options` and pass it to `TaskDefinition.run_on_host(...)` / `run_on_hosts(...)`, or read recursion depth with `run_options.max_depth`. Refs: #80
+- **Breaking:** Python task results now support `TaskStatus.PASSED_WITH_WARNINGS` and serialize warning-bearing successes as `PassedWithWarnings`. Update result parsers that assume only `Passed`, `Failed`, and `Skipped` outcome keys. Refs: #99
+- Improved Python type stubs and editor-facing API documentation for Genja runtime, settings, plugin manager, connection, plugin, and processor APIs. Refs: #94
+- **Breaking:** Rust `Genja::from_settings_file_async(...)` now requires the selected inventory plugin to implement `AsyncPluginInventory` and no longer falls back to synchronous inventory plugins. Python `Genja.from_settings(...)` now rejects async Python inventory plugins; use `await Genja.from_settings_async(...)` instead. Use sync constructors for sync inventory plugins such as `FileInventoryPlugin`, and async constructors for async inventory plugins. Refs: #86
+
+### Fixed
+
+- Improved Python dry-run task decorator validation errors so missing dry-run methods identify the task execution mode and required method signature. Refs: #80
+- Improved Python plugin hook failures so errors identify the plugin and hook and include the original Python traceback when available. Refs: #105
+- Improved Python `TaskRunOptions(max_depth=...)` constructor errors for boolean values and accidentally nested `TaskRunOptions` objects. Refs: #105
+- Settings files now allow partial `inventory` sections, with omitted inventory fields falling back to their defaults. Refs: #86
+
 ## 0.3.0 - 2026-07-14
 
 Released packages:

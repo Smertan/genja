@@ -33,6 +33,9 @@ cargo run -p genja --example filter_hosts
 cargo run -p genja --example run_task
 cargo run -p genja --example run_task_tree
 cargo run -p genja --example async_inventory_plugin
+cargo run -p genja --example task_registration
+cargo run -p genja --example task_registration_custom_factory
+cargo run -p genja --example task_registration_spec
 ```
 
 | Example | Demonstrates |
@@ -40,8 +43,12 @@ cargo run -p genja --example async_inventory_plugin
 | `basic_runtime.rs` | Loading a runtime from `settings.yaml` and printing host IDs. |
 | `filter_hosts.rs` | Filtering selected hosts with `filter_by_key_value(...)`. |
 | `run_task.rs` | Defining a task with `#[genja_task]`, running it, and printing JSON results. |
+| `idempotent_task.rs` | Defining a task-authored convergence check that skips already-converged hosts. |
 | `run_task_tree.rs` | Defining sub-tasks and running a task tree with depth control. |
 | `async_inventory_plugin.rs` | Implementing an async Rust inventory plugin and building a runtime from generated inventory. |
+| `task_registration.rs` | Registering a Rust task, listing compiled descriptors, printing schema JSON, and constructing by `<id>@<version>`. |
+| `task_registration_custom_factory.rs` | Registering a Rust task with a custom factory for prepared JSON input and sanitized validation errors. |
+| `task_registration_spec.rs` | Constructing a registered Rust task from YAML and JSON task spec strings, including retry and session verification overrides. |
 
 Use the Rust examples when you want to see the public `genja` crate, the
 `#[genja_task]` macro, and Rust plugin traits in context.
@@ -63,6 +70,7 @@ python genja/examples/python/basic_runtime.py
 python genja/examples/python/filter_hosts.py
 python genja/examples/python/run_task.py
 python genja/examples/python/run_task_tree.py
+python genja/examples/python/task_registration.py
 ```
 
 | Example | Demonstrates |
@@ -71,6 +79,7 @@ python genja/examples/python/run_task_tree.py
 | `filter_hosts.py` | Filtering selected hosts with `filter_by_key_value(...)`. |
 | `run_task.py` | Defining a Python task with `@task`, running it, and printing JSON results. |
 | `run_task_tree.py` | Defining Python sub-tasks and running a task tree with `max_depth`. |
+| `task_registration.py` | Importing a module with registered Python tasks, listing descriptors, and constructing by `<id>@<version>`. |
 
 See `genja/examples/python/README.md` for the local Python setup notes that live
 beside the examples.
@@ -86,4 +95,5 @@ For fuller explanations, see:
 - [Quickstart](quickstart.md)
 - [Inventory](inventory.md)
 - [Tasks](tasks.md)
+- [Task Registration](task-registration.md)
 - [Plugins](plugins/index.md)

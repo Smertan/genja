@@ -9,6 +9,7 @@ use pyo3::types::{PyAny, PyModule};
 
 use crate::task;
 
+/// Default task retry settings configured at runner scope.
 #[pyclass(name = "RunnerRetryConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyRunnerRetryConfig {
@@ -17,6 +18,14 @@ pub struct PyRunnerRetryConfig {
 
 #[pymethods]
 impl PyRunnerRetryConfig {
+    /// Create runner retry configuration.
+    ///
+    /// # Parameters
+    ///
+    /// * `allow` - Whether retries are allowed by default.
+    /// * `max_attempts` - Maximum attempts for retryable tasks. Values lower than 1 are
+    ///   normalized to 1 by the runtime.
+    /// * `delay_ms` - Delay in milliseconds before retry attempts.
     #[new]
     #[pyo3(signature = (allow=None, max_attempts=None, delay_ms=None))]
     fn new(allow: Option<bool>, max_attempts: Option<usize>, delay_ms: Option<u64>) -> Self {
@@ -29,16 +38,19 @@ impl PyRunnerRetryConfig {
         }
     }
 
+    /// Whether retries are allowed by default.
     #[getter]
     pub(crate) fn allow(&self) -> Option<bool> {
         self.inner.allow()
     }
 
+    /// Maximum attempts for retryable tasks.
     #[getter]
     pub(crate) fn max_attempts(&self) -> Option<usize> {
         self.inner.max_attempts()
     }
 
+    /// Delay in milliseconds before retry attempts.
     #[getter]
     pub(crate) fn delay_ms(&self) -> Option<u64> {
         self.inner.delay_ms()
@@ -54,6 +66,10 @@ impl PyRunnerRetryConfig {
     }
 }
 
+/// Inventory file path options.
+///
+/// These options are used by file-based inventory loading to locate hosts, groups,
+/// and defaults files.
 #[pyclass(name = "OptionsConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyOptionsConfig {
@@ -62,6 +78,13 @@ pub struct PyOptionsConfig {
 
 #[pymethods]
 impl PyOptionsConfig {
+    /// Create inventory file options.
+    ///
+    /// # Parameters
+    ///
+    /// * `hosts_file` - Optional path to a hosts inventory file.
+    /// * `groups_file` - Optional path to a groups inventory file.
+    /// * `defaults_file` - Optional path to a defaults inventory file.
     #[new]
     #[pyo3(signature = (hosts_file=None, groups_file=None, defaults_file=None))]
     fn new(
@@ -84,16 +107,19 @@ impl PyOptionsConfig {
         }
     }
 
+    /// Path to the hosts inventory file, if configured.
     #[getter]
     pub(crate) fn hosts_file(&self) -> Option<String> {
         self.inner.hosts_file().map(str::to_owned)
     }
 
+    /// Path to the groups inventory file, if configured.
     #[getter]
     pub(crate) fn groups_file(&self) -> Option<String> {
         self.inner.groups_file().map(str::to_owned)
     }
 
+    /// Path to the defaults inventory file, if configured.
     #[getter]
     pub(crate) fn defaults_file(&self) -> Option<String> {
         self.inner.defaults_file().map(str::to_owned)
@@ -109,6 +135,7 @@ impl PyOptionsConfig {
     }
 }
 
+/// Core runtime behavior settings.
 #[pyclass(name = "CoreConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyCoreConfig {
@@ -117,6 +144,12 @@ pub struct PyCoreConfig {
 
 #[pymethods]
 impl PyCoreConfig {
+    /// Create core runtime settings.
+    ///
+    /// # Parameters
+    ///
+    /// * `raise_on_error` - Whether task execution should raise when errors occur.
+    ///   When omitted, the runtime default is used.
     #[new]
     #[pyo3(signature = (raise_on_error=None))]
     fn new(raise_on_error: Option<bool>) -> Self {
@@ -129,6 +162,7 @@ impl PyCoreConfig {
         }
     }
 
+    /// Whether task execution should raise when errors occur.
     #[getter]
     pub(crate) fn raise_on_error(&self) -> bool {
         self.inner.raise_on_error()
@@ -139,6 +173,7 @@ impl PyCoreConfig {
     }
 }
 
+/// Inventory plugin and transform configuration.
 #[pyclass(name = "InventoryConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyInventoryConfig {
@@ -147,6 +182,22 @@ pub struct PyInventoryConfig {
 
 #[pymethods]
 impl PyInventoryConfig {
+    /// Create inventory configuration.
+    ///
+    /// # Parameters
+    ///
+    /// * `plugin` - Inventory plugin name. When omitted, the default file inventory plugin
+    ///   is used.
+    /// * `options` - File inventory options.
+    /// * `transform_function` - Optional transform plugin name applied after loading
+    ///   inventory.
+    /// * `transform_function_options` - JSON-serializable options passed to the transform
+    ///   plugin.
+    ///
+    /// # Errors
+    ///
+    /// Raises `TypeError` if `transform_function_options` cannot be converted to a
+    /// JSON-compatible value.
     #[new]
     #[pyo3(signature = (plugin=None, options=None, transform_function=None, transform_function_options=None))]
     fn new(
@@ -176,11 +227,13 @@ impl PyInventoryConfig {
         })
     }
 
+    /// Inventory plugin name.
     #[getter]
     pub(crate) fn plugin(&self) -> String {
         self.inner.plugin().to_owned()
     }
 
+    /// Inventory plugin options.
     #[getter]
     pub(crate) fn options(&self) -> PyOptionsConfig {
         PyOptionsConfig {
@@ -188,11 +241,13 @@ impl PyInventoryConfig {
         }
     }
 
+    /// Transform plugin name, if configured.
     #[getter]
     pub(crate) fn transform_function(&self) -> Option<String> {
         self.inner.transform_function().map(str::to_owned)
     }
 
+    /// Options passed to the transform plugin, if configured.
     #[getter]
     pub(crate) fn transform_function_options(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self.inner.transform_function_options() {
@@ -211,6 +266,7 @@ impl PyInventoryConfig {
     }
 }
 
+/// SSH-related runtime configuration.
 #[pyclass(name = "SSHConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PySSHConfig {
@@ -219,6 +275,11 @@ pub struct PySSHConfig {
 
 #[pymethods]
 impl PySSHConfig {
+    /// Create SSH configuration.
+    ///
+    /// # Parameters
+    ///
+    /// * `config_file` - Optional path to an SSH config file.
     #[new]
     #[pyo3(signature = (config_file=None))]
     fn new(config_file: Option<String>) -> Self {
@@ -231,11 +292,17 @@ impl PySSHConfig {
         }
     }
 
+    /// Path to the SSH config file, if configured.
     #[getter]
     pub(crate) fn config_file(&self) -> Option<String> {
         self.inner.config_file().map(str::to_owned)
     }
 
+    /// Validate SSH configuration.
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if the configured SSH config file or SSH options are invalid.
     fn validate(&self) -> PyResult<()> {
         self.inner
             .validate()
@@ -247,6 +314,7 @@ impl PySSHConfig {
     }
 }
 
+/// Task runner plugin and execution limit configuration.
 #[pyclass(name = "RunnerConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyRunnerConfig {
@@ -255,6 +323,16 @@ pub struct PyRunnerConfig {
 
 #[pymethods]
 impl PyRunnerConfig {
+    /// Create runner configuration.
+    ///
+    /// # Parameters
+    ///
+    /// * `plugin` - Runner plugin name. Common values include `serial` and `threaded`;
+    ///   custom registered runners may also be used.
+    /// * `worker_count` - Optional maximum worker count for runners that support parallelism.
+    /// * `max_task_depth` - Optional maximum nested sub-task depth.
+    /// * `max_connection_attempts` - Optional maximum connection attempts per host.
+    /// * `retry` - Optional default retry behavior for task execution.
     #[new]
     #[pyo3(signature = (plugin=None, worker_count=None, max_task_depth=None, max_connection_attempts=None, retry=None))]
     fn new(
@@ -285,26 +363,31 @@ impl PyRunnerConfig {
         }
     }
 
+    /// Runner plugin name.
     #[getter]
     pub(crate) fn plugin(&self) -> String {
         self.inner.plugin().to_owned()
     }
 
+    /// Maximum runner worker count, if configured.
     #[getter]
     pub(crate) fn worker_count(&self) -> Option<usize> {
         self.inner.worker_count()
     }
 
+    /// Maximum nested sub-task depth.
     #[getter]
     pub(crate) fn max_task_depth(&self) -> usize {
         self.inner.max_task_depth()
     }
 
+    /// Maximum connection attempts per host.
     #[getter]
     pub(crate) fn max_connection_attempts(&self) -> usize {
         self.inner.max_connection_attempts()
     }
 
+    /// Default retry behavior for task execution.
     #[getter]
     pub(crate) fn retry(&self) -> PyRunnerRetryConfig {
         PyRunnerRetryConfig {
@@ -324,6 +407,7 @@ impl PyRunnerConfig {
     }
 }
 
+/// Runtime logging configuration.
 #[pyclass(name = "LoggingConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyLoggingConfig {
@@ -332,6 +416,16 @@ pub struct PyLoggingConfig {
 
 #[pymethods]
 impl PyLoggingConfig {
+    /// Create logging configuration.
+    ///
+    /// # Parameters
+    ///
+    /// * `enabled` - Whether runtime logging is enabled.
+    /// * `level` - Logging level such as `info`, `debug`, or `trace`.
+    /// * `log_file` - Path to the runtime log file.
+    /// * `to_console` - Whether logs should also be emitted to the console.
+    /// * `file_size` - Maximum log file size before rotation.
+    /// * `max_file_count` - Maximum number of rotated log files to keep.
     #[new]
     #[pyo3(signature = (enabled=None, level=None, log_file=None, to_console=None, file_size=None, max_file_count=None))]
     fn new(
@@ -366,31 +460,37 @@ impl PyLoggingConfig {
         }
     }
 
+    /// Whether runtime logging is enabled.
     #[getter]
     pub(crate) fn enabled(&self) -> bool {
         self.inner.enabled()
     }
 
+    /// Configured logging level.
     #[getter]
     pub(crate) fn level(&self) -> String {
         self.inner.level().to_owned()
     }
 
+    /// Path to the runtime log file.
     #[getter]
     pub(crate) fn log_file(&self) -> String {
         self.inner.log_file().to_owned()
     }
 
+    /// Whether logs are also emitted to the console.
     #[getter]
     pub(crate) fn to_console(&self) -> bool {
         self.inner.to_console()
     }
 
+    /// Maximum log file size before rotation.
     #[getter]
     pub(crate) fn file_size(&self) -> u64 {
         self.inner.file_size()
     }
 
+    /// Maximum number of rotated log files to keep.
     #[getter]
     pub(crate) fn max_file_count(&self) -> usize {
         self.inner.max_file_count()
@@ -409,6 +509,11 @@ impl PyLoggingConfig {
     }
 }
 
+/// Complete Genja runtime settings.
+///
+/// Settings combine core behavior, inventory loading, SSH, runner, and logging
+/// configuration. They can be passed to `Genja.from_settings(...)`,
+/// `Genja.from_hosts(...)`, or `Genja.from_inventory(...)`.
 #[pyclass(name = "Settings", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PySettings {
@@ -417,6 +522,17 @@ pub struct PySettings {
 
 #[pymethods]
 impl PySettings {
+    /// Create settings from optional section configs.
+    ///
+    /// Omitted sections use runtime defaults.
+    ///
+    /// # Parameters
+    ///
+    /// * `core` - Core runtime settings.
+    /// * `inventory` - Inventory loading settings.
+    /// * `ssh` - SSH settings.
+    /// * `runner` - Runner settings.
+    /// * `logging` - Logging settings.
     #[new]
     #[pyo3(signature = (core=None, inventory=None, ssh=None, runner=None, logging=None))]
     fn new(
@@ -447,6 +563,15 @@ impl PySettings {
         }
     }
 
+    /// Load settings from a YAML or JSON file.
+    ///
+    /// # Parameters
+    ///
+    /// * `path` - Path to the settings file.
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if the file cannot be read or parsed as valid settings.
     #[staticmethod]
     fn from_file(path: &str) -> PyResult<Self> {
         let inner = Settings::from_file(path).map_err(|err| {
@@ -455,12 +580,18 @@ impl PySettings {
         Ok(Self { inner })
     }
 
+    /// Validate settings.
+    ///
+    /// # Errors
+    ///
+    /// Raises `ValueError` if any setting is invalid.
     fn validate(&self) -> PyResult<()> {
         self.inner
             .validate()
             .map_err(|err| PyValueError::new_err(format!("invalid settings: {err}")))
     }
 
+    /// Core runtime settings.
     #[getter]
     pub(crate) fn core(&self) -> PyCoreConfig {
         PyCoreConfig {
@@ -468,6 +599,7 @@ impl PySettings {
         }
     }
 
+    /// Inventory loading settings.
     #[getter]
     pub(crate) fn inventory(&self) -> PyInventoryConfig {
         PyInventoryConfig {
@@ -475,6 +607,7 @@ impl PySettings {
         }
     }
 
+    /// SSH settings.
     #[getter]
     pub(crate) fn ssh(&self) -> PySSHConfig {
         PySSHConfig {
@@ -482,6 +615,7 @@ impl PySettings {
         }
     }
 
+    /// Runner settings.
     #[getter]
     pub(crate) fn runner(&self) -> PyRunnerConfig {
         PyRunnerConfig {
@@ -489,6 +623,7 @@ impl PySettings {
         }
     }
 
+    /// Logging settings.
     #[getter]
     pub(crate) fn logging(&self) -> PyLoggingConfig {
         PyLoggingConfig {

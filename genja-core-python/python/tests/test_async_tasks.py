@@ -3,7 +3,14 @@ import asyncio
 import pytest
 import genja
 from genja import Genja
-from genja.task import Host, TaskFailureResult, TaskSuccessResult, task
+from genja.task import (
+    Host,
+    IdempotencyCheckResult,
+    IdempotencyMode,
+    TaskFailureResult,
+    TaskSuccessResult,
+    task,
+)
 from tests.fixtures.connection_plugins import ConnectionPlugin
 
 
@@ -129,7 +136,10 @@ def test_runtime_run_task_async_with_sub_tasks():
             "router1": Host(hostname="10.0.0.1", platform="ios"),
         }).with_runner("serial")
 
-        return await runtime.run_task_async(AsyncParentTask, max_depth=2)
+        return await runtime.run_task_async(
+            AsyncParentTask,
+            run_options=genja.TaskRunOptions(max_depth=2),
+        )
 
     results = asyncio.run(run_case())
 
@@ -212,6 +222,143 @@ async def test_runtime_run_task_async_works_in_pytest_asyncio():
 
     assert results.task_name == "async_backup"
     assert results.passed_hosts == ["router1"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_run_task_async_supports_dry_run():
+    calls: list[str] = []
+
+    @task(name="async_preview", supports_dry_run=True)
+    class AsyncPreviewTask:
+        async def start_async(self, task, host, context):
+            calls.append("start_async")
+            return TaskSuccessResult(summary="started")
+
+        async def dry_run_async(self, task, host, context):
+            calls.append("dry_run_async")
+            assert task.supports_dry_run is True
+            assert context.dry_run is True
+            return TaskSuccessResult(
+                changed=True,
+                summary=f"would update {host.hostname}",
+            )
+
+    runtime = Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
+
+    results = await runtime.run_task_async(
+        AsyncPreviewTask,
+        run_options=genja.TaskRunOptions(dry_run=True),
+    )
+
+    assert calls == ["dry_run_async"]
+    assert results.passed_hosts == ["router1"]
+    host_result = results.to_dict()["hosts"]["router1"]
+    assert host_result["outcome"]["Passed"]["changed"] is True
+    assert host_result["execution_metadata"]["dry_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_runtime_run_task_async_idempotent_converged_check_skips_start():
+    calls: list[str] = []
+
+    @task(name="async_idempotent_converged", idempotency=IdempotencyMode.CHECK)
+    class AsyncIdempotentConvergedTask:
+        async def check_async(self, task, host, context):
+            calls.append("check_async")
+            assert task.idempotency == IdempotencyMode.CHECK
+            await asyncio.sleep(0.01)
+            return IdempotencyCheckResult.converged(
+                summary=f"{host.hostname} already configured",
+            )
+
+        async def start_async(self, task, host, context):
+            calls.append("start_async")
+            return TaskSuccessResult(changed=True, summary="started")
+
+    runtime = Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
+
+    results = await runtime.run_task_async(AsyncIdempotentConvergedTask)
+    host_result = results.to_dict()["hosts"]["router1"]
+
+    assert calls == ["check_async"]
+    assert results.passed_hosts == ["router1"]
+    assert host_result["outcome"]["Passed"]["changed"] is False
+    assert host_result["outcome"]["Passed"]["summary"] == "10.0.0.1 already configured"
+
+
+@pytest.mark.asyncio
+async def test_runtime_run_task_async_check_and_verify_reuses_check_hook():
+    calls: list[str] = []
+
+    @task(
+        name="async_idempotent_verified",
+        idempotency=IdempotencyMode.CHECK_AND_VERIFY,
+    )
+    class AsyncIdempotentVerifiedTask:
+        async def check_async(self, task, host, context):
+            calls.append("check_async")
+            await asyncio.sleep(0.01)
+            if calls.count("check_async") == 1:
+                return IdempotencyCheckResult.change_required(diff="+configured")
+            return IdempotencyCheckResult.converged(summary="now converged")
+
+        async def start_async(self, task, host, context):
+            calls.append("start_async")
+            return TaskSuccessResult(changed=True, summary="applied")
+
+    runtime = Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
+
+    results = await runtime.run_task_async(AsyncIdempotentVerifiedTask)
+    host_result = results.to_dict()["hosts"]["router1"]
+
+    assert calls == ["check_async", "start_async", "check_async"]
+    assert results.passed_hosts == ["router1"]
+    assert host_result["outcome"]["Passed"]["changed"] is True
+    assert host_result["outcome"]["Passed"]["summary"] == "applied"
+
+
+@pytest.mark.asyncio
+async def test_runtime_run_task_async_dry_run_bypasses_idempotency_check():
+    calls: list[str] = []
+
+    @task(
+        name="async_idempotent_dry_run",
+        idempotency=IdempotencyMode.CHECK,
+        supports_dry_run=True,
+    )
+    class AsyncIdempotentDryRunTask:
+        async def check_async(self, task, host, context):
+            calls.append("check_async")
+            return IdempotencyCheckResult.converged()
+
+        async def start_async(self, task, host, context):
+            calls.append("start_async")
+            return TaskSuccessResult(changed=True, summary="started")
+
+        async def dry_run_async(self, task, host, context):
+            calls.append("dry_run_async")
+            return TaskSuccessResult(changed=True, summary="would change")
+
+    runtime = Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
+
+    results = await runtime.run_task_async(
+        AsyncIdempotentDryRunTask,
+        run_options=genja.TaskRunOptions(dry_run=True),
+    )
+    host_result = results.to_dict()["hosts"]["router1"]
+
+    assert calls == ["dry_run_async"]
+    assert results.passed_hosts == ["router1"]
+    assert host_result["outcome"]["Passed"]["changed"] is True
+    assert host_result["execution_metadata"]["dry_run"] is True
 
 
 def test_runtime_run_task_async_handles_exception_in_task():

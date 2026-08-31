@@ -1,0 +1,19 @@
+error: `idempotency` requires `async fn check_async(...)` for async tasks
+  --> tests/ui_genja_task/fail/missing_async_check.rs:13:6
+   |
+13 | impl MissingAsyncCheckTask {
+   |      ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `genja_core::inventory::Host`
+ --> tests/ui_genja_task/fail/missing_async_check.rs:2:5
+  |
+2 | use genja_core::inventory::Host;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `HostTaskResult`, `IdempotencyMode`, `TaskRuntimeContext`, and `TaskSuccess`
+ --> tests/ui_genja_task/fail/missing_async_check.rs:4:5
+  |
+4 |     HostTaskResult, IdempotencyMode, TaskRuntimeContext, TaskSuccess,
+  |     ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^

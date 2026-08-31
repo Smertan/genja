@@ -5,7 +5,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 #[async_trait]
 pub trait Connection
@@ -688,6 +688,7 @@ pub struct ConnectionCounters {
 /// ```
 pub struct ConnectionManager {
     connections_map: DashMap<ConnectionKey, Arc<Mutex<dyn Connection>>>,
+    connection_locks: DashMap<ConnectionKey, Arc<Mutex<()>>>,
     connection_factory: RwLock<Option<Arc<ConnectionFactory>>>,
     counters: Arc<DashMap<String, ConnectionCounters>>,
 }
@@ -696,6 +697,7 @@ impl fmt::Debug for ConnectionManager {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ConnectionManager")
             .field("connections_map_len", &self.connections_map.len())
+            .field("connection_locks_len", &self.connection_locks.len())
             .field(
                 "has_connection_factory",
                 &self
@@ -712,9 +714,45 @@ impl ConnectionManager {
     pub fn with_connection_factory(factory: Arc<ConnectionFactory>) -> Self {
         Self {
             connections_map: DashMap::new(),
+            connection_locks: DashMap::new(),
             connection_factory: RwLock::new(Some(factory)),
             counters: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Return the stable per-key lifecycle lock for cache ownership operations.
+    ///
+    /// The lock entry is intentionally retained for the manager lifetime once created.
+    /// Removing it while another task still holds an `Arc` could allow two distinct locks
+    /// for the same key and break replacement serialization.
+    fn connection_lifecycle_lock(&self, key: &ConnectionKey) -> Arc<Mutex<()>> {
+        self.connection_locks
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    /// Acquire exclusive lifecycle ownership for a connection key.
+    ///
+    /// Hold this guard across async cache operations that create, open, evict, replace,
+    /// or insert `connections_map[key]`. The guard protects the cache slot; the connection
+    /// object's own mutex still protects mutable plugin state on a specific instance.
+    async fn lock_connection_lifecycle(&self, key: &ConnectionKey) -> OwnedMutexGuard<()> {
+        self.connection_lifecycle_lock(key).lock_owned().await
+    }
+
+    /// Clone the configured connection factory or return the stable setup error.
+    ///
+    /// The returned `Arc` lets callers release the `RwLock` before invoking the factory,
+    /// avoiding factory calls while the manager configuration lock is held.
+    fn connection_factory(&self) -> Result<Arc<ConnectionFactory>, String> {
+        let guard = self
+            .connection_factory
+            .read()
+            .map_err(|_| "connection factory lock poisoned".to_string())?;
+        guard
+            .clone()
+            .ok_or_else(|| "connection factory not set".to_string())
     }
 
     fn increment_create(&self, connection_type: &str) {
@@ -769,6 +807,13 @@ impl ConnectionManager {
     /// to create one and inserts it.
     ///
     /// # Concurrency and Race Behavior
+    ///
+    /// This is a low-level synchronous helper and does not acquire the per-key
+    /// lifecycle lock used by async lifecycle operations. Prefer
+    /// [`open_connection`](Self::open_connection) when callers need a ready-to-use
+    /// connection. New async methods that create, evict, replace, or open cached
+    /// connections should acquire `lock_connection_lifecycle(...)` and then call the
+    /// private `get_or_create_unlocked(...)` helper instead.
     ///
     /// - Creation uses `DashMap::entry`, so only one connection is created per unique key,
     ///   even under concurrent access.
@@ -830,15 +875,19 @@ impl ConnectionManager {
         &self,
         key: ConnectionKey,
     ) -> Result<Option<Arc<Mutex<dyn Connection>>>, String> {
-        let factory = {
-            let guard = self
-                .connection_factory
-                .read()
-                .map_err(|_| "connection factory lock poisoned".to_string())?;
-            guard
-                .clone()
-                .ok_or_else(|| "connection factory not set".to_string())?
-        };
+        self.get_or_create_unlocked(key)
+    }
+
+    /// Return a cached connection or create one without taking the lifecycle lock.
+    ///
+    /// Call this only when the caller already holds `lock_connection_lifecycle(...)`
+    /// for async lifecycle paths, or from legacy synchronous paths where taking the async
+    /// lifecycle lock is not possible.
+    fn get_or_create_unlocked(
+        &self,
+        key: ConnectionKey,
+    ) -> Result<Option<Arc<Mutex<dyn Connection>>>, String> {
+        let factory = self.connection_factory()?;
 
         match self.connections_map.entry(key) {
             dashmap::mapref::entry::Entry::Occupied(entry) => Ok(Some(entry.get().clone())),
@@ -905,13 +954,19 @@ impl ConnectionManager {
     ///
     /// # Thread Safety and Locking
     ///
-    /// The method uses a two-phase locking strategy to prevent deadlocks:
+    /// The method uses a layered locking strategy:
     ///
-    /// 1. **Factory Lock**: `get_or_create()` briefly acquires the factory's `RwLock` to clone
+    /// 1. **Lifecycle Lock**: A per-key async mutex is acquired before the connection
+    ///    cache is inspected or modified. The same lock is used by
+    ///    [`replace_connection`](Self::replace_connection), preventing a replacement from
+    ///    evicting a connection while another async opener recreates or retrieves the same
+    ///    key. Different connection keys use different locks and can proceed concurrently.
+    ///
+    /// 2. **Factory Lock**: `get_or_create()` briefly acquires the factory's `RwLock` to clone
     ///    the `Arc<ConnectionFactory>`, then releases it before calling the factory function.
     ///    This prevents holding the factory lock during connection creation.
     ///
-    /// 2. **Connection Lock**: After obtaining the connection, the method acquires its `Mutex`
+    /// 3. **Connection Lock**: After obtaining the connection, the method acquires its `Mutex`
     ///    in a scoped block (`{ ... }`). The lock is automatically released when the scope ends,
     ///    before returning the connection. This allows the caller to acquire the lock again
     ///    without deadlock.
@@ -1119,7 +1174,9 @@ impl ConnectionManager {
         key: &ConnectionKey,
         params: &ResolvedConnectionParams,
     ) -> Result<Option<Arc<Mutex<dyn Connection>>>, String> {
-        let Some(connection) = self.get_or_create(key.clone())? else {
+        let _lifecycle_guard = self.lock_connection_lifecycle(key).await;
+
+        let Some(connection) = self.get_or_create_unlocked(key.clone())? else {
             return Ok(None);
         };
 
@@ -1132,12 +1189,57 @@ impl ConnectionManager {
         }
         Ok(Some(connection))
     }
+
+    /// Replace the cached connection for `key` with a freshly created and opened instance.
+    ///
+    /// Replacement is serialized with [`open_connection`](Self::open_connection) for the
+    /// same [`ConnectionKey`] by acquiring a per-key lifecycle lock before touching the
+    /// connection cache. That lock is separate from the connection object's own mutex:
+    /// the lifecycle lock protects ownership of the cache slot while entries are removed,
+    /// created, opened, and inserted; the connection mutex protects mutable plugin state
+    /// on a specific connection instance.
+    ///
+    /// The old connection is evicted before the replacement is created. Closing the old
+    /// connection is best-effort and uses the old connection object only after it has been
+    /// removed from the cache. If the factory returns `None`, this method leaves the old
+    /// connection evicted and returns `Ok(None)`. If opening the replacement fails, the
+    /// replacement is not inserted and the open error is returned.
+    pub async fn replace_connection(
+        &self,
+        key: &ConnectionKey,
+        params: &ResolvedConnectionParams,
+    ) -> Result<Option<Arc<Mutex<dyn Connection>>>, String> {
+        let _lifecycle_guard = self.lock_connection_lifecycle(key).await;
+
+        if let Some((_, old_connection)) = self.connections_map.remove(key) {
+            let mut old_connection = old_connection.lock().await;
+            old_connection.close();
+            self.increment_close(&key.plugin_name);
+        }
+
+        let factory = self.connection_factory()?;
+        let Some(new_connection) = factory(key) else {
+            return Ok(None);
+        };
+        self.increment_create(&key.plugin_name);
+
+        {
+            let mut new_connection_guard = new_connection.lock().await;
+            new_connection_guard.open(params).await?;
+            self.increment_open(&key.plugin_name);
+        }
+
+        self.connections_map
+            .insert(key.clone(), new_connection.clone());
+        Ok(Some(new_connection))
+    }
 }
 
 impl Default for ConnectionManager {
     fn default() -> Self {
         Self {
             connections_map: DashMap::new(),
+            connection_locks: DashMap::new(),
             connection_factory: RwLock::new(None),
             counters: Arc::new(DashMap::new()),
         }

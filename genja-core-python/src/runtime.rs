@@ -121,6 +121,11 @@
 //! core_routers = runtime.filter_by_key_value("groups", "core")
 //! ios_routers = runtime.filter_by_key_value("platform", "^ios")
 //!
+//! # Filter with a Python predicate over transformed host dictionaries
+//! lab_ios = runtime.filter_hosts(
+//!     lambda host: host["platform"] == "ios" and host["data"]["site"] == "lab-a"
+//! )
+//!
 //! # Filters are chainable and immutable
 //! filtered = (runtime
 //!     .filter_by_key("platform")
@@ -156,12 +161,18 @@
 //! results = runtime.run_task(BackupTask)
 //!
 //! # Run with custom depth limit for sub-tasks
-//! results = runtime.run_task(BackupTask, max_depth=5)
+//! results = runtime.run_task(
+//!     BackupTask,
+//!     run_options=genja.TaskRunOptions(max_depth=5),
+//! )
 //!
 //! # Run an ordered Tasks collection
 //! tasks = genja.Tasks()
 //! tasks.add_task(BackupTask)
-//! all_results = runtime.run_tasks(tasks, max_depth=5)
+//! all_results = runtime.run_tasks(
+//!     tasks,
+//!     run_options=genja.TaskRunOptions(max_depth=5),
+//! )
 //! ```
 //!
 //! # Plugin Integration
@@ -385,10 +396,13 @@
 use genja::Genja as RuntimeGenja;
 use genja_core::inventory::{Defaults, Groups, Hosts, Inventory};
 use genja_core::{GenjaError, Settings};
-use pyo3::exceptions::PyValueError;
+use pyo3::PyTypeInfo;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
+use pyo3_async_runtimes::tokio::future_into_py;
 use serde::de::DeserializeOwned;
+use std::cell::{Cell, RefCell};
 use std::sync::Mutex;
 
 use crate::plugin_manager::{PyPluginManager, register_python_plugin_on_manager};
@@ -610,6 +624,107 @@ impl PyGenja {
         build_runtime_from_settings(settings, plugin_manager, None)
     }
 
+    /// Creates a Genja runtime instance from settings using strict async inventory loading.
+    ///
+    /// This method validates the supplied settings, requires the configured inventory
+    /// plugin to be async-capable, awaits inventory loading, and builds a runtime with
+    /// the loaded inventory and settings. Sync-only inventory plugins such as the
+    /// default `FileInventoryPlugin` are rejected.
+    ///
+    /// # Parameters
+    ///
+    /// * `settings` - Runtime settings containing async inventory plugin configuration,
+    ///   runner selection, and other options.
+    /// * `plugin_manager` - Optional plugin manager for loading and managing plugins.
+    ///   Pass one when custom Python async inventory plugins must be registered before
+    ///   inventory is loaded.
+    ///
+    /// # Returns
+    ///
+    /// Returns an awaitable that resolves to a fully configured runtime instance on
+    /// success, or raises `ValueError` if validation, async inventory loading, or
+    /// runtime construction fails.
+    #[staticmethod]
+    #[pyo3(signature = (settings, plugin_manager=None))]
+    fn _from_settings_async_native(
+        py: Python<'_>,
+        settings: PyRef<'_, PySettings>,
+        plugin_manager: Option<PyRef<'_, PyPluginManager>>,
+    ) -> PyResult<Py<PyAny>> {
+        let settings = settings.inner.clone();
+        let plugin_manager = if let Some(plugin_manager) = plugin_manager {
+            plugin_manager.take_inner()?
+        } else {
+            PyPluginManager::new().take_inner()?
+        };
+
+        future_into_py(py, async move {
+            build_runtime_from_settings_async(settings, plugin_manager, None).await
+        })
+        .map(Bound::unbind)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (settings, plugin_manager=None))]
+    fn from_settings_async(
+        py: Python<'_>,
+        settings: Bound<'_, PyAny>,
+        plugin_manager: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let async_helpers = PyModule::import(py, "genja._async")?;
+        let helper = async_helpers.getattr("from_settings_async")?;
+        Ok(helper
+            .call1((PyGenja::type_object(py), settings, plugin_manager))?
+            .unbind())
+    }
+
+    /// Creates a Genja runtime instance from a YAML or JSON settings file using strict async inventory loading.
+    ///
+    /// This native helper backs `Genja.from_settings_file_async(...)`. It loads
+    /// settings from the supplied path, requires the configured inventory plugin to
+    /// be async-capable, awaits inventory loading, and builds a runtime with the
+    /// loaded inventory and settings. Sync-only inventory plugins such as the
+    /// default `FileInventoryPlugin` are rejected.
+    #[staticmethod]
+    #[pyo3(signature = (path, plugin_manager=None))]
+    fn _from_settings_file_async_native(
+        py: Python<'_>,
+        path: String,
+        plugin_manager: Option<PyRef<'_, PyPluginManager>>,
+    ) -> PyResult<Py<PyAny>> {
+        let plugin_manager = if let Some(plugin_manager) = plugin_manager {
+            plugin_manager.take_inner()?
+        } else {
+            PyPluginManager::new().take_inner()?
+        };
+
+        future_into_py(py, async move {
+            let settings = Settings::from_file(&path).map_err(|err| {
+                PyValueError::new_err(format!("failed to load settings from {path}: {err}"))
+            })?;
+            build_runtime_from_settings_async(settings, plugin_manager, None).await
+        })
+        .map(Bound::unbind)
+    }
+
+    /// Creates a Genja runtime instance from a YAML or JSON settings file using strict async inventory loading.
+    ///
+    /// This public method returns a normal Python coroutine and delegates to the
+    /// native async helper only when awaited.
+    #[staticmethod]
+    #[pyo3(signature = (path, plugin_manager=None))]
+    fn from_settings_file_async(
+        py: Python<'_>,
+        path: Bound<'_, PyAny>,
+        plugin_manager: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let async_helpers = PyModule::import(py, "genja._async")?;
+        let helper = async_helpers.getattr("from_settings_file_async")?;
+        Ok(helper
+            .call1((PyGenja::type_object(py), path, plugin_manager))?
+            .unbind())
+    }
+
     /// Creates a Genja runtime instance from a YAML or JSON settings file.
     ///
     /// This method loads runtime configuration from a file, including inventory plugin
@@ -799,6 +914,90 @@ impl PyGenja {
                 ))
             })
             .collect()
+    }
+
+    /// Filters the runtime using a Python predicate over each selected host payload.
+    ///
+    /// This method creates a new runtime instance containing only hosts for which
+    /// `predicate(host)` returns a truthy value. The predicate receives the same transformed
+    /// host dictionary shape returned by [`PyGenja::iter_selected_hosts`]. Filtering is applied
+    /// to the current selection, so this method can be chained with `filter_by_key` and
+    /// `filter_by_key_value`. The original runtime instance remains unchanged.
+    ///
+    /// # Parameters
+    ///
+    /// * `predicate` - A Python callable that receives one host dictionary and returns a
+    ///   truthy value to keep the host or a falsy value to exclude it.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `PyResult<Self>` containing a new runtime instance with the filtered host
+    /// selection on success.
+    ///
+    /// # Errors
+    ///
+    /// This method will return an error if:
+    /// - `predicate` is not callable
+    /// - The inventory is not loaded or accessible
+    /// - A selected host payload cannot be converted to Python
+    /// - The predicate raises an exception or its return value cannot be evaluated as truthy
+    fn filter_hosts(&self, py: Python<'_>, predicate: Bound<'_, PyAny>) -> PyResult<Self> {
+        if !predicate.is_callable() {
+            return Err(PyTypeError::new_err(
+                "filter_hosts predicate must be callable",
+            ));
+        }
+
+        let selected_host_ids = self.host_ids();
+        let current_index = Cell::new(0usize);
+        let predicate_error: RefCell<Option<PyErr>> = RefCell::new(None);
+
+        let inner = self.inner.filter_hosts(|host| {
+            let index = current_index.get();
+            current_index.set(index.saturating_add(1));
+
+            if predicate_error.borrow().is_some() {
+                return false;
+            }
+
+            let host_id = selected_host_ids
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or("<unknown>");
+
+            let host_payload =
+                match entity_to_py_dict(py, host, "failed to convert selected host payload") {
+                    Ok(host_payload) => host_payload,
+                    Err(err) => {
+                        *predicate_error.borrow_mut() = Some(PyValueError::new_err(format!(
+                            "filter_hosts failed for host {host_id}: {err}"
+                        )));
+                        return false;
+                    }
+                };
+
+            match predicate
+                .call1((host_payload.bind(py),))
+                .and_then(|result| result.is_truthy())
+            {
+                Ok(keep) => keep,
+                Err(err) => {
+                    *predicate_error.borrow_mut() = Some(PyValueError::new_err(format!(
+                        "filter_hosts predicate failed for host {host_id}: {err}"
+                    )));
+                    false
+                }
+            }
+        });
+
+        if let Some(err) = predicate_error.into_inner() {
+            return Err(err);
+        }
+
+        let inner = inner.map_err(|err| {
+            PyValueError::new_err(format!("failed to filter hosts with predicate: {err}"))
+        })?;
+        Ok(Self { inner })
     }
 
     /// Filters the runtime to include only hosts that have a specific key in their payload.
@@ -1071,37 +1270,37 @@ impl PyGenja {
     /// - The runner plugin encounters an error during task execution
     /// - Task execution exceeds the maximum depth limit for sub-tasks
     /// - The task implementation raises an unhandled exception
-    #[pyo3(signature = (task_class, max_depth=None))]
+    #[pyo3(signature = (task_class, run_options=None))]
     fn run_task(
         &self,
         py: Python<'_>,
         task_class: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<PyTaskResults> {
-        task::run_task(py, &self.inner, task_class, max_depth)
+        task::run_task(py, &self.inner, task_class, run_options)
     }
 
-    #[pyo3(signature = (task_class, max_depth=None))]
+    #[pyo3(signature = (task_class, run_options=None))]
     fn _run_task_async_native(
         &self,
         py: Python<'_>,
         task_class: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        task::run_task_async(py, &self.inner, task_class, max_depth)
+        task::run_task_async(py, &self.inner, task_class, run_options)
     }
 
-    #[pyo3(signature = (task_class, max_depth=None))]
+    #[pyo3(signature = (task_class, run_options=None))]
     fn run_task_async(
         slf: PyRef<'_, Self>,
         py: Python<'_>,
         task_class: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let async_helpers = PyModule::import(py, "genja._async")?;
         let helper = async_helpers.getattr("run_task_async")?;
         Ok(helper
-            .call1((slf.into_pyobject(py)?, task_class, max_depth))?
+            .call1((slf.into_pyobject(py)?, task_class, run_options))?
             .unbind())
     }
 
@@ -1110,37 +1309,37 @@ impl PyGenja {
     /// Each entry in `tasks` is a root task definition and may declare its own
     /// nested sub-task tree. The returned list preserves input order, so
     /// `results[n]` corresponds to `tasks[n]`.
-    #[pyo3(signature = (tasks, max_depth=None))]
+    #[pyo3(signature = (tasks, run_options=None))]
     fn run_tasks(
         &self,
         py: Python<'_>,
         tasks: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Vec<PyTaskResults>> {
-        task::run_tasks(py, &self.inner, tasks, max_depth)
+        task::run_tasks(py, &self.inner, tasks, run_options)
     }
 
-    #[pyo3(signature = (tasks, max_depth=None))]
+    #[pyo3(signature = (tasks, run_options=None))]
     fn _run_tasks_async_native(
         &self,
         py: Python<'_>,
         tasks: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        task::run_tasks_async(py, &self.inner, tasks, max_depth)
+        task::run_tasks_async(py, &self.inner, tasks, run_options)
     }
 
-    #[pyo3(signature = (tasks, max_depth=None))]
+    #[pyo3(signature = (tasks, run_options=None))]
     fn run_tasks_async(
         slf: PyRef<'_, Self>,
         py: Python<'_>,
         tasks: Bound<'_, PyAny>,
-        max_depth: Option<usize>,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         let async_helpers = PyModule::import(py, "genja._async")?;
         let helper = async_helpers.getattr("run_tasks_async")?;
         Ok(helper
-            .call1((slf.into_pyobject(py)?, tasks, max_depth))?
+            .call1((slf.into_pyobject(py)?, tasks, run_options))?
             .unbind())
     }
 
@@ -1906,18 +2105,57 @@ fn build_runtime_from_settings(
     settings.validate().map_err(|err| {
         PyValueError::new_err(format!("failed to validate runtime settings: {err}"))
     })?;
-    let inventory = load_inventory_from_settings(&settings, &plugin_manager)
-        .map_err(|err| PyValueError::new_err(format!("failed to build Genja runtime: {err}")))?;
+    let inventory = load_inventory_from_settings(&settings, &plugin_manager).map_err(|err| {
+        PyValueError::new_err(format!(
+            "failed to build Genja runtime: {}",
+            format_python_inventory_error(&err)
+        ))
+    })?;
     build_runtime(inventory, Some(settings), plugin_manager, runner)
+}
+
+async fn build_runtime_from_settings_async(
+    settings: Settings,
+    plugin_manager: genja_plugin_manager::PluginManager,
+    runner: Option<&str>,
+) -> PyResult<PyGenja> {
+    settings.validate().map_err(|err| {
+        PyValueError::new_err(format!("failed to validate runtime settings: {err}"))
+    })?;
+    let inventory = load_inventory_from_settings_async_strict(&settings, &plugin_manager)
+        .await
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "failed to build Genja runtime: {}",
+                format_python_inventory_error(&err)
+            ))
+        })?;
+    build_runtime(inventory, Some(settings), plugin_manager, runner)
+}
+
+fn format_python_inventory_error(err: &GenjaError) -> String {
+    match err {
+        GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(name) => {
+            format!(
+                "async inventory plugin '{name}' requires async runtime construction.\n\nUse one of:\n- `await Genja.from_settings_async(...)`\n- `await Genja.from_settings_file_async(...)`"
+            )
+        }
+        GenjaError::SyncInventoryPluginRequiresSyncConstruction(name) => {
+            format!(
+                "sync inventory plugin '{name}' requires sync runtime construction.\n\nUse one of:\n- `Genja.from_settings(...)`\n- `Genja.from_settings_file(...)`\n\nOr change the inventory plugin to an async implementation before using an async constructor."
+            )
+        }
+        _ => err.to_string(),
+    }
 }
 
 /// Loads inventory from settings using the configured inventory plugin.
 ///
 /// This function loads the inventory by selecting and invoking the appropriate inventory
-/// plugin based on the settings configuration. It first checks if a specific plugin is
-/// configured in the settings. If no plugin is specified, it falls back to the default
-/// "FileInventoryPlugin". The function validates that the selected plugin exists and is
-/// actually an inventory plugin before attempting to load.
+/// plugin based on the settings configuration. Settings construction and deserialization
+/// are responsible for applying default inventory plugin values; this function treats the
+/// configured plugin name literally. The function validates that the selected plugin exists
+/// and is actually an inventory plugin before attempting to load.
 ///
 /// # Parameters
 ///
@@ -1940,7 +2178,7 @@ fn build_runtime_from_settings(
 /// - The configured inventory plugin is not found in the plugin manager
 /// - The configured plugin exists but is not an inventory plugin
 /// - The inventory plugin fails to load the inventory from the settings
-/// - The default "FileInventoryPlugin" cannot be found when no plugin is specified
+/// - The configured inventory plugin name is empty or cannot be found
 fn load_inventory_from_settings(
     settings: &Settings,
     plugin_manager: &genja_plugin_manager::PluginManager,
@@ -1948,32 +2186,52 @@ fn load_inventory_from_settings(
     let inventory_cfg = settings.inventory();
     let plugin_name = inventory_cfg.plugin();
 
-    if !plugin_name.is_empty() {
-        if let Some(plugin) = plugin_manager.get_inventory_plugin(plugin_name) {
-            return plugin
-                .load(settings, plugin_manager)
-                .map_err(GenjaError::from);
-        }
-
-        if plugin_manager.get_plugin(plugin_name).is_some() {
-            return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
-        }
-
-        return Err(GenjaError::PluginNotFound(plugin_name.to_string()));
-    }
-
-    let default_name = "FileInventoryPlugin";
-    if let Some(plugin) = plugin_manager.get_inventory_plugin(default_name) {
+    if let Some(plugin) = plugin_manager.get_inventory_plugin(plugin_name) {
         return plugin
             .load(settings, plugin_manager)
             .map_err(GenjaError::from);
     }
 
-    if plugin_manager.get_plugin(default_name).is_some() {
-        return Err(GenjaError::NotInventoryPlugin(default_name.to_string()));
+    if plugin_manager
+        .get_async_inventory_plugin(plugin_name)
+        .is_some()
+    {
+        return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
+            plugin_name.to_string(),
+        ));
     }
 
-    Err(GenjaError::PluginNotFound(default_name.to_string()))
+    if plugin_manager.get_plugin(plugin_name).is_some() {
+        return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
+    }
+
+    Err(GenjaError::PluginNotFound(plugin_name.to_string()))
+}
+
+async fn load_inventory_from_settings_async_strict(
+    settings: &Settings,
+    plugin_manager: &genja_plugin_manager::PluginManager,
+) -> Result<Inventory, GenjaError> {
+    let plugin_name = settings.inventory().plugin();
+
+    if let Some(plugin) = plugin_manager.get_async_inventory_plugin(plugin_name) {
+        return plugin
+            .load_async(settings, plugin_manager)
+            .await
+            .map_err(GenjaError::from);
+    }
+
+    if plugin_manager.get_inventory_plugin(plugin_name).is_some() {
+        return Err(GenjaError::SyncInventoryPluginRequiresSyncConstruction(
+            plugin_name.to_string(),
+        ));
+    }
+
+    if plugin_manager.get_plugin(plugin_name).is_some() {
+        return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
+    }
+
+    Err(GenjaError::PluginNotFound(plugin_name.to_string()))
 }
 
 #[cfg(test)]
@@ -2360,7 +2618,7 @@ mod tests {
                 .getattr("AsyncRuntimeTask")
                 .expect("task fixture should exist");
             let results = runtime
-                .run_task(py, task_class, Some(5))
+                .run_task(py, task_class, None)
                 .expect("task should execute through python runner");
 
             assert_eq!(

@@ -17,5 +17,5 @@ python /path/to/genja/genja/examples/python/basic_runtime.py
 python /path/to/genja/genja/examples/python/filter_hosts.py
 python /path/to/genja/genja/examples/python/run_task.py
 python /path/to/genja/genja/examples/python/run_task_tree.py
+python /path/to/genja/genja/examples/python/task_registration.py
 ```
-

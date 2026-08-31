@@ -61,8 +61,11 @@
 pub use ::async_trait::async_trait;
 pub use genja_core;
 pub use genja_core::GenjaError;
-use genja_core::inventory::{Host, Hosts, Inventory};
+use genja_core::inventory::{
+    Connection, ConnectionKey, Host, Hosts, Inventory, ResolvedConnectionParams,
+};
 use genja_core::settings::RunnerConfig;
+pub use genja_core::task::TaskRunOptions;
 use genja_core::task::{
     Task, TaskConnectionResolver, TaskDefinition, TaskInfo, TaskProcessorResolver, TaskResults,
     TaskResultsSummary, Tasks,
@@ -125,19 +128,24 @@ struct RuntimeTaskConnectionResolver {
 }
 
 impl RuntimeTaskConnectionResolver {
+    /// Create a resolver backed by the runtime inventory.
+    ///
+    /// The resolver uses the inventory for both connection parameter resolution and
+    /// access to the shared connection manager cache.
     fn new(inventory: Arc<Inventory>) -> Self {
         Self { inventory }
     }
-}
 
-#[async_trait]
-impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
-    async fn resolve_task_connection(
+    /// Resolve the task's connection key and current inventory parameters.
+    ///
+    /// Both normal connection opening and post-change connection replacement use this
+    /// helper so replacement re-reads the host's resolved connection parameters before
+    /// creating the new connection instance.
+    fn task_connection_key_and_params(
         &self,
         task: &dyn Task,
         hostname: &str,
-    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn genja_core::inventory::Connection>>>, GenjaError>
-    {
+    ) -> Result<Option<(ConnectionKey, ResolvedConnectionParams)>, GenjaError> {
         let Some(key) = task.get_connection_key(hostname) else {
             return Ok(None);
         };
@@ -152,9 +160,49 @@ impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
                 ))
             })?;
 
+        Ok(Some((key, params)))
+    }
+}
+
+#[async_trait]
+impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
+    /// Open or retrieve the task connection through the inventory connection manager.
+    ///
+    /// This preserves the normal runtime behavior of caching connections by
+    /// `ConnectionKey` while ensuring the returned connection has been opened.
+    async fn resolve_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, GenjaError> {
+        let Some((key, params)) = self.task_connection_key_and_params(task, hostname)? else {
+            return Ok(None);
+        };
+
         self.inventory
             .connections()
             .open_connection(&key, &params)
+            .await
+            .map_err(GenjaError::Message)
+    }
+
+    /// Replace the task connection through the inventory connection manager.
+    ///
+    /// This path is used by session verification after a changed task result. It
+    /// delegates cache eviction, old-connection close, new instance creation, and
+    /// authentication to `ConnectionManager::replace_connection`.
+    async fn replace_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, GenjaError> {
+        let Some((key, params)) = self.task_connection_key_and_params(task, hostname)? else {
+            return Ok(None);
+        };
+
+        self.inventory
+            .connections()
+            .replace_connection(&key, &params)
             .await
             .map_err(GenjaError::Message)
     }
@@ -292,6 +340,56 @@ impl Genja {
         Self::from_validated_settings(settings)
     }
 
+    /// Creates a `Genja` instance from an already constructed settings object using async inventory loading.
+    ///
+    /// Validates the supplied settings, initializes plugins, and loads inventory
+    /// using the async inventory plugin configured by `settings.inventory()`. This
+    /// is the strict async programmatic equivalent of [`Self::from_settings`].
+    ///
+    /// This constructor does not fall back to synchronous inventory plugins. If
+    /// the configured inventory plugin is sync-only, runtime construction fails with
+    /// `GenjaError::SyncInventoryPluginRequiresSyncConstruction`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(GenjaError::ConfigLoad)` if settings validation fails.
+    ///
+    /// Returns `Err(GenjaError::PluginLoad)` if plugin discovery or dynamic plugin
+    /// loading fails.
+    ///
+    /// Returns inventory-related errors from loading the configured async inventory
+    /// plugin, including `GenjaError::InventoryLoad`, `GenjaError::PluginNotFound`,
+    /// `GenjaError::NotInventoryPlugin`, and
+    /// `GenjaError::SyncInventoryPluginRequiresSyncConstruction`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use genja::Genja;
+    /// use genja_core::settings::InventoryConfig;
+    /// use genja_core::Settings;
+    ///
+    /// # async fn build_runtime() -> Result<(), Box<dyn std::error::Error>> {
+    /// let settings = Settings::builder()
+    ///     .inventory(
+    ///         InventoryConfig::builder()
+    ///             .plugin("api_inventory")
+    ///             .build(),
+    ///     )
+    ///     .build();
+    ///
+    /// let genja = Genja::from_settings_async(settings).await?;
+    /// assert!(genja.inventory_loaded());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn from_settings_async(settings: Settings) -> Result<Self, GenjaError> {
+        settings
+            .validate()
+            .map_err(|err| GenjaError::ConfigLoad(ConfigLoadError::SshConfig(err)))?;
+        Self::from_validated_settings_async(settings).await
+    }
+
     fn from_validated_settings(settings: Settings) -> Result<Self, GenjaError> {
         let mut genja = Self::new();
         genja.set_settings(settings);
@@ -300,16 +398,27 @@ impl Genja {
         Ok(genja)
     }
 
+    async fn from_validated_settings_async(settings: Settings) -> Result<Self, GenjaError> {
+        let mut genja = Self::new();
+        genja.set_settings(settings);
+        genja.load_plugins()?;
+        genja.load_inventory_from_settings_async_strict().await?;
+        Ok(genja)
+    }
+
     /// Creates a `Genja` instance from a settings file path using async inventory loading.
     ///
-    /// This follows the same flow as [`Self::from_settings_file`], but allows
-    /// async inventory plugins to participate in runtime construction.
+    /// This follows the same flow as [`Self::from_settings_file`], but requires
+    /// the selected inventory plugin to be registered as an async inventory
+    /// plugin. If the configured inventory plugin, or default
+    /// `FileInventoryPlugin`, is sync-only, runtime construction fails with
+    /// `GenjaError::SyncInventoryPluginRequiresSyncConstruction`.
     pub async fn from_settings_file_async(settings_file_path: &str) -> Result<Self, GenjaError> {
         let settings = Settings::from_file(settings_file_path).map_err(GenjaError::from)?;
         let mut genja = Self::new();
         genja.set_settings(settings);
         genja.load_plugins()?;
-        genja.load_inventory_from_settings_async().await?;
+        genja.load_inventory_from_settings_async_strict().await?;
         Ok(genja)
     }
 
@@ -326,37 +435,9 @@ impl Genja {
     /// - `GenjaError::InventoryLoad` - Inventory loading failed
     fn load_inventory_from_settings(&mut self) -> Result<(), GenjaError> {
         self.ensure_plugins_loaded()?;
-        let inventory_cfg = self.settings.inventory();
-        let plugin_name = inventory_cfg.plugin();
+        let plugin_name = self.settings.inventory().plugin();
 
-        if !plugin_name.is_empty() {
-            if let Some(plugin) = self.plugins.get_inventory_plugin(plugin_name) {
-                let inventory = plugin
-                    .load(&self.settings, &self.plugins)
-                    .map_err(GenjaError::from)?;
-                self.load_inventory(inventory);
-                return Ok(());
-            }
-
-            if self
-                .plugins
-                .get_async_inventory_plugin(plugin_name)
-                .is_some()
-            {
-                return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
-                    plugin_name.to_string(),
-                ));
-            }
-
-            if self.plugins.get_plugin(plugin_name).is_some() {
-                return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
-            }
-
-            return Err(GenjaError::PluginNotFound(plugin_name.to_string()));
-        }
-
-        let default_name = "FileInventoryPlugin";
-        if let Some(plugin) = self.plugins.get_inventory_plugin(default_name) {
+        if let Some(plugin) = self.plugins.get_inventory_plugin(plugin_name) {
             let inventory = plugin
                 .load(&self.settings, &self.plugins)
                 .map_err(GenjaError::from)?;
@@ -366,53 +447,32 @@ impl Genja {
 
         if self
             .plugins
-            .get_async_inventory_plugin(default_name)
+            .get_async_inventory_plugin(plugin_name)
             .is_some()
         {
             return Err(GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(
-                default_name.to_string(),
+                plugin_name.to_string(),
             ));
         }
 
-        if self.plugins.get_plugin(default_name).is_some() {
-            return Err(GenjaError::NotInventoryPlugin(default_name.to_string()));
+        if self.plugins.get_plugin(plugin_name).is_some() {
+            return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
         }
 
-        Err(GenjaError::PluginNotFound(default_name.to_string()))
+        Err(GenjaError::PluginNotFound(plugin_name.to_string()))
     }
 
-    async fn load_inventory_from_settings_async(&mut self) -> Result<(), GenjaError> {
+    /// Loads inventory from settings using only async inventory plugins.
+    ///
+    /// This helper enforces the strict async contract used by
+    /// [`Self::from_settings_async`]. It rejects sync-only inventory plugins with
+    /// `GenjaError::SyncInventoryPluginRequiresSyncConstruction` instead of
+    /// falling back to synchronous loading.
+    async fn load_inventory_from_settings_async_strict(&mut self) -> Result<(), GenjaError> {
         self.ensure_plugins_loaded()?;
-        let inventory_cfg = self.settings.inventory();
-        let plugin_name = inventory_cfg.plugin();
+        let plugin_name = self.settings.inventory().plugin();
 
-        if !plugin_name.is_empty() {
-            if let Some(plugin) = self.plugins.get_async_inventory_plugin(plugin_name) {
-                let inventory = plugin
-                    .load_async(&self.settings, &self.plugins)
-                    .await
-                    .map_err(GenjaError::from)?;
-                self.load_inventory(inventory);
-                return Ok(());
-            }
-
-            if let Some(plugin) = self.plugins.get_inventory_plugin(plugin_name) {
-                let inventory = plugin
-                    .load(&self.settings, &self.plugins)
-                    .map_err(GenjaError::from)?;
-                self.load_inventory(inventory);
-                return Ok(());
-            }
-
-            if self.plugins.get_plugin(plugin_name).is_some() {
-                return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
-            }
-
-            return Err(GenjaError::PluginNotFound(plugin_name.to_string()));
-        }
-
-        let default_name = "FileInventoryPlugin";
-        if let Some(plugin) = self.plugins.get_async_inventory_plugin(default_name) {
+        if let Some(plugin) = self.plugins.get_async_inventory_plugin(plugin_name) {
             let inventory = plugin
                 .load_async(&self.settings, &self.plugins)
                 .await
@@ -421,19 +481,17 @@ impl Genja {
             return Ok(());
         }
 
-        if let Some(plugin) = self.plugins.get_inventory_plugin(default_name) {
-            let inventory = plugin
-                .load(&self.settings, &self.plugins)
-                .map_err(GenjaError::from)?;
-            self.load_inventory(inventory);
-            return Ok(());
+        if self.plugins.get_inventory_plugin(plugin_name).is_some() {
+            return Err(GenjaError::SyncInventoryPluginRequiresSyncConstruction(
+                plugin_name.to_string(),
+            ));
         }
 
-        if self.plugins.get_plugin(default_name).is_some() {
-            return Err(GenjaError::NotInventoryPlugin(default_name.to_string()));
+        if self.plugins.get_plugin(plugin_name).is_some() {
+            return Err(GenjaError::NotInventoryPlugin(plugin_name.to_string()));
         }
 
-        Err(GenjaError::PluginNotFound(default_name.to_string()))
+        Err(GenjaError::PluginNotFound(plugin_name.to_string()))
     }
 
     /// Loads plugins from the executable-relative plugin directory.
@@ -957,11 +1015,27 @@ impl Genja {
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
         ensure_sync_execution_outside_tokio("run_task()", "run_task_async()")?;
+        self.run_task_with_options(task, TaskRunOptions::new(max_depth))
+    }
+
+    /// Executes a task using explicit runtime options.
+    ///
+    /// Use this when the invocation needs controls beyond the required maximum
+    /// depth argument accepted by [`Self::run_task`], such as dry-run mode.
+    pub fn run_task_with_options<T: Task + 'static>(
+        &self,
+        task: T,
+        run_options: TaskRunOptions,
+    ) -> Result<TaskResults, GenjaError> {
+        ensure_sync_execution_outside_tokio(
+            "run_task_with_options()",
+            "run_task_with_options_async()",
+        )?;
         let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_task_async(task, max_depth))
+        runtime.block_on(self.run_task_with_options_async(task, run_options))
     }
 
     /// Executes a task against the currently selected hosts using the configured runner plugin.
@@ -974,15 +1048,29 @@ impl Genja {
         task: T,
         max_depth: usize,
     ) -> Result<TaskResults, GenjaError> {
-        self.run_task_definition_async(TaskDefinition::new(task), max_depth)
+        self.run_task_with_options_async(task, TaskRunOptions::new(max_depth))
+            .await
+    }
+
+    /// Executes a task asynchronously using explicit runtime options.
+    ///
+    /// Use this when the invocation needs controls beyond the required maximum
+    /// depth argument accepted by [`Self::run_task_async`], such as dry-run mode.
+    pub async fn run_task_with_options_async<T: Task + 'static>(
+        &self,
+        task: T,
+        run_options: TaskRunOptions,
+    ) -> Result<TaskResults, GenjaError> {
+        self.run_task_definition_async(TaskDefinition::new(task), run_options)
             .await
     }
 
     async fn run_task_definition_async(
         &self,
         task_definition: TaskDefinition,
-        max_depth: usize,
+        run_options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
+        let max_depth = run_options.max_depth();
         let hosts = self.selected_hosts()?;
         let host_count = hosts.len();
         let inventory = self
@@ -1013,7 +1101,7 @@ impl Genja {
                 &hosts,
                 Some(connection_resolver),
                 self.settings.runner(),
-                max_depth,
+                run_options,
             )
             .await?;
         let summary = results.task_summary();
@@ -1032,11 +1120,27 @@ impl Genja {
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         ensure_sync_execution_outside_tokio("run_tasks()", "run_tasks_async()")?;
+        self.run_tasks_with_options(tasks, TaskRunOptions::new(max_depth))
+    }
+
+    /// Executes an ordered list of root task trees using explicit runtime options.
+    ///
+    /// Use this when the invocation needs controls beyond the required maximum
+    /// depth argument accepted by [`Self::run_tasks`], such as dry-run mode.
+    pub fn run_tasks_with_options(
+        &self,
+        tasks: Tasks,
+        run_options: TaskRunOptions,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        ensure_sync_execution_outside_tokio(
+            "run_tasks_with_options()",
+            "run_tasks_with_options_async()",
+        )?;
         let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_tasks_async(tasks, max_depth))
+        runtime.block_on(self.run_tasks_with_options_async(tasks, run_options))
     }
 
     /// Executes an ordered list of root task trees using the configured runner plugin.
@@ -1046,9 +1150,23 @@ impl Genja {
     /// async application work.
     pub async fn run_tasks_async(
         &self,
-        mut tasks: Tasks,
+        tasks: Tasks,
         max_depth: usize,
     ) -> Result<Vec<TaskResults>, GenjaError> {
+        self.run_tasks_with_options_async(tasks, TaskRunOptions::new(max_depth))
+            .await
+    }
+
+    /// Executes an ordered list of root task trees asynchronously using explicit runtime options.
+    ///
+    /// Use this when the invocation needs controls beyond the required maximum
+    /// depth argument accepted by [`Self::run_tasks_async`], such as dry-run mode.
+    pub async fn run_tasks_with_options_async(
+        &self,
+        mut tasks: Tasks,
+        run_options: TaskRunOptions,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        let max_depth = run_options.max_depth();
         let hosts = self.selected_hosts()?;
         let host_count = hosts.len();
         let inventory = self
@@ -1085,7 +1203,7 @@ impl Genja {
                 &hosts,
                 Some(connection_resolver),
                 self.settings.runner(),
-                max_depth,
+                run_options,
             )
             .await?;
         for result in &results {
@@ -1173,7 +1291,7 @@ impl Default for Genja {
 
 #[cfg(test)]
 mod tests {
-    use super::{Genja, GenjaError, genja_task};
+    use super::{Genja, GenjaError, RuntimeTaskConnectionResolver, TaskRunOptions, genja_task};
     use async_trait::async_trait;
     use genja_core::Settings;
     use genja_core::inventory::{
@@ -1183,14 +1301,16 @@ mod tests {
     use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig, SSHConfig};
     use genja_core::task::RetryConfig;
     use genja_core::task::{
-        BlockingTaskRuntimeContext, HostTaskResult, Task, TaskDefinition, TaskError,
-        TaskExecutionMode, TaskFailure, TaskInfo, TaskRuntimeContext, TaskSuccess, Tasks,
+        BlockingTaskRuntimeContext, HostTaskResult, Task, TaskConnectionResolver, TaskDefinition,
+        TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskRuntimeContext,
+        TaskSuccess, Tasks,
     };
     use genja_plugin_manager::PluginManager;
     use genja_plugin_manager::plugin_types::{
         AsyncPluginInventory, Plugin, PluginConnection, Plugins,
     };
     use serde_json::{Value, json};
+    use std::collections::HashMap;
     use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1410,8 +1530,47 @@ mod tests {
         alive: bool,
     }
 
+    #[derive(Debug)]
+    struct SessionVerificationConnectionPlugin {
+        key: Option<ConnectionKey>,
+        open_counts: Arc<Mutex<HashMap<String, usize>>>,
+        close_count: Arc<AtomicUsize>,
+        fail_replacement_for_host: Option<&'static str>,
+        alive: bool,
+    }
+
     struct ConnectionAwareTask {
         saw_connection: Arc<AtomicBool>,
+    }
+
+    struct RuntimeSessionVerificationTask {
+        start_calls: Arc<AtomicUsize>,
+    }
+
+    struct UnsupportedDryRunTask {
+        start_calls: Arc<AtomicUsize>,
+    }
+
+    struct AsyncDryRunRuntimeTask {
+        start_calls: Arc<AtomicUsize>,
+        dry_run_calls: Arc<AtomicUsize>,
+        saw_dry_run_context: Arc<AtomicBool>,
+    }
+
+    struct BlockingDryRunRuntimeTask {
+        start_calls: Arc<AtomicUsize>,
+        dry_run_calls: Arc<AtomicUsize>,
+        saw_dry_run_context: Arc<AtomicBool>,
+    }
+
+    struct DryRunConnectionAwareTask {
+        start_calls: Arc<AtomicUsize>,
+        saw_connection: Arc<AtomicBool>,
+        saw_dry_run_context: Arc<AtomicBool>,
+    }
+
+    struct FlakyDryRunTask {
+        attempts: Arc<AtomicUsize>,
     }
 
     struct BlockingSuccessTask;
@@ -1611,6 +1770,52 @@ mod tests {
         }
     }
 
+    impl Plugin for SessionVerificationConnectionPlugin {
+        fn name(&self) -> String {
+            "session-test".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl PluginConnection for SessionVerificationConnectionPlugin {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn PluginConnection> {
+            Box::new(Self {
+                key: Some(key.clone()),
+                open_counts: Arc::clone(&self.open_counts),
+                close_count: Arc::clone(&self.close_count),
+                fail_replacement_for_host: self.fail_replacement_for_host,
+                alive: false,
+            })
+        }
+
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            let key = self.key.as_ref().expect("connection key should be set");
+            let mut open_counts = self
+                .open_counts
+                .lock()
+                .expect("open counts lock should not be poisoned");
+            let count = open_counts.entry(key.hostname.clone()).or_default();
+            *count += 1;
+            if Some(key.hostname.as_str()) == self.fail_replacement_for_host && *count > 1 {
+                return Err("replacement session failed".to_string());
+            }
+            self.alive = true;
+            Ok(())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.alive = false;
+            self.close_count.fetch_add(1, Ordering::SeqCst);
+            self.key
+                .clone()
+                .unwrap_or_else(|| ConnectionKey::new("", "session-test"))
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+    }
+
     impl TaskInfo for ConnectionAwareTask {
         fn name(&self) -> &str {
             "connection-aware"
@@ -1642,6 +1847,176 @@ mod tests {
 
         fn execution_mode(&self) -> TaskExecutionMode {
             TaskExecutionMode::Async
+        }
+    }
+
+    #[genja_task(
+        name = "runtime-session-verification",
+        connection_plugin_name = "session-test",
+        session_verification(max_attempts = 1)
+    )]
+    impl RuntimeSessionVerificationTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("changed"),
+            ))
+        }
+    }
+
+    impl TaskInfo for UnsupportedDryRunTask {
+        fn name(&self) -> &str {
+            "unsupported-dry-run"
+        }
+    }
+
+    #[async_trait]
+    impl Task for UnsupportedDryRunTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[genja_task(name = "async-dry-run-runtime", supports_dry_run = true)]
+    impl AsyncDryRunRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary("started"),
+            ))
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.dry_run_calls.fetch_add(1, Ordering::SeqCst);
+            self.saw_dry_run_context
+                .store(context.dry_run(), Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("planned"),
+            ))
+        }
+    }
+
+    #[genja_task(name = "blocking-dry-run-runtime", supports_dry_run = true)]
+    impl BlockingDryRunRuntimeTask {
+        fn start(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary("started"),
+            ))
+        }
+
+        fn dry_run(
+            &self,
+            _host: &Host,
+            context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.dry_run_calls.fetch_add(1, Ordering::SeqCst);
+            self.saw_dry_run_context
+                .store(context.dry_run(), Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("planned"),
+            ))
+        }
+    }
+
+    #[genja_task(
+        name = "dry-run-connection-aware",
+        connection_plugin_name = "test",
+        supports_dry_run = true
+    )]
+    impl DryRunConnectionAwareTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.saw_dry_run_context
+                .store(context.dry_run(), Ordering::SeqCst);
+            let alive = if let Some(connection) = context.connection() {
+                let guard = connection.lock().await;
+                guard.is_alive()
+            } else {
+                false
+            };
+            self.saw_connection.store(alive, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_changed(alive),
+            ))
+        }
+    }
+
+    #[genja_task(
+        name = "flaky-dry-run",
+        supports_dry_run = true,
+        retry(allow = true, max_attempts = 3)
+    )]
+    impl FlakyDryRunTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary("started"),
+            ))
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt == 1 {
+                return Ok(HostTaskResult::failed(
+                    TaskFailure::new(std::io::Error::other("temporary dry-run failure"))
+                        .with_retryable(true),
+                ));
+            }
+
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary("dry-run recovered"),
+            ))
         }
     }
 
@@ -1712,6 +2087,50 @@ mod tests {
         hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
 
         Inventory::builder().hosts(hosts).build()
+    }
+
+    fn session_verification_plugin_manager(
+        open_counts: Arc<Mutex<HashMap<String, usize>>>,
+        close_count: Arc<AtomicUsize>,
+        fail_replacement_for_host: Option<&'static str>,
+    ) -> PluginManager {
+        let mut plugin_manager = PluginManager::new();
+        plugin_manager.register_plugin(Plugins::Connection(Box::new(
+            SessionVerificationConnectionPlugin {
+                key: None,
+                open_counts,
+                close_count,
+                fail_replacement_for_host,
+                alive: false,
+            },
+        )));
+        plugin_manager
+    }
+
+    fn genja_with_session_verification_connection(
+        runner_plugin: &str,
+        open_counts: Arc<Mutex<HashMap<String, usize>>>,
+        close_count: Arc<AtomicUsize>,
+        fail_replacement_for_host: Option<&'static str>,
+    ) -> Genja {
+        let settings = Settings::builder()
+            .runner(
+                RunnerConfig::builder()
+                    .plugin(runner_plugin)
+                    .worker_count(2)
+                    .build(),
+            )
+            .build();
+
+        Genja::builder(test_inventory())
+            .with_settings(settings)
+            .with_plugin_manager(session_verification_plugin_manager(
+                open_counts,
+                close_count,
+                fail_replacement_for_host,
+            ))
+            .build()
+            .expect("genja should build with session verification connection plugin")
     }
 
     fn test_inventory_with_data() -> Inventory {
@@ -2045,12 +2464,140 @@ mod tests {
             .enable_all()
             .build()
             .expect("test runtime should build")
-            .block_on(genja.load_inventory_from_settings_async())
+            .block_on(genja.load_inventory_from_settings_async_strict())
             .expect("async settings load should support async inventory plugins");
 
         assert!(genja.inventory_loaded());
         assert_eq!(genja.host_ids().len(), 1);
         assert_eq!(genja.host_ids()[0].as_str(), "router1");
+    }
+
+    #[test]
+    fn from_settings_async_loads_async_inventory_from_programmatic_settings() {
+        let mut plugin_manager = genja_plugin_manager::PluginManager::new();
+        plugin_manager.register_plugin(Plugins::AsyncInventory(Box::new(TestAsyncInventoryPlugin)));
+
+        let settings = Settings::builder()
+            .inventory(InventoryConfig::builder().plugin("async_inventory").build())
+            .runner(RunnerConfig::builder().plugin("serial").build())
+            .build();
+
+        let mut genja = Genja::new();
+        genja.set_settings(settings);
+        genja.plugins = Arc::new(plugin_manager);
+        genja.plugins_loaded = true;
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(genja.load_inventory_from_settings_async_strict())
+            .expect("strict async settings load should support async inventory plugins");
+
+        assert!(genja.inventory_loaded());
+        assert_eq!(genja.host_ids().len(), 1);
+        assert_eq!(genja.host_ids()[0].as_str(), "router1");
+        assert_eq!(genja.settings().inventory().plugin(), "async_inventory");
+        assert_eq!(genja.settings().runner().plugin(), "serial");
+    }
+
+    #[test]
+    fn from_settings_async_rejects_sync_only_inventory_plugin() {
+        let settings = Settings::default();
+
+        let error = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(Genja::from_settings_async(settings))
+            .expect_err("strict async settings load should reject sync-only default inventory");
+
+        assert!(matches!(
+            error,
+            GenjaError::SyncInventoryPluginRequiresSyncConstruction(name)
+                if name == "FileInventoryPlugin"
+        ));
+    }
+
+    #[test]
+    fn from_settings_async_returns_missing_inventory_plugin_error() {
+        let settings = Settings::builder()
+            .inventory(
+                InventoryConfig::builder()
+                    .plugin("missing_inventory")
+                    .build(),
+            )
+            .build();
+
+        let error = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(Genja::from_settings_async(settings))
+            .expect_err("missing async inventory plugin should be rejected");
+
+        assert!(matches!(error, GenjaError::PluginNotFound(name) if name == "missing_inventory"));
+    }
+
+    #[test]
+    fn from_settings_async_returns_not_inventory_plugin_error() {
+        let settings = Settings::builder()
+            .inventory(InventoryConfig::builder().plugin("serial").build())
+            .build();
+
+        let error = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(Genja::from_settings_async(settings))
+            .expect_err("non-inventory plugin should be rejected");
+
+        assert!(matches!(error, GenjaError::NotInventoryPlugin(name) if name == "serial"));
+    }
+
+    #[test]
+    fn from_settings_async_validates_programmatic_settings() {
+        let settings = Settings::builder()
+            .ssh(
+                SSHConfig::builder()
+                    .config_file("/nonexistent/genja/ssh_config")
+                    .build(),
+            )
+            .build();
+
+        let error = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(Genja::from_settings_async(settings))
+            .expect_err("invalid programmatic settings should be rejected");
+
+        assert!(matches!(error, GenjaError::ConfigLoad(_)));
+    }
+
+    #[test]
+    fn from_settings_file_async_rejects_sync_only_inventory_plugin() {
+        let temp_dir = temp_test_dir("from-settings-file-async-strict");
+        let settings_path = temp_dir.join("settings.yaml");
+        fs::write(&settings_path, "").expect("settings file should be written");
+
+        let error = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(Genja::from_settings_file_async(
+                settings_path.to_str().unwrap(),
+            ))
+            .expect_err(
+                "settings-file async constructor should reject sync-only default inventory",
+            );
+
+        assert!(matches!(
+            error,
+            GenjaError::SyncInventoryPluginRequiresSyncConstruction(name)
+                if name == "FileInventoryPlugin"
+        ));
+        fs::remove_dir_all(&temp_dir).unwrap_or(());
     }
 
     #[test]
@@ -2186,6 +2733,301 @@ mod tests {
             assert!(host_result.execution_metadata().retried());
             assert!(!host_result.execution_metadata().retry_exhausted());
         }
+    }
+
+    #[test]
+    fn run_verifies_replacement_sessions_across_serial_and_threaded_runners() {
+        for runner_plugin in ["serial", "threaded"] {
+            let open_counts = Arc::new(Mutex::new(HashMap::new()));
+            let close_count = Arc::new(AtomicUsize::new(0));
+            let start_calls = Arc::new(AtomicUsize::new(0));
+            let genja = genja_with_session_verification_connection(
+                runner_plugin,
+                Arc::clone(&open_counts),
+                Arc::clone(&close_count),
+                None,
+            );
+
+            let results = genja
+                .run_task(
+                    RuntimeSessionVerificationTask {
+                        start_calls: Arc::clone(&start_calls),
+                    },
+                    0,
+                )
+                .expect("session verification should succeed");
+
+            assert_eq!(results.passed_hosts().len(), 2);
+            assert_eq!(start_calls.load(Ordering::SeqCst), 2);
+            assert_eq!(close_count.load(Ordering::SeqCst), 2);
+            assert_eq!(
+                *open_counts
+                    .lock()
+                    .expect("open counts lock should not be poisoned"),
+                HashMap::from([("router1".to_string(), 2), ("router2".to_string(), 2),])
+            );
+
+            for hostname in ["router1", "router2"] {
+                let host_result = results.host_result(hostname).expect("host result");
+                assert!(host_result.is_passed(), "{runner_plugin} {hostname}");
+                let metadata = host_result
+                    .execution_metadata()
+                    .session_verification()
+                    .expect("session verification metadata should be recorded");
+                assert!(metadata.requested());
+                assert_eq!(metadata.attempts(), 1);
+                assert!(metadata.new_session_established());
+            }
+        }
+    }
+
+    #[test]
+    fn threaded_runner_continues_other_hosts_after_session_verification_failure() {
+        let open_counts = Arc::new(Mutex::new(HashMap::new()));
+        let close_count = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let genja = genja_with_session_verification_connection(
+            "threaded",
+            Arc::clone(&open_counts),
+            Arc::clone(&close_count),
+            Some("router1"),
+        );
+
+        let results = genja
+            .run_task(
+                RuntimeSessionVerificationTask {
+                    start_calls: Arc::clone(&start_calls),
+                },
+                0,
+            )
+            .expect("threaded runner should capture host-scoped verification failure");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(results.failed_hosts().len(), 1);
+        assert_eq!(results.passed_hosts().len(), 1);
+        assert_eq!(
+            *open_counts
+                .lock()
+                .expect("open counts lock should not be poisoned"),
+            HashMap::from([("router1".to_string(), 2), ("router2".to_string(), 2),])
+        );
+
+        let router1 = results.host_result("router1").expect("router1 result");
+        let failure = router1.failure().expect("router1 should fail");
+        assert!(matches!(failure.kind(), TaskFailureKind::Connection));
+        assert!(
+            failure
+                .message()
+                .contains("new management session could not be established")
+        );
+        let metadata = router1
+            .execution_metadata()
+            .session_verification()
+            .expect("failure should record verification metadata");
+        assert!(metadata.requested());
+        assert_eq!(metadata.attempts(), 1);
+        assert!(!metadata.new_session_established());
+
+        let router2 = results.host_result("router2").expect("router2 result");
+        assert!(router2.is_passed());
+        let metadata = router2
+            .execution_metadata()
+            .session_verification()
+            .expect("success should record verification metadata");
+        assert!(metadata.new_session_established());
+    }
+
+    #[test]
+    fn run_task_with_options_dry_run_calls_async_dry_run_not_start() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let dry_run_calls = Arc::new(AtomicUsize::new(0));
+        let saw_dry_run_context = Arc::new(AtomicBool::new(false));
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja
+            .run_task_with_options(
+                AsyncDryRunRuntimeTask {
+                    start_calls: Arc::clone(&start_calls),
+                    dry_run_calls: Arc::clone(&dry_run_calls),
+                    saw_dry_run_context: Arc::clone(&saw_dry_run_context),
+                },
+                TaskRunOptions::new(0).with_dry_run(true),
+            )
+            .expect("dry-run should execute");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(dry_run_calls.load(Ordering::SeqCst), 2);
+        assert!(saw_dry_run_context.load(Ordering::SeqCst));
+        for (_, host_result) in results.hosts().iter() {
+            assert!(host_result.is_passed());
+            assert!(host_result.execution_metadata().dry_run());
+            assert!(
+                host_result
+                    .success()
+                    .is_some_and(|success| success.changed())
+            );
+        }
+    }
+
+    #[test]
+    fn run_task_with_options_dry_run_calls_blocking_dry_run_not_start() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let dry_run_calls = Arc::new(AtomicUsize::new(0));
+        let saw_dry_run_context = Arc::new(AtomicBool::new(false));
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja
+            .run_task_with_options(
+                BlockingDryRunRuntimeTask {
+                    start_calls: Arc::clone(&start_calls),
+                    dry_run_calls: Arc::clone(&dry_run_calls),
+                    saw_dry_run_context: Arc::clone(&saw_dry_run_context),
+                },
+                TaskRunOptions::new(0).with_dry_run(true),
+            )
+            .expect("blocking dry-run should execute");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(dry_run_calls.load(Ordering::SeqCst), 2);
+        assert!(saw_dry_run_context.load(Ordering::SeqCst));
+        for (_, host_result) in results.hosts().iter() {
+            assert!(host_result.is_passed());
+            assert!(host_result.execution_metadata().dry_run());
+        }
+    }
+
+    #[test]
+    fn run_task_with_options_dry_run_fails_unsupported_task_without_start() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let genja = Genja::from_inventory(test_inventory());
+
+        let results = genja
+            .run_task_with_options(
+                UnsupportedDryRunTask {
+                    start_calls: Arc::clone(&start_calls),
+                },
+                TaskRunOptions::new(0).with_dry_run(true),
+            )
+            .expect("unsupported dry-run should be captured in results");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        for (_, host_result) in results.hosts().iter() {
+            let failure = host_result.failure().expect("host should fail");
+            assert!(matches!(
+                failure.kind(),
+                genja_core::task::TaskFailureKind::Unsupported
+            ));
+            assert!(failure.message().contains("does not support dry-run"));
+            assert!(host_result.execution_metadata().dry_run());
+        }
+    }
+
+    #[test]
+    fn run_task_with_options_dry_run_opens_declared_connections() {
+        let mut plugin_manager = PluginManager::new();
+        plugin_manager.register_plugin(Plugins::Connection(Box::new(TestConnectionPlugin)));
+        let saw_connection = Arc::new(AtomicBool::new(false));
+        let saw_dry_run_context = Arc::new(AtomicBool::new(false));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let genja = Genja::builder(test_inventory())
+            .with_plugin_manager(plugin_manager)
+            .build()
+            .expect("genja should build with test connection plugin");
+
+        let results = genja
+            .run_task_with_options(
+                DryRunConnectionAwareTask {
+                    start_calls: Arc::clone(&start_calls),
+                    saw_connection: Arc::clone(&saw_connection),
+                    saw_dry_run_context: Arc::clone(&saw_dry_run_context),
+                },
+                TaskRunOptions::new(0).with_dry_run(true),
+            )
+            .expect("dry-run should resolve connection");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        assert!(saw_connection.load(Ordering::SeqCst));
+        assert!(saw_dry_run_context.load(Ordering::SeqCst));
+        assert_eq!(results.passed_hosts().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn runtime_task_connection_resolver_replaces_cached_connection() {
+        let inventory = Arc::new(test_inventory());
+        let factory_calls = Arc::new(AtomicUsize::new(0));
+        let factory_calls_for_factory = Arc::clone(&factory_calls);
+        inventory
+            .connections()
+            .set_connection_factory(Arc::new(move |key: &ConnectionKey| {
+                factory_calls_for_factory.fetch_add(1, Ordering::SeqCst);
+                Some(Arc::new(tokio::sync::Mutex::new(TestRuntimeConnection {
+                    key: key.clone(),
+                    alive: false,
+                }))
+                    as Arc<tokio::sync::Mutex<dyn Connection>>)
+            }));
+
+        let resolver = RuntimeTaskConnectionResolver::new(Arc::clone(&inventory));
+        let task = ConnectionAwareTask {
+            saw_connection: Arc::new(AtomicBool::new(false)),
+        };
+        let key = ConnectionKey::new("router1", "test");
+
+        let first = resolver
+            .resolve_task_connection(&task, "router1")
+            .await
+            .expect("initial connection should resolve")
+            .expect("initial connection should exist");
+        let replacement = resolver
+            .replace_task_connection(&task, "router1")
+            .await
+            .expect("replacement should resolve")
+            .expect("replacement connection should exist");
+
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &inventory
+                .connections()
+                .get(&key)
+                .expect("replacement should be cached")
+        ));
+        assert_eq!(factory_calls.load(Ordering::SeqCst), 2);
+
+        let first = first.lock().await;
+        assert!(!first.is_alive());
+        drop(first);
+
+        let replacement = replacement.lock().await;
+        assert!(replacement.is_alive());
+    }
+
+    #[test]
+    fn run_task_with_options_dry_run_uses_existing_retry_policy() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let mut hosts = Hosts::new();
+        hosts.add_host(
+            "router1",
+            Host::builder().hostname("10.0.0.1").platform("ios").build(),
+        );
+        let genja = Genja::from_inventory(Inventory::builder().hosts(hosts).build());
+
+        let results = genja
+            .run_task_with_options(
+                FlakyDryRunTask {
+                    attempts: Arc::clone(&attempts),
+                },
+                TaskRunOptions::new(0).with_dry_run(true),
+            )
+            .expect("dry-run should retry retryable failures");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let router1 = results
+            .host_result("router1")
+            .expect("router1 result should exist");
+        assert!(router1.execution_metadata().dry_run());
+        assert_eq!(router1.execution_metadata().attempts(), 2);
+        assert!(router1.execution_metadata().retried());
     }
 
     #[tokio::test]

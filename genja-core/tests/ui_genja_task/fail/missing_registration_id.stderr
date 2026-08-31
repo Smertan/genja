@@ -1,0 +1,10 @@
+error: `registration(...)` requires `id = "..."`
+ --> tests/ui_genja_task/fail/missing_registration_id.rs:6:1
+  |
+6 | / #[genja_task(
+7 | |     name = "bad_task",
+8 | |     registration(version = "1.2.3")
+9 | | )]
+  | |__^
+  |
+  = note: this error originates in the attribute macro `genja_task` (in Nightly builds, run with -Z macro-backtrace for more info)

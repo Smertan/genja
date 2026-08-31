@@ -10,7 +10,10 @@ class PluginBase(ABC):
     """Base class for Python plugin types with locked group names."""
 
     group_name: ClassVar[str]
+    """Plugin group name used by Genja's plugin registry."""
+
     _locked_group_name: ClassVar[str | None] = None
+    """Internal locked group name used by concrete plugin base classes."""
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -45,6 +48,7 @@ class PluginBase(ABC):
     @property
     @final
     def group(self) -> str:
+        """Return the plugin group used by Genja's plugin registry."""
         return self.group_name
 
 

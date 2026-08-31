@@ -369,6 +369,10 @@
 //!   `on_task_start`, then for each selected host `on_instance_start`,
 //!   [`Task::start`], `on_instance_finish`, then any sub-task trees, then
 //!   `on_task_finish`.
+//! - Dry-run is requested through [`TaskRunOptions`]. When dry-run is enabled,
+//!   the runtime opens declared task connections, then calls [`Task::dry_run`]
+//!   or [`Task::dry_run_async`] instead of [`Task::start`] or
+//!   [`Task::start_async`].
 //! - If processor name resolution fails, execution returns
 //!   `GenjaError::PluginNotFound`. If a processor hook returns an error, execution
 //!   stops and propagates that error.
@@ -629,7 +633,7 @@ use async_recursion::async_recursion;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::any::{Any, type_name};
 use std::error::Error;
 use std::fmt;
@@ -640,6 +644,22 @@ use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::task;
 use tokio::time::{Duration, sleep};
+
+pub mod registration;
+pub mod spec;
+pub use registration::{
+    CompiledTaskRegistration, InMemoryTaskRegistry, RegisteredTaskFactory, TaskCatalog,
+    TaskDescriptor, TaskDescriptorMetadata, TaskFactoryRegistry, TaskIdSource,
+    TaskRegistrationError, TaskRegistrationKey, compiled_task_registry,
+    create_compiled_task_by_identity, get_compiled_task_descriptor,
+    get_compiled_task_descriptor_by_identity, list_compiled_tasks, validate_explicit_task_id,
+    validate_task_version,
+};
+pub use spec::{
+    TaskSpec, TaskSpecConstructionError, TaskSpecError, TaskSpecFormat, TaskSpecOverrides,
+    create_compiled_task_from_spec, create_compiled_task_from_spec_str,
+    create_compiled_task_from_spec_str_with_format,
+};
 
 /// Optional retry metadata for a task or runner.
 ///
@@ -750,6 +770,81 @@ impl RetryConfigBuilder {
             max_attempts: self.max_attempts,
             delay_ms: self.delay_ms,
         }
+    }
+}
+
+/// Optional task metadata for verifying that a fresh management session can be
+/// established after a task changes a host.
+///
+/// Session verification is independent from task retry and idempotency. The
+/// absence of this configuration means session verification is disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionVerificationConfig {
+    max_attempts: usize,
+    delay_ms: u64,
+}
+
+impl Default for SessionVerificationConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 1,
+            delay_ms: 0,
+        }
+    }
+}
+
+impl SessionVerificationConfig {
+    /// Create session verification metadata from explicit field values.
+    pub const fn new(max_attempts: usize, delay_ms: u64) -> Self {
+        Self {
+            max_attempts,
+            delay_ms,
+        }
+    }
+
+    /// Return the configured maximum total new-session establishment attempts.
+    pub fn max_attempts(&self) -> usize {
+        self.max_attempts
+    }
+
+    /// Return the fixed delay between session establishment attempts in milliseconds.
+    pub fn delay_ms(&self) -> u64 {
+        self.delay_ms
+    }
+}
+
+/// Host-level execution metadata for post-change session verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SessionVerificationMetadata {
+    requested: bool,
+    attempts: usize,
+    new_session_established: bool,
+}
+
+impl SessionVerificationMetadata {
+    /// Create session verification execution metadata.
+    pub const fn new(requested: bool, attempts: usize, new_session_established: bool) -> Self {
+        Self {
+            requested,
+            attempts,
+            new_session_established,
+        }
+    }
+
+    /// Return whether session verification was requested for the task.
+    pub fn requested(&self) -> bool {
+        self.requested
+    }
+
+    /// Return how many session establishment attempts were made.
+    pub fn attempts(&self) -> usize {
+        self.attempts
+    }
+
+    /// Return whether a fresh session was successfully established.
+    pub fn new_session_established(&self) -> bool {
+        self.new_session_established
     }
 }
 
@@ -1077,6 +1172,7 @@ struct HostTaskResultHumanJson<'a> {
 #[derive(Serialize)]
 enum HostTaskOutcomeHumanJson<'a> {
     Passed(TaskSuccessHumanJson<'a>),
+    PassedWithWarnings(TaskSuccessHumanJson<'a>),
     Failed(TaskFailureHumanJson<'a>),
     Skipped(TaskSkipHumanJson<'a>),
 }
@@ -1089,6 +1185,8 @@ struct HostExecutionMetadataHumanJson {
     attempts: usize,
     retried: bool,
     retry_exhausted: bool,
+    dry_run: bool,
+    session_verification: Option<SessionVerificationMetadata>,
 }
 
 #[derive(Serialize)]
@@ -1207,6 +1305,9 @@ impl<'a> From<&'a HostTaskOutcome> for HostTaskOutcomeHumanJson<'a> {
     fn from(result: &'a HostTaskOutcome) -> Self {
         match result {
             HostTaskOutcome::Passed(success) => Self::Passed(TaskSuccessHumanJson::from(success)),
+            HostTaskOutcome::PassedWithWarnings(success) => {
+                Self::PassedWithWarnings(TaskSuccessHumanJson::from(success))
+            }
             HostTaskOutcome::Failed(failure) => Self::Failed(TaskFailureHumanJson::from(failure)),
             HostTaskOutcome::Skipped(skip) => Self::Skipped(TaskSkipHumanJson::from(skip)),
         }
@@ -1222,6 +1323,8 @@ impl From<&HostExecutionMetadata> for HostExecutionMetadataHumanJson {
             attempts: metadata.attempts(),
             retried: metadata.retried(),
             retry_exhausted: metadata.retry_exhausted(),
+            dry_run: metadata.dry_run(),
+            session_verification: metadata.session_verification(),
         }
     }
 }
@@ -1755,6 +1858,7 @@ pub struct HostTaskResult {
 #[derive(Debug, Clone, Serialize)]
 pub enum HostTaskOutcome {
     Passed(TaskSuccess),
+    PassedWithWarnings(TaskSuccess),
     Failed(TaskFailure),
     Skipped(TaskSkip),
 }
@@ -1768,6 +1872,8 @@ pub struct HostExecutionMetadata {
     attempts: usize,
     retried: bool,
     retry_exhausted: bool,
+    dry_run: bool,
+    session_verification: Option<SessionVerificationMetadata>,
 }
 
 impl Default for HostExecutionMetadata {
@@ -1780,6 +1886,8 @@ impl Default for HostExecutionMetadata {
             attempts: 1,
             retried: false,
             retry_exhausted: false,
+            dry_run: false,
+            session_verification: None,
         }
     }
 }
@@ -1820,6 +1928,19 @@ impl HostExecutionMetadata {
         self
     }
 
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
+    pub fn with_session_verification(
+        mut self,
+        session_verification: SessionVerificationMetadata,
+    ) -> Self {
+        self.session_verification = Some(session_verification);
+        self
+    }
+
     pub fn started_at(&self) -> Option<SystemTime> {
         self.started_at
     }
@@ -1853,6 +1974,14 @@ impl HostExecutionMetadata {
         self.retry_exhausted
     }
 
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    pub fn session_verification(&self) -> Option<SessionVerificationMetadata> {
+        self.session_verification
+    }
+
     pub fn started_at_display(&self) -> Option<String> {
         self.started_at.map(format_timestamp_display)
     }
@@ -1883,6 +2012,14 @@ impl HostTaskResult {
     pub fn passed(result: TaskSuccess) -> Self {
         Self {
             outcome: HostTaskOutcome::Passed(result),
+            execution_metadata: HostExecutionMetadata::new(),
+        }
+    }
+
+    /// Creates a successful `HostTaskResult` whose warnings should be surfaced prominently.
+    pub fn passed_with_warnings(result: TaskSuccess) -> Self {
+        Self {
+            outcome: HostTaskOutcome::PassedWithWarnings(result),
             execution_metadata: HostExecutionMetadata::new(),
         }
     }
@@ -1958,7 +2095,10 @@ impl HostTaskResult {
     /// `true` if this result represents a successful task execution (`Passed` variant),
     /// `false` otherwise.
     pub fn is_passed(&self) -> bool {
-        matches!(self.outcome, HostTaskOutcome::Passed(_))
+        matches!(
+            self.outcome,
+            HostTaskOutcome::Passed(_) | HostTaskOutcome::PassedWithWarnings(_)
+        )
     }
 
     /// Checks if the task execution failed.
@@ -2009,6 +2149,7 @@ impl HostTaskResult {
     pub fn status(&self) -> &'static str {
         match self.outcome() {
             HostTaskOutcome::Passed(_) => "passed",
+            HostTaskOutcome::PassedWithWarnings(_) => "passed_with_warnings",
             HostTaskOutcome::Failed(_) => "failed",
             HostTaskOutcome::Skipped(_) => "skipped",
         }
@@ -2025,7 +2166,9 @@ impl HostTaskResult {
     /// or was skipped.
     pub fn success(&self) -> Option<&TaskSuccess> {
         match self.outcome() {
-            HostTaskOutcome::Passed(success) => Some(success),
+            HostTaskOutcome::Passed(success) | HostTaskOutcome::PassedWithWarnings(success) => {
+                Some(success)
+            }
             HostTaskOutcome::Failed(_) | HostTaskOutcome::Skipped(_) => None,
         }
     }
@@ -2042,7 +2185,9 @@ impl HostTaskResult {
     pub fn failure(&self) -> Option<&TaskFailure> {
         match self.outcome() {
             HostTaskOutcome::Failed(failure) => Some(failure),
-            HostTaskOutcome::Passed(_) | HostTaskOutcome::Skipped(_) => None,
+            HostTaskOutcome::Passed(_)
+            | HostTaskOutcome::PassedWithWarnings(_)
+            | HostTaskOutcome::Skipped(_) => None,
         }
     }
 
@@ -2058,7 +2203,9 @@ impl HostTaskResult {
     pub fn skipped_detail(&self) -> Option<&TaskSkip> {
         match self.outcome() {
             HostTaskOutcome::Skipped(skip) => Some(skip),
-            HostTaskOutcome::Passed(_) | HostTaskOutcome::Failed(_) => None,
+            HostTaskOutcome::Passed(_)
+            | HostTaskOutcome::PassedWithWarnings(_)
+            | HostTaskOutcome::Failed(_) => None,
         }
     }
 
@@ -3086,6 +3233,368 @@ pub enum TaskFailureKind {
     External,
 }
 
+/// Task-authored idempotency behavior.
+///
+/// Idempotency is declared by task authors and controls whether Genja should
+/// perform convergence checks around normal task execution. It is disabled by
+/// default so existing tasks keep their current behavior.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IdempotencyMode {
+    /// Do not perform idempotency checks.
+    #[default]
+    Disabled,
+    /// Check convergence before invoking the normal task entrypoint.
+    Check,
+    /// Check convergence before execution and verify convergence after success.
+    CheckAndVerify,
+}
+
+/// Result of an idempotency convergence check.
+///
+/// A check reports the host's current convergence state. `Converged` means the
+/// desired state is already satisfied. `ChangeRequired` means normal execution
+/// should apply the task change. Details are JSON values so they can be
+/// serialized in task results and passed through language bindings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum IdempotencyCheck {
+    /// The host is already in the desired state.
+    Converged {
+        /// Optional human-readable convergence summary.
+        summary: Option<String>,
+        /// Optional structured convergence details.
+        details: Option<Value>,
+    },
+    /// The host is not yet in the desired state.
+    ChangeRequired {
+        /// Optional diff describing the remaining change.
+        diff: Option<String>,
+        /// Optional structured diagnostic details.
+        details: Option<Value>,
+    },
+}
+
+impl IdempotencyCheck {
+    /// Create a converged check result with a human-readable summary.
+    pub fn converged(summary: impl Into<String>) -> Self {
+        Self::Converged {
+            summary: Some(summary.into()),
+            details: None,
+        }
+    }
+
+    /// Create a converged check result without a summary.
+    pub fn converged_without_summary() -> Self {
+        Self::Converged {
+            summary: None,
+            details: None,
+        }
+    }
+
+    /// Create a change-required check result with a human-readable diff.
+    pub fn change_required(diff: impl Into<String>) -> Self {
+        Self::ChangeRequired {
+            diff: Some(diff.into()),
+            details: None,
+        }
+    }
+
+    /// Create a change-required check result without a diff.
+    pub fn change_required_without_diff() -> Self {
+        Self::ChangeRequired {
+            diff: None,
+            details: None,
+        }
+    }
+
+    /// Attach structured JSON details to this check result.
+    pub fn with_details(mut self, value: Value) -> Self {
+        match &mut self {
+            Self::Converged { details, .. } | Self::ChangeRequired { details, .. } => {
+                *details = Some(value);
+            }
+        }
+        self
+    }
+}
+
+const IDEMPOTENCY_RETRY_CONVERGED_WARNING: &str = "Task converged after a failed retry attempt; previous attempts may have partially changed state or skipped finalization steps.";
+
+fn converged_check_to_host_result(
+    summary: Option<String>,
+    details: Option<Value>,
+    attempts: usize,
+) -> HostTaskResult {
+    let mut success = TaskSuccess::new().with_changed(false);
+    if let Some(summary) = summary {
+        success = success.with_summary(summary);
+    }
+
+    if attempts > 1 {
+        let mut idempotency = json!({
+            "state": "converged",
+            "converged_after_retry": true,
+            "previous_attempts_may_have_changed_state": true,
+            "previous_attempts_may_have_skipped_finalization": true,
+        });
+        if let Some(details) = details {
+            idempotency["details"] = details;
+        }
+        success = success
+            .with_warning(IDEMPOTENCY_RETRY_CONVERGED_WARNING)
+            .with_metadata(json!({
+                "idempotency": idempotency,
+            }));
+        return HostTaskResult::passed_with_warnings(success);
+    }
+
+    if let Some(details) = details {
+        success = success.with_metadata(json!({
+            "idempotency": {
+                "state": "converged",
+                "details": details,
+            }
+        }));
+    }
+    HostTaskResult::passed(success)
+}
+
+fn failed_verification_check_to_host_result(
+    diff: Option<String>,
+    details: Option<Value>,
+) -> HostTaskResult {
+    let failure_details = json!({
+        "application_completed": true,
+        "configuration_may_have_changed": true,
+        "remaining_diff": diff,
+        "idempotency": {
+            "state": "change_required",
+            "details": details,
+        },
+    });
+    HostTaskResult::failed(
+        TaskFailure::new(crate::GenjaError::Message(
+            "Configuration did not converge after application".to_string(),
+        ))
+        .with_kind(TaskFailureKind::Validation)
+        .with_details(failure_details),
+    )
+}
+
+/// Build execution metadata for a requested session verification attempt.
+fn session_verification_metadata(
+    attempts: usize,
+    new_session_established: bool,
+) -> SessionVerificationMetadata {
+    SessionVerificationMetadata::new(true, attempts, new_session_established)
+}
+
+/// Build execution metadata for a requested verification that was rejected before attempts.
+fn session_verification_not_run_metadata() -> SessionVerificationMetadata {
+    session_verification_metadata(0, false)
+}
+
+/// Attach session verification metadata to an existing host result.
+fn with_session_verification_metadata(
+    mut host_result: HostTaskResult,
+    metadata: SessionVerificationMetadata,
+) -> HostTaskResult {
+    *host_result.execution_metadata_mut() = host_result
+        .execution_metadata()
+        .clone()
+        .with_session_verification(metadata);
+    host_result
+}
+
+/// Build the host-scoped connection failure returned after replacement attempts are exhausted.
+fn session_verification_connection_failure(
+    attempts: usize,
+    new_session_established: bool,
+) -> HostTaskResult {
+    HostTaskResult::failed(
+        TaskFailure::new(crate::GenjaError::Message(
+            "a new management session could not be established after applying the change; the original task may already have applied its change and automatic rollback is unavailable"
+                .to_string(),
+        ))
+        .with_kind(TaskFailureKind::Connection)
+        .with_retryable(false)
+        .with_details(json!({
+            "change_may_have_been_applied": true,
+            "session_verification_attempts": attempts,
+            "new_session_established": new_session_established,
+            "rollback_available": false,
+        })),
+    )
+}
+
+/// Build the host-scoped validation failure returned for invalid manual task metadata.
+fn session_verification_validation_failure(message: impl Into<String>) -> HostTaskResult {
+    with_session_verification_metadata(
+        HostTaskResult::failed(
+            TaskFailure::new(crate::GenjaError::Message(message.into()))
+                .with_kind(TaskFailureKind::Validation),
+        ),
+        session_verification_not_run_metadata(),
+    )
+}
+
+/// Validate session verification metadata that macro-authored tasks normally reject earlier.
+fn validate_session_verification_request(
+    task: &dyn Task,
+    connection_resolver: Option<&dyn TaskConnectionResolver>,
+    dry_run: bool,
+) -> Option<HostTaskResult> {
+    let config = task.session_verification_config()?;
+
+    if dry_run {
+        return None;
+    }
+
+    if config.max_attempts() == 0 {
+        return Some(session_verification_validation_failure(
+            "session verification max_attempts must be greater than 0",
+        ));
+    }
+
+    if task.connection_plugin_name().is_none() {
+        return Some(session_verification_validation_failure(
+            "session verification requires a connection plugin",
+        ));
+    }
+
+    if connection_resolver.is_none() {
+        return Some(session_verification_validation_failure(
+            "session verification requires a task connection resolver",
+        ));
+    }
+
+    None
+}
+
+/// Return whether the final task result requires post-change session verification.
+fn should_attempt_session_verification(
+    task: &dyn Task,
+    host_result: &HostTaskResult,
+    dry_run: bool,
+) -> bool {
+    task.session_verification_config().is_some()
+        && !dry_run
+        && host_result.is_passed()
+        && host_result
+            .success()
+            .map(TaskSuccess::changed)
+            .unwrap_or(false)
+}
+
+/// Replace the task connection until a fresh session is established or attempts are exhausted.
+async fn verify_replacement_session(
+    task: &dyn Task,
+    hostname: &str,
+    connection_resolver: &dyn TaskConnectionResolver,
+    config: &SessionVerificationConfig,
+) -> Result<
+    (
+        SessionVerificationMetadata,
+        Option<Arc<Mutex<dyn Connection>>>,
+    ),
+    HostTaskResult,
+> {
+    let max_attempts = config.max_attempts();
+    let mut last_error = None;
+
+    for attempt in 1..=max_attempts {
+        match connection_resolver
+            .replace_task_connection(task, hostname)
+            .await
+        {
+            Ok(Some(connection)) => {
+                return Ok((
+                    session_verification_metadata(attempt, true),
+                    Some(connection),
+                ));
+            }
+            Ok(None) => {
+                last_error = Some(crate::GenjaError::Message(
+                    "task connection resolver did not return a replacement connection".to_string(),
+                ));
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
+        }
+
+        if attempt < max_attempts && config.delay_ms() > 0 {
+            sleep(Duration::from_millis(config.delay_ms())).await;
+        }
+    }
+
+    if let Some(error) = last_error {
+        warn!(
+            "session verification failed for task '{}' on host '{}' after {} attempt(s): {}",
+            task.name(),
+            hostname,
+            max_attempts,
+            error
+        );
+    }
+
+    Err(with_session_verification_metadata(
+        session_verification_connection_failure(max_attempts, false),
+        session_verification_metadata(max_attempts, false),
+    ))
+}
+
+/// Return whether `CheckAndVerify` post-check should wait for a replacement connection.
+fn should_defer_idempotency_post_check(
+    task: &dyn Task,
+    host_result: &HostTaskResult,
+    dry_run: bool,
+) -> bool {
+    matches!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify)
+        && should_attempt_session_verification(task, host_result, dry_run)
+}
+
+/// Run the `CheckAndVerify` post-check through the replacement connection.
+async fn run_replacement_idempotency_post_check(
+    task: Arc<dyn Task>,
+    host: &Host,
+    original_result: HostTaskResult,
+    replacement_connection: Option<Arc<Mutex<dyn Connection>>>,
+    execution_context: TaskExecutionContext,
+    attempt: usize,
+) -> HostTaskResult {
+    let check_result = match task.execution_mode() {
+        TaskExecutionMode::Async => {
+            let runtime_context =
+                TaskRuntimeContext::new(execution_context, replacement_connection)
+                    .with_current_attempt(attempt);
+            task.check_async(host, &runtime_context).await
+        }
+        TaskExecutionMode::Blocking => {
+            let blocking_context = BlockingTaskRuntimeContext::new(
+                execution_context,
+                replacement_connection,
+                Handle::current(),
+            )
+            .with_current_attempt(attempt);
+            let host = host.clone();
+            match task::spawn_blocking(move || task.check(&host, &blocking_context)).await {
+                Ok(result) => result,
+                Err(err) => Err(TaskError::new(std::io::Error::other(format!(
+                    "blocking task join error: {err}"
+                )))),
+            }
+        }
+    };
+
+    match check_result {
+        Ok(IdempotencyCheck::Converged { .. }) => original_result,
+        Ok(IdempotencyCheck::ChangeRequired { diff, details }) => {
+            failed_verification_check_to_host_result(diff, details)
+        }
+        Err(error) => HostTaskResult::failed(TaskFailure::from_task_error(error)),
+    }
+}
+
 /// Task metadata required for execution.
 ///
 /// Task authoring macros such as `#[genja_task(...)]` implement this trait
@@ -3120,13 +3629,76 @@ pub trait TaskInfo {
     fn retry_config(&self) -> Option<&RetryConfig> {
         None
     }
+
+    /// Return task-specific post-change session verification metadata, if set.
+    fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+        None
+    }
+
+    /// Return whether this task declares support for dry-run execution.
+    fn supports_dry_run(&self) -> bool {
+        false
+    }
+
+    /// Return the task-authored idempotency mode.
+    fn idempotency_mode(&self) -> IdempotencyMode {
+        IdempotencyMode::Disabled
+    }
 }
 
 /// Sub-task provider interface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TaskExecutionMode {
     Blocking,
     Async,
+}
+
+/// Runtime options for executing a task or ordered task list.
+///
+/// These options represent operator-selected execution behavior for a single
+/// invocation. Task metadata declares what a task supports; run options declare
+/// what the runtime should request. Use [`TaskRunOptions::with_dry_run`] to
+/// request dry-run execution for tasks that declare dry-run support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskRunOptions {
+    max_depth: usize,
+    dry_run: bool,
+}
+
+impl TaskRunOptions {
+    /// Create run options for normal task execution with the provided maximum depth.
+    pub fn new(max_depth: usize) -> Self {
+        Self {
+            max_depth,
+            dry_run: false,
+        }
+    }
+
+    /// Return the maximum recursive task depth for this invocation.
+    pub fn max_depth(&self) -> usize {
+        self.max_depth
+    }
+
+    /// Return whether this invocation should run in dry-run mode.
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    /// Set whether this invocation should run in dry-run mode.
+    ///
+    /// Dry-run mode requires the target task to report dry-run support. The
+    /// runtime validates support before calling the normal task entrypoint.
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
+    /// Set the maximum recursive task depth for this invocation.
+    pub fn with_max_depth(mut self, max_depth: usize) -> Self {
+        self.max_depth = max_depth;
+        self
+    }
 }
 
 /// Core task interface required for execution.
@@ -3177,6 +3749,74 @@ pub trait Task: TaskInfo + Send + Sync {
         )))
     }
 
+    /// Check current convergence state for a blocking idempotent task.
+    ///
+    /// Implement this for blocking tasks whose [`TaskInfo::idempotency_mode`]
+    /// returns [`IdempotencyMode::Check`] or
+    /// [`IdempotencyMode::CheckAndVerify`].
+    fn check(
+        &self,
+        host: &Host,
+        context: &BlockingTaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "blocking check() not implemented",
+        )))
+    }
+
+    /// Check current convergence state for an async idempotent task.
+    ///
+    /// Implement this for async tasks whose [`TaskInfo::idempotency_mode`]
+    /// returns [`IdempotencyMode::Check`] or
+    /// [`IdempotencyMode::CheckAndVerify`].
+    async fn check_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "async check_async() not implemented",
+        )))
+    }
+
+    /// Execute a blocking dry run with runtime execution context.
+    ///
+    /// Implement this for blocking tasks that return `true` from
+    /// [`TaskInfo::supports_dry_run`]. Dry-run methods return the same
+    /// [`HostTaskResult`] shape as normal execution and should use fields such
+    /// as `changed`, `diff`, `summary`, and `metadata` to describe the planned
+    /// result.
+    fn dry_run(
+        &self,
+        host: &Host,
+        context: &BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "blocking dry_run() not implemented",
+        )))
+    }
+
+    /// Execute an async dry run with runtime execution context.
+    ///
+    /// Implement this for async tasks that return `true` from
+    /// [`TaskInfo::supports_dry_run`]. Dry-run methods return the same
+    /// [`HostTaskResult`] shape as normal execution and should use fields such
+    /// as `changed`, `diff`, `summary`, and `metadata` to describe the planned
+    /// result.
+    async fn dry_run_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let _ = (host, context);
+        Err(TaskError::new(std::io::Error::other(
+            "async dry_run_async() not implemented",
+        )))
+    }
+
     /// Return any sub-tasks for this task.
     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
         Vec::new()
@@ -3216,6 +3856,7 @@ pub struct TaskRuntimeContext {
     execution: TaskExecutionContext,
     connection: Option<Arc<Mutex<dyn Connection>>>,
     current_attempt: usize,
+    dry_run: bool,
 }
 
 impl TaskRuntimeContext {
@@ -3227,6 +3868,7 @@ impl TaskRuntimeContext {
             execution,
             connection,
             current_attempt: 1,
+            dry_run: false,
         }
     }
 
@@ -3247,8 +3889,18 @@ impl TaskRuntimeContext {
         self.current_attempt
     }
 
+    /// Returns true when the current task invocation is a dry run.
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
     pub(crate) fn with_current_attempt(mut self, current_attempt: usize) -> Self {
         self.current_attempt = current_attempt.max(1);
+        self
+    }
+
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
         self
     }
 
@@ -3332,6 +3984,7 @@ pub struct BlockingTaskRuntimeContext {
     execution: TaskExecutionContext,
     connection: Option<BlockingTaskConnection>,
     current_attempt: usize,
+    dry_run: bool,
 }
 
 impl BlockingTaskRuntimeContext {
@@ -3345,6 +3998,7 @@ impl BlockingTaskRuntimeContext {
             connection: connection
                 .map(|connection| BlockingTaskConnection::new(connection, runtime_handle)),
             current_attempt: 1,
+            dry_run: false,
         }
     }
 
@@ -3365,8 +4019,18 @@ impl BlockingTaskRuntimeContext {
         self.current_attempt
     }
 
+    /// Returns true when the current task invocation is a dry run.
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
     pub(crate) fn with_current_attempt(mut self, current_attempt: usize) -> Self {
         self.current_attempt = current_attempt.max(1);
+        self
+    }
+
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
         self
     }
 
@@ -3501,19 +4165,49 @@ pub trait TaskProcessorResolver: Send + Sync {
     fn resolve_task_processor(&self, name: &str) -> Option<Arc<dyn TaskProcessor>>;
 }
 
-/// Opens or verifies task-scoped connections before execution.
+/// Opens, verifies, or replaces task-scoped connections during execution.
 ///
 /// The full runtime can implement this trait to ensure the connection selected by
 /// a task is available before the task body runs. Core task execution remains
 /// generic by depending only on this trait rather than on a concrete runtime type.
+///
+/// Session verification uses [`TaskConnectionResolver::replace_task_connection`]
+/// after a task has successfully changed a host. Resolver implementations that
+/// own connection caches should evict the old connection, close it on a
+/// best-effort basis, create a new connection instance, and authenticate that new
+/// connection before returning it.
 #[async_trait]
 pub trait TaskConnectionResolver: Send + Sync {
     /// Open or retrieve the connection required by `task` for `hostname`.
+    ///
+    /// Implementations should return `Ok(None)` when the task does not declare a
+    /// connection. When a connection is declared, the returned connection should be
+    /// ready for the task runtime context to use.
     async fn resolve_task_connection(
         &self,
         task: &dyn Task,
         hostname: &str,
     ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError>;
+
+    /// Replace the connection required by `task` for `hostname`.
+    ///
+    /// Implementations that support replacement should not call `open()` on the
+    /// existing cached connection. A successful replacement requires a newly
+    /// created and authenticated connection instance, returned to the runtime so
+    /// post-change verification can run through the fresh session.
+    ///
+    /// The default implementation returns an explicit unsupported-operation error so
+    /// custom resolvers remain source-compatible until they opt in to replacement.
+    async fn replace_task_connection(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+    ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError> {
+        let _ = (task, hostname);
+        Err(crate::GenjaError::NotImplemented(
+            "task connection replacement is not supported by this resolver",
+        ))
+    }
 }
 
 impl fmt::Debug for dyn TaskProcessorResolver {
@@ -3576,6 +4270,25 @@ pub struct TaskDefinition {
     inner: Arc<dyn Task>,
     processor_resolver: Option<Arc<dyn TaskProcessorResolver>>,
     processor_names: Arc<Vec<String>>,
+    retry_config_override: Option<RetryConfig>,
+    session_verification_config_override: Option<SessionVerificationConfig>,
+}
+
+impl fmt::Debug for TaskDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskDefinition")
+            .field("name", &self.name())
+            .field("execution_mode", &self.inner.execution_mode())
+            .field("connection_plugin_name", &self.connection_plugin_name())
+            .field("processor_names", &self.processor_names())
+            .field("has_processor_resolver", &self.processor_resolver.is_some())
+            .field("retry_config_override", &self.retry_config_override)
+            .field(
+                "session_verification_config_override",
+                &self.session_verification_config_override,
+            )
+            .finish()
+    }
 }
 
 impl TaskDefinition {
@@ -3585,6 +4298,8 @@ impl TaskDefinition {
             inner: Arc::new(task),
             processor_resolver: None,
             processor_names: Arc::new(Vec::new()),
+            retry_config_override: None,
+            session_verification_config_override: None,
         }
     }
 
@@ -3619,6 +4334,27 @@ impl TaskDefinition {
         processor_resolver: Arc<dyn TaskProcessorResolver>,
     ) -> Self {
         self.processor_resolver = Some(processor_resolver);
+        self
+    }
+
+    /// Override the root task's retry policy for this task definition.
+    ///
+    /// This is a per-definition runtime policy override. It does not mutate the
+    /// authored task metadata and does not apply to sub-tasks.
+    pub fn with_retry_config_override(mut self, retry_config: RetryConfig) -> Self {
+        self.retry_config_override = Some(retry_config);
+        self
+    }
+
+    /// Override the root task's post-change session verification policy.
+    ///
+    /// This is a per-definition runtime policy override. It does not mutate the
+    /// authored task metadata and does not apply to sub-tasks.
+    pub fn with_session_verification_config_override(
+        mut self,
+        session_verification_config: SessionVerificationConfig,
+    ) -> Self {
+        self.session_verification_config_override = Some(session_verification_config);
         self
     }
 
@@ -3707,12 +4443,24 @@ impl TaskDefinition {
         results: &mut TaskResults,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
+        self.start_with_options(hostname, host, results, TaskRunOptions::new(max_depth))
+            .await
+    }
+
+    /// Execute this task and all its sub-tasks with explicit runtime options.
+    pub async fn start_with_options(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        run_options: TaskRunOptions,
+    ) -> Result<(), crate::GenjaError> {
         self.start_with_retry_defaults(
             hostname,
             host,
             results,
             None,
-            max_depth,
+            run_options,
             TaskRetryDefaults::default(),
         )
         .await
@@ -3727,12 +4475,31 @@ impl TaskDefinition {
         connection_resolver: Option<&dyn TaskConnectionResolver>,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
+        self.start_with_connection_resolver_and_options(
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            TaskRunOptions::new(max_depth),
+        )
+        .await
+    }
+
+    /// Executes this task definition with explicit runtime options and task-scoped connections.
+    pub async fn start_with_connection_resolver_and_options(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        run_options: TaskRunOptions,
+    ) -> Result<(), crate::GenjaError> {
         self.start_with_retry_defaults(
             hostname,
             host,
             results,
             connection_resolver,
-            max_depth,
+            run_options,
             TaskRetryDefaults::default(),
         )
         .await
@@ -3748,12 +4515,33 @@ impl TaskDefinition {
         runner_config: &RunnerConfig,
         max_depth: usize,
     ) -> Result<(), crate::GenjaError> {
+        self.start_with_connection_resolver_runner_config_and_options(
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            runner_config,
+            TaskRunOptions::new(max_depth),
+        )
+        .await
+    }
+
+    /// Executes this task definition with runner retry defaults and explicit runtime options.
+    pub async fn start_with_connection_resolver_runner_config_and_options(
+        &self,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        runner_config: &RunnerConfig,
+        run_options: TaskRunOptions,
+    ) -> Result<(), crate::GenjaError> {
         self.start_with_retry_defaults(
             hostname,
             host,
             results,
             connection_resolver,
-            max_depth,
+            run_options,
             TaskRetryDefaults::from(runner_config),
         )
         .await
@@ -3765,7 +4553,7 @@ impl TaskDefinition {
         host: &Host,
         results: &mut TaskResults,
         connection_resolver: Option<&dyn TaskConnectionResolver>,
-        max_depth: usize,
+        run_options: TaskRunOptions,
         retry_defaults: TaskRetryDefaults,
     ) -> Result<(), crate::GenjaError> {
         Self::start_with_depth(
@@ -3778,7 +4566,7 @@ impl TaskDefinition {
             self.processor_names(),
             None,
             0,
-            max_depth,
+            run_options,
             retry_defaults,
         )
         .await
@@ -3861,9 +4649,10 @@ impl TaskDefinition {
         processor_names: Vec<&str>,
         parent_task_name: Option<&str>,
         depth: usize,
-        max_depth: usize,
+        run_options: TaskRunOptions,
         retry_defaults: TaskRetryDefaults,
     ) -> Result<(), crate::GenjaError> {
+        let max_depth = run_options.max_depth();
         if depth > max_depth {
             let started_at = SystemTime::now();
             let finished_at = started_at;
@@ -3884,7 +4673,8 @@ impl TaskDefinition {
                 .clone()
                 .with_attempts(1)
                 .with_retried(false)
-                .with_retry_exhausted(false);
+                .with_retry_exhausted(false)
+                .with_dry_run(run_options.dry_run());
             results.insert_host_result(hostname, host_result);
             return Ok(());
         }
@@ -3904,6 +4694,32 @@ impl TaskDefinition {
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
+
+        if let Some(mut host_result) = validate_session_verification_request(
+            task.as_ref(),
+            connection_resolver,
+            run_options.dry_run(),
+        ) {
+            let finished_at = SystemTime::now();
+            let duration_ns = finished_at
+                .duration_since(started_at)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            results.record_execution_timing(started_at, finished_at);
+            host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
+            *host_result.execution_metadata_mut() = host_result
+                .execution_metadata()
+                .clone()
+                .with_attempts(1)
+                .with_retried(false)
+                .with_retry_exhausted(false)
+                .with_dry_run(run_options.dry_run());
+            for processor in &processors {
+                processor.on_instance_finish(&processor_context, &mut host_result)?;
+            }
+            results.insert_host_result(hostname, host_result);
+            return Ok(());
+        }
 
         let connection = if let Some(connection_resolver) = connection_resolver {
             match connection_resolver
@@ -3936,7 +4752,8 @@ impl TaskDefinition {
                         .clone()
                         .with_attempts(1)
                         .with_retried(false)
-                        .with_retry_exhausted(false);
+                        .with_retry_exhausted(false)
+                        .with_dry_run(run_options.dry_run());
                     for processor in &processors {
                         processor.on_instance_finish(&processor_context, &mut host_result)?;
                     }
@@ -3947,6 +4764,35 @@ impl TaskDefinition {
         } else {
             None
         };
+
+        if run_options.dry_run() && !task.supports_dry_run() {
+            let finished_at = SystemTime::now();
+            let duration_ns = finished_at
+                .duration_since(started_at)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            results.record_execution_timing(started_at, finished_at);
+            let mut host_result = HostTaskResult::failed(
+                TaskFailure::new(crate::GenjaError::Message(format!(
+                    "task '{}' does not support dry-run execution",
+                    task.name()
+                )))
+                .with_kind(TaskFailureKind::Unsupported),
+            )
+            .with_execution_timing(started_at, finished_at, duration_ns);
+            *host_result.execution_metadata_mut() = host_result
+                .execution_metadata()
+                .clone()
+                .with_attempts(1)
+                .with_retried(false)
+                .with_retry_exhausted(false)
+                .with_dry_run(true);
+            for processor in &processors {
+                processor.on_instance_finish(&processor_context, &mut host_result)?;
+            }
+            results.insert_host_result(hostname, host_result);
+            return Ok(());
+        }
 
         let mut attempts = 0;
         let host_result = loop {
@@ -3960,8 +4806,62 @@ impl TaskDefinition {
                 TaskExecutionMode::Async => {
                     let runtime_context =
                         TaskRuntimeContext::new(execution_context, connection.clone())
-                            .with_current_attempt(attempts);
-                    task.start_async(host, &runtime_context).await
+                            .with_current_attempt(attempts)
+                            .with_dry_run(run_options.dry_run());
+                    if run_options.dry_run() {
+                        task.dry_run_async(host, &runtime_context).await
+                    } else {
+                        match task.idempotency_mode() {
+                            IdempotencyMode::Disabled => {
+                                task.start_async(host, &runtime_context).await
+                            }
+                            IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                                match task.check_async(host, &runtime_context).await {
+                                    Ok(IdempotencyCheck::Converged { summary, details }) => Ok(
+                                        converged_check_to_host_result(summary, details, attempts),
+                                    ),
+                                    Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                        match task.start_async(host, &runtime_context).await {
+                                            Ok(host_result) => {
+                                                if matches!(
+                                                    task.idempotency_mode(),
+                                                    IdempotencyMode::CheckAndVerify
+                                                ) && host_result.is_passed()
+                                                    && !should_defer_idempotency_post_check(
+                                                        task.as_ref(),
+                                                        &host_result,
+                                                        run_options.dry_run(),
+                                                    )
+                                                {
+                                                    match task
+                                                        .check_async(host, &runtime_context)
+                                                        .await
+                                                    {
+                                                        Ok(IdempotencyCheck::Converged {
+                                                            ..
+                                                        }) => Ok(host_result),
+                                                        Ok(IdempotencyCheck::ChangeRequired {
+                                                            diff,
+                                                            details,
+                                                        }) => {
+                                                            Ok(failed_verification_check_to_host_result(
+                                                                diff, details,
+                                                            ))
+                                                        }
+                                                        Err(error) => Err(error),
+                                                    }
+                                                } else {
+                                                    Ok(host_result)
+                                                }
+                                            }
+                                            Err(error) => Err(error),
+                                        }
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            }
+                        }
+                    }
                 }
                 TaskExecutionMode::Blocking => {
                     let blocking_context = BlockingTaskRuntimeContext::new(
@@ -3969,10 +4869,63 @@ impl TaskDefinition {
                         connection.clone(),
                         Handle::current(),
                     )
-                    .with_current_attempt(attempts);
+                    .with_current_attempt(attempts)
+                    .with_dry_run(run_options.dry_run());
                     let task = Arc::clone(&task);
                     let host = host.clone();
-                    match task::spawn_blocking(move || task.start(&host, &blocking_context)).await {
+                    let dry_run = run_options.dry_run();
+                    match task::spawn_blocking(move || {
+                        if dry_run {
+                            task.dry_run(&host, &blocking_context)
+                        } else {
+                            match task.idempotency_mode() {
+                                IdempotencyMode::Disabled => task.start(&host, &blocking_context),
+                                IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                                    match task.check(&host, &blocking_context) {
+                                        Ok(IdempotencyCheck::Converged { summary, details }) => {
+                                            Ok(converged_check_to_host_result(
+                                                summary, details, attempts,
+                                            ))
+                                        }
+                                        Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                            let host_result =
+                                                task.start(&host, &blocking_context)?;
+                                            if matches!(
+                                                task.idempotency_mode(),
+                                                IdempotencyMode::CheckAndVerify
+                                            ) && host_result.is_passed()
+                                                && !should_defer_idempotency_post_check(
+                                                    task.as_ref(),
+                                                    &host_result,
+                                                    dry_run,
+                                                )
+                                            {
+                                                match task.check(&host, &blocking_context) {
+                                                    Ok(IdempotencyCheck::Converged { .. }) => {
+                                                        Ok(host_result)
+                                                    }
+                                                    Ok(IdempotencyCheck::ChangeRequired {
+                                                        diff,
+                                                        details,
+                                                    }) => Ok(
+                                                        failed_verification_check_to_host_result(
+                                                            diff, details,
+                                                        ),
+                                                    ),
+                                                    Err(error) => Err(error),
+                                                }
+                                            } else {
+                                                Ok(host_result)
+                                            }
+                                        }
+                                        Err(error) => Err(error),
+                                    }
+                                }
+                            }
+                        }
+                    })
+                    .await
+                    {
                         Ok(result) => result,
                         Err(err) => Err(TaskError::new(std::io::Error::other(format!(
                             "blocking task join error: {err}"
@@ -4006,6 +4959,37 @@ impl TaskDefinition {
             break host_result;
         };
 
+        let mut host_result = host_result;
+        if should_attempt_session_verification(task.as_ref(), &host_result, run_options.dry_run()) {
+            let config = task
+                .session_verification_config()
+                .expect("session verification config should exist when verification is required");
+            let connection_resolver = connection_resolver
+                .expect("session verification request validation should require a resolver");
+            match verify_replacement_session(task.as_ref(), hostname, connection_resolver, config)
+                .await
+            {
+                Ok((metadata, replacement_connection)) => {
+                    host_result = with_session_verification_metadata(host_result, metadata);
+                    if matches!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify) {
+                        host_result = run_replacement_idempotency_post_check(
+                            Arc::clone(&task),
+                            host,
+                            host_result,
+                            replacement_connection,
+                            TaskExecutionContext::new(depth, max_depth),
+                            attempts,
+                        )
+                        .await;
+                        host_result = with_session_verification_metadata(host_result, metadata);
+                    }
+                }
+                Err(failure_result) => {
+                    host_result = failure_result;
+                }
+            }
+        }
+
         let finished_at = SystemTime::now();
         let duration_ns = finished_at
             .duration_since(started_at)
@@ -4033,13 +5017,7 @@ impl TaskDefinition {
             );
         }
 
-        let status = if host_result.is_passed() {
-            "passed"
-        } else if host_result.is_failed() {
-            "failed"
-        } else {
-            "skipped"
-        };
+        let status = host_result.status();
 
         let retry_exhausted = retry_policy.retry_exhausted(&host_result, attempts);
         let mut host_result =
@@ -4049,7 +5027,8 @@ impl TaskDefinition {
             .clone()
             .with_attempts(attempts)
             .with_retried(attempts > 1)
-            .with_retry_exhausted(retry_exhausted);
+            .with_retry_exhausted(retry_exhausted)
+            .with_dry_run(run_options.dry_run());
         let duration_display = host_result
             .execution_metadata()
             .duration_display()
@@ -4106,7 +5085,7 @@ impl TaskDefinition {
                 sub_processor_names,
                 Some(task.name()),
                 depth + 1,
-                max_depth,
+                run_options,
                 retry_defaults,
             )
             .await?;
@@ -4187,7 +5166,23 @@ impl TaskInfo for TaskDefinition {
     }
 
     fn retry_config(&self) -> Option<&RetryConfig> {
-        self.inner.retry_config()
+        self.retry_config_override
+            .as_ref()
+            .or_else(|| self.inner.retry_config())
+    }
+
+    fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+        self.session_verification_config_override
+            .as_ref()
+            .or_else(|| self.inner.session_verification_config())
+    }
+
+    fn supports_dry_run(&self) -> bool {
+        self.inner.supports_dry_run()
+    }
+
+    fn idempotency_mode(&self) -> IdempotencyMode {
+        self.inner.idempotency_mode()
     }
 }
 
@@ -4322,6 +5317,22 @@ mod tests {
 
     struct SkippingTask;
 
+    struct DryRunInfoTask;
+
+    struct IdempotencyInfoTask;
+
+    struct SessionVerificationInfoTask {
+        config: SessionVerificationConfig,
+    }
+
+    struct SessionVerificationRuntimeTask {
+        start_calls: Arc<AtomicUsize>,
+        result: HostTaskResult,
+        config: SessionVerificationConfig,
+        connection_plugin_name: Option<&'static str>,
+        supports_dry_run: bool,
+    }
+
     struct FlakyTask {
         name: &'static str,
         attempts: Arc<AtomicUsize>,
@@ -4347,9 +5358,59 @@ mod tests {
         succeed_on_attempt: usize,
     }
 
+    struct IdempotentAsyncRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+        check_result: IdempotencyCheck,
+    }
+
+    struct IdempotentBlockingRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+        check_result: IdempotencyCheck,
+    }
+
+    struct DryRunIdempotentRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        dry_run_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+    }
+
+    struct CheckAndVerifyAsyncRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+        check_results: Arc<Mutex<Vec<IdempotencyCheck>>>,
+        start_result: HostTaskResult,
+    }
+
+    struct CheckAndVerifySessionRuntimeTask {
+        check_calls: Arc<AtomicUsize>,
+        start_calls: Arc<AtomicUsize>,
+        check_results: Arc<Mutex<Vec<IdempotencyCheck>>>,
+        check_sessions: Arc<Mutex<Vec<String>>>,
+        config: SessionVerificationConfig,
+    }
+
+    struct RecordingSessionVerificationResolver {
+        resolve_calls: Arc<AtomicUsize>,
+        replace_calls: Arc<AtomicUsize>,
+        fail_until_attempt: usize,
+    }
+
+    struct TaggedSessionVerificationResolver {
+        replace_calls: Arc<AtomicUsize>,
+    }
+
     #[derive(Debug)]
     struct TestConnection {
         key: ConnectionKey,
+        alive: bool,
+    }
+
+    #[derive(Debug)]
+    struct TaggedTestConnection {
+        key: ConnectionKey,
+        tag: &'static str,
         alive: bool,
     }
 
@@ -4374,6 +5435,125 @@ mod tests {
         fn close(&mut self) -> ConnectionKey {
             self.alive = false;
             self.key.clone()
+        }
+    }
+
+    #[async_trait]
+    impl Connection for TaggedTestConnection {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+            Box::new(Self {
+                key: key.clone(),
+                tag: self.tag,
+                alive: false,
+            })
+        }
+
+        fn is_alive(&self) -> bool {
+            self.alive
+        }
+
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            self.alive = true;
+            Ok(())
+        }
+
+        async fn execute_command(&mut self, _command: &str) -> Result<String, String> {
+            Ok(self.tag.to_string())
+        }
+
+        fn close(&mut self) -> ConnectionKey {
+            self.alive = false;
+            self.key.clone()
+        }
+    }
+
+    struct UnsupportedConnectionReplacementResolver;
+
+    #[async_trait]
+    impl TaskConnectionResolver for UnsupportedConnectionReplacementResolver {
+        async fn resolve_task_connection(
+            &self,
+            _task: &dyn Task,
+            _hostname: &str,
+        ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError> {
+            Ok(None)
+        }
+    }
+
+    #[async_trait]
+    impl TaskConnectionResolver for RecordingSessionVerificationResolver {
+        async fn resolve_task_connection(
+            &self,
+            task: &dyn Task,
+            hostname: &str,
+        ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError> {
+            self.resolve_calls.fetch_add(1, Ordering::SeqCst);
+            let Some(key) = task.get_connection_key(hostname) else {
+                return Ok(None);
+            };
+            Ok(Some(Arc::new(tokio::sync::Mutex::new(TestConnection {
+                key,
+                alive: true,
+            }))))
+        }
+
+        async fn replace_task_connection(
+            &self,
+            task: &dyn Task,
+            hostname: &str,
+        ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError> {
+            let attempt = self.replace_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt <= self.fail_until_attempt {
+                return Err(crate::GenjaError::Message(format!(
+                    "replacement attempt {attempt} failed"
+                )));
+            }
+
+            let Some(key) = task.get_connection_key(hostname) else {
+                return Ok(None);
+            };
+            Ok(Some(Arc::new(tokio::sync::Mutex::new(TestConnection {
+                key,
+                alive: true,
+            }))))
+        }
+    }
+
+    #[async_trait]
+    impl TaskConnectionResolver for TaggedSessionVerificationResolver {
+        async fn resolve_task_connection(
+            &self,
+            task: &dyn Task,
+            hostname: &str,
+        ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError> {
+            let Some(key) = task.get_connection_key(hostname) else {
+                return Ok(None);
+            };
+            Ok(Some(Arc::new(tokio::sync::Mutex::new(
+                TaggedTestConnection {
+                    key,
+                    tag: "initial",
+                    alive: true,
+                },
+            ))))
+        }
+
+        async fn replace_task_connection(
+            &self,
+            task: &dyn Task,
+            hostname: &str,
+        ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError> {
+            self.replace_calls.fetch_add(1, Ordering::SeqCst);
+            let Some(key) = task.get_connection_key(hostname) else {
+                return Ok(None);
+            };
+            Ok(Some(Arc::new(tokio::sync::Mutex::new(
+                TaggedTestConnection {
+                    key,
+                    tag: "replacement",
+                    alive: true,
+                },
+            ))))
         }
     }
 
@@ -4426,6 +5606,354 @@ mod tests {
 
         fn processor_names(&self) -> Vec<&str> {
             self.processors.iter().map(String::as_str).collect()
+        }
+    }
+
+    impl TaskInfo for DryRunInfoTask {
+        fn name(&self) -> &str {
+            "dry-run-info"
+        }
+
+        fn supports_dry_run(&self) -> bool {
+            true
+        }
+    }
+
+    impl TaskInfo for IdempotencyInfoTask {
+        fn name(&self) -> &str {
+            "idempotency-info"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::CheckAndVerify
+        }
+    }
+
+    impl TaskInfo for SessionVerificationInfoTask {
+        fn name(&self) -> &str {
+            "session-verification-info"
+        }
+
+        fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+            Some(&self.config)
+        }
+    }
+
+    impl TaskInfo for SessionVerificationRuntimeTask {
+        fn name(&self) -> &str {
+            "session-verification-runtime"
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            self.connection_plugin_name
+        }
+
+        fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+            Some(&self.config)
+        }
+
+        fn supports_dry_run(&self) -> bool {
+            self.supports_dry_run
+        }
+    }
+
+    #[async_trait]
+    impl Task for SessionVerificationInfoTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for SessionVerificationRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.result.clone())
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.result.clone())
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    impl TaskInfo for IdempotentAsyncRuntimeTask {
+        fn name(&self) -> &str {
+            "idempotent-async-runtime"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::Check
+        }
+    }
+
+    #[async_trait]
+    impl Task for IdempotentAsyncRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied"),
+            ))
+        }
+
+        async fn check_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.check_result.clone())
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    impl TaskInfo for IdempotentBlockingRuntimeTask {
+        fn name(&self) -> &str {
+            "idempotent-blocking-runtime"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::Check
+        }
+    }
+
+    #[async_trait]
+    impl Task for IdempotentBlockingRuntimeTask {
+        fn start(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied"),
+            ))
+        }
+
+        fn check(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.check_result.clone())
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Blocking
+        }
+    }
+
+    impl TaskInfo for DryRunIdempotentRuntimeTask {
+        fn name(&self) -> &str {
+            "dry-run-idempotent-runtime"
+        }
+
+        fn supports_dry_run(&self) -> bool {
+            true
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::Check
+        }
+    }
+
+    impl TaskInfo for CheckAndVerifyAsyncRuntimeTask {
+        fn name(&self) -> &str {
+            "check-and-verify-async-runtime"
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::CheckAndVerify
+        }
+    }
+
+    impl TaskInfo for CheckAndVerifySessionRuntimeTask {
+        fn name(&self) -> &str {
+            "check-and-verify-session-runtime"
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            Some("ssh")
+        }
+
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            IdempotencyMode::CheckAndVerify
+        }
+
+        fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+            Some(&self.config)
+        }
+    }
+
+    #[async_trait]
+    impl Task for CheckAndVerifyAsyncRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.start_result.clone())
+        }
+
+        async fn check_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            let mut check_results = self
+                .check_results
+                .lock()
+                .expect("check results lock should not be poisoned");
+            Ok(check_results.remove(0))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for CheckAndVerifySessionRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied"),
+            ))
+        }
+
+        async fn check_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            let session = context
+                .execute_command("session")
+                .await?
+                .unwrap_or_else(|| "none".to_string());
+            self.check_sessions
+                .lock()
+                .expect("check sessions lock should not be poisoned")
+                .push(session);
+            let mut check_results = self
+                .check_results
+                .lock()
+                .expect("check results lock should not be poisoned");
+            Ok(check_results.remove(0))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for DryRunIdempotentRuntimeTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.start_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_changed(true),
+            ))
+        }
+
+        async fn dry_run_async(
+            &self,
+            _host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.dry_run_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary(format!("dry_run={}", context.dry_run())),
+            ))
+        }
+
+        async fn check_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.check_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(IdempotencyCheck::converged("already converged"))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for IdempotencyInfoTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[async_trait]
+    impl Task for DryRunInfoTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -4921,6 +6449,395 @@ mod tests {
             .expect("host result should be skipped");
         assert_eq!(skip.reason(), Some("filtered"));
         assert_eq!(skip.message(), None);
+    }
+
+    #[test]
+    fn idempotent_async_converged_check_skips_start_and_passes_unchanged() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(IdempotentAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_result: IdempotencyCheck::converged("already configured")
+                .with_details(json!({"current": "desired"})),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("idempotent-async-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("converged check should pass");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host should pass");
+        assert_eq!(host_result.status(), "passed");
+        let success = host_result.success().expect("host should pass");
+        assert!(!success.changed());
+        assert_eq!(success.summary(), Some("already configured"));
+        assert_eq!(
+            success.metadata(),
+            Some(&json!({
+                "idempotency": {
+                    "state": "converged",
+                    "details": {
+                        "current": "desired",
+                    }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn idempotent_blocking_change_required_invokes_start_once() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(IdempotentBlockingRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_result: IdempotencyCheck::change_required("+configured")
+                .with_details(json!({"desired": "configured"})),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("idempotent-blocking-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("change-required check should invoke start");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let success = results
+            .host_result("router1")
+            .and_then(HostTaskResult::success)
+            .expect("host should pass");
+        assert!(success.changed());
+        assert_eq!(success.summary(), Some("applied"));
+    }
+
+    #[test]
+    fn dry_run_does_not_invoke_idempotency_check() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let dry_run_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(DryRunIdempotentRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            dry_run_calls: Arc::clone(&dry_run_calls),
+            start_calls: Arc::clone(&start_calls),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("dry-run-idempotent-runtime");
+
+        run_async(task.start_with_options(
+            "router1",
+            &host,
+            &mut results,
+            TaskRunOptions::new(0).with_dry_run(true),
+        ))
+        .expect("dry-run should execute without idempotency check");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(dry_run_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.execution_metadata().dry_run());
+        let success = host_result.success().expect("host should pass");
+        assert!(success.changed());
+        assert_eq!(success.summary(), Some("dry_run=true"));
+    }
+
+    #[test]
+    fn check_and_verify_preserves_successful_application_result_after_convergence() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(CheckAndVerifyAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::converged("verified")
+                    .with_details(json!({"current": "configured"})),
+            ])),
+            start_result: HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied")
+                    .with_diff("+configured"),
+            ),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-async-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("check-and-verify should preserve successful application");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let success = results
+            .host_result("router1")
+            .and_then(HostTaskResult::success)
+            .expect("host should pass");
+        assert!(success.changed());
+        assert_eq!(success.summary(), Some("applied"));
+        assert_eq!(success.diff(), Some("+configured"));
+    }
+
+    #[test]
+    fn check_and_verify_change_required_post_check_returns_validation_failure() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(CheckAndVerifyAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::change_required("+remaining")
+                    .with_details(json!({"desired": "remaining"})),
+            ])),
+            start_result: HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_changed(true)
+                    .with_summary("applied"),
+            ),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-async-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("validation failure should be captured as a host result");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("host should fail validation");
+        assert!(matches!(failure.kind(), TaskFailureKind::Validation));
+        assert_eq!(
+            failure.message(),
+            "Configuration did not converge after application"
+        );
+        assert_eq!(
+            failure.details(),
+            Some(&json!({
+                "application_completed": true,
+                "configuration_may_have_changed": true,
+                "remaining_diff": "+remaining",
+                "idempotency": {
+                    "state": "change_required",
+                    "details": {
+                        "desired": "remaining",
+                    },
+                },
+            }))
+        );
+    }
+
+    #[test]
+    fn check_and_verify_does_not_verify_after_failed_application_result() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(CheckAndVerifyAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::converged("would not be called"),
+            ])),
+            start_result: HostTaskResult::failed(
+                TaskFailure::new(crate::GenjaError::Message("apply failed".to_string()))
+                    .with_kind(TaskFailureKind::Command),
+            ),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-async-runtime");
+
+        run_async(task.start("router1", &host, &mut results, 0))
+            .expect("application failure should be captured");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("host should preserve application failure");
+        assert!(matches!(failure.kind(), TaskFailureKind::Command));
+        assert_eq!(failure.message(), "apply failed");
+    }
+
+    #[test]
+    fn check_and_verify_with_session_verification_uses_replacement_connection_for_post_check() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let check_sessions = Arc::new(Mutex::new(Vec::new()));
+        let task = TaskDefinition::new(CheckAndVerifySessionRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::converged("configured"),
+            ])),
+            check_sessions: Arc::clone(&check_sessions),
+            config: SessionVerificationConfig::new(1, 0),
+        });
+        let resolver = TaggedSessionVerificationResolver {
+            replace_calls: Arc::clone(&replace_calls),
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-session-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("combined verification should succeed");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *check_sessions
+                .lock()
+                .expect("check sessions lock should not be poisoned"),
+            vec!["initial".to_string(), "replacement".to_string()]
+        );
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_passed());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            Some(SessionVerificationMetadata::new(true, 1, true))
+        );
+    }
+
+    #[test]
+    fn check_and_verify_with_session_verification_returns_validation_failure_after_replacement() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let check_sessions = Arc::new(Mutex::new(Vec::new()));
+        let task = TaskDefinition::new(CheckAndVerifySessionRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::change_required("+remaining")
+                    .with_details(json!({"desired": "remaining"})),
+            ])),
+            check_sessions: Arc::clone(&check_sessions),
+            config: SessionVerificationConfig::new(1, 0),
+        });
+        let resolver = TaggedSessionVerificationResolver {
+            replace_calls: Arc::clone(&replace_calls),
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-session-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("combined verification failure should be captured");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *check_sessions
+                .lock()
+                .expect("check sessions lock should not be poisoned"),
+            vec!["initial".to_string(), "replacement".to_string()]
+        );
+        let host_result = results.host_result("router1").expect("host result");
+        let failure = host_result.failure().expect("host should fail validation");
+        assert!(matches!(failure.kind(), TaskFailureKind::Validation));
+        assert_eq!(
+            failure.details(),
+            Some(&json!({
+                "application_completed": true,
+                "configuration_may_have_changed": true,
+                "remaining_diff": "+remaining",
+                "idempotency": {
+                    "state": "change_required",
+                    "details": {
+                        "desired": "remaining",
+                    },
+                },
+            }))
+        );
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            Some(SessionVerificationMetadata::new(true, 1, true))
+        );
+    }
+
+    #[test]
+    fn retry_converged_pre_check_returns_passed_with_warnings() {
+        let check_calls = Arc::new(AtomicUsize::new(0));
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(CheckAndVerifyAsyncRuntimeTask {
+            check_calls: Arc::clone(&check_calls),
+            start_calls: Arc::clone(&start_calls),
+            check_results: Arc::new(Mutex::new(vec![
+                IdempotencyCheck::change_required("+configured"),
+                IdempotencyCheck::converged("already configured after retry")
+                    .with_details(json!({"current": "configured"})),
+            ])),
+            start_result: HostTaskResult::failed(
+                TaskFailure::new(crate::GenjaError::Message("apply failed".to_string()))
+                    .with_kind(TaskFailureKind::Command)
+                    .with_retryable(true),
+            ),
+        });
+        let runner_config = RunnerConfig::builder()
+            .retry(RetryConfig::builder().allow(true).max_attempts(2).build())
+            .build();
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("check-and-verify-async-runtime");
+
+        run_async(task.start_with_connection_resolver_and_runner_config(
+            "router1",
+            &host,
+            &mut results,
+            None,
+            &runner_config,
+            0,
+        ))
+        .expect("retry should finish with a warning-bearing pass");
+
+        assert_eq!(check_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        let host_result = results.host_result("router1").expect("host result");
+        assert_eq!(host_result.status(), "passed_with_warnings");
+        assert!(matches!(
+            host_result.outcome(),
+            HostTaskOutcome::PassedWithWarnings(_)
+        ));
+        assert_eq!(host_result.execution_metadata().attempts(), 2);
+        assert!(host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+        let success = host_result.success().expect("host should pass");
+        assert!(!success.changed());
+        assert_eq!(success.summary(), Some("already configured after retry"));
+        assert_eq!(success.warnings(), [IDEMPOTENCY_RETRY_CONVERGED_WARNING]);
+        assert_eq!(
+            success.metadata(),
+            Some(&json!({
+                "idempotency": {
+                    "state": "converged",
+                    "details": {
+                        "current": "configured",
+                    },
+                    "converged_after_retry": true,
+                    "previous_attempts_may_have_changed_state": true,
+                    "previous_attempts_may_have_skipped_finalization": true,
+                },
+            }))
+        );
     }
 
     #[test]
@@ -5497,6 +7414,43 @@ mod tests {
     }
 
     #[test]
+    fn passed_with_warnings_is_successful_and_serializes_distinct_outcome() {
+        let result = HostTaskResult::passed_with_warnings(
+            TaskSuccess::new()
+                .with_changed(false)
+                .with_summary("state appears converged")
+                .with_warning("previous attempt may have skipped finalization"),
+        );
+
+        assert!(result.is_passed());
+        assert!(!result.is_failed());
+        assert_eq!(result.status(), "passed_with_warnings");
+        assert!(matches!(
+            result.outcome(),
+            HostTaskOutcome::PassedWithWarnings(_)
+        ));
+        assert_eq!(
+            result
+                .success()
+                .expect("warning success payload should be accessible")
+                .warnings(),
+            ["previous attempt may have skipped finalization"]
+        );
+
+        let mut results = TaskResults::new("warning-success");
+        results.insert_host_result("router1", result);
+
+        assert_eq!(results.passed_hosts(), vec![&NatString::from("router1")]);
+        assert_eq!(results.host_summary().passed(), 1);
+
+        let json = results
+            .to_json_string()
+            .expect("human json should serialize passed-with-warnings");
+        assert!(json.contains("\"PassedWithWarnings\""));
+        assert!(json.contains("previous attempt may have skipped finalization"));
+    }
+
+    #[test]
     fn task_skip_and_host_task_result_expose_skip_metadata() {
         let skipped = HostTaskResult {
             outcome: HostTaskOutcome::Skipped(
@@ -5685,15 +7639,70 @@ mod tests {
 
         assert!(json.contains("\"router1\":{\"outcome\":{\"Passed\":{"));
         assert!(json.contains("\"summary\":\"ok\""));
-        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"2ms\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}"));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"2ms\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false,\"session_verification\":null}"));
         assert!(json.contains("\"router2\":{\"outcome\":{\"Failed\":"));
-        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"250us\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}"));
+        assert!(json.contains("\"execution_metadata\":{\"started_at\":\"1970-01-01T00:00:00Z\",\"finished_at\":\"1970-01-01T00:00:00Z\",\"duration\":\"250us\",\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false,\"session_verification\":null}"));
         assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\""));
-        assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\",\"message\":null}},\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false}}"));
+        assert!(json.contains("\"router3\":{\"outcome\":{\"Skipped\":{\"reason\":\"filtered\",\"message\":null}},\"execution_metadata\":{\"started_at\":null,\"finished_at\":null,\"duration\":null,\"attempts\":1,\"retried\":false,\"retry_exhausted\":false,\"dry_run\":false,\"session_verification\":null}}"));
         assert!(!json.contains("\"Passed\":{\"result\":null,\"changed\":false,\"diff\":null,\"summary\":\"ok\",\"warnings\":[],\"messages\":[],\"metadata\":null,\"started_at\""));
         assert!(!json.contains("\"Failed\":{\"kind\":\"Internal\",\"error_type\":\"genja_core::task::tests::TestTaskFailureError\",\"message\":\"task failure test error\",\"retryable\":false,\"details\":null,\"warnings\":[],\"messages\":[],\"started_at\""));
         assert!(!json.contains("\"duration_ns\""));
         assert!(!json.contains("\"duration_ms\""));
+    }
+
+    #[test]
+    fn host_execution_metadata_tracks_dry_run_state() {
+        let metadata = HostExecutionMetadata::new();
+        assert!(!metadata.dry_run());
+
+        let metadata = metadata.with_dry_run(true);
+        assert!(metadata.dry_run());
+
+        let mut results = TaskResults::new("plan");
+        let mut passed = HostTaskResult::passed(TaskSuccess::new().with_changed(true));
+        *passed.execution_metadata_mut() = passed.execution_metadata().clone().with_dry_run(true);
+        results.insert_host_result("router1", passed);
+
+        let raw_json = results
+            .to_raw_json_string()
+            .expect("raw json should serialize dry-run metadata");
+        assert!(raw_json.contains("\"dry_run\":true"));
+
+        let human_json = results
+            .to_json_string()
+            .expect("human json should serialize dry-run metadata");
+        assert!(human_json.contains("\"dry_run\":true"));
+    }
+
+    #[test]
+    fn host_execution_metadata_tracks_session_verification() {
+        let metadata = HostExecutionMetadata::new();
+        assert_eq!(metadata.session_verification(), None);
+
+        let session_verification = SessionVerificationMetadata::new(true, 2, true);
+        let metadata = metadata.with_session_verification(session_verification);
+        assert_eq!(metadata.session_verification(), Some(session_verification));
+        assert!(session_verification.requested());
+        assert_eq!(session_verification.attempts(), 2);
+        assert!(session_verification.new_session_established());
+
+        let mut results = TaskResults::new("verify-session");
+        let mut passed = HostTaskResult::passed(TaskSuccess::new().with_changed(true));
+        *passed.execution_metadata_mut() = passed
+            .execution_metadata()
+            .clone()
+            .with_session_verification(session_verification);
+        results.insert_host_result("router1", passed);
+
+        let raw_json = results
+            .to_raw_json_string()
+            .expect("raw json should serialize session verification metadata");
+        assert!(raw_json.contains("\"session_verification\":{\"requested\":true,\"attempts\":2,\"new_session_established\":true}"));
+
+        let human_json = results
+            .to_json_string()
+            .expect("human json should serialize session verification metadata");
+        assert!(human_json.contains("\"session_verification\":{\"requested\":true,\"attempts\":2,\"new_session_established\":true}"));
     }
 
     #[test]
@@ -5729,6 +7738,7 @@ mod tests {
         assert_eq!(context.current_depth(), 2);
         assert_eq!(context.max_depth(), 5);
         assert_eq!(context.current_attempt(), 1);
+        assert!(!context.dry_run());
         assert!(context.has_connection());
         assert!(context.connection().is_some());
 
@@ -5736,6 +7746,599 @@ mod tests {
             .with_connection(|connection| Ok(connection.is_alive()))
             .expect("connection helper should not fail");
         assert_eq!(is_alive, Some(true));
+    }
+
+    #[test]
+    fn task_runtime_context_exposes_dry_run_state() {
+        let context =
+            TaskRuntimeContext::new(TaskExecutionContext::new(0, 1), None).with_dry_run(true);
+        assert!(context.dry_run());
+
+        run_async(async {
+            let blocking_context = BlockingTaskRuntimeContext::new(
+                TaskExecutionContext::new(0, 1),
+                None,
+                Handle::current(),
+            )
+            .with_dry_run(true);
+            assert!(blocking_context.dry_run());
+        });
+    }
+
+    #[test]
+    fn task_info_defaults_to_no_dry_run_support() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+
+        assert!(!task.supports_dry_run());
+    }
+
+    #[test]
+    fn idempotency_mode_defaults_to_disabled() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+
+        assert_eq!(task.idempotency_mode(), IdempotencyMode::Disabled);
+    }
+
+    #[test]
+    fn session_verification_config_defaults_to_single_immediate_max_attempt() {
+        let config = SessionVerificationConfig::default();
+
+        assert_eq!(config.max_attempts(), 1);
+        assert_eq!(config.delay_ms(), 0);
+    }
+
+    #[test]
+    fn task_info_defaults_to_no_session_verification_config() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+
+        assert!(task.session_verification_config().is_none());
+    }
+
+    #[test]
+    fn task_connection_resolver_rejects_replacement_by_default() {
+        let resolver = UnsupportedConnectionReplacementResolver;
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+
+        let err = run_async(resolver.replace_task_connection(&task, "router1"))
+            .expect_err("default replacement hook should be unsupported");
+
+        assert!(matches!(err, crate::GenjaError::NotImplemented(_)));
+        assert!(
+            err.to_string()
+                .contains("task connection replacement is not supported")
+        );
+    }
+
+    #[test]
+    fn session_verification_replaces_connection_after_changed_passed_result() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(1, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("session verification should succeed");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 1);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_passed());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            Some(SessionVerificationMetadata::new(true, 1, true))
+        );
+    }
+
+    #[test]
+    fn session_verification_does_not_replace_after_unchanged_result() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(false)),
+            config: SessionVerificationConfig::new(1, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("unchanged result should succeed without replacement");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_passed());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_verification_does_not_replace_after_failed_result() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::failed(
+                TaskFailure::new(crate::GenjaError::Message("apply failed".to_string()))
+                    .with_kind(TaskFailureKind::Command),
+            ),
+            config: SessionVerificationConfig::new(1, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("failed result should be preserved");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_failed());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_verification_does_not_replace_during_dry_run() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(1, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: true,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver_and_options(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            TaskRunOptions::new(0).with_dry_run(true),
+        ))
+        .expect("dry-run should not replace the connection");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 0);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_passed());
+        assert!(host_result.execution_metadata().dry_run());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_verification_succeeds_after_configured_retry_without_rerunning_task() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(2, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: 1,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("session verification should retry replacement");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 2);
+        let host_result = results.host_result("router1").expect("host result");
+        assert!(host_result.is_passed());
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            Some(SessionVerificationMetadata::new(true, 2, true))
+        );
+    }
+
+    #[test]
+    fn session_verification_exhaustion_returns_connection_failure_without_rerunning_task() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let replace_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(3, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::clone(&replace_calls),
+            fail_until_attempt: usize::MAX,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("session verification failure should be captured");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(replace_calls.load(Ordering::SeqCst), 3);
+        let host_result = results.host_result("router1").expect("host result");
+        let failure = host_result.failure().expect("host should fail");
+        assert!(matches!(failure.kind(), TaskFailureKind::Connection));
+        assert!(!failure.retryable());
+        assert!(failure.message().contains("may already have applied"));
+        assert!(
+            failure
+                .message()
+                .contains("automatic rollback is unavailable")
+        );
+        assert_eq!(
+            failure.details(),
+            Some(&json!({
+                "change_may_have_been_applied": true,
+                "session_verification_attempts": 3,
+                "new_session_established": false,
+                "rollback_available": false,
+            }))
+        );
+        assert_eq!(
+            host_result.execution_metadata().session_verification(),
+            Some(SessionVerificationMetadata::new(true, 3, false))
+        );
+    }
+
+    #[test]
+    fn session_verification_rejects_zero_max_attempts_before_task_execution() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(0, 0),
+            connection_plugin_name: Some("ssh"),
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::new(AtomicUsize::new(0)),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("invalid session verification metadata should be captured");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("host should fail validation");
+        assert!(matches!(failure.kind(), TaskFailureKind::Validation));
+        assert_eq!(
+            failure.message(),
+            "session verification max_attempts must be greater than 0"
+        );
+    }
+
+    #[test]
+    fn session_verification_rejects_missing_connection_before_task_execution() {
+        let start_calls = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(SessionVerificationRuntimeTask {
+            start_calls: Arc::clone(&start_calls),
+            result: HostTaskResult::passed(TaskSuccess::new().with_changed(true)),
+            config: SessionVerificationConfig::new(1, 0),
+            connection_plugin_name: None,
+            supports_dry_run: false,
+        });
+        let resolver = RecordingSessionVerificationResolver {
+            resolve_calls: Arc::new(AtomicUsize::new(0)),
+            replace_calls: Arc::new(AtomicUsize::new(0)),
+            fail_until_attempt: 0,
+        };
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("session-verification-runtime");
+
+        run_async(task.start_with_connection_resolver(
+            "router1",
+            &host,
+            &mut results,
+            Some(&resolver),
+            0,
+        ))
+        .expect("invalid session verification metadata should be captured");
+
+        assert_eq!(start_calls.load(Ordering::SeqCst), 0);
+        let failure = results
+            .host_result("router1")
+            .and_then(HostTaskResult::failure)
+            .expect("host should fail validation");
+        assert!(matches!(failure.kind(), TaskFailureKind::Validation));
+        assert_eq!(
+            failure.message(),
+            "session verification requires a connection plugin"
+        );
+    }
+
+    #[test]
+    fn task_definition_delegates_dry_run_support() {
+        let task = TaskDefinition::new(DryRunInfoTask);
+
+        assert!(task.supports_dry_run());
+    }
+
+    #[test]
+    fn task_definition_retry_override_wins_over_authored_metadata() {
+        let task = TaskDefinition::new(RetryConfiguredFlakyTask {
+            inner: FlakyTask {
+                name: "retry-override",
+                attempts: Arc::new(AtomicUsize::new(0)),
+                succeed_on_attempt: 1,
+            },
+            retry_config: RetryConfig::builder()
+                .allow(true)
+                .max_attempts(3)
+                .delay_ms(100)
+                .build(),
+        })
+        .with_retry_config_override(
+            RetryConfig::builder()
+                .allow(false)
+                .max_attempts(2)
+                .delay_ms(250)
+                .build(),
+        );
+
+        let retry_config = task
+            .retry_config()
+            .expect("retry override should be present");
+        assert_eq!(retry_config.allow(), Some(false));
+        assert_eq!(retry_config.max_attempts(), Some(2));
+        assert_eq!(retry_config.delay_ms(), Some(250));
+    }
+
+    #[test]
+    fn task_definition_session_verification_override_wins_over_authored_metadata() {
+        let task = TaskDefinition::new(SessionVerificationInfoTask {
+            config: SessionVerificationConfig::new(3, 5_000),
+        })
+        .with_session_verification_config_override(SessionVerificationConfig::new(2, 1_000));
+
+        let config = task
+            .session_verification_config()
+            .expect("session verification override should be present");
+        assert_eq!(config.max_attempts(), 2);
+        assert_eq!(config.delay_ms(), 1_000);
+    }
+
+    #[test]
+    fn task_definition_debug_includes_metadata_only() {
+        let task = TaskDefinition::new(ProcessorTask {
+            name: "processor-root",
+            processors: vec!["audit".to_string()],
+        });
+
+        let debug = format!("{task:?}");
+
+        assert!(debug.contains("TaskDefinition"));
+        assert!(debug.contains("processor-root"));
+        assert!(debug.contains("Async"));
+        assert!(debug.contains("audit"));
+        assert!(debug.contains("has_processor_resolver: false"));
+    }
+
+    #[test]
+    fn task_definition_delegates_idempotency_mode() {
+        let task = TaskDefinition::new(IdempotencyInfoTask);
+
+        assert_eq!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify);
+    }
+
+    #[test]
+    fn task_definition_delegates_session_verification_config() {
+        let config = SessionVerificationConfig::new(3, 5_000);
+        let task = TaskDefinition::new(SessionVerificationInfoTask { config });
+
+        assert_eq!(task.session_verification_config(), Some(&config));
+    }
+
+    #[test]
+    fn idempotency_check_serializes_convergence_states() {
+        let converged = IdempotencyCheck::converged("already configured")
+            .with_details(json!({"current": "ntp server 192.0.2.10"}));
+        let converged_json =
+            serde_json::to_value(&converged).expect("converged check should serialize");
+        assert_eq!(
+            converged_json,
+            json!({
+                "Converged": {
+                    "summary": "already configured",
+                    "details": {
+                        "current": "ntp server 192.0.2.10"
+                    }
+                }
+            })
+        );
+
+        let change_required = IdempotencyCheck::change_required("+ntp server 192.0.2.10")
+            .with_details(json!({"desired": "ntp server 192.0.2.10"}));
+        let change_required_json =
+            serde_json::to_value(&change_required).expect("change check should serialize");
+        assert_eq!(
+            change_required_json,
+            json!({
+                "ChangeRequired": {
+                    "diff": "+ntp server 192.0.2.10",
+                    "details": {
+                        "desired": "ntp server 192.0.2.10"
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn task_default_dry_run_methods_report_not_implemented() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+        let host = Host::builder().hostname("router1").build();
+
+        run_async(async {
+            let async_context =
+                TaskRuntimeContext::new(TaskExecutionContext::new(0, 1), None).with_dry_run(true);
+            let error = task
+                .dry_run_async(&host, &async_context)
+                .await
+                .expect_err("default async dry-run should fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("dry_run_async() not implemented")
+            );
+
+            let blocking_context = BlockingTaskRuntimeContext::new(
+                TaskExecutionContext::new(0, 1),
+                None,
+                Handle::current(),
+            )
+            .with_dry_run(true);
+            let error = task
+                .dry_run(&host, &blocking_context)
+                .expect_err("default blocking dry-run should fail");
+            assert!(error.to_string().contains("dry_run() not implemented"));
+        });
+    }
+
+    #[test]
+    fn task_default_idempotency_check_methods_report_not_implemented() {
+        let task = TestTask {
+            name: "default",
+            subs: Vec::new(),
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+        let host = Host::builder().hostname("router1").build();
+
+        run_async(async {
+            let async_context = TaskRuntimeContext::new(TaskExecutionContext::new(0, 1), None);
+            let error = task
+                .check_async(&host, &async_context)
+                .await
+                .expect_err("default async check should fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("async check_async() not implemented")
+            );
+
+            let blocking_context = BlockingTaskRuntimeContext::new(
+                TaskExecutionContext::new(0, 1),
+                None,
+                Handle::current(),
+            );
+            let error = task
+                .check(&host, &blocking_context)
+                .expect_err("default blocking check should fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("blocking check() not implemented")
+            );
+        });
     }
 
     #[test]

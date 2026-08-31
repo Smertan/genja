@@ -165,15 +165,21 @@ When running a task directly, the call may also provide a maximum depth.
 === ":fontawesome-brands-python: Python"
 
     ```python
-    results = genja.run_task(CollectFacts, max_depth=1)
+    import genja as genja_lib
+
+    results = genja.run_task(
+        CollectFacts,
+        run_options=genja_lib.TaskRunOptions(max_depth=1),
+    )
     ```
 
 Use `0` for only the top-level task. Use a higher value when sub-tasks should
 run.
 
 Rust `run_task(...)` and `run_tasks(...)` require the depth argument. Python
-accepts `max_depth=None`; when omitted, the runtime uses
-`runner.max_task_depth` from settings.
+uses `run_options=TaskRunOptions(...)` for runtime execution controls; when
+`run_options` is omitted or `TaskRunOptions.max_depth` is `None`, the runtime
+uses `runner.max_task_depth` from settings.
 
 ## Multiple Tasks
 
@@ -233,7 +239,7 @@ authored in and register under the `RunnerPlugin` group.
     use genja::genja_core::inventory::Hosts;
     use genja::genja_core::settings::RunnerConfig;
     use genja::genja_core::task::{
-        TaskConnectionResolver, TaskDefinition, TaskResults,
+        TaskConnectionResolver, TaskDefinition, TaskResults, TaskRunOptions,
     };
     use genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
     use genja_plugin_manager::PluginManager;
@@ -255,17 +261,17 @@ authored in and register under the `RunnerPlugin` group.
             hosts: &Hosts,
             connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
             _runner_config: &RunnerConfig,
-            max_depth: usize,
+            run_options: TaskRunOptions,
         ) -> Result<TaskResults, genja::GenjaError> {
             let mut results = TaskResults::new(task.as_task().name());
 
             if let Some((host_id, host)) = hosts.iter().next() {
-                task.start_with_connection_resolver(
+                task.start_with_connection_resolver_and_options(
                     host_id.as_ref(),
                     host,
                     &mut results,
                     connection_resolver.as_deref(),
-                    max_depth,
+                    run_options,
                 )
                 .await?;
             }
@@ -295,13 +301,13 @@ authored in and register under the `RunnerPlugin` group.
             hosts: dict[str, object],
             connection_resolver: genja_lib.TaskConnectionResolver | None,
             runner_config: RunnerConfig,
-            max_depth: int,
+            run_options: genja_lib.TaskRunOptions,
         ) -> genja_lib.TaskResults:
             _, first_host = next(iter(hosts.items()))
             return task.run_on_host(
                 first_host,
                 connection_resolver=connection_resolver,
-                max_depth=max_depth,
+                run_options=run_options,
             )
 
 
@@ -337,13 +343,13 @@ Async Python runners use the same base class:
             hosts: dict[str, object],
             connection_resolver: genja_lib.TaskConnectionResolver | None,
             runner_config: RunnerConfig,
-            max_depth: int,
+            run_options: genja_lib.TaskRunOptions,
         ) -> genja_lib.TaskResults:
             _, first_host = next(iter(hosts.items()))
             return task.run_on_host(
                 first_host,
                 connection_resolver=connection_resolver,
-                max_depth=max_depth,
+                run_options=run_options,
             )
     ```
 

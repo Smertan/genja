@@ -629,6 +629,29 @@ fn settings_from_file_uses_defaults_for_empty_file() {
 }
 
 #[test]
+fn settings_from_file_defaults_missing_inventory_fields() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let file_path = tempdir.path().join("config.yaml");
+    std::fs::write(
+        &file_path,
+        r#"
+inventory:
+  plugin: CustomInventoryPlugin
+"#,
+    )
+    .unwrap();
+
+    let settings = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap();
+
+    assert_eq!(settings.inventory().plugin(), "CustomInventoryPlugin");
+    assert!(settings.inventory().options().hosts_file().is_none());
+    assert!(settings.inventory().options().groups_file().is_none());
+    assert!(settings.inventory().options().defaults_file().is_none());
+    assert!(settings.inventory().transform_function().is_none());
+    assert!(settings.inventory().transform_function_options().is_none());
+}
+
+#[test]
 fn settings_from_file_loads_populated_yaml() {
     let ssh_context = write_temp_ssh_config("Host example\n  HostName example.com\n");
     let tempdir = tempfile::tempdir().unwrap();

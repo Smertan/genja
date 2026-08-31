@@ -63,17 +63,35 @@ class _GenjaModel(BaseModel):
 
 
 class ConnectionKey(_GenjaModel):
+    """Connection lookup key for a host and connection plugin."""
+
     hostname: str
+    """Inventory hostname the connection targets."""
+
     plugin_name: str
+    """Connection plugin name selected for the task."""
 
 
 class ResolvedConnectionParams(_GenjaModel):
+    """Resolved connection parameters passed to connection instances."""
+
     hostname: str
+    """Inventory hostname the connection targets."""
+
     port: int | None = None
+    """Network port, if configured."""
+
     username: str | None = None
+    """Username, if configured."""
+
     password: str | None = None
+    """Password or secret, if configured."""
+
     platform: str | None = None
+    """Platform identifier, if configured."""
+
     extras: Any | None = None
+    """Additional connection options from inventory."""
 
 
 class ConnectionBase(ABC):
@@ -83,9 +101,15 @@ class ConnectionBase(ABC):
     def open(
         self,
         params: ResolvedConnectionParams,
-    ) -> None | Awaitable[None]: ...
+    ) -> None | Awaitable[None]:
+        """Open the connection using resolved inventory parameters."""
+        ...
 
     def execute_command(self, command: str) -> str | Awaitable[str]:
+        """Execute a command on the connection.
+
+        Override this for command-oriented connection plugins.
+        """
         raise NotImplementedError("connection does not implement execute_command")
 
     @abstractmethod
@@ -96,10 +120,14 @@ class ConnectionBase(ABC):
         | dict[str, Any]
         | None
         | Awaitable[ConnectionKey | dict[str, Any] | None]
-    ): ...
+    ):
+        """Close the connection and optionally return a reusable connection key."""
+        ...
 
     @abstractmethod
-    def is_alive(self) -> bool | Awaitable[bool]: ...
+    def is_alive(self) -> bool | Awaitable[bool]:
+        """Return whether the connection is currently usable."""
+        ...
 
 
 class ConnectionPluginBase(PluginBase):
@@ -112,7 +140,9 @@ class ConnectionPluginBase(PluginBase):
     def create(
         self,
         key: ConnectionKey,
-    ) -> ConnectionBase | Awaitable[ConnectionBase]: ...
+    ) -> ConnectionBase | Awaitable[ConnectionBase]:
+        """Create a connection instance for a connection key."""
+        ...
 
 
 __all__ = [

@@ -66,9 +66,11 @@ Rust inventory plugins can be synchronous (`PluginInventory`) or asynchronous
 
 When the inventory plugin is discovered from the runtime plugin directory and
 selected by `settings.yaml`, use `Genja::from_settings_file_async(...)` for the
-async path. When you register inventory plugins in code, load the inventory
-explicitly through the plugin and then build `Genja` from the returned
-`Inventory`.
+async path. For programmatic settings, use `Genja::from_settings_async(...)`.
+Async constructors are strict: the selected inventory plugin must implement
+`AsyncPluginInventory`. Use `Genja::from_settings_file(...)` or
+`Genja::from_settings(...)` for sync-only inventory plugins such as
+`FileInventoryPlugin`.
 
 ```rust
 use genja::Genja;
@@ -80,7 +82,7 @@ use genja::genja_core::inventory::{
     Hosts,
     Inventory,
 };
-use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin, Plugins};
+use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
 use genja_plugin_manager::PluginManager;
 
 #[derive(Debug)]
@@ -107,21 +109,16 @@ impl AsyncPluginInventory for ApiInventoryPlugin {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let settings = Settings::from_file("settings.yaml")?;
+    // Assumes `api_inventory` is available through runtime plugin discovery.
+    let settings = Settings::builder()
+        .inventory(
+            genja::genja_core::settings::InventoryConfig::builder()
+                .plugin("api_inventory")
+                .build(),
+        )
+        .build();
 
-    let mut plugins = PluginManager::new();
-    plugins.register_plugin(Plugins::AsyncInventory(Box::new(ApiInventoryPlugin)));
-
-    let inventory = plugins
-        .get_async_inventory_plugin("api_inventory")
-        .ok_or("missing async inventory plugin")?
-        .load_async(&settings, &plugins)
-        .await?;
-
-    let genja = Genja::builder(inventory)
-        .with_settings(settings)
-        .with_plugin_manager(plugins)
-        .build()?;
+    let genja = Genja::from_settings_async(settings).await?;
 
     assert_eq!(genja.host_ids().len(), 1);
     Ok(())
@@ -145,7 +142,7 @@ use genja::genja_core::task::{HostTaskResult, TaskError, TaskRuntimeContext, Tas
 
 struct CheckConfig;
 
-#[genja_task(name = "check_config")]
+#[genja_task(name = "check_config", supports_dry_run = true)]
 impl CheckConfig {
     async fn start_async(
         &self,
@@ -154,6 +151,19 @@ impl CheckConfig {
     ) -> Result<HostTaskResult, TaskError> {
         Ok(HostTaskResult::passed(
             TaskSuccess::new().with_summary("configuration checked"),
+        ))
+    }
+
+    async fn dry_run_async(
+        &self,
+        _host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        assert!(context.dry_run());
+        Ok(HostTaskResult::passed(
+            TaskSuccess::new()
+                .with_changed(false)
+                .with_summary("configuration would be checked"),
         ))
     }
 }
@@ -172,6 +182,50 @@ assert_eq!(host_result.status(), "passed");
 assert_eq!(host_result.execution_metadata().attempts(), 1);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+Tasks that declare dry-run support can be previewed with explicit runtime
+options:
+
+```rust
+use genja::TaskRunOptions;
+
+let results = genja.run_task_with_options(
+    CheckConfig,
+    TaskRunOptions::new(1).with_dry_run(true),
+)?;
+
+assert!(results.host_result("router1").unwrap().execution_metadata().dry_run());
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Tasks may also declare idempotency checks with `IdempotencyMode::Check` or
+`IdempotencyMode::CheckAndVerify`. When a pre-check reports convergence, Genja
+records a passed host result with `changed=false` and does not invoke the normal
+task entrypoint. `CheckAndVerify` reruns the same check after a passed
+application result and records a validation failure if the host is still not
+converged.
+
+Tasks that change management access can opt into post-change session
+verification. Genja closes and replaces the declared connection after a passed,
+changed result and confirms that a new authenticated session can be established:
+
+```rust
+#[genja_task(
+    name = "replace_management_acl",
+    connection_plugin_name = "ssh",
+    session_verification(
+        max_attempts = 3,
+        delay_ms = 5000
+    )
+)]
+impl ReplaceManagementAcl {
+    // task methods
+}
+```
+
+Session verification is separate from retries and idempotency. When combined
+with `IdempotencyMode::CheckAndVerify`, the post-check runs through the
+replacement session.
 
 For async Rust applications, use `run_task_async(...)` instead of `run_task(...)`:
 

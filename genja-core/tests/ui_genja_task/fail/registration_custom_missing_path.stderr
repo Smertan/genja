@@ -1,0 +1,5 @@
+error: `factory = custom(...)` requires a factory function path
+ --> tests/ui_genja_task/fail/registration_custom_missing_path.rs:9:19
+  |
+9 |         factory = custom
+  |                   ^^^^^^

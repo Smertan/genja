@@ -14,6 +14,10 @@ results, connection state, or processor behavior.
 - Settings models and file loading for JSON and YAML configuration
 - Task traits, task metadata, task runtime context, and structured task results
   with semantic outcomes plus host execution metadata
+- Task-authored idempotency metadata and convergence check results for
+  pre-execution checks and optional post-application verification
+- Task-authored session verification metadata for proving post-change
+  replacement management sessions
 - Connection state and task connection resolver traits for runtime integrations
 - Processor result handling used by task execution
 - Re-exported task authoring macros from `genja-core-derive`
@@ -86,3 +90,16 @@ For complete application examples, see the
 Per-host task results are represented by `HostTaskResult`, which separates the
 semantic task outcome from host-level execution metadata such as timing and
 retry attempt state.
+
+Tasks that can inspect current host state may opt into idempotency by returning
+`IdempotencyMode::Check` or `IdempotencyMode::CheckAndVerify` from
+`TaskInfo::idempotency_mode()` and implementing the matching `check(...)` or
+`check_async(...)` hook. A converged check returns a passed host result with
+`changed=false` without invoking the normal task entrypoint.
+
+Tasks that change management access may opt into post-change session
+verification by returning `Some(SessionVerificationConfig::new(...))` from
+`TaskInfo::session_verification_config()` or by using
+`session_verification(...)` in the `#[genja_task(...)]` macro. Session
+verification is independent from idempotency; when both are enabled, the
+post-application idempotency check runs through the replacement session.

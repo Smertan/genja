@@ -1,0 +1,21 @@
+error: `idempotency` requires blocking tasks to define `fn check(...)`, not `check_async(...)`
+  --> tests/ui_genja_task/fail/blocking_task_async_check.rs:14:6
+   |
+14 | impl BlockingAsyncCheckTask {
+   |      ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `genja_core::inventory::Host`
+ --> tests/ui_genja_task/fail/blocking_task_async_check.rs:2:5
+  |
+2 | use genja_core::inventory::Host;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `BlockingTaskRuntimeContext`, `HostTaskResult`, `IdempotencyCheck`, `IdempotencyMode`, `TaskRuntimeContext`, and `TaskSuccess`
+ --> tests/ui_genja_task/fail/blocking_task_async_check.rs:4:5
+  |
+4 |     BlockingTaskRuntimeContext, HostTaskResult, IdempotencyCheck, IdempotencyMode,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+5 |     TaskRuntimeContext, TaskSuccess,
+  |     ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^

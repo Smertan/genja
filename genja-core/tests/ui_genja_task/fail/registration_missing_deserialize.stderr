@@ -1,0 +1,29 @@
+error[E0277]: the trait bound `BadTask: serde::de::DeserializeOwned` is not satisfied
+  --> tests/ui_genja_task/fail/registration_missing_deserialize.rs:7:1
+   |
+7  | / #[genja_task(
+8  | |     name = "bad_task",
+9  | |     registration(id = "acme.tests.bad_task")
+10 | | )]
+   | |__^ the trait `for<'de> genja_core::serde::Deserialize<'de>` is not implemented for `BadTask`
+   |
+   = help: the following other types implement trait `genja_core::serde::Deserialize<'de>`:
+             &'a Path
+             &'a [u8]
+             &'a ron::value::raw::RawValue
+             &'a str
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+           and $N others
+   = note: required for `BadTask` to implement `DeserializeOwned`
+note: required by a bound in `from_value`
+  --> $CARGO/serde_json-$VERSION/src/value/mod.rs
+   |
+   | pub fn from_value<T>(value: Value) -> Result<T, Error>
+   |        ---------- required by a bound in this function
+   | where
+   |     T: DeserializeOwned,
+   |        ^^^^^^^^^^^^^^^^ required by this bound in `from_value`
+   = note: this error originates in the attribute macro `genja_task` (in Nightly builds, run with -Z macro-backtrace for more info)

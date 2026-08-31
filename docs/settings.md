@@ -127,6 +127,62 @@ should load inventory from `settings.inventory`:
     runtime = genja.Genja.from_settings(settings)
     ```
 
+Use `Genja::from_settings_async(...)` / `Genja.from_settings_async(...)` for
+programmatic settings, or `Genja.from_settings_file_async(...)` for Python
+settings files, when the selected inventory plugin is async. Async construction
+is strict: the selected plugin must be async-capable; use the sync constructors
+for sync-only inventory plugins such as `FileInventoryPlugin`.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::Genja;
+    use genja_core::Settings;
+    use genja_core::settings::InventoryConfig;
+
+    # async fn build_runtime() -> Result<(), Box<dyn std::error::Error>> {
+    // Assumes `api_inventory` is available through runtime plugin discovery.
+    let settings = Settings::builder()
+        .inventory(InventoryConfig::builder().plugin("api_inventory").build())
+        .build();
+
+    let runtime = Genja::from_settings_async(settings).await?;
+    # Ok(())
+    # }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja
+
+    class ApiInventoryPlugin(genja.InventoryPluginBase):
+        name = "api_inventory"
+
+        async def load(self, settings, plugins):
+            return {
+                "router1": {
+                    "hostname": "10.0.0.1",
+                    "platform": "ios",
+                },
+            }
+
+    plugins = genja.PluginManager()
+    plugins.register_plugin(ApiInventoryPlugin())
+
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="api_inventory"),
+    )
+
+    runtime = await genja.Genja.from_settings_async(settings, plugin_manager=plugins)
+
+    # Or load settings from a file with the same strict async inventory contract.
+    runtime = await genja.Genja.from_settings_file_async(
+        "settings.yaml",
+        plugin_manager=plugins,
+    )
+    ```
+
 ### With Explicit Inventory
 
 When hosts or a full inventory are supplied explicitly, `from_hosts(...)` and
@@ -225,11 +281,9 @@ These top-level sections are supported:
 | `runner` | object | `RunnerConfig::default()` |
 | `logging` | object | `LoggingConfig::default()` |
 
-Top-level sections are optional. Nested fields have the defaults listed below.
-Unknown top-level sections are rejected.
-Current implementation note: if the `inventory` section is present, include an
-`options` object; use `options: {}` when the selected inventory plugin does not
-need file paths.
+Top-level sections are optional. Nested fields have the defaults listed below,
+including when only part of a section is configured. Unknown top-level sections
+are rejected.
 
 ## Core
 

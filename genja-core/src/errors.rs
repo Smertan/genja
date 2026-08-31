@@ -348,6 +348,8 @@ pub enum GenjaError {
     NotInventoryPlugin(String),
     /// The named plugin is an async-only inventory plugin and requires async construction.
     AsyncInventoryPluginRequiresAsyncConstruction(String),
+    /// The named plugin is a sync-only inventory plugin and requires sync construction.
+    SyncInventoryPluginRequiresSyncConstruction(String),
     /// The named plugin is not a runner plugin.
     NotRunnerPlugin(String),
     /// A plugin failed to load.
@@ -374,7 +376,13 @@ impl fmt::Display for GenjaError {
             GenjaError::AsyncInventoryPluginRequiresAsyncConstruction(name) => {
                 write!(
                     f,
-                    "async inventory plugin '{name}' requires async runtime construction"
+                    "async inventory plugin '{name}' requires async runtime construction.\n\nUse one of:\n- `Genja::from_settings_async(...)`\n- `Genja::from_settings_file_async(...)`"
+                )
+            }
+            GenjaError::SyncInventoryPluginRequiresSyncConstruction(name) => {
+                write!(
+                    f,
+                    "sync inventory plugin '{name}' requires sync runtime construction.\n\nUse one of:\n- `Genja::from_settings(...)`\n- `Genja::from_settings_file(...)`\n\nOr change the inventory plugin to an async implementation before using an async constructor."
                 )
             }
             GenjaError::NotRunnerPlugin(name) => {

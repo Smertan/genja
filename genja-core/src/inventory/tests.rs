@@ -6,7 +6,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::runtime::Builder;
-    use tokio::sync::Mutex;
+    use tokio::sync::{Mutex, Notify};
 
     fn run_async<F: Future>(future: F) -> F::Output {
         Builder::new_current_thread()
@@ -14,6 +14,17 @@ mod tests {
             .build()
             .expect("test runtime should build")
             .block_on(future)
+    }
+
+    fn test_connection_params(hostname: &str) -> ResolvedConnectionParams {
+        ResolvedConnectionParams {
+            hostname: hostname.to_string(),
+            port: Some(22),
+            username: None,
+            password: None,
+            platform: None,
+            extras: None,
+        }
     }
 
     fn create_dummy_hosts() -> Result<Hosts, std::io::Error> {
@@ -928,18 +939,299 @@ mod tests {
         let factory = Arc::new(|_key: &ConnectionKey| None);
         let manager = ConnectionManager::with_connection_factory(factory);
         let key = ConnectionKey::new("h1", "ssh");
-        let params = ResolvedConnectionParams {
-            hostname: "h1".to_string(),
-            port: Some(22),
-            username: None,
-            password: None,
-            platform: None,
-            extras: None,
-        };
+        let params = test_connection_params("h1");
 
         let result = run_async(manager.open_connection(&key, &params)).unwrap();
         assert!(result.is_none());
         assert!(manager.connection_counters_for("ssh").is_none());
+    }
+
+    #[test]
+    fn connection_manager_replace_connection_evicts_closes_and_opens_new_instance() {
+        #[derive(Debug)]
+        struct RecordingConnection {
+            key: ConnectionKey,
+            id: usize,
+            alive: bool,
+            close_calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl Connection for RecordingConnection {
+            fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+                Box::new(Self {
+                    key: key.clone(),
+                    id: self.id,
+                    alive: false,
+                    close_calls: Arc::clone(&self.close_calls),
+                })
+            }
+
+            fn is_alive(&self) -> bool {
+                self.alive
+            }
+
+            async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+                self.alive = true;
+                Ok(())
+            }
+
+            async fn execute_command(&mut self, command: &str) -> Result<String, String> {
+                if command == "id" {
+                    Ok(self.id.to_string())
+                } else {
+                    Err("unsupported command".to_string())
+                }
+            }
+
+            fn close(&mut self) -> ConnectionKey {
+                self.alive = false;
+                self.close_calls.fetch_add(1, Ordering::SeqCst);
+                self.key.clone()
+            }
+        }
+
+        let next_id = Arc::new(AtomicUsize::new(0));
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let factory = {
+            let next_id = Arc::clone(&next_id);
+            let close_calls = Arc::clone(&close_calls);
+            Arc::new(move |key: &ConnectionKey| {
+                let id = next_id.fetch_add(1, Ordering::SeqCst) + 1;
+                Some(Arc::new(Mutex::new(RecordingConnection {
+                    key: key.clone(),
+                    id,
+                    alive: false,
+                    close_calls: Arc::clone(&close_calls),
+                })) as Arc<Mutex<dyn Connection>>)
+            })
+        };
+        let manager = ConnectionManager::with_connection_factory(factory);
+        let key = ConnectionKey::new("h1", "ssh");
+        let params = test_connection_params("h1");
+
+        let first = run_async(manager.open_connection(&key, &params))
+            .expect("initial open should succeed")
+            .expect("initial connection should exist");
+        let replacement = run_async(manager.replace_connection(&key, &params))
+            .expect("replacement should succeed")
+            .expect("replacement connection should exist");
+
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &manager.get(&key).expect("replacement should be cached")
+        ));
+
+        run_async(async {
+            let first = first.lock().await;
+            assert!(!first.is_alive());
+            let mut replacement = replacement.lock().await;
+            assert_eq!(replacement.execute_command("id").await.unwrap(), "2");
+            assert!(replacement.is_alive());
+        });
+
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+        let counters = manager.connection_counters_for("ssh").unwrap();
+        assert_eq!(counters.create_calls, 2);
+        assert_eq!(counters.open_calls, 2);
+        assert_eq!(counters.close_calls, 1);
+    }
+
+    #[test]
+    fn connection_manager_open_waits_for_same_key_replacement() {
+        #[derive(Debug)]
+        struct BlockingOpenConnection {
+            key: ConnectionKey,
+            id: usize,
+            alive: bool,
+            replacement_open_started: Arc<Notify>,
+            replacement_open_continue: Arc<Notify>,
+        }
+
+        #[async_trait]
+        impl Connection for BlockingOpenConnection {
+            fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+                Box::new(Self {
+                    key: key.clone(),
+                    id: self.id,
+                    alive: false,
+                    replacement_open_started: Arc::clone(&self.replacement_open_started),
+                    replacement_open_continue: Arc::clone(&self.replacement_open_continue),
+                })
+            }
+
+            fn is_alive(&self) -> bool {
+                self.alive
+            }
+
+            async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+                if self.id == 2 {
+                    self.replacement_open_started.notify_one();
+                    self.replacement_open_continue.notified().await;
+                }
+                self.alive = true;
+                Ok(())
+            }
+
+            async fn execute_command(&mut self, command: &str) -> Result<String, String> {
+                if command == "id" {
+                    Ok(self.id.to_string())
+                } else {
+                    Err("unsupported command".to_string())
+                }
+            }
+
+            fn close(&mut self) -> ConnectionKey {
+                self.alive = false;
+                self.key.clone()
+            }
+        }
+
+        run_async(async {
+            let next_id = Arc::new(AtomicUsize::new(0));
+            let replacement_open_started = Arc::new(Notify::new());
+            let replacement_open_continue = Arc::new(Notify::new());
+            let factory = {
+                let next_id = Arc::clone(&next_id);
+                let replacement_open_started = Arc::clone(&replacement_open_started);
+                let replacement_open_continue = Arc::clone(&replacement_open_continue);
+                Arc::new(move |key: &ConnectionKey| {
+                    let id = next_id.fetch_add(1, Ordering::SeqCst) + 1;
+                    Some(Arc::new(Mutex::new(BlockingOpenConnection {
+                        key: key.clone(),
+                        id,
+                        alive: false,
+                        replacement_open_started: Arc::clone(&replacement_open_started),
+                        replacement_open_continue: Arc::clone(&replacement_open_continue),
+                    })) as Arc<Mutex<dyn Connection>>)
+                })
+            };
+            let manager = Arc::new(ConnectionManager::with_connection_factory(factory));
+            let key = ConnectionKey::new("h1", "ssh");
+            let params = test_connection_params("h1");
+
+            manager
+                .open_connection(&key, &params)
+                .await
+                .expect("initial open should succeed")
+                .expect("initial connection should exist");
+
+            let replace_manager = Arc::clone(&manager);
+            let replace_key = key.clone();
+            let replace_params = params.clone();
+            let replace_task = tokio::spawn(async move {
+                replace_manager
+                    .replace_connection(&replace_key, &replace_params)
+                    .await
+                    .expect("replacement should succeed")
+                    .expect("replacement connection should exist")
+            });
+
+            replacement_open_started.notified().await;
+
+            let open_manager = Arc::clone(&manager);
+            let open_key = key.clone();
+            let open_params = params.clone();
+            let open_task = tokio::spawn(async move {
+                open_manager
+                    .open_connection(&open_key, &open_params)
+                    .await
+                    .expect("open should succeed")
+                    .expect("connection should exist")
+            });
+
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            assert!(!open_task.is_finished());
+            assert_eq!(next_id.load(Ordering::SeqCst), 2);
+
+            replacement_open_continue.notify_one();
+            let replacement = replace_task.await.expect("replace task should join");
+            let opened = open_task.await.expect("open task should join");
+
+            assert!(Arc::ptr_eq(&replacement, &opened));
+            let mut opened = opened.lock().await;
+            assert_eq!(opened.execute_command("id").await.unwrap(), "2");
+            assert_eq!(next_id.load(Ordering::SeqCst), 2);
+        });
+    }
+
+    #[test]
+    fn connection_manager_replacements_for_different_keys_can_open_concurrently() {
+        #[derive(Debug)]
+        struct ConcurrentOpenConnection {
+            key: ConnectionKey,
+            alive: bool,
+            active_opens: Arc<AtomicUsize>,
+            max_active_opens: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl Connection for ConcurrentOpenConnection {
+            fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+                Box::new(Self {
+                    key: key.clone(),
+                    alive: false,
+                    active_opens: Arc::clone(&self.active_opens),
+                    max_active_opens: Arc::clone(&self.max_active_opens),
+                })
+            }
+
+            fn is_alive(&self) -> bool {
+                self.alive
+            }
+
+            async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+                let active = self.active_opens.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_active_opens.fetch_max(active, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                self.active_opens.fetch_sub(1, Ordering::SeqCst);
+                self.alive = true;
+                Ok(())
+            }
+
+            fn close(&mut self) -> ConnectionKey {
+                self.alive = false;
+                self.key.clone()
+            }
+        }
+
+        run_async(async {
+            let active_opens = Arc::new(AtomicUsize::new(0));
+            let max_active_opens = Arc::new(AtomicUsize::new(0));
+            let factory = {
+                let active_opens = Arc::clone(&active_opens);
+                let max_active_opens = Arc::clone(&max_active_opens);
+                Arc::new(move |key: &ConnectionKey| {
+                    Some(Arc::new(Mutex::new(ConcurrentOpenConnection {
+                        key: key.clone(),
+                        alive: false,
+                        active_opens: Arc::clone(&active_opens),
+                        max_active_opens: Arc::clone(&max_active_opens),
+                    })) as Arc<Mutex<dyn Connection>>)
+                })
+            };
+            let manager = Arc::new(ConnectionManager::with_connection_factory(factory));
+            let key1 = ConnectionKey::new("h1", "ssh");
+            let key2 = ConnectionKey::new("h2", "ssh");
+            let params1 = test_connection_params("h1");
+            let params2 = test_connection_params("h2");
+
+            let replace1 = {
+                let manager = Arc::clone(&manager);
+                tokio::spawn(async move { manager.replace_connection(&key1, &params1).await })
+            };
+            let replace2 = {
+                let manager = Arc::clone(&manager);
+                tokio::spawn(async move { manager.replace_connection(&key2, &params2).await })
+            };
+            let result1 = replace1.await.expect("h1 replace task should join");
+            let result2 = replace2.await.expect("h2 replace task should join");
+
+            assert!(result1.expect("h1 replace should succeed").is_some());
+            assert!(result2.expect("h2 replace should succeed").is_some());
+            assert_eq!(max_active_opens.load(Ordering::SeqCst), 2);
+        });
     }
 
     #[test]

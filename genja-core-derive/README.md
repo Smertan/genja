@@ -20,14 +20,25 @@ use genja_core::task::{
 
 struct CheckTask;
 
-#[genja_task(name = "check", connection_plugin_name = "ssh")]
+#[genja_task(
+    name = "check",
+    connection_plugin_name = "ssh",
+    session_verification(
+        max_attempts = 3,
+        delay_ms = 5000
+    )
+)]
 impl CheckTask {
     async fn start_async(
         &self,
         _host: &Host,
         _context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
-        Ok(HostTaskResult::passed(TaskSuccess::new()))
+        Ok(HostTaskResult::passed(
+            TaskSuccess::new()
+                .with_changed(true)
+                .with_summary("management access updated"),
+        ))
     }
 }
 ```
@@ -68,3 +79,14 @@ The current supported contract does not include:
 - unknown `#[task(...)]` helper attributes
 - `DerefMacro` or `DerefMutMacro` on non-tuple-wrapper types
 - `DerefMacro` without an in-scope `DerefTarget` trait
+
+`#[genja_task(...)]` also validates optional task hooks. Use
+`supports_dry_run = true` with `dry_run(...)` or `dry_run_async(...)`, and use
+`idempotency = IdempotencyMode::Check` or
+`idempotency = IdempotencyMode::CheckAndVerify` with `check(...)` or
+`check_async(...)`. The hook must match the task entrypoint mode.
+
+Grouped metadata uses nested macro arguments. Use `retry(...)` for task retry
+overrides and `session_verification(...)` for post-change replacement session
+verification. Session verification requires `connection_plugin_name`; declaring
+it without a task connection is rejected by the macro.

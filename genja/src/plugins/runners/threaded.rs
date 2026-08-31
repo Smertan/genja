@@ -118,7 +118,7 @@
 //! ```rust
 //! use genja_core::inventory::{Hosts, Host, BaseBuilderHost};
 //! use genja_core::settings::RunnerConfig;
-//! use genja_core::task::TaskDefinition;
+//! use genja_core::task::{TaskDefinition, TaskRunOptions};
 //! use genja_plugin_manager::plugin_types::PluginRunner;
 //! # use genja::plugins::ThreadedRunnerPlugin;
 //!
@@ -132,7 +132,13 @@
 //! let config = RunnerConfig::default();
 //!
 //! // let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-//! // let results = runtime.block_on(runner.run_task(&task, &hosts, None, &config, 10))?;
+//! // let results = runtime.block_on(runner.run_task(
+//! //     &task,
+//! //     &hosts,
+//! //     None,
+//! //     &config,
+//! //     TaskRunOptions::new(10),
+//! // ))?;
 //! # Ok(())
 //! # }
 //! ```
@@ -152,7 +158,7 @@
 //! ## Running Multiple Tasks
 //!
 //! ```rust
-//! use genja_core::task::Tasks;
+//! use genja_core::task::{TaskRunOptions, Tasks};
 //! use genja_plugin_manager::plugin_types::PluginRunner;
 //! use tokio::runtime::Builder;
 //! # use genja::plugins::ThreadedRunnerPlugin;
@@ -170,7 +176,13 @@
 //!
 //! // Execute root tasks in order, each with parallel host execution
 //! let runtime = Builder::new_current_thread().enable_all().build().unwrap();
-//! let all_results = runtime.block_on(runner.run_tasks(&tasks, &hosts, None, &config, 10))?;
+//! let all_results = runtime.block_on(runner.run_tasks(
+//!     &tasks,
+//!     &hosts,
+//!     None,
+//!     &config,
+//!     TaskRunOptions::new(10),
+//! ))?;
 //! # Ok(())
 //! # }
 //! ```
@@ -219,7 +231,7 @@ use genja_core::GenjaError;
 use genja_core::NatString;
 use genja_core::inventory::{Host, Hosts};
 use genja_core::settings::RunnerConfig;
-use genja_core::task::{TaskDefinition, TaskInfo, TaskResults, Tasks};
+use genja_core::task::{TaskDefinition, TaskInfo, TaskResults, TaskRunOptions, Tasks};
 use genja_plugin_manager::plugin_types::{Plugin, PluginRunner};
 use log::error;
 use std::time::SystemTime;
@@ -266,7 +278,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
     /// * `hosts` - A collection of hosts on which to execute the task.
     /// * `connection_resolver` - Optional shared resolver used for per-host connection selection.
     /// * `runner_config` - Configuration for the runner, including the desired concurrency limit.
-    /// * `max_depth` - The maximum recursion depth for nested task execution.
+    /// * `options` - Runtime options for task execution.
     ///
     /// # Returns
     ///
@@ -285,7 +297,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         hosts: &Hosts,
         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        max_depth: usize,
+        run_options: TaskRunOptions,
     ) -> Result<TaskResults, GenjaError> {
         if hosts.is_empty() {
             let started_at = SystemTime::now();
@@ -320,7 +332,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
                     &host,
                     connection_resolver,
                     &runner_config,
-                    max_depth,
+                    run_options,
                 )
                 .await
             });
@@ -360,7 +372,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
                         &host,
                         connection_resolver,
                         &runner_config,
-                        max_depth,
+                        run_options,
                     )
                     .await
                 });
@@ -386,7 +398,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
         hosts: &Hosts,
         connection_resolver: Option<std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>>,
         runner_config: &RunnerConfig,
-        max_depth: usize,
+        run_options: TaskRunOptions,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
@@ -396,7 +408,7 @@ impl PluginRunner for ThreadedRunnerPlugin {
                     hosts,
                     connection_resolver.clone(),
                     runner_config,
-                    max_depth,
+                    run_options,
                 )
                 .await?,
             );

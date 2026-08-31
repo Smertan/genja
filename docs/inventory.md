@@ -332,19 +332,23 @@ Python inventory plugins extend `InventoryPluginBase` and implement
 
 ### Async Loaders
 
-Python and Rust both support async inventory loading, but the integration path
-differs today. Python can pass an in-memory plugin manager into
-`Genja.from_settings_file(...)`. Rust currently needs to register the plugin,
-load the inventory explicitly, and then build `Genja` from that inventory.
+Python and Rust both support async inventory loading. Async runtime construction
+is strict: Rust `Genja::from_settings_async(...)` and
+`Genja::from_settings_file_async(...)` require the selected inventory plugin to
+implement `AsyncPluginInventory`, and Python `Genja.from_settings_async(...)`
+or `Genja.from_settings_file_async(...)` requires an async Python inventory
+plugin. Use the synchronous constructors for sync-only inventory plugins such as
+`FileInventoryPlugin`.
 
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
     use genja::Genja;
     use genja::async_trait;
-    use genja::genja_core::inventory::{Host, Hosts, Inventory};
+    use genja::genja_core::inventory::{BaseBuilderHost, Host, Hosts, Inventory};
     use genja::genja_core::{InventoryLoadError, Settings};
-    use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin, Plugins};
+    use genja::genja_core::settings::InventoryConfig;
+    use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
     use genja_plugin_manager::PluginManager;
 
     #[derive(Debug)]
@@ -374,21 +378,12 @@ load the inventory explicitly, and then build `Genja` from that inventory.
 
     #[tokio::main]
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
-        let settings = Settings::from_file("settings.yaml")?;
+        // Assumes `api_inventory` is available through runtime plugin discovery.
+        let settings = Settings::builder()
+            .inventory(InventoryConfig::builder().plugin("api_inventory").build())
+            .build();
 
-        let mut plugins = PluginManager::new();
-        plugins.register_plugin(Plugins::AsyncInventory(Box::new(ApiInventoryPlugin)));
-
-        let inventory = plugins
-            .get_async_inventory_plugin("api_inventory")
-            .ok_or("missing async inventory plugin")?
-            .load_async(&settings, &plugins)
-            .await?;
-
-        let genja = Genja::builder(inventory)
-            .with_settings(settings)
-            .with_plugin_manager(plugins)
-            .build()?;
+        let genja = Genja::from_settings_async(settings).await?;
 
         for host_id in genja.host_ids() {
             println!("{host_id}");
@@ -399,22 +394,21 @@ load the inventory explicitly, and then build `Genja` from that inventory.
     ```
 
 === ":fontawesome-brands-python: Python"
-    Python async inventory loaders use the same base class and still use
-    `Genja.from_settings_file(...)`. Pass the plugin manager when loading
-    settings so the runtime can resolve the Python plugin by name.
+    Python async inventory loaders use the same base class and
+    `Genja.from_settings_async(...)` or `Genja.from_settings_file_async(...)`.
+    Pass the plugin manager when loading settings so the runtime can resolve the
+    Python plugin by name.
 
     ```python
-    import genja as genja_lib
-    from genja import Settings
-    from genja.inventory import InventoryPluginBase
+    import genja
 
 
-    class ApiInventoryPlugin(InventoryPluginBase):
+    class ApiInventoryPlugin(genja.InventoryPluginBase):
         name = "api_inventory"
 
         async def load(
             self,
-            settings: Settings,
+            settings: genja.Settings,
             plugins: object,
         ) -> dict[str, dict[str, object]]:
             return {
@@ -429,15 +423,24 @@ load the inventory explicitly, and then build `Genja` from that inventory.
             }
 
 
-    plugins = genja_lib.PluginManager()
+    plugins = genja.PluginManager()
     plugins.register_plugin(ApiInventoryPlugin())
 
-    genja = genja_lib.Genja.from_settings_file(
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="api_inventory"),
+    )
+
+    runtime = await genja.Genja.from_settings_async(
+        settings,
+        plugin_manager=plugins,
+    )
+
+    runtime = await genja.Genja.from_settings_file_async(
         "settings.yaml",
         plugin_manager=plugins,
     )
 
-    for host_id in genja.host_ids():
+    for host_id in runtime.host_ids():
         print(host_id)
     ```
 
@@ -564,6 +567,19 @@ Use `filter_by_key_value` to match values with a regular expression:
 
     ```python
     core_site = genja.filter_by_key_value("data.site.name", "^core$")
+    ```
+
+Use Python `filter_hosts` when host selection is easier to express as code:
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    lab_ios = genja.filter_hosts(
+        lambda host: (
+            host["platform"] == "ios"
+            and host["data"]["site"]["name"] == "lab-a"
+        )
+    )
     ```
 
 Plain keys can match nested objects recursively. Dot paths such as

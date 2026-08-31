@@ -1,0 +1,5 @@
+error: `registration(input_schema = ...)` supports only `"schemars"`
+  --> tests/ui_genja_task/fail/unsupported_registration_schema.rs:10:24
+   |
+10 |         input_schema = "jsonschema"
+   |                        ^^^^^^^^^^^^

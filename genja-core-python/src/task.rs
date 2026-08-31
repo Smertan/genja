@@ -1,14 +1,16 @@
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
-    HostTaskResult, MessageLevel, RetryConfig, Task, TaskConnectionResolver, TaskDefinition,
-    TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
-    TaskResultsSummary, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
+    HostTaskResult, IdempotencyCheck, IdempotencyMode, MessageLevel, RetryConfig,
+    SessionVerificationConfig, Task, TaskConnectionResolver, TaskDefinition, TaskError,
+    TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
+    TaskResultsSummary, TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
+    validate_explicit_task_id, validate_task_version,
 };
 use async_trait::async_trait;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyBool, PyDict, PyModule};
 use pyo3_async_runtimes::tokio::future_into_py;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -22,6 +24,288 @@ use crate::plugin_manager::{
 enum PythonTaskExecutionMode {
     Blocking,
     Async,
+}
+
+macro_rules! py_string_enum {
+    (
+        py: $py_enum:ident,
+        rust: $rust_enum:ident,
+        python_name: $python_name:literal,
+        variants: {
+            $(
+                $variant:ident => $class_attr:ident => $value:literal
+            ),+ $(,)?
+        }
+    ) => {
+        /// Python-facing task metadata enum backed by a Rust enum.
+        #[pyclass(name = $python_name, eq, skip_from_py_object)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum $py_enum {
+            $($variant),+
+        }
+
+        impl $py_enum {
+            fn value_str(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => $value),+
+                }
+            }
+
+            fn variant_name(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => stringify!($class_attr)),+
+                }
+            }
+        }
+
+        #[pymethods]
+        impl $py_enum {
+            $(
+                #[classattr]
+                const $class_attr: Self = Self::$variant;
+            )+
+
+            /// Return the stable string value for this enum variant.
+            #[getter]
+            fn value(&self) -> &'static str {
+                self.value_str()
+            }
+
+            /// Return the stable string value for display.
+            fn __str__(&self) -> &'static str {
+                self.value_str()
+            }
+
+            fn __repr__(&self) -> String {
+                format!("{}.{}", $python_name, self.variant_name())
+            }
+        }
+
+        impl From<$rust_enum> for $py_enum {
+            fn from(value: $rust_enum) -> Self {
+                match value {
+                    $($rust_enum::$variant => Self::$variant),+
+                }
+            }
+        }
+
+        impl From<$py_enum> for $rust_enum {
+            fn from(value: $py_enum) -> Self {
+                match value {
+                    $($py_enum::$variant => Self::$variant),+
+                }
+            }
+        }
+    };
+}
+
+py_string_enum! {
+    py: PyIdempotencyMode,
+    rust: IdempotencyMode,
+    python_name: "IdempotencyMode",
+    variants: {
+        Disabled => DISABLED => "disabled",
+        Check => CHECK => "check",
+        CheckAndVerify => CHECK_AND_VERIFY => "check_and_verify",
+    }
+}
+
+impl PyIdempotencyMode {
+    fn task_model_value(py: Python<'_>, mode: IdempotencyMode) -> PyResult<Py<PyAny>> {
+        let task_module = PyModule::import(py, "genja.task")?;
+        let mode_class = task_module.getattr("IdempotencyMode")?;
+        let py_mode = Self::from(mode);
+
+        Ok(mode_class.getattr(py_mode.variant_name())?.unbind())
+    }
+}
+
+/// Python wrapper for post-change replacement session verification metadata.
+#[pyclass(name = "SessionVerificationConfig", eq, skip_from_py_object)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PySessionVerificationConfig {
+    inner: SessionVerificationConfig,
+}
+
+impl From<SessionVerificationConfig> for PySessionVerificationConfig {
+    fn from(inner: SessionVerificationConfig) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<PySessionVerificationConfig> for SessionVerificationConfig {
+    fn from(value: PySessionVerificationConfig) -> Self {
+        value.inner
+    }
+}
+
+#[pymethods]
+impl PySessionVerificationConfig {
+    /// Create post-change replacement session verification metadata.
+    ///
+    /// `max_attempts` defaults to 1 and must be greater than 0. `delay_ms`
+    /// defaults to 0 and must be greater than or equal to 0.
+    #[new]
+    #[pyo3(signature = (max_attempts=1, delay_ms=0))]
+    fn new(
+        #[pyo3(from_py_with = extract_max_attempts_argument)] max_attempts: i128,
+        #[pyo3(from_py_with = extract_delay_ms_argument)] delay_ms: i128,
+    ) -> PyResult<Self> {
+        if max_attempts < 1 {
+            return Err(PyValueError::new_err("max_attempts must be greater than 0"));
+        }
+        let max_attempts = usize::try_from(max_attempts)
+            .map_err(|_| PyValueError::new_err("max_attempts is too large"))?;
+
+        if delay_ms < 0 {
+            return Err(PyValueError::new_err(
+                "delay_ms must be greater than or equal to 0",
+            ));
+        }
+        let delay_ms =
+            u64::try_from(delay_ms).map_err(|_| PyValueError::new_err("delay_ms is too large"))?;
+
+        Ok(Self {
+            inner: SessionVerificationConfig::new(max_attempts, delay_ms),
+        })
+    }
+
+    /// Maximum total replacement session establishment attempts.
+    #[getter]
+    fn max_attempts(&self) -> usize {
+        self.inner.max_attempts()
+    }
+
+    /// Fixed delay between replacement session attempts in milliseconds.
+    #[getter]
+    fn delay_ms(&self) -> u64 {
+        self.inner.delay_ms()
+    }
+
+    /// Return the configuration as a JSON-compatible dictionary.
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_value_to_py(py, &session_verification_config_to_json(Some(&self.inner)))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SessionVerificationConfig(max_attempts={}, delay_ms={})",
+            self.inner.max_attempts(),
+            self.inner.delay_ms()
+        )
+    }
+}
+
+/// Python wrapper for a task-authored idempotency convergence check result.
+#[pyclass(name = "IdempotencyCheckResult", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyIdempotencyCheckResult {
+    inner: IdempotencyCheck,
+}
+
+impl From<IdempotencyCheck> for PyIdempotencyCheckResult {
+    fn from(inner: IdempotencyCheck) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<PyIdempotencyCheckResult> for IdempotencyCheck {
+    fn from(value: PyIdempotencyCheckResult) -> Self {
+        value.inner
+    }
+}
+
+#[pymethods]
+impl PyIdempotencyCheckResult {
+    /// Create a check result indicating the host is already converged.
+    #[staticmethod]
+    #[pyo3(signature = (summary=None, details=None))]
+    fn converged(summary: Option<String>, details: Option<Bound<'_, PyAny>>) -> PyResult<Self> {
+        let mut check = match summary {
+            Some(summary) => IdempotencyCheck::converged(summary),
+            None => IdempotencyCheck::converged_without_summary(),
+        };
+        if let Some(details) = details {
+            check = check.with_details(py_any_to_json_value(&details)?);
+        }
+        Ok(Self { inner: check })
+    }
+
+    /// Create a check result indicating normal task execution should run.
+    #[staticmethod]
+    #[pyo3(signature = (diff=None, details=None))]
+    fn change_required(diff: Option<String>, details: Option<Bound<'_, PyAny>>) -> PyResult<Self> {
+        let mut check = match diff {
+            Some(diff) => IdempotencyCheck::change_required(diff),
+            None => IdempotencyCheck::change_required_without_diff(),
+        };
+        if let Some(details) = details {
+            check = check.with_details(py_any_to_json_value(&details)?);
+        }
+        Ok(Self { inner: check })
+    }
+
+    /// Return the current convergence state as a stable string.
+    #[getter]
+    fn status(&self) -> &'static str {
+        match self.inner {
+            IdempotencyCheck::Converged { .. } => "converged",
+            IdempotencyCheck::ChangeRequired { .. } => "change_required",
+        }
+    }
+
+    /// Return the convergence summary for a converged result, if present.
+    #[getter]
+    fn summary(&self) -> Option<&str> {
+        match &self.inner {
+            IdempotencyCheck::Converged { summary, .. } => summary.as_deref(),
+            IdempotencyCheck::ChangeRequired { .. } => None,
+        }
+    }
+
+    /// Return the remaining diff for a change-required result, if present.
+    #[getter]
+    fn diff(&self) -> Option<&str> {
+        match &self.inner {
+            IdempotencyCheck::ChangeRequired { diff, .. } => diff.as_deref(),
+            IdempotencyCheck::Converged { .. } => None,
+        }
+    }
+
+    /// Return structured check details, if present.
+    #[getter]
+    fn details(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner {
+            IdempotencyCheck::Converged { details, .. }
+            | IdempotencyCheck::ChangeRequired { details, .. } => match details {
+                Some(details) => json_value_to_py(py, details),
+                None => Ok(py.None()),
+            },
+        }
+    }
+
+    /// Return the check result as a Python dictionary.
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let value = match &self.inner {
+            IdempotencyCheck::Converged { summary, details } => json!({
+                "status": self.status(),
+                "summary": summary,
+                "diff": Value::Null,
+                "details": details,
+            }),
+            IdempotencyCheck::ChangeRequired { diff, details } => json!({
+                "status": self.status(),
+                "summary": Value::Null,
+                "diff": diff,
+                "details": details,
+            }),
+        };
+        json_value_to_py(py, &value)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("IdempotencyCheckResult(status={:?})", self.status())
+    }
 }
 
 #[pyclass(name = "HostTaskResult", skip_from_py_object)]
@@ -60,7 +344,10 @@ struct PythonTaskSpec {
     connection_plugin_name: Option<String>,
     processor_names: Vec<String>,
     retry_config: Option<RetryConfig>,
+    session_verification_config: Option<SessionVerificationConfig>,
     options: Option<Value>,
+    supports_dry_run: bool,
+    idempotency_mode: IdempotencyMode,
     py_task_class: Arc<Py<PyAny>>,
     execution_mode: PythonTaskExecutionMode,
     sub_tasks: Vec<PythonTaskSpec>,
@@ -69,6 +356,39 @@ struct PythonTaskSpec {
 struct PythonBackedTask {
     spec: PythonTaskSpec,
     sub_tasks: Vec<Arc<dyn Task>>,
+}
+
+struct PythonTaskRunContext {
+    current_depth: usize,
+    max_depth: Option<usize>,
+    current_attempt: usize,
+    dry_run: bool,
+    connection: Option<Py<PyAny>>,
+}
+
+impl PythonTaskRunContext {
+    fn from_blocking(
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+        connection: Option<Py<PyAny>>,
+    ) -> Self {
+        Self {
+            current_depth: context.current_depth(),
+            max_depth: Some(context.max_depth()),
+            current_attempt: context.current_attempt(),
+            dry_run: context.dry_run(),
+            connection,
+        }
+    }
+
+    fn from_async(context: &TaskRuntimeContext, connection: Option<Py<PyAny>>) -> Self {
+        Self {
+            current_depth: context.current_depth(),
+            max_depth: Some(context.max_depth()),
+            current_attempt: context.current_attempt(),
+            dry_run: context.dry_run(),
+            connection,
+        }
+    }
 }
 
 impl TaskInfo for PythonBackedTask {
@@ -100,6 +420,18 @@ impl TaskInfo for PythonBackedTask {
     fn retry_config(&self) -> Option<&RetryConfig> {
         self.spec.retry_config.as_ref()
     }
+
+    fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+        self.spec.session_verification_config.as_ref()
+    }
+
+    fn supports_dry_run(&self) -> bool {
+        self.spec.supports_dry_run
+    }
+
+    fn idempotency_mode(&self) -> IdempotencyMode {
+        self.spec.idempotency_mode
+    }
 }
 
 #[async_trait]
@@ -118,10 +450,46 @@ impl Task for PythonBackedTask {
         .flatten();
         self.run_python_blocking(
             host,
-            context.current_depth(),
-            Some(context.max_depth()),
-            context.current_attempt(),
-            python_connection,
+            PythonTaskRunContext::from_blocking(context, python_connection),
+            "start",
+        )
+    }
+
+    fn dry_run(
+        &self,
+        host: &Host,
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let python_connection = match context.connection() {
+            Some(connection) => Some(connection.with_connection(|connection| {
+                Ok(python_connection_from_runtime_connection(connection))
+            })?),
+            None => None,
+        }
+        .flatten();
+        self.run_python_blocking(
+            host,
+            PythonTaskRunContext::from_blocking(context, python_connection),
+            "dry_run",
+        )
+    }
+
+    fn check(
+        &self,
+        host: &Host,
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let python_connection = match context.connection() {
+            Some(connection) => Some(connection.with_connection(|connection| {
+                Ok(python_connection_from_runtime_connection(connection))
+            })?),
+            None => None,
+        }
+        .flatten();
+        self.run_python_check_blocking(
+            host,
+            PythonTaskRunContext::from_blocking(context, python_connection),
+            "check",
         )
     }
 
@@ -138,10 +506,46 @@ impl Task for PythonBackedTask {
         };
         self.run_python(
             host,
-            context.current_depth(),
-            Some(context.max_depth()),
-            context.current_attempt(),
-            python_connection,
+            PythonTaskRunContext::from_async(context, python_connection),
+            "start_async",
+        )
+        .await
+    }
+
+    async fn dry_run_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        let python_connection = if let Some(connection) = context.connection() {
+            let guard = connection.lock().await;
+            python_connection_from_runtime_connection(&*guard)
+        } else {
+            None
+        };
+        self.run_python(
+            host,
+            PythonTaskRunContext::from_async(context, python_connection),
+            "dry_run_async",
+        )
+        .await
+    }
+
+    async fn check_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let python_connection = if let Some(connection) = context.connection() {
+            let guard = connection.lock().await;
+            python_connection_from_runtime_connection(&*guard)
+        } else {
+            None
+        };
+        self.run_python_check(
+            host,
+            PythonTaskRunContext::from_async(context, python_connection),
+            "check_async",
         )
         .await
     }
@@ -162,10 +566,8 @@ impl PythonBackedTask {
     fn run_python_blocking(
         &self,
         host: &Host,
-        current_depth: usize,
-        max_depth: Option<usize>,
-        current_attempt: usize,
-        connection: Option<Py<PyAny>>,
+        context: PythonTaskRunContext,
+        method_name: &str,
     ) -> Result<HostTaskResult, TaskError> {
         let result = Python::attach(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
@@ -184,14 +586,15 @@ impl PythonBackedTask {
             .map_err(python_task_error)?;
             let context_payload = build_python_task_runtime_context(
                 py,
-                current_depth,
-                max_depth,
-                current_attempt,
-                connection,
+                context.current_depth,
+                context.max_depth,
+                context.current_attempt,
+                context.dry_run,
+                context.connection,
             )
             .map_err(python_task_error)?;
             let result = instance
-                .call_method1("start", (task_payload, host_payload, context_payload))
+                .call_method1(method_name, (task_payload, host_payload, context_payload))
                 .map_err(python_task_error)?;
             let is_awaitable: bool = PyModule::import(py, "inspect")
                 .map_err(python_task_error)?
@@ -213,10 +616,8 @@ impl PythonBackedTask {
     async fn run_python(
         &self,
         host: &Host,
-        current_depth: usize,
-        max_depth: Option<usize>,
-        current_attempt: usize,
-        connection: Option<Py<PyAny>>,
+        context: PythonTaskRunContext,
+        method_name: &str,
     ) -> Result<HostTaskResult, TaskError> {
         let result = Python::attach(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
@@ -235,15 +636,16 @@ impl PythonBackedTask {
             .map_err(python_task_error)?;
             let context_payload = build_python_task_runtime_context(
                 py,
-                current_depth,
-                max_depth,
-                current_attempt,
-                connection,
+                context.current_depth,
+                context.max_depth,
+                context.current_attempt,
+                context.dry_run,
+                context.connection,
             )
             .map_err(python_task_error)?;
 
             instance
-                .call_method1("start_async", (task_payload, host_payload, context_payload))
+                .call_method1(method_name, (task_payload, host_payload, context_payload))
                 .map(Bound::unbind)
                 .map_err(python_task_error)
         })?;
@@ -252,6 +654,100 @@ impl PythonBackedTask {
             .map_err(python_task_error)?;
         Python::attach(|py| {
             python_result_to_host_task_result(result.bind(py).clone()).map_err(python_task_error)
+        })
+    }
+
+    fn run_python_check_blocking(
+        &self,
+        host: &Host,
+        context: PythonTaskRunContext,
+        method_name: &str,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let result = Python::attach(|py| {
+            let class = self.spec.py_task_class.as_ref().bind(py);
+            let instance = class.call0().map_err(python_task_error)?;
+            let task_payload = build_python_task_model(
+                py,
+                "TaskInfo",
+                python_task_spec_to_py_dict(py, &self.spec).map_err(python_task_error)?,
+            )
+            .map_err(python_task_error)?;
+            let host_payload = build_python_task_model(
+                py,
+                "Host",
+                host_to_py_dict(py, host).map_err(python_task_error)?,
+            )
+            .map_err(python_task_error)?;
+            let context_payload = build_python_task_runtime_context(
+                py,
+                context.current_depth,
+                context.max_depth,
+                context.current_attempt,
+                context.dry_run,
+                context.connection,
+            )
+            .map_err(python_task_error)?;
+            let result = instance
+                .call_method1(method_name, (task_payload, host_payload, context_payload))
+                .map_err(python_task_error)?;
+            let is_awaitable: bool = PyModule::import(py, "inspect")
+                .map_err(python_task_error)?
+                .call_method1("isawaitable", (result.clone(),))
+                .map_err(python_task_error)?
+                .extract()
+                .map_err(python_task_error)?;
+            if is_awaitable {
+                return Err(TaskError::new(std::io::Error::other(
+                    "python blocking task check() must not return an awaitable",
+                )));
+            }
+            python_result_to_idempotency_check(result).map_err(python_task_error)
+        })?;
+
+        Ok(result)
+    }
+
+    async fn run_python_check(
+        &self,
+        host: &Host,
+        context: PythonTaskRunContext,
+        method_name: &str,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        let result = Python::attach(|py| {
+            let class = self.spec.py_task_class.as_ref().bind(py);
+            let instance = class.call0().map_err(python_task_error)?;
+            let task_payload = build_python_task_model(
+                py,
+                "TaskInfo",
+                python_task_spec_to_py_dict(py, &self.spec).map_err(python_task_error)?,
+            )
+            .map_err(python_task_error)?;
+            let host_payload = build_python_task_model(
+                py,
+                "Host",
+                host_to_py_dict(py, host).map_err(python_task_error)?,
+            )
+            .map_err(python_task_error)?;
+            let context_payload = build_python_task_runtime_context(
+                py,
+                context.current_depth,
+                context.max_depth,
+                context.current_attempt,
+                context.dry_run,
+                context.connection,
+            )
+            .map_err(python_task_error)?;
+
+            instance
+                .call_method1(method_name, (task_payload, host_payload, context_payload))
+                .map(Bound::unbind)
+                .map_err(python_task_error)
+        })?;
+        let result = resolve_python_maybe_awaitable_async(result)
+            .await
+            .map_err(python_task_error)?;
+        Python::attach(|py| {
+            python_result_to_idempotency_check(result.bind(py).clone()).map_err(python_task_error)
         })
     }
 }
@@ -273,6 +769,18 @@ pub struct PyTasks {
 #[derive(Clone)]
 pub struct PyTaskConnectionResolver {
     pub(crate) inner: Option<Arc<dyn TaskConnectionResolver>>,
+}
+
+#[pyclass(name = "TaskRunOptions", skip_from_py_object)]
+#[derive(Clone)]
+/// Python wrapper for runtime task execution options.
+///
+/// `TaskRunOptions` carries operator-selected execution controls such as
+/// maximum sub-task depth and dry-run mode. It is separate from task decorator
+/// `options`, which are task-authored metadata.
+pub struct PyTaskRunOptions {
+    pub(crate) max_depth: Option<usize>,
+    pub(crate) dry_run: bool,
 }
 
 #[pymethods]
@@ -326,6 +834,21 @@ impl PyTaskDefinition {
         retry_config_to_py_object(py, self.inner.retry_config())
     }
 
+    #[getter]
+    fn session_verification(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        session_verification_config_to_py_object(py, self.inner.session_verification_config())
+    }
+
+    #[getter]
+    fn supports_dry_run(&self) -> bool {
+        self.inner.supports_dry_run()
+    }
+
+    #[getter]
+    fn idempotency(&self, py: Python<'_>) -> PyResult<Py<PyIdempotencyMode>> {
+        Py::new(py, PyIdempotencyMode::from(self.inner.idempotency_mode()))
+    }
+
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self.spec.as_ref() {
             Some(spec) => json_value_to_py(py, &python_task_spec_to_json(spec)),
@@ -333,12 +856,12 @@ impl PyTaskDefinition {
         }
     }
 
-    #[pyo3(signature = (host, connection_resolver=None, max_depth=0))]
+    #[pyo3(signature = (host, connection_resolver=None, run_options=None))]
     fn run_on_host(
         &self,
         host: Bound<'_, PyAny>,
         connection_resolver: Option<PyRef<'_, PyTaskConnectionResolver>>,
-        max_depth: usize,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<PyTaskResults> {
         let py = host.py();
         let host = python_host_to_rust_host(host)?;
@@ -346,24 +869,26 @@ impl PyTaskDefinition {
         let host_id = host.hostname().unwrap_or("host").to_string();
         hosts.add_host(host_id, host);
         let resolver = connection_resolver.and_then(|resolver| resolver.inner.clone());
+        let run_options = resolve_task_run_options(run_options.as_ref(), 0)?;
         let inner = py
-            .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, max_depth))
+            .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, run_options))
             .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
         Ok(PyTaskResults { inner })
     }
 
-    #[pyo3(signature = (hosts, connection_resolver=None, max_depth=0))]
+    #[pyo3(signature = (hosts, connection_resolver=None, run_options=None))]
     fn run_on_hosts(
         &self,
         hosts: Bound<'_, PyAny>,
         connection_resolver: Option<PyRef<'_, PyTaskConnectionResolver>>,
-        max_depth: usize,
+        run_options: Option<Bound<'_, PyAny>>,
     ) -> PyResult<PyTaskResults> {
         let py = hosts.py();
         let hosts = python_hosts_to_rust_hosts(hosts)?;
         let resolver = connection_resolver.and_then(|resolver| resolver.inner.clone());
+        let run_options = resolve_task_run_options(run_options.as_ref(), 0)?;
         let inner = py
-            .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, max_depth))
+            .detach(|| run_task_definition_on_hosts(&self.inner, &hosts, resolver, run_options))
             .map_err(|err| PyValueError::new_err(format!("python task execution failed: {err}")))?;
         Ok(PyTaskResults { inner })
     }
@@ -374,6 +899,66 @@ impl PyTaskDefinition {
             self.name(),
             self.connection_plugin_name(),
             self.sub_tasks().len()
+        )
+    }
+}
+
+#[pymethods]
+impl PyTaskRunOptions {
+    /// Create runtime task execution options.
+    #[new]
+    #[pyo3(signature = (max_depth=None, dry_run=false))]
+    fn new(max_depth: Option<Bound<'_, PyAny>>, dry_run: bool) -> PyResult<Self> {
+        let max_depth = match max_depth {
+            Some(value) => Some(extract_task_run_options_max_depth(&value)?),
+            None => None,
+        };
+        Ok(Self { max_depth, dry_run })
+    }
+
+    /// Return the maximum nested sub-task depth override, if configured.
+    #[getter]
+    fn max_depth(&self) -> Option<usize> {
+        self.max_depth
+    }
+
+    /// Return whether dry-run execution is requested.
+    #[getter]
+    fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    /// Return a copy with a different maximum nested sub-task depth.
+    fn with_max_depth(&self, max_depth: usize) -> Self {
+        Self {
+            max_depth: Some(max_depth),
+            dry_run: self.dry_run,
+        }
+    }
+
+    /// Return a copy with dry-run execution enabled or disabled.
+    fn with_dry_run(&self, dry_run: bool) -> Self {
+        Self {
+            max_depth: self.max_depth,
+            dry_run,
+        }
+    }
+
+    /// Convert the runtime options to a Python dictionary.
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let payload = PyDict::new(py);
+        match self.max_depth {
+            Some(max_depth) => payload.set_item("max_depth", max_depth)?,
+            None => payload.set_item("max_depth", py.None())?,
+        }
+        payload.set_item("dry_run", self.dry_run)?;
+        Ok(payload.unbind().into())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TaskRunOptions(max_depth={:?}, dry_run={})",
+            self.max_depth, self.dry_run
         )
     }
 }
@@ -588,13 +1173,16 @@ pub fn run_task(
     py: Python<'_>,
     runtime: &RuntimeGenja,
     task_class: Bound<'_, PyAny>,
-    max_depth: Option<usize>,
+    run_options: Option<Bound<'_, PyAny>>,
 ) -> PyResult<PyTaskResults> {
     let spec = extract_python_task_spec(task_class)?;
     let task = task_from_spec(&spec);
-    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+    let run_options = resolve_task_run_options(
+        run_options.as_ref(),
+        runtime.settings().runner().max_task_depth(),
+    )?;
     let inner = py
-        .detach(|| runtime.run_task(task, max_depth))
+        .detach(|| runtime.run_task_with_options(task, run_options))
         .map_err(|err| {
             PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
         })?;
@@ -605,16 +1193,19 @@ pub fn run_task_async(
     py: Python<'_>,
     runtime: &RuntimeGenja,
     task_class: Bound<'_, PyAny>,
-    max_depth: Option<usize>,
+    run_options: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let spec = extract_python_task_spec(task_class)?;
     let runtime = runtime.clone();
     let task = task_from_spec(&spec);
-    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+    let run_options = resolve_task_run_options(
+        run_options.as_ref(),
+        runtime.settings().runner().max_task_depth(),
+    )?;
 
     future_into_py(py, async move {
         let inner = runtime
-            .run_task_async(task, max_depth)
+            .run_task_with_options_async(task, run_options)
             .await
             .map_err(|err| {
                 PyValueError::new_err(format!("failed to run task through Genja runtime: {err}"))
@@ -628,16 +1219,19 @@ pub fn run_tasks(
     py: Python<'_>,
     runtime: &RuntimeGenja,
     task_input: Bound<'_, PyAny>,
-    max_depth: Option<usize>,
+    run_options: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Vec<PyTaskResults>> {
     let tasks = task_input
         .extract::<PyRef<'_, PyTasks>>()
         .map_err(|_| PyValueError::new_err("tasks must be a genja.Tasks instance"))?
         .to_runtime_tasks();
 
-    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+    let run_options = resolve_task_run_options(
+        run_options.as_ref(),
+        runtime.settings().runner().max_task_depth(),
+    )?;
     let results = py
-        .detach(|| runtime.run_tasks(tasks, max_depth))
+        .detach(|| runtime.run_tasks_with_options(tasks, run_options))
         .map_err(|err| {
             PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
         })?;
@@ -651,7 +1245,7 @@ pub fn run_tasks_async(
     py: Python<'_>,
     runtime: &RuntimeGenja,
     task_input: Bound<'_, PyAny>,
-    max_depth: Option<usize>,
+    run_options: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let tasks = task_input
         .extract::<PyRef<'_, PyTasks>>()
@@ -659,11 +1253,14 @@ pub fn run_tasks_async(
         .to_runtime_tasks();
 
     let runtime = runtime.clone();
-    let max_depth = max_depth.unwrap_or_else(|| runtime.settings().runner().max_task_depth());
+    let run_options = resolve_task_run_options(
+        run_options.as_ref(),
+        runtime.settings().runner().max_task_depth(),
+    )?;
 
     future_into_py(py, async move {
         let results = runtime
-            .run_tasks_async(tasks, max_depth)
+            .run_tasks_with_options_async(tasks, run_options)
             .await
             .map_err(|err| {
                 PyValueError::new_err(format!("failed to run tasks through Genja runtime: {err}"))
@@ -676,13 +1273,81 @@ pub fn run_tasks_async(
     .map(Bound::unbind)
 }
 
+fn task_run_options_max_depth_type_error(type_name: &str) -> PyErr {
+    PyValueError::new_err(format!(
+        "TaskRunOptions(max_depth=...) expected int | None, got {type_name}"
+    ))
+}
+
+fn extract_task_run_options_max_depth(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    if value.is_none() {
+        return Err(task_run_options_max_depth_type_error("NoneType"));
+    }
+    if value.is_instance_of::<PyBool>() {
+        return Err(task_run_options_max_depth_type_error("bool"));
+    }
+    if value.extract::<PyRef<'_, PyTaskRunOptions>>().is_ok() {
+        return Err(PyValueError::new_err(
+            "TaskRunOptions(max_depth=...) expected int | None, got TaskRunOptions. Did you pass an existing TaskRunOptions object as max_depth? Runner plugins receive run_options as their fifth argument, not max_depth.",
+        ));
+    }
+    value.extract::<usize>().map_err(|_| {
+        let type_name = value
+            .get_type()
+            .name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "unknown".to_string());
+        task_run_options_max_depth_type_error(&type_name)
+    })
+}
+
+fn resolve_task_run_options(
+    run_options: Option<&Bound<'_, PyAny>>,
+    default_max_depth: usize,
+) -> PyResult<TaskRunOptions> {
+    if let Some(run_options) = run_options {
+        if run_options.is_none() {
+            // Explicit None is equivalent to omitting run_options.
+        } else if let Ok(run_options) = run_options.extract::<PyRef<'_, PyTaskRunOptions>>() {
+            return Ok(
+                TaskRunOptions::new(run_options.max_depth.unwrap_or(default_max_depth))
+                    .with_dry_run(run_options.dry_run),
+            );
+        } else {
+            return Err(PyValueError::new_err(
+                "run_options must be a genja.TaskRunOptions instance",
+            ));
+        }
+    }
+
+    Ok(TaskRunOptions::new(default_max_depth))
+}
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyHostTaskResult>()?;
+    module.add_class::<PyIdempotencyMode>()?;
+    module.add_class::<PySessionVerificationConfig>()?;
+    module.add_class::<PyIdempotencyCheckResult>()?;
     module.add_class::<PyTaskDefinition>()?;
     module.add_class::<PyTasks>()?;
     module.add_class::<PyTaskConnectionResolver>()?;
+    module.add_class::<PyTaskRunOptions>()?;
     module.add_class::<PyTaskResults>()?;
+    module.add_function(wrap_pyfunction!(validate_registered_task_id, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_registered_task_version, module)?)?;
     Ok(())
+}
+
+#[pyfunction(name = "_validate_task_id")]
+/// Validate an explicit task registration ID with the Rust core contract.
+fn validate_registered_task_id(task_id: &str) -> PyResult<()> {
+    validate_explicit_task_id(task_id).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+#[pyfunction(name = "_validate_task_version")]
+/// Validate a task registration version with the Rust core semver parser.
+fn validate_registered_task_version(version: &str) -> PyResult<()> {
+    validate_task_version(version).map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 pub(crate) fn python_result_to_host_task_result(obj: Bound<'_, PyAny>) -> PyResult<HostTaskResult> {
@@ -695,6 +1360,11 @@ pub(crate) fn python_result_to_task_results(obj: Bound<'_, PyAny>) -> PyResult<T
     json_to_task_results(&value)
 }
 
+fn python_result_to_idempotency_check(obj: Bound<'_, PyAny>) -> PyResult<IdempotencyCheck> {
+    let result = obj.extract::<PyRef<'_, PyIdempotencyCheckResult>>()?;
+    Ok(result.inner.clone())
+}
+
 fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
     if let Some(outcome) = value.get("outcome") {
         return host_task_result_from_payload(outcome);
@@ -703,6 +1373,10 @@ fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
     let result_value = if let Some(passed) = value.get("Passed") {
         let mut tagged = passed.clone();
         tagged["status"] = Value::String("passed".to_string());
+        tagged
+    } else if let Some(passed_with_warnings) = value.get("PassedWithWarnings") {
+        let mut tagged = passed_with_warnings.clone();
+        tagged["status"] = Value::String("passed_with_warnings".to_string());
         tagged
     } else if let Some(failed) = value.get("Failed") {
         let mut tagged = failed.clone();
@@ -723,6 +1397,9 @@ fn host_task_result_from_payload(value: &Value) -> PyResult<HostTaskResult> {
 
     match status {
         "passed" => Ok(HostTaskResult::passed(json_to_task_success(&result_value)?)),
+        "passed_with_warnings" => Ok(HostTaskResult::passed_with_warnings(json_to_task_success(
+            &result_value,
+        )?)),
         "failed" => Ok(HostTaskResult::failed(json_to_task_failure(&result_value)?)),
         "skipped" => Ok(HostTaskResult::skipped_with_detail(json_to_task_skip(
             &result_value,
@@ -950,7 +1627,10 @@ fn task_to_json(task: &dyn Task) -> Value {
         "connection_plugin_name": task.connection_plugin_name(),
         "processors": task.processor_names(),
         "retry": retry_config_to_json(task.retry_config()),
+        "session_verification": session_verification_config_to_json(task.session_verification_config()),
         "options": task.options(),
+        "supports_dry_run": task.supports_dry_run(),
+        "idempotency": PyIdempotencyMode::from(task.idempotency_mode()).value_str(),
         "sub_tasks": task.sub_tasks().into_iter().map(|sub_task| task_to_json(sub_task.as_ref())).collect::<Vec<_>>(),
     })
 }
@@ -964,11 +1644,21 @@ fn retry_config_to_json(retry_config: Option<&RetryConfig>) -> Value {
     }
 }
 
+fn session_verification_config_to_json(
+    session_verification_config: Option<&SessionVerificationConfig>,
+) -> Value {
+    match session_verification_config {
+        Some(session_verification_config) => serde_json::to_value(session_verification_config)
+            .expect("session verification config should serialize"),
+        None => Value::Null,
+    }
+}
+
 fn run_task_definition_on_hosts(
     task_definition: &TaskDefinition,
     hosts: &Hosts,
     connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
-    max_depth: usize,
+    run_options: TaskRunOptions,
 ) -> Result<TaskResults, ::genja_core::GenjaError> {
     let future = async {
         let started_at = SystemTime::now();
@@ -978,12 +1668,12 @@ fn run_task_definition_on_hosts(
         for (host_id, host) in hosts.iter() {
             let mut host_results = TaskResults::new(task_definition.name());
             task_definition
-                .start_with_connection_resolver(
+                .start_with_connection_resolver_and_options(
                     host_id.as_str(),
                     host,
                     &mut host_results,
                     connection_resolver.as_deref(),
-                    max_depth,
+                    run_options,
                 )
                 .await?;
             results.merge(host_results);
@@ -1016,6 +1706,8 @@ fn run_task_definition_on_hosts(
 
 fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonTaskSpec> {
     let class_dict = py_task_class.getattr("__dict__")?;
+    let has_dry_run = class_dict.contains("dry_run")?;
+    let has_dry_run_async = class_dict.contains("dry_run_async")?;
     let execution_mode = match (
         class_dict.contains("start")?,
         class_dict.contains("start_async")?,
@@ -1066,6 +1758,84 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     };
     reject_misplaced_retry_metadata(&info)?;
     let retry_config = extract_retry_config_from_metadata(&info)?;
+    let session_verification_config = extract_session_verification_config_from_metadata(
+        &info,
+        connection_plugin_name.as_deref(),
+    )?;
+
+    let supports_dry_run = if let Some(value) = info.get_item("supports_dry_run")? {
+        if value.is_none() {
+            false
+        } else {
+            value.extract::<bool>()?
+        }
+    } else {
+        false
+    };
+    if supports_dry_run {
+        match (execution_mode, has_dry_run, has_dry_run_async) {
+            (PythonTaskExecutionMode::Blocking, true, false) => {}
+            (PythonTaskExecutionMode::Async, false, true) => {}
+            (PythonTaskExecutionMode::Blocking, false, _) => {
+                return Err(PyValueError::new_err(
+                    "supports_dry_run=True requires 'dry_run' for sync Python tasks",
+                ));
+            }
+            (PythonTaskExecutionMode::Async, _, false) => {
+                return Err(PyValueError::new_err(
+                    "supports_dry_run=True requires 'dry_run_async' for async Python tasks",
+                ));
+            }
+            (PythonTaskExecutionMode::Blocking, _, true) => {
+                return Err(PyValueError::new_err(
+                    "supports_dry_run=True requires sync Python tasks to define 'dry_run', not 'dry_run_async'",
+                ));
+            }
+            (PythonTaskExecutionMode::Async, true, _) => {
+                return Err(PyValueError::new_err(
+                    "supports_dry_run=True requires async Python tasks to define 'dry_run_async', not 'dry_run'",
+                ));
+            }
+        }
+    }
+    let idempotency_mode = if let Some(value) = info.get_item("idempotency")? {
+        if value.is_none() {
+            IdempotencyMode::Disabled
+        } else {
+            let py_mode = value.extract::<PyRef<'_, PyIdempotencyMode>>()?;
+            (*py_mode).into()
+        }
+    } else {
+        IdempotencyMode::Disabled
+    };
+    if !matches!(idempotency_mode, IdempotencyMode::Disabled) {
+        let has_check = class_dict.contains("check")?;
+        let has_check_async = class_dict.contains("check_async")?;
+        match (execution_mode, has_check, has_check_async) {
+            (PythonTaskExecutionMode::Blocking, true, false) => {}
+            (PythonTaskExecutionMode::Async, false, true) => {}
+            (PythonTaskExecutionMode::Blocking, false, _) => {
+                return Err(PyValueError::new_err(
+                    "idempotency requires 'check' for sync Python tasks",
+                ));
+            }
+            (PythonTaskExecutionMode::Async, _, false) => {
+                return Err(PyValueError::new_err(
+                    "idempotency requires 'check_async' for async Python tasks",
+                ));
+            }
+            (PythonTaskExecutionMode::Blocking, _, true) => {
+                return Err(PyValueError::new_err(
+                    "idempotency requires sync Python tasks to define 'check', not 'check_async'",
+                ));
+            }
+            (PythonTaskExecutionMode::Async, true, _) => {
+                return Err(PyValueError::new_err(
+                    "idempotency requires async Python tasks to define 'check_async', not 'check'",
+                ));
+            }
+        }
+    }
 
     let options = if let Some(options) = info.get_item("options")? {
         if options.is_none() {
@@ -1091,7 +1861,10 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         connection_plugin_name,
         processor_names,
         retry_config,
+        session_verification_config,
         options,
+        supports_dry_run,
+        idempotency_mode,
         py_task_class: Arc::new(py_task_class.unbind()),
         execution_mode,
         sub_tasks,
@@ -1119,7 +1892,10 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
         "connection_plugin_name": spec.connection_plugin_name,
         "processors": spec.processor_names,
         "retry": retry_config_to_json(spec.retry_config.as_ref()),
+        "session_verification": session_verification_config_to_json(spec.session_verification_config.as_ref()),
         "options": spec.options,
+        "supports_dry_run": spec.supports_dry_run,
+        "idempotency": PyIdempotencyMode::from(spec.idempotency_mode).value_str(),
         "sub_tasks": spec.sub_tasks.iter().map(python_task_spec_to_json).collect::<Vec<_>>(),
     })
 }
@@ -1140,6 +1916,15 @@ fn python_task_spec_to_py_dict<'py>(
     task.set_item(
         "retry",
         retry_config_to_py_object(py, spec.retry_config.as_ref())?,
+    )?;
+    task.set_item(
+        "session_verification",
+        session_verification_config_to_py_object(py, spec.session_verification_config.as_ref())?,
+    )?;
+    task.set_item("supports_dry_run", spec.supports_dry_run)?;
+    task.set_item(
+        "idempotency",
+        PyIdempotencyMode::task_model_value(py, spec.idempotency_mode)?,
     )?;
     if let Some(options) = spec.options.as_ref() {
         task.set_item("options", json_value_to_py(py, options)?)?;
@@ -1164,6 +1949,20 @@ fn retry_config_to_py_object(
     json_value_to_py(py, &value)
 }
 
+fn session_verification_config_to_py_object(
+    py: Python<'_>,
+    session_verification_config: Option<&SessionVerificationConfig>,
+) -> PyResult<Py<PyAny>> {
+    match session_verification_config {
+        Some(session_verification_config) => Py::new(
+            py,
+            PySessionVerificationConfig::from(*session_verification_config),
+        )
+        .map(|config| config.into_any()),
+        None => Ok(py.None()),
+    }
+}
+
 fn reject_misplaced_retry_metadata(info: &Bound<'_, PyDict>) -> PyResult<()> {
     if info.contains("allow_retries")? {
         return Err(PyValueError::new_err(
@@ -1181,6 +1980,54 @@ fn reject_misplaced_retry_metadata(info: &Bound<'_, PyDict>) -> PyResult<()> {
         ));
     }
     Ok(())
+}
+
+fn extract_integer_argument(
+    value: &Bound<'_, PyAny>,
+    field_name: &str,
+    expected: &str,
+) -> PyResult<i128> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(format!(
+            "{field_name} must be {expected}"
+        )));
+    }
+    value
+        .extract::<i128>()
+        .map_err(|_| PyValueError::new_err(format!("{field_name} must be {expected}")))
+}
+
+fn extract_max_attempts_argument(value: &Bound<'_, PyAny>) -> PyResult<i128> {
+    extract_integer_argument(value, "max_attempts", "an integer")
+}
+
+fn extract_delay_ms_argument(value: &Bound<'_, PyAny>) -> PyResult<i128> {
+    extract_integer_argument(value, "delay_ms", "an integer")
+}
+
+fn extract_session_verification_config_from_metadata(
+    info: &Bound<'_, PyDict>,
+    connection_plugin_name: Option<&str>,
+) -> PyResult<Option<SessionVerificationConfig>> {
+    let Some(value) = info.get_item("session_verification")? else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    let config = value
+        .extract::<PyRef<'_, PySessionVerificationConfig>>()
+        .map_err(|_| {
+            PyValueError::new_err(
+                "python task metadata field 'session_verification' must be SessionVerificationConfig or None",
+            )
+        })?;
+    if connection_plugin_name.is_none() {
+        return Err(PyValueError::new_err(
+            "python task metadata field 'session_verification' requires 'connection_plugin_name'",
+        ));
+    }
+    Ok(Some(config.inner))
 }
 
 fn extract_retry_config_from_metadata(info: &Bound<'_, PyDict>) -> PyResult<Option<RetryConfig>> {
@@ -1256,11 +2103,13 @@ fn build_python_task_runtime_context(
     current_depth: usize,
     max_depth: Option<usize>,
     current_attempt: usize,
+    dry_run: bool,
     connection: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let context = PyDict::new(py);
     context.set_item("current_depth", current_depth)?;
     context.set_item("current_attempt", current_attempt)?;
+    context.set_item("dry_run", dry_run)?;
     if let Some(max_depth) = max_depth {
         context.set_item("max_depth", max_depth)?;
     } else {
@@ -1377,16 +2226,64 @@ impl TaskInfo for RuntimeTaskWrapper {
     fn retry_config(&self) -> Option<&RetryConfig> {
         self.inner.retry_config()
     }
+
+    fn supports_dry_run(&self) -> bool {
+        self.inner.supports_dry_run()
+    }
+
+    fn idempotency_mode(&self) -> IdempotencyMode {
+        self.inner.idempotency_mode()
+    }
 }
 
 #[async_trait]
 impl Task for RuntimeTaskWrapper {
+    fn start(
+        &self,
+        host: &Host,
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        self.inner.start(host, context)
+    }
+
     async fn start_async(
         &self,
         host: &Host,
         context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, TaskError> {
         self.inner.start_async(host, context).await
+    }
+
+    fn dry_run(
+        &self,
+        host: &Host,
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        self.inner.dry_run(host, context)
+    }
+
+    async fn dry_run_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<HostTaskResult, TaskError> {
+        self.inner.dry_run_async(host, context).await
+    }
+
+    fn check(
+        &self,
+        host: &Host,
+        context: &::genja_core::task::BlockingTaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        self.inner.check(host, context)
+    }
+
+    async fn check_async(
+        &self,
+        host: &Host,
+        context: &TaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, TaskError> {
+        self.inner.check_async(host, context).await
     }
 
     fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
@@ -1512,7 +2409,7 @@ mod tests {
             let task = PyModule::from_code(
                 py,
                 pyo3::ffi::c_str!(
-                    "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    def has_connection(self):\n        return self.connection is not None\n"
+                    "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass _IdempotencyModeValue:\n    def __init__(self, value):\n        self.value = value\n\nclass IdempotencyMode:\n    DISABLED = _IdempotencyModeValue('disabled')\n    CHECK = _IdempotencyModeValue('check')\n    CHECK_AND_VERIFY = _IdempotencyModeValue('check_and_verify')\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    def has_connection(self):\n        return self.connection is not None\n"
                 ),
                 pyo3::ffi::c_str!("genja/task.py"),
                 pyo3::ffi::c_str!("genja.task"),
@@ -1551,6 +2448,8 @@ mod tests {
             None => info.set_item("connection_plugin_name", py.None())?,
         }
         info.set_item("retry", py.None())?;
+        info.set_item("supports_dry_run", false)?;
+        info.set_item("idempotency", Py::new(py, PyIdempotencyMode::Disabled)?)?;
         info.set_item("sub_tasks", sub_tasks)?;
 
         let attrs = PyDict::new(py);
@@ -1583,6 +2482,52 @@ mod tests {
         }
 
         type_fn.call1((name, bases, attrs))
+    }
+
+    #[test]
+    fn task_run_options_rejects_bool_max_depth() {
+        init_python();
+        Python::attach(|py| {
+            let value = PyBool::new(py, true).to_owned().into_any();
+            let err = match PyTaskRunOptions::new(Some(value), false) {
+                Ok(_) => panic!("bool max_depth should fail"),
+                Err(err) => err,
+            };
+
+            assert_eq!(
+                err.to_string(),
+                "ValueError: TaskRunOptions(max_depth=...) expected int | None, got bool"
+            );
+        });
+    }
+
+    #[test]
+    fn task_run_options_rejects_nested_task_run_options_max_depth() {
+        init_python();
+        Python::attach(|py| {
+            let nested = Py::new(
+                py,
+                PyTaskRunOptions {
+                    max_depth: Some(1),
+                    dry_run: false,
+                },
+            )
+            .expect("nested run options should build");
+            let err = match PyTaskRunOptions::new(Some(nested.bind(py).clone().into_any()), false) {
+                Ok(_) => panic!("nested TaskRunOptions max_depth should fail"),
+                Err(err) => err,
+            };
+
+            let message = err.to_string();
+            assert!(
+                message.contains(
+                    "TaskRunOptions(max_depth=...) expected int | None, got TaskRunOptions"
+                )
+            );
+            assert!(message.contains(
+                "Runner plugins receive run_options as their fifth argument, not max_depth"
+            ));
+        });
     }
 
     #[test]
@@ -1639,6 +2584,103 @@ mod tests {
             assert_eq!(
                 data["outcome"]["Passed"]["metadata"]["backup_file"],
                 "/tmp/router1.cfg"
+            );
+        });
+    }
+
+    #[test]
+    fn python_result_to_host_task_result_round_trips_passed_with_warnings_dict() {
+        init_python();
+        Python::attach(|py| {
+            let result = PyDict::new(py);
+            result.set_item("status", "passed_with_warnings").unwrap();
+            result.set_item("changed", false).unwrap();
+            result
+                .set_item("summary", "state appears converged")
+                .unwrap();
+            result
+                .set_item(
+                    "warnings",
+                    vec!["previous attempt may have skipped finalization"],
+                )
+                .unwrap();
+
+            let host_result = python_result_to_host_task_result(result.into_any())
+                .expect("passed-with-warnings result should convert");
+            let data = host_task_result_to_json(&host_result);
+
+            assert!(host_result.is_passed());
+            assert_eq!(host_result.status(), "passed_with_warnings");
+            assert!(data["outcome"]["PassedWithWarnings"].is_object());
+            assert_eq!(
+                data["outcome"]["PassedWithWarnings"]["warnings"],
+                json!(["previous attempt may have skipped finalization"])
+            );
+        });
+    }
+
+    #[test]
+    fn py_idempotency_mode_exposes_stable_values() {
+        Python::attach(|py| {
+            let mode = Py::new(py, PyIdempotencyMode::CheckAndVerify)
+                .expect("mode should convert to python");
+            let mode = mode.bind(py).clone().into_any();
+
+            assert_eq!(
+                mode.getattr("value")
+                    .expect("value should exist")
+                    .extract::<String>()
+                    .expect("value should be a string"),
+                "check_and_verify"
+            );
+            assert_eq!(
+                mode.call_method0("__str__")
+                    .expect("__str__ should work")
+                    .extract::<String>()
+                    .expect("__str__ should return a string"),
+                "check_and_verify"
+            );
+            assert_eq!(
+                mode.call_method0("__repr__")
+                    .expect("__repr__ should work")
+                    .extract::<String>()
+                    .expect("__repr__ should return a string"),
+                "IdempotencyMode.CHECK_AND_VERIFY"
+            );
+        });
+    }
+
+    #[test]
+    fn py_idempotency_check_result_exposes_expected_fields() {
+        Python::attach(|py| {
+            let details =
+                json_value_to_py(py, &json!({"desired": "ntp"})).expect("details should convert");
+            let result = PyIdempotencyCheckResult::change_required(
+                Some("+ntp server 192.0.2.10".to_string()),
+                Some(details.bind(py).clone()),
+            )
+            .expect("check result should build");
+            let result = Py::new(py, result).expect("result should convert to python");
+            let result = result.bind(py);
+
+            for field in ["status", "summary", "diff", "details"] {
+                assert!(
+                    result.hasattr(field).expect("hasattr should work"),
+                    "{field} should be exposed as a Python property"
+                );
+            }
+
+            let payload = result.call_method0("to_dict").expect("to_dict should work");
+            assert_eq!(
+                py_any_to_json_value(&payload).expect("payload should convert"),
+                json!({
+                    "status": "change_required",
+                    "summary": null,
+                    "diff": "+ntp server 192.0.2.10",
+                    "details": {
+                        "desired": "ntp",
+                    },
+                })
             );
         });
     }
@@ -1897,7 +2939,7 @@ mod tests {
             };
 
             let result = task_definition
-                .run_on_host(host.into_any(), None, 0)
+                .run_on_host(host.into_any(), None, None)
                 .expect("async task should execute");
             assert_eq!(result.passed_hosts(), vec!["router1".to_string()]);
             let host_result = result

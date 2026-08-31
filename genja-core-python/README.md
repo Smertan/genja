@@ -52,12 +52,10 @@ class BackupTask:
         )
 
 
-genja = genja.Genja.from_hosts(
-    {
-        "router1": {"hostname": "10.0.0.1", "platform": "ios"},
-        "router2": {"hostname": "10.0.0.2", "platform": "nxos"},
-    }
-).with_runner("serial")
+genja = genja.Genja.from_hosts({
+    "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+    "router2": {"hostname": "10.0.0.2", "platform": "nxos"},
+}).with_runner("serial")
 
 results = genja.run_task(BackupTask)
 print(results.to_dict())
@@ -105,11 +103,9 @@ class BackupTaskAsync:
 
 
 async def main() -> None:
-    runtime = genja.Genja.from_hosts(
-        {
-            "router1": {"hostname": "10.0.0.1", "platform": "ios"},
-        }
-    ).with_runner("serial")
+    runtime = genja.Genja.from_hosts({
+        "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+    }).with_runner("serial")
 
     results = await runtime.run_task_async(BackupTaskAsync)
     print(results.to_dict())
@@ -129,6 +125,56 @@ Python task authoring rules:
 - Define `async def start_async(...)` for async tasks.
 - Define exactly one of those methods on a `@task(...)` class.
 - Use `sub_tasks=[ChildTask, ...]` to declare child tasks.
+- Use `supports_dry_run=True` with `dry_run(...)` or `dry_run_async(...)`
+  when operators should be able to preview a task.
+- Use `idempotency=IdempotencyMode.CHECK` or
+  `idempotency=IdempotencyMode.CHECK_AND_VERIFY` with `check(...)` or
+  `check_async(...)` when the task can inspect whether a host is already in
+  the desired state.
+- Use `session_verification=SessionVerificationConfig(...)` with
+  `connection_plugin_name` when a changed task should prove that a new
+  authenticated management session can be established after the change.
+
+```python
+from genja.task import (
+    Host,
+    IdempotencyCheckResult,
+    IdempotencyMode,
+    TaskInfo,
+    TaskRuntimeContext,
+    TaskSuccessResult,
+    task,
+)
+
+
+@task(name="ensure_ntp", idempotency=IdempotencyMode.CHECK)
+class EnsureNtp:
+    def check(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> IdempotencyCheckResult:
+        return IdempotencyCheckResult.change_required(diff="+ntp server 192.0.2.10")
+
+    def start(
+        self,
+        task: TaskInfo,
+        host: Host,
+        context: TaskRuntimeContext,
+    ) -> TaskSuccessResult:
+        return TaskSuccessResult(changed=True, summary="configured NTP")
+```
+
+Dry-run dispatch does not automatically run idempotency checks. Task authors
+who want shared inspection behavior can call private helper code from both
+their dry-run hook and check hook.
+
+Session verification is independent from idempotency. When both
+`session_verification=SessionVerificationConfig(...)` and
+`idempotency=IdempotencyMode.CHECK_AND_VERIFY` are enabled, Genja replaces the
+connection before running the post-check, so the post-check uses the new
+session.
 
 ## Logging
 
@@ -251,6 +297,44 @@ settings = genja.Settings(
 genja = genja.Genja.from_settings(settings)
 ```
 
+Use `from_settings_async(...)` for programmatic settings or
+`from_settings_file_async(...)` for settings files when the selected inventory
+plugin is async. Async construction is strict: the selected inventory plugin must
+be async-capable, and sync-only inventory plugins such as the default
+`FileInventoryPlugin` are rejected.
+
+```python
+import genja
+
+
+class ApiInventoryPlugin(genja.InventoryPluginBase):
+    name = "api_inventory"
+
+    async def load(self, settings, plugins):
+        return {
+            "router1": {
+                "hostname": "10.0.0.1",
+                "platform": "ios",
+            },
+        }
+
+
+plugins = genja.PluginManager()
+plugins.register_plugin(ApiInventoryPlugin())
+
+settings = genja.Settings(
+    inventory=genja.InventoryConfig(plugin="api_inventory"),
+)
+
+genja = await genja.Genja.from_settings_async(settings, plugin_manager=plugins)
+
+# Or load settings from a file with the same strict async inventory contract.
+genja = await genja.Genja.from_settings_file_async(
+    "config.yaml",
+    plugin_manager=plugins,
+)
+```
+
 Programmatic construction itself does not read files, but runtime creation
 validates supplied settings before building the runtime. To validate explicitly,
 call `settings.validate()` or `settings.ssh.validate()`.
@@ -271,7 +355,7 @@ genja = genja.Genja.from_settings_file("config.yaml", plugin_manager=plugins)
 ```
 
 The same `plugin_manager` argument is available on `Genja.from_settings(...)`
-for Python-authored inventory plugins.
+and the async settings constructors for Python-authored inventory plugins.
 
 ## Development
 
@@ -317,3 +401,18 @@ Run Ruff:
 ```bash
 pdm run lint
 ```
+
+Check Python API stubs and PyO3 documentation coverage:
+
+```bash
+pdm run check-stubs
+```
+
+Run this when changing Rust/PyO3-exposed Python APIs, `.pyi` stubs, Python API
+docstrings, or top-level Python re-exports.
+
+The check requires every top-level `python/genja/*.pyi` stub to be listed in
+`STUBS_REQUIRING_DOCSTRINGS` in `scripts/check_python_api_docs.py`. When adding
+a stub, document its public API and add it to that list during the same change.
+Add duplicated top-level re-export classes to `DUPLICATED_TOP_LEVEL_CLASSES` so
+`genja.pyi` and `__init__.pyi` stay aligned.

@@ -656,7 +656,7 @@ mod tests {
                 std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>,
             >,
             _runner_config: &genja_core::settings::RunnerConfig,
-            _max_depth: usize,
+            _run_options: genja_core::task::TaskRunOptions,
         ) -> Result<genja_core::task::TaskResults, genja_core::GenjaError> {
             Ok(genja_core::task::TaskResults::new("runner"))
         }
@@ -669,7 +669,7 @@ mod tests {
                 std::sync::Arc<dyn genja_core::task::TaskConnectionResolver>,
             >,
             _runner_config: &genja_core::settings::RunnerConfig,
-            _max_depth: usize,
+            _run_options: genja_core::task::TaskRunOptions,
         ) -> Result<Vec<genja_core::task::TaskResults>, genja_core::GenjaError> {
             Ok(Vec::new())
         }

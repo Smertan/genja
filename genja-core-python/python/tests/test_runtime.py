@@ -1,7 +1,8 @@
 import asyncio
 
 import genja
-from tests.fixtures.inventory_plugins import StaticInventoryPlugin
+import pytest
+from tests.fixtures.inventory_plugins import AsyncInventoryPlugin, StaticInventoryPlugin
 from genja.inventory import Defaults, Group, Host as InventoryHost, Inventory
 from genja.task import (
     Host,
@@ -83,6 +84,105 @@ def test_genja_from_settings_accepts_python_inventory_plugin_manager():
 
     assert runtime.inventory_loaded()
     assert runtime.host_ids() == ["router1", "router2"]
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_async_accepts_async_python_inventory_plugin_manager():
+    manager = genja.PluginManager()
+    manager.register_plugin(AsyncInventoryPlugin())
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="python_async_inventory"),
+        runner=genja.RunnerConfig(plugin="serial"),
+    )
+
+    runtime = await genja.Genja.from_settings_async(settings, plugin_manager=manager)
+
+    assert runtime.inventory_loaded()
+    assert runtime.host_ids() == ["router1", "router2"]
+    assert runtime.settings().inventory.plugin == "python_async_inventory"
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_file_async_accepts_async_python_inventory_plugin_manager(
+    tmp_path,
+):
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text(
+        "inventory:\n  plugin: python_async_inventory\nrunner:\n  plugin: serial\n"
+    )
+    manager = genja.PluginManager()
+    manager.register_plugin(AsyncInventoryPlugin())
+
+    runtime = await genja.Genja.from_settings_file_async(
+        str(settings_path),
+        plugin_manager=manager,
+    )
+
+    assert runtime.inventory_loaded()
+    assert runtime.host_ids() == ["router1", "router2"]
+    assert runtime.settings().inventory.plugin == "python_async_inventory"
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_async_rejects_sync_only_inventory_plugin():
+    manager = genja.PluginManager()
+    manager.register_plugin(StaticInventoryPlugin())
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="python_inventory"),
+    )
+
+    with pytest.raises(ValueError, match="sync inventory plugin 'python_inventory'"):
+        await genja.Genja.from_settings_async(settings, plugin_manager=manager)
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_file_async_rejects_sync_only_inventory_plugin(
+    tmp_path,
+):
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("inventory:\n  plugin: python_inventory\n")
+    manager = genja.PluginManager()
+    manager.register_plugin(StaticInventoryPlugin())
+
+    with pytest.raises(ValueError, match="sync inventory plugin 'python_inventory'"):
+        await genja.Genja.from_settings_file_async(
+            str(settings_path),
+            plugin_manager=manager,
+        )
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_rejects_async_only_inventory_plugin():
+    manager = genja.PluginManager()
+    manager.register_plugin(AsyncInventoryPlugin())
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="python_async_inventory"),
+    )
+
+    with pytest.raises(
+        ValueError, match="async inventory plugin 'python_async_inventory'"
+    ):
+        genja.Genja.from_settings(settings, plugin_manager=manager)
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_async_returns_missing_inventory_plugin_error():
+    settings = genja.Settings(
+        inventory=genja.InventoryConfig(plugin="missing_inventory"),
+    )
+
+    with pytest.raises(ValueError, match="plugin 'missing_inventory' not found"):
+        await genja.Genja.from_settings_async(settings)
+
+
+@pytest.mark.asyncio
+async def test_genja_from_settings_async_validates_programmatic_settings():
+    settings = genja.Settings(
+        ssh=genja.SSHConfig(config_file="/nonexistent/genja/ssh_config"),
+    )
+
+    with pytest.raises(ValueError, match="failed to validate runtime settings"):
+        await genja.Genja.from_settings_async(settings)
 
 
 @task(name="runtime_backup")
@@ -196,7 +296,10 @@ def test_genja_runtime_run_tasks_async_preserves_order():
         tasks = genja.Tasks()
         tasks.add_task(RuntimeBackupTask)
         tasks.add_task(RuntimeAsyncBackupTask)
-        return await runtime.run_tasks_async(tasks, max_depth=1)
+        return await runtime.run_tasks_async(
+            tasks,
+            run_options=genja.TaskRunOptions(max_depth=1),
+        )
 
     results = asyncio.run(run_case())
 
@@ -244,7 +347,7 @@ def test_genja_runtime_runs_ordered_task_list_with_nested_subtasks():
         "runtime_parent",
     ]
 
-    results = runtime.run_tasks(tasks, max_depth=1)
+    results = runtime.run_tasks(tasks, run_options=genja.TaskRunOptions(max_depth=1))
 
     assert [result.task_name for result in results] == [
         "runtime_backup",
@@ -266,7 +369,10 @@ def test_genja_runtime_run_tasks_rejects_plain_task_iterable():
     }).with_runner("serial")
 
     try:
-        runtime.run_tasks([RuntimeBackupTask, RuntimeParentTask], max_depth=1)
+        runtime.run_tasks(
+            [RuntimeBackupTask, RuntimeParentTask],
+            run_options=genja.TaskRunOptions(max_depth=1),
+        )
     except ValueError as err:
         assert "tasks must be a genja.Tasks instance" in str(err)
     else:
@@ -392,11 +498,109 @@ def test_genja_filter_accessors_and_execution_respect_selected_hosts():
     assert filtered.hosts_raw()["router1"]["platform"] == "ios"
 
 
+def test_genja_filter_hosts_accepts_simple_predicate_and_preserves_original():
+    runtime = genja.Genja.from_hosts({
+        "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+        "router2": {"hostname": "10.0.0.2", "platform": "nxos"},
+    })
+
+    filtered = runtime.filter_hosts(lambda host: host["platform"] == "ios")
+
+    assert filtered.host_ids() == ["router1"]
+    assert runtime.host_ids() == ["router1", "router2"]
+
+
+def test_genja_filter_hosts_supports_multi_field_and_nested_predicates():
+    runtime = genja.Genja.from_hosts({
+        "router1": {
+            "hostname": "10.0.0.1",
+            "platform": "ios",
+            "data": {"site": {"name": "lab-a"}, "priority": 10},
+        },
+        "router2": {
+            "hostname": "10.0.0.2",
+            "platform": "ios",
+            "data": {"site": {"name": "lab-b"}, "priority": 20},
+        },
+        "router3": {
+            "hostname": "10.0.0.3",
+            "platform": "nxos",
+            "data": {"site": {"name": "lab-a"}, "priority": 30},
+        },
+    })
+
+    filtered = runtime.filter_hosts(
+        lambda host: (
+            host["platform"] == "ios"
+            and host["data"]["site"]["name"] == "lab-b"
+            and host["data"]["priority"] >= 20
+        )
+    )
+
+    assert filtered.host_ids() == ["router2"]
+
+
+def test_genja_filter_hosts_chains_with_existing_filters_and_truthiness():
+    runtime = genja.Genja.from_hosts({
+        "router1": {
+            "hostname": "10.0.0.1",
+            "platform": "ios",
+            "data": {"role": "core"},
+        },
+        "router2": {
+            "hostname": "10.0.0.2",
+            "platform": "ios",
+            "data": {"role": "edge"},
+        },
+        "router3": {
+            "hostname": "10.0.0.3",
+            "platform": "nxos",
+            "data": {"role": "core"},
+        },
+    })
+
+    filtered = (
+        runtime
+        .filter_by_key("platform")
+        .filter_by_key_value("platform", "^ios$")
+        .filter_hosts(lambda host: host["data"]["role"] == "edge")
+    )
+
+    assert filtered.host_ids() == ["router2"]
+
+
+def test_genja_filter_hosts_rejects_non_callable_predicate():
+    runtime = genja.Genja.from_hosts({
+        "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+    })
+
+    with pytest.raises(TypeError, match="predicate must be callable"):
+        runtime.filter_hosts("not callable")
+
+
+def test_genja_filter_hosts_predicate_exceptions_include_host_context():
+    runtime = genja.Genja.from_hosts({
+        "router1": {"hostname": "10.0.0.1", "platform": "ios"},
+        "router2": {"hostname": "10.0.0.2", "platform": "nxos"},
+    })
+
+    def predicate(host):
+        if host["platform"] == "nxos":
+            raise RuntimeError("unsupported platform")
+        return False
+
+    with pytest.raises(ValueError, match="router2.*unsupported platform"):
+        runtime.filter_hosts(predicate)
+
+
 def test_genja_runtime_hides_depth_from_python_task_context():
     runtime = genja.Genja.from_hosts({
         "router1": Host(hostname="10.0.0.1", platform="ios"),
     }).with_runner("serial")
-    results = runtime.run_task(RuntimeParentTask, max_depth=1)
+    results = runtime.run_task(
+        RuntimeParentTask,
+        run_options=genja.TaskRunOptions(max_depth=1),
+    )
     data = results.to_dict(raw=True)
 
     assert data["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
@@ -428,6 +632,72 @@ def test_genja_runtime_passes_python_connection_into_runtime_context():
     results = runtime.run_task(RuntimeConnectionTask)
     data = results.to_dict()
 
+    assert data["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
+        "connection_alive": True,
+        "connection_hostname": "router1",
+        "opened_with": {
+            "hostname": "10.0.0.1",
+            "port": 22,
+            "username": "admin",
+            "password": "secret",
+            "platform": "ios",
+            "extras": None,
+        },
+    }
+
+
+def test_genja_runtime_opens_python_connection_for_dry_run():
+    calls: list[str] = []
+
+    @task(
+        name="runtime_connection_dry_run",
+        connection_plugin_name="ssh",
+        supports_dry_run=True,
+    )
+    class RuntimeConnectionDryRunTask:
+        def start(self, task, host, context):
+            calls.append("start")
+            return TaskSuccessResult(summary="started")
+
+        def dry_run(self, task, host, context):
+            calls.append("dry_run")
+            assert task.supports_dry_run is True
+            assert context.dry_run is True
+            assert isinstance(context.connection(), TestConnection)
+            connection = context.connection()
+            return TaskSuccessResult(
+                changed=True,
+                summary=f"would connect to {host.hostname}",
+                metadata={
+                    "connection_alive": connection.is_alive(),
+                    "connection_hostname": connection.key.hostname,
+                    "opened_with": connection.opened_with,
+                },
+            )
+
+    plugins = genja.PluginManager()
+    plugins.register_plugin(ConnectionPlugin())
+
+    runtime = genja.Genja.from_hosts(
+        {
+            "router1": Host(
+                hostname="10.0.0.1",
+                port=22,
+                username="admin",
+                password="secret",
+                platform="ios",
+            ),
+        },
+        plugin_manager=plugins,
+    ).with_runner("serial")
+    results = runtime.run_task(
+        RuntimeConnectionDryRunTask,
+        run_options=genja.TaskRunOptions(dry_run=True),
+    )
+    data = results.to_dict()
+
+    assert calls == ["dry_run"]
+    assert data["hosts"]["router1"]["execution_metadata"]["dry_run"] is True
     assert data["hosts"]["router1"]["outcome"]["Passed"]["metadata"] == {
         "connection_alive": True,
         "connection_hostname": "router1",

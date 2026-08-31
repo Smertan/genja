@@ -65,16 +65,18 @@ Rust supports both synchronous and asynchronous inventory plugins.
 
 If you are loading inventory through runtime plugin discovery from a settings
 file, use `Genja::from_settings_file_async(...)` when the selected inventory
-plugin is async-capable. If you are registering inventory plugins in code, load
-the inventory through the plugin first and then build `Genja` from the returned
-`Inventory`.
+plugin implements `AsyncPluginInventory`. For programmatic settings, use
+`Genja::from_settings_async(...)` with an async inventory plugin. Async
+constructors are strict: sync-only inventory plugins such as
+`FileInventoryPlugin` must use `Genja::from_settings_file(...)` or
+`Genja::from_settings(...)`.
 
 ```rust
 use genja::Genja;
 use genja::async_trait;
 use genja::genja_core::inventory::{BaseBuilderHost, Host, Hosts, Inventory};
 use genja::genja_core::{InventoryLoadError, Settings};
-use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin, Plugins};
+use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
 use genja_plugin_manager::PluginManager;
 
 #[derive(Debug)]
@@ -101,21 +103,16 @@ impl AsyncPluginInventory for ApiInventoryPlugin {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let settings = Settings::from_file("config.yaml")?;
+    // Assumes `api_inventory` is available through runtime plugin discovery.
+    let settings = Settings::builder()
+        .inventory(
+            genja::genja_core::settings::InventoryConfig::builder()
+                .plugin("api_inventory")
+                .build(),
+        )
+        .build();
 
-    let mut plugins = PluginManager::new();
-    plugins.register_plugin(Plugins::AsyncInventory(Box::new(ApiInventoryPlugin)));
-
-    let inventory = plugins
-        .get_async_inventory_plugin("api_inventory")
-        .ok_or("missing async inventory plugin")?
-        .load_async(&settings, &plugins)
-        .await?;
-
-    let genja = Genja::builder(inventory)
-        .with_settings(settings)
-        .with_plugin_manager(plugins)
-        .build()?;
+    let genja = Genja::from_settings_async(settings).await?;
 
     assert_eq!(genja.host_ids().len(), 1);
     Ok(())
@@ -254,6 +251,10 @@ Notes:
 
 - `max_depth` limits recursive sub-task execution. A task with no sub-tasks can use a small value like `1`.
 - `#[genja_task(...)]` owns static task metadata like name, processors, and connection plugin selection.
+- Tasks can opt into dry-run support and idempotency checks through
+  `#[genja_task(...)]` metadata and matching task hooks.
+- Tasks that change management access can opt into post-change session
+  verification with `session_verification(...)` metadata.
 - `connection_plugin_name` is optional, but usually needed for real task execution.
 - Rich task output is split between semantic outcome payloads
   (`TaskSuccess`, `TaskFailure`, `TaskSkip`) and host-level execution metadata on
