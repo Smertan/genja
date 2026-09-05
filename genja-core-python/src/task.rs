@@ -98,11 +98,20 @@ macro_rules! py_string_enum {
                 self.value_str()
             }
 
-            /// Return the stable string value for display.
+            /// Return the stable string value for `str(enum_value)`.
+            ///
+            /// This keeps Python display output aligned with `.value`, so task
+            /// enum values behave like compact value objects in logs and error
+            /// messages instead of using Python's default object formatting.
             fn __str__(&self) -> &'static str {
                 self.value_str()
             }
 
+            /// Return the qualified enum constant name for `repr(enum_value)`.
+            ///
+            /// The representation mirrors Python enum-style output without
+            /// including the serialized value, for example
+            /// `TaskFailureKind.CONNECTION`.
             fn __repr__(&self) -> String {
                 format!("{}.{}", $python_name, self.variant_name())
             }
