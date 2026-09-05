@@ -258,6 +258,7 @@ from genja.task import (
     Host,
     RetryConfig,
     TaskFailureResult,
+    TaskFailureKind,
     TaskInfo,
     TaskRuntimeContext,
     task,
@@ -282,7 +283,7 @@ class RetryableBackup:
     ) -> TaskFailureResult:
         return TaskFailureResult(
             message=f"temporary rate limit on {host.hostname}",
-            kind="external",
+            kind=TaskFailureKind.EXTERNAL,
             retryable=True,
         )
 ```
@@ -515,6 +516,10 @@ Tasks return one result per host.
     )
     ```
 
+    Python task result models require task enum instances such as
+    `TaskFailureKind.CONNECTION`; raw string values such as `"connection"` are
+    not accepted.
+
 Success results can include result payloads, change status, diffs, summaries,
 warnings, messages, and metadata. Warning-bearing successes may be represented
 as `PassedWithWarnings` when the desired state is satisfied but important
@@ -550,7 +555,8 @@ failure classification.
 
 ## Failure Kinds
 
-Use failure kinds to make task failures easier to classify:
+Use failure kinds to make task failures easier to classify. Their serialized
+values are:
 
 - `connection`
 - `authentication`
