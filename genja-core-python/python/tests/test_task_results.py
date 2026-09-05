@@ -1,4 +1,6 @@
+import copy
 from datetime import datetime, timezone
+import importlib
 
 import genja
 from pydantic import ValidationError
@@ -11,6 +13,27 @@ from genja.task import (
     TaskSkipResult,
     TaskSuccessResult,
 )
+
+genja_task = importlib.import_module("genja.task")
+
+
+def test_task_result_enums_are_rust_backed_exports():
+    assert genja.TaskFailureKind is genja_task.TaskFailureKind
+    assert genja.TaskMessageLevel is genja_task.TaskMessageLevel
+    assert genja.TaskFailureKind.CONNECTION == TaskFailureKind.CONNECTION
+    assert genja.TaskMessageLevel.WARNING == TaskMessageLevel.WARNING
+
+    assert TaskFailureKind.CONNECTION.value == "connection"
+    assert TaskMessageLevel.WARNING.value == "warning"
+    assert str(TaskFailureKind.CONNECTION) == "connection"
+    assert str(TaskMessageLevel.WARNING) == "warning"
+    assert repr(TaskFailureKind.CONNECTION) == "TaskFailureKind.CONNECTION"
+    assert repr(TaskMessageLevel.WARNING) == "TaskMessageLevel.WARNING"
+
+    assert copy.copy(TaskFailureKind.EXTERNAL) == TaskFailureKind.EXTERNAL
+    assert copy.deepcopy(TaskFailureKind.EXTERNAL) == TaskFailureKind.EXTERNAL
+    assert copy.copy(TaskMessageLevel.INFO) == TaskMessageLevel.INFO
+    assert copy.deepcopy(TaskMessageLevel.INFO) == TaskMessageLevel.INFO
 
 
 def test_host_task_result_from_python_success_result_round_trips():
@@ -87,9 +110,19 @@ def test_task_message_rejects_invalid_message_level():
         TaskMessage(level="verbose", text="unexpected level")
 
 
+def test_task_message_rejects_raw_message_level_value():
+    with pytest.raises(ValidationError):
+        TaskMessage(level="info", text="unexpected level")
+
+
 def test_task_failure_result_rejects_invalid_failure_kind():
     with pytest.raises(ValidationError):
         TaskFailureResult(message="boom", kind="network")
+
+
+def test_task_failure_result_rejects_raw_failure_kind_value():
+    with pytest.raises(ValidationError):
+        TaskFailureResult(message="boom", kind="external")
 
 
 def test_task_success_result_rejects_invalid_status_literal():
