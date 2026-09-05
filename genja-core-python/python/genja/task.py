@@ -167,6 +167,8 @@ from .genja import (
     IdempotencyCheckResult,
     IdempotencyMode,
     SessionVerificationConfig,
+    TaskFailureKind,
+    TaskMessageLevel,
     _validate_task_id as _rust_validate_task_id,
     _validate_task_version as _rust_validate_task_version,
 )
@@ -1550,6 +1552,11 @@ class TaskMessage(_GenjaModel):
         description="Timestamp associated with the message.",
     )
 
+    @field_serializer("level")
+    def _serialize_level(self, value: TaskMessageLevel) -> str:
+        """Serialize the Rust-backed message level enum as its stable value."""
+        return value.value
+
 
 class TaskStatus(str, Enum):
     """Canonical task status values returned by Genja task results.
@@ -1580,89 +1587,6 @@ class TaskStatus(str, Enum):
     PASSED_WITH_WARNINGS = "passed_with_warnings"
     FAILED = "failed"
     SKIPPED = "skipped"
-
-
-class TaskFailureKind(str, Enum):
-    """Canonical task failure categories returned by Genja task results.
-
-    This enumeration defines the types of failures that can occur during task
-    execution. Each failure kind categorizes the root cause of a task failure,
-    enabling consumers to understand the nature of the error and determine
-    appropriate remediation strategies. These categories are used in
-    TaskFailureResult to provide structured failure classification.
-
-    Attributes:
-        CONNECTION (str): Indicates a failure related to establishing or
-            maintaining network connectivity to the target host. This includes
-            network timeouts, connection refused errors, and other transport-level
-            issues.
-        AUTHENTICATION (str): Indicates a failure related to authenticating
-            with the target host or service. This includes invalid credentials,
-            expired tokens, insufficient permissions, and other authentication
-            mechanism failures.
-        VALIDATION (str): Indicates a failure related to input validation,
-            configuration validation, or precondition checks. This includes
-            invalid parameters, malformed data, or unmet prerequisites.
-        TIMEOUT (str): Indicates a failure caused by an operation exceeding
-            its allowed execution time. This includes command timeouts, response
-            timeouts, and other time-bound operation failures.
-        COMMAND (str): Indicates a failure related to executing a command or
-            operation on the target host. This includes command execution errors,
-            non-zero exit codes, and other command-level failures.
-        UNSUPPORTED (str): Indicates a failure caused by attempting an operation
-            that is not supported by the target platform, connection plugin, or
-            current configuration. This includes unsupported features, incompatible
-            versions, and unavailable capabilities.
-        INTERNAL (str): Indicates a failure caused by an internal error within
-            the Genja task implementation or runtime. This includes programming
-            errors, unexpected exceptions, and other internal system failures.
-        EXTERNAL (str): Indicates a failure caused by an external system or
-            dependency. This includes third-party service failures, external API
-            errors, and other failures outside the direct control of the task.
-    """
-
-    CONNECTION = "connection"
-    AUTHENTICATION = "authentication"
-    VALIDATION = "validation"
-    TIMEOUT = "timeout"
-    COMMAND = "command"
-    UNSUPPORTED = "unsupported"
-    INTERNAL = "internal"
-    EXTERNAL = "external"
-
-
-class TaskMessageLevel(str, Enum):
-    """Canonical task message severity levels returned by Genja task results.
-
-    This enumeration defines the severity levels for structured messages
-    emitted during task execution. Each level indicates the importance and
-    nature of the message, enabling consumers to filter, prioritize, and
-    display messages appropriately. These levels are used in TaskMessage
-    instances attached to task results.
-
-    Attributes:
-        INFO (str): Indicates an informational message that provides general
-            context, progress updates, or non-critical details about task
-            execution. These messages are typically used for logging normal
-            operational events.
-        WARNING (str): Indicates a warning message that highlights a potential
-            issue, unexpected condition, or non-fatal problem that occurred
-            during task execution. These messages alert users to conditions
-            that may require attention but did not prevent task completion.
-        ERROR (str): Indicates an error message that describes a failure,
-            exception, or critical problem that occurred during task execution.
-            These messages provide diagnostic information about task failures
-            and are typically associated with TaskFailureResult outcomes.
-        DEBUG (str): Indicates a debug message that provides detailed technical
-            information useful for troubleshooting and development. These
-            messages contain verbose diagnostic data and are typically filtered
-            out in production environments unless debug logging is enabled.
-    """
-
-    INFO = "info"
-    WARNING = "warning"
-    ERROR = "error"
-    DEBUG = "debug"
 
 
 class TaskSuccessResult(_GenjaModel):
@@ -1856,6 +1780,11 @@ class TaskFailureResult(_GenjaModel):
         default_factory=list,
         description="Structured messages emitted before the failure occurred.",
     )
+
+    @field_serializer("kind")
+    def _serialize_kind(self, value: TaskFailureKind) -> str:
+        """Serialize the Rust-backed failure kind enum as its stable value."""
+        return value.value
 
     @field_validator("details", mode="before")
     @classmethod

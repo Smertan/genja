@@ -26,6 +26,33 @@ enum PythonTaskExecutionMode {
     Async,
 }
 
+// Generate a Python-facing enum wrapper for a Rust enum whose public Python
+// representation is a stable lowercase string value.
+//
+// The generated wrapper exposes Python constants, `.value`, `str(...)`,
+// `repr(...)`, Rust/Python conversions, and Python copy hooks. The copy hooks
+// let immutable PyO3 enum values be reused safely when libraries such as
+// Pydantic copy model defaults before validation or serialization.
+//
+// Example:
+//
+// py_string_enum! {
+//     py: PyIdempotencyMode,
+//     rust: IdempotencyMode,
+//     python_name: "IdempotencyMode",
+//     variants: {
+//         Check => CHECK => "check",
+//     }
+// }
+//
+// That invocation generates a `PyIdempotencyMode::Check` Rust variant exposed
+// to Python as the `IdempotencyMode.CHECK` class attribute.
+//
+// Python users can then rely on:
+//
+// IdempotencyMode.CHECK.value == "check"
+// str(IdempotencyMode.CHECK) == "check"
+// repr(IdempotencyMode.CHECK) == "IdempotencyMode.CHECK"
 macro_rules! py_string_enum {
     (
         py: $py_enum:ident,
@@ -79,6 +106,27 @@ macro_rules! py_string_enum {
             fn __repr__(&self) -> String {
                 format!("{}.{}", $python_name, self.variant_name())
             }
+
+            /// Return the same enum value for Python shallow-copy operations.
+            ///
+            /// Generated task enum values are immutable constants, so copying
+            /// them does not need to allocate a distinct object. Providing this
+            /// hook also prevents Python's `copy` module from falling back to
+            /// pickle-based reconstruction for PyO3 enum values.
+            fn __copy__(&self) -> Self {
+                *self
+            }
+
+            /// Return the same enum value for Python deep-copy operations.
+            ///
+            /// Pydantic may deep-copy field defaults while constructing models.
+            /// Because these enum values are immutable, the copied value is
+            /// identical to the original constant. Handling `__deepcopy__`
+            /// directly keeps PyO3 enum defaults usable without requiring them
+            /// to support Python pickle serialization.
+            fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+                *self
+            }
         }
 
         impl From<$rust_enum> for $py_enum {
@@ -107,6 +155,34 @@ py_string_enum! {
         Disabled => DISABLED => "disabled",
         Check => CHECK => "check",
         CheckAndVerify => CHECK_AND_VERIFY => "check_and_verify",
+    }
+}
+
+py_string_enum! {
+    py: PyTaskMessageLevel,
+    rust: MessageLevel,
+    python_name: "TaskMessageLevel",
+    variants: {
+        Info => INFO => "info",
+        Warning => WARNING => "warning",
+        Error => ERROR => "error",
+        Debug => DEBUG => "debug",
+    }
+}
+
+py_string_enum! {
+    py: PyTaskFailureKind,
+    rust: TaskFailureKind,
+    python_name: "TaskFailureKind",
+    variants: {
+        Connection => CONNECTION => "connection",
+        Authentication => AUTHENTICATION => "authentication",
+        Validation => VALIDATION => "validation",
+        Timeout => TIMEOUT => "timeout",
+        Command => COMMAND => "command",
+        Unsupported => UNSUPPORTED => "unsupported",
+        Internal => INTERNAL => "internal",
+        External => EXTERNAL => "external",
     }
 }
 
@@ -1326,6 +1402,8 @@ fn resolve_task_run_options(
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyHostTaskResult>()?;
     module.add_class::<PyIdempotencyMode>()?;
+    module.add_class::<PyTaskMessageLevel>()?;
+    module.add_class::<PyTaskFailureKind>()?;
     module.add_class::<PySessionVerificationConfig>()?;
     module.add_class::<PyIdempotencyCheckResult>()?;
     module.add_class::<PyTaskDefinition>()?;
