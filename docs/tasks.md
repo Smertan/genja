@@ -530,6 +530,9 @@ results include a machine-readable reason and human-readable message. Per-host
 timing and retry data are reported on `HostTaskResult.execution_metadata`, not
 inside success or failure payloads.
 
+Python task result helpers validate task-authored payloads, provide defaults,
+and expose `to_dict()` for the JSON-compatible form consumed by the runtime.
+
 For Rust consumers, a good pattern is:
 
 ```rust
