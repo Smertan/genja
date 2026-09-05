@@ -274,6 +274,72 @@ class IdempotencyMode:
     def value(self) -> str:
         """Stable string value for this idempotency mode."""
         ...
+    def __str__(self) -> str:
+        """Return the stable string value for display."""
+        ...
+    def __repr__(self) -> str:
+        """Return the qualified enum constant name."""
+        ...
+    def __copy__(self) -> IdempotencyMode:
+        """Return this immutable enum value for shallow copy operations."""
+        ...
+    def __deepcopy__(self, memo: dict[int, Any]) -> IdempotencyMode:
+        """Return this immutable enum value for deep copy operations."""
+        ...
+
+class TaskMessageLevel:
+    """Task message severity level backed by the Rust core enum."""
+
+    INFO: ClassVar[TaskMessageLevel]
+    WARNING: ClassVar[TaskMessageLevel]
+    ERROR: ClassVar[TaskMessageLevel]
+    DEBUG: ClassVar[TaskMessageLevel]
+
+    @property
+    def value(self) -> str:
+        """Stable string value for this task message level."""
+        ...
+    def __str__(self) -> str:
+        """Return the stable string value for display."""
+        ...
+    def __repr__(self) -> str:
+        """Return the qualified enum constant name."""
+        ...
+    def __copy__(self) -> TaskMessageLevel:
+        """Return this immutable enum value for shallow copy operations."""
+        ...
+    def __deepcopy__(self, memo: dict[int, Any]) -> TaskMessageLevel:
+        """Return this immutable enum value for deep copy operations."""
+        ...
+
+class TaskFailureKind:
+    """Task failure category backed by the Rust core enum."""
+
+    CONNECTION: ClassVar[TaskFailureKind]
+    AUTHENTICATION: ClassVar[TaskFailureKind]
+    VALIDATION: ClassVar[TaskFailureKind]
+    TIMEOUT: ClassVar[TaskFailureKind]
+    COMMAND: ClassVar[TaskFailureKind]
+    UNSUPPORTED: ClassVar[TaskFailureKind]
+    INTERNAL: ClassVar[TaskFailureKind]
+    EXTERNAL: ClassVar[TaskFailureKind]
+
+    @property
+    def value(self) -> str:
+        """Stable string value for this task failure kind."""
+        ...
+    def __str__(self) -> str:
+        """Return the stable string value for display."""
+        ...
+    def __repr__(self) -> str:
+        """Return the qualified enum constant name."""
+        ...
+    def __copy__(self) -> TaskFailureKind:
+        """Return this immutable enum value for shallow copy operations."""
+        ...
+    def __deepcopy__(self, memo: dict[int, Any]) -> TaskFailureKind:
+        """Return this immutable enum value for deep copy operations."""
+        ...
 
 class IdempotencyCheckResult:
     """Result returned from Python idempotency check methods."""

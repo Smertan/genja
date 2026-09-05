@@ -4,6 +4,14 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+Changed packages:
+
+- Python package: `genja-py`, `genja-core-python`
+
+### Changed
+
+- **Breaking:** Changed Python task failure and message level enums to use Rust-backed bindings and reject raw string values in task result models. Use `TaskFailureKind.EXTERNAL` and `TaskMessageLevel.INFO` instead of raw strings such as `"external"` or `"info"`. Refs: #101
+
 ## 0.4.0 - 2026-08-31
 
 Released packages:
