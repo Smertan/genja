@@ -11,6 +11,7 @@ Changed packages:
 ### Changed
 
 - **Breaking:** Changed Python task failure and message level enums to use Rust-backed bindings and reject raw string values in task result models. Use `TaskFailureKind.EXTERNAL` and `TaskMessageLevel.INFO` instead of raw strings such as `"external"` or `"info"`. Refs: #101
+- **Breaking:** Changed Python `TaskMessage` to use a Rust-backed binding while preserving constructor fields, imports, and `to_dict()` output. Use `to_dict()` instead of Pydantic APIs such as `model_dump()`, and pass `TaskMessageLevel` values instead of raw strings for `level`. Refs: #102
 
 ## 0.4.0 - 2026-08-31
 
