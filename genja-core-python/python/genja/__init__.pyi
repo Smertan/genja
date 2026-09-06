@@ -39,6 +39,7 @@ from .genja import (
     IdempotencyMode,
     SessionVerificationConfig,
     TaskFailureKind,
+    TaskMessage,
     TaskMessageLevel,
 )
 from .task import (
@@ -55,7 +56,6 @@ from .task import (
     TaskRuntimeContext,
     TaskFailureResult,
     TaskInfo,
-    TaskMessage,
     TaskRegistration,
     TaskRegistrationError,
     TaskRegistrationKey,
@@ -140,6 +140,51 @@ class TaskMessageLevel:
         ...
     def __deepcopy__(self, memo: dict[int, Any]) -> TaskMessageLevel:
         """Return this immutable enum value for deep copy operations."""
+        ...
+
+class TaskMessage:
+    """Structured task message backed by the Rust core type."""
+
+    def __init__(
+        self,
+        level: TaskMessageLevel,
+        text: str,
+        code: str | None = None,
+        timestamp: Any | None = None,
+    ) -> None:
+        """Create a structured task message."""
+        ...
+
+    @property
+    def level(self) -> TaskMessageLevel:
+        """Message severity level."""
+        ...
+
+    @property
+    def text(self) -> str:
+        """Human-readable message text."""
+        ...
+
+    @property
+    def code(self) -> str | None:
+        """Optional machine-readable message code."""
+        ...
+
+    @property
+    def timestamp(self) -> Any | None:
+        """Optional message timestamp as a timezone-aware datetime."""
+        ...
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the message as a JSON-compatible dictionary."""
+        ...
+
+    def __getitem__(self, key: str) -> Any:
+        """Return a field from the JSON-compatible dictionary form."""
+        ...
+
+    def __repr__(self) -> str:
+        """Return a compact representation for debugging."""
         ...
 
 class TaskFailureKind:

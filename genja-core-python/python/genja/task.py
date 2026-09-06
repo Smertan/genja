@@ -146,7 +146,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field as dataclass_field
-from datetime import datetime
 from enum import Enum
 import inspect
 from importlib import metadata as importlib_metadata
@@ -168,6 +167,7 @@ from .genja import (
     IdempotencyMode,
     SessionVerificationConfig,
     TaskFailureKind,
+    TaskMessage,
     TaskMessageLevel,
     _validate_task_id as _rust_validate_task_id,
     _validate_task_version as _rust_validate_task_version,
@@ -1514,50 +1514,6 @@ def task(
     return wrap
 
 
-class TaskMessage(_GenjaModel):
-    """A structured message attached to a task result.
-
-    This class represents a single diagnostic or informational message that
-    can be attached to task execution results. Messages provide structured
-    logging and diagnostic information about task execution, including
-    severity levels, human-readable text, optional machine-readable codes,
-    and timestamps. Multiple TaskMessage instances can be included in
-    TaskSuccessResult, TaskFailureResult, or other result types to provide
-    detailed execution context.
-
-    Attributes:
-        level (TaskMessageLevel): The severity level of the message, indicating
-            its importance and type (INFO, WARNING, ERROR, or DEBUG). This helps
-            consumers filter and prioritize messages based on their significance.
-        text (str): Human-readable message text that describes the event,
-            condition, or diagnostic information. This is the primary content
-            of the message intended for display to users or in logs.
-        code (str | None): Optional machine-readable message code that can be
-            used for programmatic message identification, filtering, or
-            internationalization. If None, no specific code is associated with
-            this message.
-        timestamp (datetime | None): Optional timestamp indicating when the
-            message was generated during task execution. If None, no specific
-            timestamp is recorded for this message.
-    """
-
-    level: TaskMessageLevel = Field(description="Message severity level.")
-    text: str = Field(description="Human-readable message text.")
-    code: str | None = Field(
-        default=None,
-        description="Optional machine-readable message code.",
-    )
-    timestamp: datetime | None = Field(
-        default=None,
-        description="Timestamp associated with the message.",
-    )
-
-    @field_serializer("level")
-    def _serialize_level(self, value: TaskMessageLevel) -> str:
-        """Serialize the Rust-backed message level enum as its stable value."""
-        return value.value
-
-
 class TaskStatus(str, Enum):
     """Canonical task status values returned by Genja task results.
 
@@ -1696,6 +1652,11 @@ class TaskSuccessResult(_GenjaModel):
         """
         return _ensure_json_serializable(value, "metadata")
 
+    @field_serializer("messages")
+    def _serialize_messages(self, value: list[TaskMessage]) -> list[dict[str, Any]]:
+        """Serialize Rust-backed task messages as dictionaries."""
+        return [message.to_dict() for message in value]
+
 
 class TaskFailureResult(_GenjaModel):
     """Failed task outcome returned from task entrypoint methods.
@@ -1780,6 +1741,11 @@ class TaskFailureResult(_GenjaModel):
         default_factory=list,
         description="Structured messages emitted before the failure occurred.",
     )
+
+    @field_serializer("messages")
+    def _serialize_messages(self, value: list[TaskMessage]) -> list[dict[str, Any]]:
+        """Serialize Rust-backed task messages as dictionaries."""
+        return [message.to_dict() for message in value]
 
     @field_serializer("kind")
     def _serialize_kind(self, value: TaskFailureKind) -> str:

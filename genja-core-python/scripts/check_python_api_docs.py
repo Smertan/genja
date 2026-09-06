@@ -52,6 +52,7 @@ DUPLICATED_TOP_LEVEL_CLASSES = [
     "IdempotencyCheckResult",
     "IdempotencyMode",
     "TaskFailureKind",
+    "TaskMessage",
     "TaskMessageLevel",
     "TaskConnectionResolver",
     "TaskDefinition",

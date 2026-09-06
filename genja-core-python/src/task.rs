@@ -8,13 +8,13 @@ use ::genja_core::task::{
     validate_explicit_task_id, validate_task_version,
 };
 use async_trait::async_trait;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyModule};
 use pyo3_async_runtimes::tokio::future_into_py;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::plugin_manager::{
     python_connection_from_runtime_connection, resolve_python_maybe_awaitable_async,
@@ -193,6 +193,166 @@ py_string_enum! {
         Internal => INTERNAL => "internal",
         External => EXTERNAL => "external",
     }
+}
+
+/// Python wrapper for a structured task message backed by Rust `TaskMessage`.
+#[pyclass(name = "TaskMessage", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyTaskMessage {
+    inner: TaskMessage,
+}
+
+impl From<TaskMessage> for PyTaskMessage {
+    fn from(inner: TaskMessage) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<PyTaskMessage> for TaskMessage {
+    fn from(value: PyTaskMessage) -> Self {
+        value.inner
+    }
+}
+
+#[pymethods]
+impl PyTaskMessage {
+    /// Create a structured task message.
+    #[new]
+    #[pyo3(signature = (level, text, code=None, timestamp=None))]
+    fn new(
+        level: PyRef<'_, PyTaskMessageLevel>,
+        text: String,
+        code: Option<String>,
+        timestamp: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let mut message = TaskMessage::new((*level).into(), text);
+        if let Some(code) = code {
+            message = message.with_code(code);
+        }
+        if let Some(timestamp) = timestamp {
+            message = message.with_timestamp(py_task_message_timestamp(&timestamp)?);
+        }
+        Ok(Self { inner: message })
+    }
+
+    /// Return the message severity level.
+    #[getter]
+    fn level(&self, py: Python<'_>) -> PyResult<Py<PyTaskMessageLevel>> {
+        Py::new(py, PyTaskMessageLevel::from(self.inner.level().clone()))
+    }
+
+    /// Return the human-readable message text.
+    #[getter]
+    fn text(&self) -> &str {
+        self.inner.text()
+    }
+
+    /// Return the optional machine-readable message code.
+    #[getter]
+    fn code(&self) -> Option<&str> {
+        self.inner.code()
+    }
+
+    /// Return the optional message timestamp as a UTC Python datetime.
+    #[getter]
+    fn timestamp(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match self.inner.timestamp() {
+            Some(timestamp) => system_time_to_py_datetime(py, timestamp),
+            None => Ok(py.None()),
+        }
+    }
+
+    /// Return the message as a JSON-compatible Python dictionary.
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_value_to_py(py, &task_message_to_python_json(&self.inner))
+    }
+
+    /// Return the JSON-compatible dictionary value for item access.
+    fn __getitem__(&self, py: Python<'_>, key: &str) -> PyResult<Py<PyAny>> {
+        let value = task_message_to_python_json(&self.inner);
+        match value.get(key) {
+            Some(value) => json_value_to_py(py, value),
+            None => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TaskMessage(level={:?}, text={:?})",
+            self.inner.level(),
+            self.inner.text()
+        )
+    }
+}
+
+fn py_task_message_timestamp(timestamp: &Bound<'_, PyAny>) -> PyResult<SystemTime> {
+    if timestamp.is_none() {
+        return Err(PyTypeError::new_err(
+            "TaskMessage(timestamp=...) expected datetime | str | None",
+        ));
+    }
+
+    if let Ok(value) = timestamp.extract::<String>() {
+        return humantime::parse_rfc3339(&value).map_err(|err| {
+            PyValueError::new_err(format!("invalid task message timestamp '{value}': {err}"))
+        });
+    }
+
+    if timestamp.hasattr("timestamp")? {
+        let seconds = timestamp
+            .call_method0("timestamp")?
+            .extract::<f64>()
+            .map_err(|_| {
+                PyTypeError::new_err("TaskMessage(timestamp=...) timestamp() must return a number")
+            })?;
+        if !seconds.is_finite() {
+            return Err(PyValueError::new_err(
+                "TaskMessage(timestamp=...) timestamp() returned a non-finite value",
+            ));
+        }
+
+        let duration = Duration::from_secs_f64(seconds.abs());
+        return if seconds.is_sign_negative() {
+            UNIX_EPOCH
+                .checked_sub(duration)
+                .ok_or_else(|| PyValueError::new_err("TaskMessage(timestamp=...) is out of range"))
+        } else {
+            UNIX_EPOCH
+                .checked_add(duration)
+                .ok_or_else(|| PyValueError::new_err("TaskMessage(timestamp=...) is out of range"))
+        };
+    }
+
+    Err(PyTypeError::new_err(
+        "TaskMessage(timestamp=...) expected datetime | str | None",
+    ))
+}
+
+fn system_time_to_py_datetime(py: Python<'_>, timestamp: SystemTime) -> PyResult<Py<PyAny>> {
+    let seconds = match timestamp.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs_f64(),
+        Err(err) => -err.duration().as_secs_f64(),
+    };
+    let datetime = PyModule::import(py, "datetime")?;
+    let timezone = datetime.getattr("timezone")?.getattr("utc")?;
+    Ok(datetime
+        .getattr("datetime")?
+        .call_method1("fromtimestamp", (seconds, timezone))?
+        .unbind())
+}
+
+fn task_message_to_python_json(message: &TaskMessage) -> Value {
+    let timestamp = message
+        .timestamp()
+        .map(|timestamp| Value::String(humantime::format_rfc3339(timestamp).to_string()))
+        .unwrap_or(Value::Null);
+
+    json!({
+        "level": PyTaskMessageLevel::from(message.level().clone()).value_str(),
+        "text": message.text(),
+        "code": message.code(),
+        "timestamp": timestamp,
+    })
 }
 
 impl PyIdempotencyMode {
@@ -1413,6 +1573,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyIdempotencyMode>()?;
     module.add_class::<PyTaskMessageLevel>()?;
     module.add_class::<PyTaskFailureKind>()?;
+    module.add_class::<PyTaskMessage>()?;
     module.add_class::<PySessionVerificationConfig>()?;
     module.add_class::<PyIdempotencyCheckResult>()?;
     module.add_class::<PyTaskDefinition>()?;
@@ -2477,7 +2638,7 @@ fn json_to_task_results(value: &Value) -> PyResult<TaskResults> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::genja_core::task::{TaskFailure, TaskFailureKind};
+    use ::genja_core::task::{MessageLevel, TaskFailure, TaskFailureKind};
     use pyo3::types::PyModule;
     use pyo3::types::PyTuple;
 
@@ -2733,6 +2894,34 @@ mod tests {
                     .extract::<String>()
                     .expect("__repr__ should return a string"),
                 "IdempotencyMode.CHECK_AND_VERIFY"
+            );
+        });
+    }
+
+    #[test]
+    fn py_task_message_matches_rust_serialization_shape() {
+        Python::attach(|py| {
+            let rust_message = TaskMessage::new(MessageLevel::Info, "backup complete".to_string())
+                .with_code("BACKUP_DONE".to_string())
+                .with_timestamp(UNIX_EPOCH + Duration::from_secs(1_777_461_600));
+            let expected = task_message_to_python_json(&rust_message);
+            let message = Py::new(py, PyTaskMessage::from(rust_message))
+                .expect("message should convert to python");
+            let message = message.bind(py);
+
+            for field in ["level", "text", "code", "timestamp"] {
+                assert!(
+                    message.hasattr(field).expect("hasattr should work"),
+                    "{field} should be exposed as a Python property"
+                );
+            }
+
+            let payload = message
+                .call_method0("to_dict")
+                .expect("to_dict should work");
+            assert_eq!(
+                py_any_to_json_value(&payload).expect("payload should convert"),
+                expected
             );
         });
     }
