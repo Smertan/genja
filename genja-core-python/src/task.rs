@@ -2657,6 +2657,8 @@ mod tests {
         let sys = PyModule::import(py, "sys").expect("sys module should import");
         let modules = sys.getattr("modules").expect("sys.modules should exist");
 
+        // Clear cached Genja modules so each embedded Python test imports the
+        // real package files against the in-memory extension module below.
         for module_name in [
             "genja",
             "genja.genja",
@@ -2674,6 +2676,9 @@ mod tests {
         }
     }
 
+    // Install the current test binary's PyO3 module so real Python package
+    // imports resolve `.genja` against these Rust symbols instead of an
+    // installed extension from the active Python environment.
     fn install_test_genja_core_module(py: Python<'_>) -> PyResult<()> {
         let sys = PyModule::import(py, "sys").expect("sys module should import");
         let modules = sys.getattr("modules").expect("sys.modules should exist");
@@ -2684,6 +2689,13 @@ mod tests {
         Ok(())
     }
 
+    fn task_definition_fixture<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
+        PyModule::import(py, "tests.fixtures.task_definitions")?.getattr(name)
+    }
+
+    // Build synthetic task classes for metadata extraction tests. The metadata
+    // mirrors the real `@task` decorator defaults, while task methods come from
+    // Python fixtures so this helper does not duplicate inline Python source.
     fn make_task_class<'py>(
         py: Python<'py>,
         name: &str,
@@ -2705,44 +2717,53 @@ mod tests {
             None => info.set_item("connection_plugin_name", py.None())?,
         }
         info.set_item("retry", py.None())?;
+        info.set_item("processors", Vec::<String>::new())?;
+        info.set_item("session_verification", py.None())?;
         info.set_item("supports_dry_run", false)?;
         let task_module = PyModule::import(py, "genja.task")?;
         let idempotency_mode = task_module
             .getattr("IdempotencyMode")?
             .getattr("DISABLED")?;
         info.set_item("idempotency", idempotency_mode)?;
+        info.set_item("options", py.None())?;
         info.set_item("sub_tasks", sub_tasks)?;
 
         let attrs = PyDict::new(py);
         attrs.set_item("__genja_task_info__", info)?;
         match execution_mode {
             PythonTaskExecutionMode::Blocking => {
-                attrs.set_item(
-                    "start",
-                    PyModule::from_code(
-                        py,
-                        pyo3::ffi::c_str!("def start(self, task, host, context):\n    return {'status': 'passed'}\n"),
-                        pyo3::ffi::c_str!("tests/_task_stub.py"),
-                        pyo3::ffi::c_str!("tests._task_stub"),
-                    )?
-                    .getattr("start")?,
-                )?;
+                attrs.set_item("start", task_definition_fixture(py, "passed_start")?)?;
             }
             PythonTaskExecutionMode::Async => {
                 attrs.set_item(
                     "start_async",
-                    PyModule::from_code(
-                        py,
-                        pyo3::ffi::c_str!("async def start_async(self, task, host, context):\n    return {'status': 'passed'}\n"),
-                        pyo3::ffi::c_str!("tests/_task_stub.py"),
-                        pyo3::ffi::c_str!("tests._task_stub"),
-                    )?
-                    .getattr("start_async")?,
+                    task_definition_fixture(py, "passed_start_async")?,
                 )?;
             }
         }
 
         type_fn.call1((name, bases, attrs))
+    }
+
+    // Compare only metadata keys so the synthetic Rust-built task classes stay
+    // aligned with the real Python decorator without coupling tests to values.
+    fn task_metadata_keys(task_class: &Bound<'_, PyAny>) -> Vec<String> {
+        let metadata = task_class
+            .getattr("__genja_task_info__")
+            .expect("task metadata should exist");
+        let metadata = metadata
+            .cast::<PyDict>()
+            .expect("task metadata should be a dict");
+        let mut keys = metadata
+            .keys()
+            .iter()
+            .map(|key| {
+                key.extract::<String>()
+                    .expect("metadata key should be a string")
+            })
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
     }
 
     #[test]
@@ -2766,6 +2787,34 @@ mod tests {
                     "{name} should be exported from the real genja.task module"
                 );
             }
+        });
+    }
+
+    #[test]
+    fn synthetic_task_metadata_matches_real_task_decorator_keys() {
+        init_python();
+        Python::attach(|py| {
+            let synthetic = make_task_class(
+                py,
+                "backup_config",
+                Some("ssh"),
+                &[],
+                PythonTaskExecutionMode::Blocking,
+            )
+            .expect("synthetic task class should be created");
+            let task_module =
+                PyModule::import(py, "genja.task").expect("real genja.task should import");
+            let task_decorator = task_module
+                .getattr("task")
+                .expect("task decorator should exist");
+            let real = task_decorator
+                .call1(("decorated_backup",))
+                .expect("task decorator should build")
+                .call1((task_definition_fixture(py, "DecoratedBackup")
+                    .expect("decorated class should exist"),))
+                .expect("task decorator should apply");
+
+            assert_eq!(task_metadata_keys(&synthetic), task_metadata_keys(&real));
         });
     }
 

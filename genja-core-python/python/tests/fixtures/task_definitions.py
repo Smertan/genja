@@ -1,3 +1,16 @@
+def passed_start(self, task, host, context):
+    return {"status": "passed"}
+
+
+async def passed_start_async(self, task, host, context):
+    return {"status": "passed"}
+
+
+class DecoratedBackup:
+    def start(self, task, host, context):
+        return {"status": "passed"}
+
+
 class AsyncRuntimeTask:
     __genja_task_info__ = {
         "name": "async_runtime_task",
