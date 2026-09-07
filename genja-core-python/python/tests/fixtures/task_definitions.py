@@ -1,3 +1,6 @@
+from genja.task import RetryConfig, task
+
+
 def passed_start(self, task, host, context):
     return {"status": "passed"}
 
@@ -11,16 +14,50 @@ class DecoratedBackup:
         return {"status": "passed"}
 
 
-class AsyncRuntimeTask:
-    __genja_task_info__ = {
-        "name": "async_runtime_task",
-        "connection_plugin_name": None,
-        "processors": [],
-        "retry": None,
-        "options": None,
-        "sub_tasks": [],
-    }
+@task(name="fixture_verify_backup", connection_plugin_name="ssh")
+class FixtureVerifyBackupTask:
+    def start(self, task, host, context):
+        return {"status": "passed"}
 
+
+@task(
+    name="fixture_backup_config",
+    connection_plugin_name="ssh",
+    sub_tasks=[FixtureVerifyBackupTask],
+)
+class FixtureBackupConfigTask:
+    def start(self, task, host, context):
+        return {"status": "passed"}
+
+
+@task(
+    name="fixture_options_task",
+    connection_plugin_name="ssh",
+    options={"backup_path": "/tmp/configs", "compress": True},
+)
+class FixtureOptionsTask:
+    def start(self, task, host, context):
+        return {"status": "passed"}
+
+
+@task(
+    name="fixture_retry_task",
+    connection_plugin_name="ssh",
+    retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
+)
+class FixtureRetryTask:
+    def start(self, task, host, context):
+        return {"status": "passed"}
+
+
+@task(name="fixture_no_connection_task")
+class FixtureNoConnectionTask:
+    def start(self, task, host, context):
+        return {"status": "passed"}
+
+
+@task(name="async_runtime_task")
+class AsyncRuntimeTask:
     async def start_async(self, task, host, context):
         return {
             "status": "passed",

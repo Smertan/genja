@@ -3098,31 +3098,17 @@ mod tests {
     fn extract_python_task_spec_extracts_nested_sub_task_metadata() {
         init_python();
         Python::attach(|py| {
-            let verify = make_task_class(
-                py,
-                "verify_backup",
-                Some("ssh"),
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("sub task class should be created");
-            let backup = make_task_class(
-                py,
-                "backup_config",
-                Some("ssh"),
-                &[verify],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("parent task class should be created");
+            let backup = task_definition_fixture(py, "FixtureBackupConfigTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(backup).expect("task spec should extract");
 
-            assert_eq!(spec.name, "backup_config");
+            assert_eq!(spec.name, "fixture_backup_config");
             assert_eq!(spec.connection_plugin_name.as_deref(), Some("ssh"));
             assert_eq!(spec.retry_config, None);
             assert_eq!(spec.options, None);
             assert_eq!(spec.sub_tasks.len(), 1);
-            assert_eq!(spec.sub_tasks[0].name, "verify_backup");
+            assert_eq!(spec.sub_tasks[0].name, "fixture_verify_backup");
             assert_eq!(
                 spec.sub_tasks[0].connection_plugin_name.as_deref(),
                 Some("ssh")
@@ -3134,27 +3120,8 @@ mod tests {
     fn extract_python_task_spec_extracts_options_payload() {
         init_python();
         Python::attach(|py| {
-            let task = make_task_class(
-                py,
-                "backup_config",
-                Some("ssh"),
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("task class should be created");
-            task.getattr("__genja_task_info__")
-                .expect("task metadata should exist")
-                .cast::<PyDict>()
-                .expect("task metadata should be a dict")
-                .set_item(
-                    "options",
-                    json_value_to_py(
-                        py,
-                        &json!({"backup_path": "/tmp/configs", "compress": true}),
-                    )
-                    .unwrap(),
-                )
-                .unwrap();
+            let task = task_definition_fixture(py, "FixtureOptionsTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 
@@ -3169,26 +3136,8 @@ mod tests {
     fn extract_python_task_spec_extracts_retry_overrides() {
         init_python();
         Python::attach(|py| {
-            let task = make_task_class(
-                py,
-                "backup_config",
-                Some("ssh"),
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("task class should be created");
-            task.getattr("__genja_task_info__")
-                .expect("task metadata should exist")
-                .cast::<PyDict>()
-                .expect("task metadata should be a dict")
-                .set_item("retry", {
-                    let retry = PyDict::new(py);
-                    retry.set_item("allow", true).unwrap();
-                    retry.set_item("max_attempts", 3).unwrap();
-                    retry.set_item("delay_ms", 500).unwrap();
-                    retry
-                })
-                .unwrap();
+            let task = task_definition_fixture(py, "FixtureRetryTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 
@@ -3253,14 +3202,8 @@ mod tests {
     fn extract_python_task_spec_allows_missing_connection_plugin_name() {
         init_python();
         Python::attach(|py| {
-            let task = make_task_class(
-                py,
-                "backup_config",
-                None,
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("task class should be created");
+            let task = task_definition_fixture(py, "FixtureNoConnectionTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 

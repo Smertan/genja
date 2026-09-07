@@ -2253,16 +2253,37 @@ mod tests {
                 "tests",
                 "tests.fixtures",
                 "genja",
+                "genja.genja",
                 "genja.task",
                 "genja.processor",
                 "genja.connection",
+                "genja.inventory",
+                "genja.plugin",
+                "genja.plugin_manager",
+                "genja.runner",
+                "genja.settings",
+                "genja.transform",
                 "genja._async",
                 "tests.fixtures.task_definitions",
                 "tests.fixtures.runner_plugins",
             ] {
                 let _ = modules.call_method1("pop", (module_name, py.None()));
             }
+            install_test_genja_core_module(py).expect("test genja.genja module should install");
+            PyModule::import(py, "genja.task").expect("real genja.task should import");
         });
+    }
+
+    // Install the current test binary's PyO3 module so decorated Python
+    // fixtures use the same Rust-backed classes as the runtime under test.
+    fn install_test_genja_core_module(py: Python<'_>) -> PyResult<()> {
+        let sys = PyModule::import(py, "sys").expect("sys module should import");
+        let modules = sys.getattr("modules").expect("sys.modules should exist");
+        let module = PyModule::new(py, "genja.genja")?;
+
+        crate::genja(py, &module)?;
+        modules.set_item("genja.genja", &module)?;
+        Ok(())
     }
 
     fn temp_test_dir(name: &str) -> PathBuf {
