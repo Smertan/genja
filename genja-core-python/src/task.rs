@@ -2645,34 +2645,43 @@ mod tests {
     fn init_python() {
         crate::init_embedded_python();
         Python::attach(|py| {
-            let sys = PyModule::import(py, "sys").expect("sys module should import");
-            let modules = sys.getattr("modules").expect("sys.modules should exist");
-            let genja = PyModule::from_code(
-                py,
-                pyo3::ffi::c_str!("__path__ = []\n"),
-                pyo3::ffi::c_str!("genja/__init__.py"),
-                pyo3::ffi::c_str!("genja"),
-            )
-            .expect("genja stub should build");
-            let task = PyModule::from_code(
-                py,
-                pyo3::ffi::c_str!(
-                    "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass _IdempotencyModeValue:\n    def __init__(self, value):\n        self.value = value\n\nclass IdempotencyMode:\n    DISABLED = _IdempotencyModeValue('disabled')\n    CHECK = _IdempotencyModeValue('check')\n    CHECK_AND_VERIFY = _IdempotencyModeValue('check_and_verify')\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    def has_connection(self):\n        return self.connection is not None\n"
-                ),
-                pyo3::ffi::c_str!("genja/task.py"),
-                pyo3::ffi::c_str!("genja.task"),
-            )
-            .expect("task stub should build");
-            genja
-                .add("task", &task)
-                .expect("task module should attach to package");
-            modules
-                .set_item("genja", &genja)
-                .expect("genja stub should register");
-            modules
-                .set_item("genja.task", &task)
-                .expect("task stub should register");
+            reset_python_genja_modules(py);
+            install_test_genja_core_module(py).expect("test genja.genja module should install");
+
+            PyModule::import(py, "genja").expect("real genja package should import");
+            PyModule::import(py, "genja.task").expect("real genja.task module should import");
         });
+    }
+
+    fn reset_python_genja_modules(py: Python<'_>) {
+        let sys = PyModule::import(py, "sys").expect("sys module should import");
+        let modules = sys.getattr("modules").expect("sys.modules should exist");
+
+        for module_name in [
+            "genja",
+            "genja.genja",
+            "genja.task",
+            "genja.connection",
+            "genja.inventory",
+            "genja.plugin",
+            "genja.plugin_manager",
+            "genja.processor",
+            "genja.runner",
+            "genja.settings",
+            "genja.transform",
+        ] {
+            let _ = modules.call_method1("pop", (module_name, py.None()));
+        }
+    }
+
+    fn install_test_genja_core_module(py: Python<'_>) -> PyResult<()> {
+        let sys = PyModule::import(py, "sys").expect("sys module should import");
+        let modules = sys.getattr("modules").expect("sys.modules should exist");
+        let module = PyModule::new(py, "genja.genja")?;
+
+        crate::genja(py, &module)?;
+        modules.set_item("genja.genja", &module)?;
+        Ok(())
     }
 
     fn make_task_class<'py>(
@@ -2697,7 +2706,11 @@ mod tests {
         }
         info.set_item("retry", py.None())?;
         info.set_item("supports_dry_run", false)?;
-        info.set_item("idempotency", Py::new(py, PyIdempotencyMode::Disabled)?)?;
+        let task_module = PyModule::import(py, "genja.task")?;
+        let idempotency_mode = task_module
+            .getattr("IdempotencyMode")?
+            .getattr("DISABLED")?;
+        info.set_item("idempotency", idempotency_mode)?;
         info.set_item("sub_tasks", sub_tasks)?;
 
         let attrs = PyDict::new(py);
@@ -2730,6 +2743,30 @@ mod tests {
         }
 
         type_fn.call1((name, bases, attrs))
+    }
+
+    #[test]
+    fn init_python_imports_real_genja_task_module() {
+        init_python();
+        Python::attach(|py| {
+            let task_module =
+                PyModule::import(py, "genja.task").expect("real genja.task should import");
+
+            for name in [
+                "Host",
+                "IdempotencyMode",
+                "RetryConfig",
+                "TaskInfo",
+                "TaskRuntimeContext",
+                "TaskSuccessResult",
+                "task",
+            ] {
+                assert!(
+                    task_module.hasattr(name).expect("hasattr should work"),
+                    "{name} should be exported from the real genja.task module"
+                );
+            }
+        });
     }
 
     #[test]
