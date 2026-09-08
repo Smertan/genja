@@ -242,6 +242,71 @@ pub(crate) fn init_embedded_python() {
 }
 
 #[cfg(test)]
+pub(crate) fn reset_python_modules(py: Python<'_>, module_names: &[&str]) {
+    let sys = PyModule::import(py, "sys").expect("sys module should import");
+    let modules = sys.getattr("modules").expect("sys.modules should exist");
+
+    for module_name in module_names {
+        let _ = modules.call_method1("pop", (module_name, py.None()));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_python_genja_modules(py: Python<'_>) {
+    // Clear cached Genja modules so embedded tests import real package files
+    // against the in-memory extension module installed for the current test.
+    reset_python_modules(
+        py,
+        &[
+            "genja",
+            "genja.genja",
+            "genja.connection",
+            "genja.inventory",
+            "genja.plugin",
+            "genja.plugin_manager",
+            "genja.processor",
+            "genja.runner",
+            "genja.settings",
+            "genja.task",
+            "genja.transform",
+            "genja._async",
+        ],
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn install_test_genja_core_module(py: Python<'_>) -> PyResult<()> {
+    let sys = PyModule::import(py, "sys").expect("sys module should import");
+    let modules = sys.getattr("modules").expect("sys.modules should exist");
+    let module = PyModule::new(py, "genja.genja")?;
+
+    // Install the current test binary's PyO3 module so real Python package
+    // imports resolve `.genja` against these Rust symbols instead of an
+    // installed extension from the active Python environment.
+    genja(py, &module)?;
+    modules.set_item("genja.genja", &module)?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn init_embedded_python_with_modules(
+    extra_reset_modules: &[&str],
+    import_modules: &[&str],
+) {
+    init_embedded_python();
+    Python::attach(|py| {
+        reset_python_modules(py, extra_reset_modules);
+        reset_python_genja_modules(py);
+        install_test_genja_core_module(py).expect("test genja.genja module should install");
+
+        for module_name in import_modules {
+            PyModule::import(py, module_name)
+                .unwrap_or_else(|err| panic!("{module_name} should import: {err}"));
+        }
+    });
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

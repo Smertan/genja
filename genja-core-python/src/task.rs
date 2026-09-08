@@ -2643,38 +2643,19 @@ mod tests {
     use pyo3::types::PyTuple;
 
     fn init_python() {
-        crate::init_embedded_python();
-        Python::attach(|py| {
-            let sys = PyModule::import(py, "sys").expect("sys module should import");
-            let modules = sys.getattr("modules").expect("sys.modules should exist");
-            let genja = PyModule::from_code(
-                py,
-                pyo3::ffi::c_str!("__path__ = []\n"),
-                pyo3::ffi::c_str!("genja/__init__.py"),
-                pyo3::ffi::c_str!("genja"),
-            )
-            .expect("genja stub should build");
-            let task = PyModule::from_code(
-                py,
-                pyo3::ffi::c_str!(
-                    "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass _IdempotencyModeValue:\n    def __init__(self, value):\n        self.value = value\n\nclass IdempotencyMode:\n    DISABLED = _IdempotencyModeValue('disabled')\n    CHECK = _IdempotencyModeValue('check')\n    CHECK_AND_VERIFY = _IdempotencyModeValue('check_and_verify')\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    def has_connection(self):\n        return self.connection is not None\n"
-                ),
-                pyo3::ffi::c_str!("genja/task.py"),
-                pyo3::ffi::c_str!("genja.task"),
-            )
-            .expect("task stub should build");
-            genja
-                .add("task", &task)
-                .expect("task module should attach to package");
-            modules
-                .set_item("genja", &genja)
-                .expect("genja stub should register");
-            modules
-                .set_item("genja.task", &task)
-                .expect("task stub should register");
-        });
+        crate::init_embedded_python_with_modules(
+            &["tests.fixtures.task_definitions"],
+            &["genja", "genja.task"],
+        );
     }
 
+    fn task_definition_fixture<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
+        PyModule::import(py, "tests.fixtures.task_definitions")?.getattr(name)
+    }
+
+    // Build synthetic task classes for metadata extraction tests. The metadata
+    // mirrors the real `@task` decorator defaults, while task methods come from
+    // Python fixtures so this helper does not duplicate inline Python source.
     fn make_task_class<'py>(
         py: Python<'py>,
         name: &str,
@@ -2696,40 +2677,105 @@ mod tests {
             None => info.set_item("connection_plugin_name", py.None())?,
         }
         info.set_item("retry", py.None())?;
+        info.set_item("processors", Vec::<String>::new())?;
+        info.set_item("session_verification", py.None())?;
         info.set_item("supports_dry_run", false)?;
-        info.set_item("idempotency", Py::new(py, PyIdempotencyMode::Disabled)?)?;
+        let task_module = PyModule::import(py, "genja.task")?;
+        let idempotency_mode = task_module
+            .getattr("IdempotencyMode")?
+            .getattr("DISABLED")?;
+        info.set_item("idempotency", idempotency_mode)?;
+        info.set_item("options", py.None())?;
         info.set_item("sub_tasks", sub_tasks)?;
 
         let attrs = PyDict::new(py);
         attrs.set_item("__genja_task_info__", info)?;
         match execution_mode {
             PythonTaskExecutionMode::Blocking => {
-                attrs.set_item(
-                    "start",
-                    PyModule::from_code(
-                        py,
-                        pyo3::ffi::c_str!("def start(self, task, host, context):\n    return {'status': 'passed'}\n"),
-                        pyo3::ffi::c_str!("tests/_task_stub.py"),
-                        pyo3::ffi::c_str!("tests._task_stub"),
-                    )?
-                    .getattr("start")?,
-                )?;
+                attrs.set_item("start", task_definition_fixture(py, "passed_start")?)?;
             }
             PythonTaskExecutionMode::Async => {
                 attrs.set_item(
                     "start_async",
-                    PyModule::from_code(
-                        py,
-                        pyo3::ffi::c_str!("async def start_async(self, task, host, context):\n    return {'status': 'passed'}\n"),
-                        pyo3::ffi::c_str!("tests/_task_stub.py"),
-                        pyo3::ffi::c_str!("tests._task_stub"),
-                    )?
-                    .getattr("start_async")?,
+                    task_definition_fixture(py, "passed_start_async")?,
                 )?;
             }
         }
 
         type_fn.call1((name, bases, attrs))
+    }
+
+    // Compare only metadata keys so the synthetic Rust-built task classes stay
+    // aligned with the real Python decorator without coupling tests to values.
+    fn task_metadata_keys(task_class: &Bound<'_, PyAny>) -> Vec<String> {
+        let metadata = task_class
+            .getattr("__genja_task_info__")
+            .expect("task metadata should exist");
+        let metadata = metadata
+            .cast::<PyDict>()
+            .expect("task metadata should be a dict");
+        let mut keys = metadata
+            .keys()
+            .iter()
+            .map(|key| {
+                key.extract::<String>()
+                    .expect("metadata key should be a string")
+            })
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn init_python_imports_real_genja_task_module() {
+        init_python();
+        Python::attach(|py| {
+            let task_module =
+                PyModule::import(py, "genja.task").expect("real genja.task should import");
+
+            for name in [
+                "Host",
+                "IdempotencyMode",
+                "RetryConfig",
+                "TaskInfo",
+                "TaskRuntimeContext",
+                "TaskSuccessResult",
+                "task",
+            ] {
+                assert!(
+                    task_module.hasattr(name).expect("hasattr should work"),
+                    "{name} should be exported from the real genja.task module"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn synthetic_task_metadata_matches_real_task_decorator_keys() {
+        init_python();
+        Python::attach(|py| {
+            let synthetic = make_task_class(
+                py,
+                "backup_config",
+                Some("ssh"),
+                &[],
+                PythonTaskExecutionMode::Blocking,
+            )
+            .expect("synthetic task class should be created");
+            let task_module =
+                PyModule::import(py, "genja.task").expect("real genja.task should import");
+            let task_decorator = task_module
+                .getattr("task")
+                .expect("task decorator should exist");
+            let real = task_decorator
+                .call1(("decorated_backup",))
+                .expect("task decorator should build")
+                .call1((task_definition_fixture(py, "DecoratedBackup")
+                    .expect("decorated class should exist"),))
+                .expect("task decorator should apply");
+
+            assert_eq!(task_metadata_keys(&synthetic), task_metadata_keys(&real));
+        });
     }
 
     #[test]
@@ -3012,31 +3058,17 @@ mod tests {
     fn extract_python_task_spec_extracts_nested_sub_task_metadata() {
         init_python();
         Python::attach(|py| {
-            let verify = make_task_class(
-                py,
-                "verify_backup",
-                Some("ssh"),
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("sub task class should be created");
-            let backup = make_task_class(
-                py,
-                "backup_config",
-                Some("ssh"),
-                &[verify],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("parent task class should be created");
+            let backup = task_definition_fixture(py, "FixtureBackupConfigTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(backup).expect("task spec should extract");
 
-            assert_eq!(spec.name, "backup_config");
+            assert_eq!(spec.name, "fixture_backup_config");
             assert_eq!(spec.connection_plugin_name.as_deref(), Some("ssh"));
             assert_eq!(spec.retry_config, None);
             assert_eq!(spec.options, None);
             assert_eq!(spec.sub_tasks.len(), 1);
-            assert_eq!(spec.sub_tasks[0].name, "verify_backup");
+            assert_eq!(spec.sub_tasks[0].name, "fixture_verify_backup");
             assert_eq!(
                 spec.sub_tasks[0].connection_plugin_name.as_deref(),
                 Some("ssh")
@@ -3048,27 +3080,8 @@ mod tests {
     fn extract_python_task_spec_extracts_options_payload() {
         init_python();
         Python::attach(|py| {
-            let task = make_task_class(
-                py,
-                "backup_config",
-                Some("ssh"),
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("task class should be created");
-            task.getattr("__genja_task_info__")
-                .expect("task metadata should exist")
-                .cast::<PyDict>()
-                .expect("task metadata should be a dict")
-                .set_item(
-                    "options",
-                    json_value_to_py(
-                        py,
-                        &json!({"backup_path": "/tmp/configs", "compress": true}),
-                    )
-                    .unwrap(),
-                )
-                .unwrap();
+            let task = task_definition_fixture(py, "FixtureOptionsTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 
@@ -3083,26 +3096,8 @@ mod tests {
     fn extract_python_task_spec_extracts_retry_overrides() {
         init_python();
         Python::attach(|py| {
-            let task = make_task_class(
-                py,
-                "backup_config",
-                Some("ssh"),
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("task class should be created");
-            task.getattr("__genja_task_info__")
-                .expect("task metadata should exist")
-                .cast::<PyDict>()
-                .expect("task metadata should be a dict")
-                .set_item("retry", {
-                    let retry = PyDict::new(py);
-                    retry.set_item("allow", true).unwrap();
-                    retry.set_item("max_attempts", 3).unwrap();
-                    retry.set_item("delay_ms", 500).unwrap();
-                    retry
-                })
-                .unwrap();
+            let task = task_definition_fixture(py, "FixtureRetryTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 
@@ -3167,14 +3162,8 @@ mod tests {
     fn extract_python_task_spec_allows_missing_connection_plugin_name() {
         init_python();
         Python::attach(|py| {
-            let task = make_task_class(
-                py,
-                "backup_config",
-                None,
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("task class should be created");
+            let task = task_definition_fixture(py, "FixtureNoConnectionTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 
