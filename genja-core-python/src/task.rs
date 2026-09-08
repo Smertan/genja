@@ -2645,48 +2645,14 @@ mod tests {
     fn init_python() {
         crate::init_embedded_python();
         Python::attach(|py| {
-            reset_python_genja_modules(py);
-            install_test_genja_core_module(py).expect("test genja.genja module should install");
+            crate::reset_python_modules(py, &["tests.fixtures.task_definitions"]);
+            crate::reset_python_genja_modules(py);
+            crate::install_test_genja_core_module(py)
+                .expect("test genja.genja module should install");
 
             PyModule::import(py, "genja").expect("real genja package should import");
             PyModule::import(py, "genja.task").expect("real genja.task module should import");
         });
-    }
-
-    fn reset_python_genja_modules(py: Python<'_>) {
-        let sys = PyModule::import(py, "sys").expect("sys module should import");
-        let modules = sys.getattr("modules").expect("sys.modules should exist");
-
-        // Clear cached Genja modules so each embedded Python test imports the
-        // real package files against the in-memory extension module below.
-        for module_name in [
-            "genja",
-            "genja.genja",
-            "genja.task",
-            "genja.connection",
-            "genja.inventory",
-            "genja.plugin",
-            "genja.plugin_manager",
-            "genja.processor",
-            "genja.runner",
-            "genja.settings",
-            "genja.transform",
-        ] {
-            let _ = modules.call_method1("pop", (module_name, py.None()));
-        }
-    }
-
-    // Install the current test binary's PyO3 module so real Python package
-    // imports resolve `.genja` against these Rust symbols instead of an
-    // installed extension from the active Python environment.
-    fn install_test_genja_core_module(py: Python<'_>) -> PyResult<()> {
-        let sys = PyModule::import(py, "sys").expect("sys module should import");
-        let modules = sys.getattr("modules").expect("sys.modules should exist");
-        let module = PyModule::new(py, "genja.genja")?;
-
-        crate::genja(py, &module)?;
-        modules.set_item("genja.genja", &module)?;
-        Ok(())
     }
 
     fn task_definition_fixture<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
