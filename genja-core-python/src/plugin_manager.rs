@@ -2825,6 +2825,11 @@ mod tests {
 
     fn init_python() {
         crate::init_embedded_python();
+        set_windows_selector_event_loop_policy();
+        crate::init_embedded_python_with_modules(&[], &["genja.processor", "genja.connection"]);
+    }
+
+    fn set_windows_selector_event_loop_policy() {
         Python::attach(|py| {
             let asyncio = PyModule::import(py, "asyncio").expect("asyncio module should import");
             let platform = py
@@ -2844,15 +2849,6 @@ mod tests {
                     .call_method1("set_event_loop_policy", (policy,))
                     .expect("Windows selector event loop policy should be set");
             }
-
-            crate::reset_python_genja_modules(py);
-            crate::install_test_genja_core_module(py)
-                .expect("test genja.genja module should install");
-
-            PyModule::import(py, "genja.processor")
-                .expect("real genja.processor module should import");
-            PyModule::import(py, "genja.connection")
-                .expect("real genja.connection module should import");
         });
     }
 

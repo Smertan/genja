@@ -2245,22 +2245,15 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn init_python() {
-        crate::init_embedded_python();
-        Python::attach(|py| {
-            crate::reset_python_modules(
-                py,
-                &[
-                    "tests",
-                    "tests.fixtures",
-                    "tests.fixtures.task_definitions",
-                    "tests.fixtures.runner_plugins",
-                ],
-            );
-            crate::reset_python_genja_modules(py);
-            crate::install_test_genja_core_module(py)
-                .expect("test genja.genja module should install");
-            PyModule::import(py, "genja.task").expect("real genja.task should import");
-        });
+        crate::init_embedded_python_with_modules(
+            &[
+                "tests",
+                "tests.fixtures",
+                "tests.fixtures.task_definitions",
+                "tests.fixtures.runner_plugins",
+            ],
+            &["genja.task"],
+        );
     }
 
     fn temp_test_dir(name: &str) -> PathBuf {

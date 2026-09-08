@@ -2643,16 +2643,10 @@ mod tests {
     use pyo3::types::PyTuple;
 
     fn init_python() {
-        crate::init_embedded_python();
-        Python::attach(|py| {
-            crate::reset_python_modules(py, &["tests.fixtures.task_definitions"]);
-            crate::reset_python_genja_modules(py);
-            crate::install_test_genja_core_module(py)
-                .expect("test genja.genja module should install");
-
-            PyModule::import(py, "genja").expect("real genja package should import");
-            PyModule::import(py, "genja.task").expect("real genja.task module should import");
-        });
+        crate::init_embedded_python_with_modules(
+            &["tests.fixtures.task_definitions"],
+            &["genja", "genja.task"],
+        );
     }
 
     fn task_definition_fixture<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {

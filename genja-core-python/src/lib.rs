@@ -289,6 +289,24 @@ pub(crate) fn install_test_genja_core_module(py: Python<'_>) -> PyResult<()> {
 }
 
 #[cfg(test)]
+pub(crate) fn init_embedded_python_with_modules(
+    extra_reset_modules: &[&str],
+    import_modules: &[&str],
+) {
+    init_embedded_python();
+    Python::attach(|py| {
+        reset_python_modules(py, extra_reset_modules);
+        reset_python_genja_modules(py);
+        install_test_genja_core_module(py).expect("test genja.genja module should install");
+
+        for module_name in import_modules {
+            PyModule::import(py, module_name)
+                .unwrap_or_else(|err| panic!("{module_name} should import: {err}"));
+        }
+    });
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
