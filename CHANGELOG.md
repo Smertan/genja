@@ -11,7 +11,7 @@ Changed packages:
 
 ### Added
 
-- Added the `genja-cli` workspace crate and `genja` binary target as the foundation for the first-party Genja CLI. Refs: #120
+- Added the `genja-cli` workspace crate with the first-party `genja` binary, top-level help, and version command. Refs: #120
 
 ### Changed
 
