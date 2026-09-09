@@ -11,4 +11,12 @@ readme = "README.md"
 keywords = ["automation", "tasks", "cli", "orchestration"]
 categories = ["command-line-utilities", "development-tools"]
 
+[lib]
+name = "genja_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "genja"
+path = "src/main.rs"
+
 [dependencies]
