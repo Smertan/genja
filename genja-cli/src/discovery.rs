@@ -12,6 +12,26 @@ pub use genja_core::task::{TaskDescriptor, TaskRegistrationKey};
 /// Result type for task descriptor discovery operations.
 pub type DiscoveryResult<T> = Result<T, DiscoveryError>;
 
+/// Source of task descriptors for terminal interfaces.
+///
+/// Implementations may read descriptors from compiled Rust registries, Python
+/// modules, provider manifests, MCP tools, or other future backends. This trait
+/// is intentionally limited to descriptor discovery and does not cover task
+/// construction or execution.
+pub trait TaskDescriptorSource {
+    /// Return all known task descriptors.
+    fn list_tasks(&self) -> DiscoveryResult<Vec<TaskDescriptor>>;
+
+    /// Describe a task by rendered `<task-id>@<task-version>` identity.
+    fn describe_task(&self, identity: &str) -> DiscoveryResult<TaskDescriptor> {
+        let key = parse_task_identity(identity)?;
+        self.describe_task_by_key(&key)
+    }
+
+    /// Describe a task by a parsed registration key.
+    fn describe_task_by_key(&self, key: &TaskRegistrationKey) -> DiscoveryResult<TaskDescriptor>;
+}
+
 /// Errors returned by task descriptor discovery sources.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiscoveryError {
