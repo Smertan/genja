@@ -29,7 +29,32 @@ pub trait TaskDescriptorSource {
     }
 
     /// Describe a task by a parsed registration key.
-    fn describe_task_by_key(&self, key: &TaskRegistrationKey) -> DiscoveryResult<TaskDescriptor>;
+    ///
+    /// Implementations may override this method when their backend supports a
+    /// direct descriptor lookup. The default implementation lists descriptors
+    /// and applies the shared exact identity matching rules.
+    fn describe_task_by_key(&self, key: &TaskRegistrationKey) -> DiscoveryResult<TaskDescriptor> {
+        let descriptors = self.list_tasks()?;
+        find_task_descriptor(descriptors.iter(), key)
+    }
+}
+
+/// Find a descriptor by exact parsed task registration key.
+pub fn find_task_descriptor<'a, I>(
+    descriptors: I,
+    key: &TaskRegistrationKey,
+) -> DiscoveryResult<TaskDescriptor>
+where
+    I: IntoIterator<Item = &'a TaskDescriptor>,
+{
+    descriptors
+        .into_iter()
+        .find(|descriptor| descriptor.id == key.id() && descriptor.version == key.version())
+        .cloned()
+        .ok_or_else(|| DiscoveryError::NotFound {
+            id: key.id().to_string(),
+            version: Some(key.version().to_string()),
+        })
 }
 
 /// Errors returned by task descriptor discovery sources.
