@@ -349,7 +349,8 @@ impl fmt::Display for TaskRegistrationKey {
 ///
 /// Explicit IDs are namespace-friendly identifiers made of one or more `.`
 /// separated segments. Segment characters must be ASCII lowercase letters,
-/// digits, `_`, or `-`; every segment must start with a letter or digit.
+/// digits, `_`, or `-`; every segment must start with an ASCII lowercase
+/// letter or digit.
 pub fn validate_explicit_task_id(id: &str) -> Result<(), TaskRegistrationError> {
     let invalid = |reason: &str| TaskRegistrationError::InvalidId {
         id: id.to_string(),
@@ -375,6 +376,8 @@ pub fn validate_explicit_task_id(id: &str) -> Result<(), TaskRegistrationError> 
     Ok(())
 }
 
+// Validate one `.`-separated task ID segment. This is where uppercase letters
+// and other non-contract characters are rejected.
 fn validate_task_id_segment(id: &str, segment: &str) -> Result<(), TaskRegistrationError> {
     let invalid = |reason: &str| TaskRegistrationError::InvalidId {
         id: id.to_string(),
