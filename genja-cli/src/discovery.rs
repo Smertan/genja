@@ -150,6 +150,12 @@ impl From<TaskRegistrationError> for DiscoveryError {
 }
 
 /// Parse a rendered `<task-id>@<task-version>` task identity.
+///
+/// This delegates validation to [`TaskRegistrationKey`], so task IDs must
+/// follow the explicit registration rules and versions must be semantic
+/// versions. When either part is invalid, the returned discovery error keeps
+/// the original rendered identity so terminal interfaces can report the exact
+/// user-provided value.
 pub fn parse_task_identity(identity: &str) -> DiscoveryResult<TaskRegistrationKey> {
     TaskRegistrationKey::parse(identity).map_err(|error| match error {
         TaskRegistrationError::InvalidIdentity { identity, reason } => {
@@ -162,4 +168,153 @@ pub fn parse_task_identity(identity: &str) -> DiscoveryResult<TaskRegistrationKe
         },
         error => DiscoveryError::source_failed(error),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use genja_core::task::{TaskDescriptorMetadata, TaskExecutionMode};
+
+    #[derive(Debug)]
+    struct StaticTaskDescriptorSource {
+        descriptors: Vec<TaskDescriptor>,
+    }
+
+    impl TaskDescriptorSource for StaticTaskDescriptorSource {
+        fn list_tasks(&self) -> DiscoveryResult<Vec<TaskDescriptor>> {
+            Ok(self.descriptors.clone())
+        }
+    }
+
+    fn descriptor(id: &str, version: &str) -> TaskDescriptor {
+        TaskDescriptor::explicit(
+            id,
+            version,
+            TaskDescriptorMetadata {
+                name: id.replace('.', "_"),
+                description: None,
+                execution_mode: TaskExecutionMode::Async,
+                connection_plugin_name: None,
+                processor_names: Vec::new(),
+                retry: None,
+            },
+            None,
+            false,
+        )
+    }
+
+    #[test]
+    fn list_tasks_returns_descriptors_from_source() {
+        let descriptors = vec![descriptor("acme.deploy", "1.0.0")];
+        let source = StaticTaskDescriptorSource {
+            descriptors: descriptors.clone(),
+        };
+
+        assert_eq!(source.list_tasks(), Ok(descriptors));
+    }
+
+    #[test]
+    fn describe_task_uses_default_identity_lookup() {
+        let expected = descriptor("acme.deploy", "1.0.0");
+        let source = StaticTaskDescriptorSource {
+            descriptors: vec![
+                descriptor("acme.deploy", "0.9.0"),
+                expected.clone(),
+                descriptor("acme.rollback", "1.0.0"),
+            ],
+        };
+
+        assert_eq!(source.describe_task("acme.deploy@1.0.0"), Ok(expected));
+    }
+
+    #[test]
+    fn describe_task_rejects_invalid_identity_before_listing() {
+        let source = StaticTaskDescriptorSource {
+            descriptors: vec![descriptor("acme.deploy", "1.0.0")],
+        };
+
+        assert!(matches!(
+            source.describe_task("acme.deploy"),
+            Err(DiscoveryError::InvalidIdentity { identity, reason })
+                if identity == "acme.deploy"
+                    && reason == "identity must contain exactly one `@` separator"
+        ));
+    }
+
+    #[test]
+    fn find_task_descriptor_returns_not_found_for_missing_key() {
+        let descriptors = vec![descriptor("acme.deploy", "1.0.0")];
+        let key = TaskRegistrationKey::parse("acme.deploy@2.0.0").expect("key should parse");
+
+        assert_eq!(
+            find_task_descriptor(descriptors.iter(), &key),
+            Err(DiscoveryError::NotFound {
+                id: "acme.deploy".to_string(),
+                version: Some("2.0.0".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_task_identity_preserves_original_identity_for_invalid_id() {
+        // TaskRegistrationKey validates the task ID before the version. This
+        // should surface an ID validation reason while preserving the complete
+        // identity string that the caller supplied.
+        assert!(matches!(
+            parse_task_identity("Acme.deploy@1.0.0"),
+            Err(DiscoveryError::InvalidIdentity { identity, reason })
+                if identity == "Acme.deploy@1.0.0"
+                    && reason == "id segments must start with an ASCII lowercase letter or digit"
+        ));
+    }
+
+    #[test]
+    fn parse_task_identity_preserves_original_identity_for_invalid_version() {
+        // Once the task ID is valid, invalid semver should map to the same
+        // discovery variant with the original rendered identity.
+        assert!(matches!(
+            parse_task_identity("acme.deploy@latest"),
+            Err(DiscoveryError::InvalidIdentity { identity, reason })
+                if identity == "acme.deploy@latest"
+                    && reason.contains("unexpected character")
+        ));
+    }
+
+    #[test]
+    fn task_registration_lookup_errors_map_to_discovery_errors() {
+        assert_eq!(
+            DiscoveryError::from(TaskRegistrationError::NotFound {
+                id: "acme.deploy".to_string(),
+                version: Some("1.0.0".to_string()),
+            }),
+            DiscoveryError::NotFound {
+                id: "acme.deploy".to_string(),
+                version: Some("1.0.0".to_string()),
+            }
+        );
+
+        assert_eq!(
+            DiscoveryError::from(TaskRegistrationError::AmbiguousVersion {
+                id: "acme.deploy".to_string(),
+                versions: vec!["1.0.0".to_string(), "2.0.0".to_string()],
+            }),
+            DiscoveryError::AmbiguousVersion {
+                id: "acme.deploy".to_string(),
+                versions: vec!["1.0.0".to_string(), "2.0.0".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn construction_registration_errors_map_to_source_failures() {
+        assert_eq!(
+            DiscoveryError::from(TaskRegistrationError::NotConstructible {
+                id: "acme.deploy".to_string(),
+                version: "1.0.0".to_string(),
+            }),
+            DiscoveryError::SourceFailed {
+                message: "registered task `acme.deploy@1.0.0` is not constructible".to_string(),
+            }
+        );
+    }
 }
