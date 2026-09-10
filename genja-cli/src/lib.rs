@@ -1,5 +1,7 @@
 //! First-party command-line interface for Genja automation workflows.
 
+pub mod discovery;
+
 use clap::{Parser, Subcommand};
 use std::ffi::OsString;
 use std::process::ExitCode;
