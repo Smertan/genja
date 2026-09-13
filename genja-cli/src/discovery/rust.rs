@@ -1,8 +1,10 @@
 //! Compiled Rust task descriptor discovery source.
 
-use genja_core::task::list_compiled_tasks;
+use genja_core::task::{get_compiled_task_descriptor_by_identity, list_compiled_tasks};
 
-use super::{DiscoveryError, DiscoveryResult, TaskDescriptor, TaskDescriptorSource};
+use super::{
+    DiscoveryError, DiscoveryResult, TaskDescriptor, TaskDescriptorSource, TaskRegistrationKey,
+};
 
 /// Task descriptor source backed by Rust tasks linked into the current process.
 #[derive(Debug, Clone, Copy, Default)]
@@ -24,5 +26,13 @@ impl TaskDescriptorSource for CompiledTaskDescriptorSource {
                 .then_with(|| left.version.cmp(&right.version))
         });
         Ok(descriptors)
+    }
+
+    fn describe_task(&self, identity: &str) -> DiscoveryResult<TaskDescriptor> {
+        get_compiled_task_descriptor_by_identity(identity).map_err(DiscoveryError::from)
+    }
+
+    fn describe_task_by_key(&self, key: &TaskRegistrationKey) -> DiscoveryResult<TaskDescriptor> {
+        self.describe_task(&key.to_string())
     }
 }
