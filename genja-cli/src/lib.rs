@@ -4,7 +4,8 @@ pub mod commands;
 pub mod discovery;
 pub mod output;
 
-use clap::{Parser, Subcommand};
+use crate::output::OutputFormat;
+use clap::{Args, Parser, Subcommand};
 use std::ffi::OsString;
 use std::process::ExitCode;
 
@@ -21,8 +22,29 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Discover and inspect registered tasks.
+    Task(TaskCommand),
     /// Print the Genja CLI version.
     Version,
+}
+
+#[derive(Debug, Args)]
+struct TaskCommand {
+    #[command(subcommand)]
+    command: TaskSubcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TaskSubcommand {
+    /// List registered task descriptors.
+    List(TaskListArgs),
+}
+
+#[derive(Debug, Args)]
+struct TaskListArgs {
+    /// Output format to render.
+    #[arg(long, value_enum, default_value = "table")]
+    output: OutputFormat,
 }
 
 /// Runs the Genja CLI with the provided process arguments.
@@ -34,6 +56,9 @@ where
     match Cli::try_parse_from(_args) {
         Ok(cli) => {
             match cli.command {
+                Some(Command::Task(task)) => match task.command {
+                    TaskSubcommand::List(args) => commands::task::list_tasks(args.output),
+                },
                 Some(Command::Version) => commands::version::print_version(),
                 None => {}
             }
