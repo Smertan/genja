@@ -3,6 +3,8 @@
 //! This module owns CLI/TUI-facing discovery concepts while reusing the
 //! canonical descriptor identity and metadata types from `genja-core`.
 
+pub mod rust;
+
 use std::error::Error;
 use std::fmt;
 
@@ -11,6 +13,12 @@ pub use genja_core::task::{TaskDescriptor, TaskRegistrationKey};
 
 /// Result type for task descriptor discovery operations.
 pub type DiscoveryResult<T> = Result<T, DiscoveryError>;
+
+/// Re-exports for source implementations and consumers that prefer an explicit
+/// source namespace.
+pub mod source {
+    pub use super::{DiscoveryError, DiscoveryResult, TaskDescriptorSource};
+}
 
 /// Source of task descriptors for terminal interfaces.
 ///
