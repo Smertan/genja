@@ -1,12 +1,12 @@
 //! First-party command-line interface for Genja automation workflows.
 
+pub mod commands;
 pub mod discovery;
+pub mod output;
 
 use clap::{Parser, Subcommand};
 use std::ffi::OsString;
 use std::process::ExitCode;
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Parser)]
 #[command(
@@ -34,7 +34,7 @@ where
     match Cli::try_parse_from(_args) {
         Ok(cli) => {
             match cli.command {
-                Some(Command::Version) => println!("genja {VERSION}"),
+                Some(Command::Version) => commands::version::print_version(),
                 None => {}
             }
 
