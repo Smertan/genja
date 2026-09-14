@@ -4,6 +4,8 @@ pub mod commands;
 pub mod discovery;
 pub mod output;
 
+use crate::discovery::rust::CompiledTaskDescriptorSource;
+use crate::discovery::{DiscoveryError, TaskDescriptor};
 use crate::output::OutputFormat;
 use clap::{Args, Parser, Subcommand};
 use std::ffi::OsString;
@@ -47,6 +49,28 @@ struct TaskListArgs {
     output: OutputFormat,
 }
 
+fn execute(cli: Cli) -> Result<(), DiscoveryError> {
+    match cli.command {
+        Some(Command::Task(task)) => match task.command {
+            TaskSubcommand::List(args) => {
+                let source = CompiledTaskDescriptorSource::new();
+                let descriptors = commands::task::list_tasks(&source, args.output)?;
+                print_task_identities(&descriptors);
+            }
+        },
+        Some(Command::Version) => commands::version::print_version(),
+        None => {}
+    }
+
+    Ok(())
+}
+
+fn print_task_identities(descriptors: &[TaskDescriptor]) {
+    for descriptor in descriptors {
+        println!("{}@{}", descriptor.id, descriptor.version);
+    }
+}
+
 /// Runs the Genja CLI with the provided process arguments.
 pub fn run<I, T>(_args: I) -> ExitCode
 where
@@ -54,17 +78,13 @@ where
     T: Into<OsString> + Clone,
 {
     match Cli::try_parse_from(_args) {
-        Ok(cli) => {
-            match cli.command {
-                Some(Command::Task(task)) => match task.command {
-                    TaskSubcommand::List(args) => commands::task::list_tasks(args.output),
-                },
-                Some(Command::Version) => commands::version::print_version(),
-                None => {}
-            }
-
-            ExitCode::SUCCESS
-        }
+        Ok(cli) => execute(cli).map_or_else(
+            |error| {
+                eprintln!("error: {error}");
+                ExitCode::FAILURE
+            },
+            |()| ExitCode::SUCCESS,
+        ),
         Err(error) => {
             let exit_code = error.exit_code();
 

@@ -94,6 +94,20 @@ fn task_list_rejects_unsupported_output_format() {
 }
 
 #[test]
+fn task_list_runs_successfully() {
+    let output = genja_command()
+        .arg("task")
+        .arg("list")
+        .output()
+        .expect("genja task list should run");
+
+    assert!(
+        output.status.success(),
+        "genja task list should succeed: {output:?}"
+    );
+}
+
+#[test]
 fn version_command_prints_cli_version() {
     let output = genja_command()
         .arg("version")
