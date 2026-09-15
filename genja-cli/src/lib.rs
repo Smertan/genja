@@ -40,8 +40,19 @@ struct TaskCommand {
 
 #[derive(Debug, Subcommand)]
 enum TaskSubcommand {
+    /// Describe one registered task descriptor.
+    Describe(TaskDescribeArgs),
     /// List registered task descriptors.
     List(TaskListArgs),
+}
+
+#[derive(Debug, Args)]
+struct TaskDescribeArgs {
+    /// Task identity in `<task-id>@<task-version>` form.
+    identity: String,
+    /// Output format to render.
+    #[arg(long, value_enum, default_value = "table")]
+    output: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -75,6 +86,7 @@ impl Error for CliError {
 fn execute(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Some(Command::Task(task)) => match task.command {
+            TaskSubcommand::Describe(_args) => {}
             TaskSubcommand::List(args) => {
                 let source = CompiledTaskDescriptorSource::new();
                 let output =

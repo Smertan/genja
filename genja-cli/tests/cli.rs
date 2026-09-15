@@ -41,7 +41,78 @@ fn task_help_prints_task_subcommands() {
 
     assert!(stdout.contains("Usage: genja task"));
     assert!(stdout.contains("Commands:"));
+    assert!(stdout.contains("describe"));
     assert!(stdout.contains("list"));
+}
+
+#[test]
+fn task_describe_help_prints_identity_and_output_formats() {
+    let output = genja_command()
+        .arg("task")
+        .arg("describe")
+        .arg("--help")
+        .output()
+        .expect("genja task describe --help should run");
+
+    assert!(
+        output.status.success(),
+        "genja task describe --help should succeed: {output:?}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("task describe help should be UTF-8");
+
+    assert!(stdout.contains("Usage: genja task describe"));
+    assert!(stdout.contains("<IDENTITY>"));
+    assert!(stdout.contains("--output"));
+    assert!(stdout.contains("table"));
+    assert!(stdout.contains("json"));
+    assert!(stdout.contains("yaml"));
+    assert!(stdout.contains("markdown"));
+}
+
+#[test]
+fn task_describe_requires_identity() {
+    let output = genja_command()
+        .arg("task")
+        .arg("describe")
+        .output()
+        .expect("genja task describe should run");
+
+    assert!(
+        !output.status.success(),
+        "missing identity should fail: {output:?}"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("error output should be UTF-8");
+
+    assert!(stderr.contains("required"));
+    assert!(stderr.contains("<IDENTITY>"));
+}
+
+#[test]
+fn task_describe_rejects_unsupported_output_format() {
+    let output = genja_command()
+        .arg("task")
+        .arg("describe")
+        .arg("acme.examples.backup_config@1.0.0")
+        .arg("--output")
+        .arg("toml")
+        .output()
+        .expect("genja task describe should run");
+
+    assert!(
+        !output.status.success(),
+        "unsupported output format should fail: {output:?}"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("error output should be UTF-8");
+
+    assert!(stderr.contains("invalid value"));
+    assert!(stderr.contains("toml"));
+    assert!(stderr.contains("table"));
+    assert!(stderr.contains("json"));
+    assert!(stderr.contains("yaml"));
+    assert!(stderr.contains("markdown"));
 }
 
 #[test]
