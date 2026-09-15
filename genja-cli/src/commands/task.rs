@@ -1,7 +1,7 @@
 //! Task command handling.
 
-use crate::discovery::{DiscoveryError, TaskDescriptor, TaskDescriptorSource};
-use crate::output::{OutputError, OutputFormat, render_task_list};
+use crate::discovery::{DiscoveryError, TaskDescriptorSource};
+use crate::output::{OutputError, OutputFormat, render_task_descriptor, render_task_list};
 use std::error::Error;
 use std::fmt;
 
@@ -10,12 +10,15 @@ use std::fmt;
 pub enum TaskDescribeError {
     /// Task descriptor discovery failed.
     Discovery(DiscoveryError),
+    /// Task descriptor output rendering failed.
+    Output(OutputError),
 }
 
 impl fmt::Display for TaskDescribeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Discovery(error) => write!(f, "{error}"),
+            Self::Output(error) => write!(f, "{error}"),
         }
     }
 }
@@ -24,6 +27,7 @@ impl Error for TaskDescribeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Discovery(error) => Some(error),
+            Self::Output(error) => Some(error),
         }
     }
 }
@@ -31,6 +35,12 @@ impl Error for TaskDescribeError {
 impl From<DiscoveryError> for TaskDescribeError {
     fn from(error: DiscoveryError) -> Self {
         Self::Discovery(error)
+    }
+}
+
+impl From<OutputError> for TaskDescribeError {
+    fn from(error: OutputError) -> Self {
+        Self::Output(error)
     }
 }
 
@@ -86,19 +96,20 @@ where
 pub fn describe_task<S>(
     source: &S,
     identity: &str,
-    _output: OutputFormat,
-) -> Result<TaskDescriptor, TaskDescribeError>
+    output: OutputFormat,
+) -> Result<String, TaskDescribeError>
 where
     S: TaskDescriptorSource + ?Sized,
 {
-    source
+    let descriptor = source
         .describe_task(identity)
-        .map_err(TaskDescribeError::from)
+        .map_err(TaskDescribeError::from)?;
+    render_task_descriptor(&descriptor, output).map_err(TaskDescribeError::from)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::discovery::DiscoveryError;
+    use crate::discovery::{DiscoveryError, TaskDescriptor};
 
     use super::*;
     use genja_core::task::{TaskDescriptorMetadata, TaskExecutionMode};
@@ -166,15 +177,12 @@ mod tests {
             result: Ok(descriptors.clone()),
         };
 
-        assert_eq!(
-            describe_task(
-                &source,
-                "acme.tests.cli.describe@1.0.0",
-                OutputFormat::Table
-            )
-            .expect("descriptor should be described"),
-            descriptors[0]
-        );
+        let output = describe_task(&source, "acme.tests.cli.describe@1.0.0", OutputFormat::Json)
+            .expect("descriptor should be described");
+        let rendered: TaskDescriptor =
+            serde_json::from_str(&output).expect("JSON output should parse");
+
+        assert_eq!(rendered, descriptors[0]);
     }
 
     #[test]

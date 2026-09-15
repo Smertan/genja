@@ -8,8 +8,8 @@ pub mod rust;
 use std::error::Error;
 use std::fmt;
 
-use genja_core::task::TaskRegistrationError;
 pub use genja_core::task::{TaskDescriptor, TaskRegistrationKey};
+use genja_core::task::{TaskRegistrationError, validate_task_version};
 
 /// Result type for task descriptor discovery operations.
 pub type DiscoveryResult<T> = Result<T, DiscoveryError>;
@@ -17,7 +17,9 @@ pub type DiscoveryResult<T> = Result<T, DiscoveryError>;
 /// Re-exports for source implementations and consumers that prefer an explicit
 /// source namespace.
 pub mod source {
-    pub use super::{DiscoveryError, DiscoveryResult, TaskDescriptorSource};
+    pub use super::{
+        DiscoveryError, DiscoveryResult, TaskDescriptorIdentity, TaskDescriptorSource,
+    };
 }
 
 /// Source of task descriptors for terminal interfaces.
@@ -32,8 +34,9 @@ pub trait TaskDescriptorSource {
 
     /// Describe a task by rendered `<task-id>@<task-version>` identity.
     fn describe_task(&self, identity: &str) -> DiscoveryResult<TaskDescriptor> {
-        let key = parse_task_identity(identity)?;
-        self.describe_task_by_key(&key)
+        let identity = parse_task_descriptor_identity(identity)?;
+        let descriptors = self.list_tasks()?;
+        find_task_descriptor_by_identity(descriptors.iter(), &identity)
     }
 
     /// Describe a task by a parsed registration key.
@@ -44,6 +47,30 @@ pub trait TaskDescriptorSource {
     fn describe_task_by_key(&self, key: &TaskRegistrationKey) -> DiscoveryResult<TaskDescriptor> {
         let descriptors = self.list_tasks()?;
         find_task_descriptor(descriptors.iter(), key)
+    }
+}
+
+/// Parsed descriptor identity used for discovery lookup.
+///
+/// Unlike [`TaskRegistrationKey`], this type only validates the rendered
+/// identity shape and semantic version. It deliberately allows generated
+/// descriptor IDs such as `auto:crate::module::Task`, so CLI users can describe
+/// any identity previously emitted by `genja task list`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskDescriptorIdentity {
+    id: String,
+    version: String,
+}
+
+impl TaskDescriptorIdentity {
+    /// Return the descriptor ID.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Return the descriptor version.
+    pub fn version(&self) -> &str {
+        &self.version
     }
 }
 
@@ -62,6 +89,24 @@ where
         .ok_or_else(|| DiscoveryError::NotFound {
             id: key.id().to_string(),
             version: Some(key.version().to_string()),
+        })
+}
+
+/// Find a descriptor by exact parsed descriptor identity.
+pub fn find_task_descriptor_by_identity<'a, I>(
+    descriptors: I,
+    identity: &TaskDescriptorIdentity,
+) -> DiscoveryResult<TaskDescriptor>
+where
+    I: IntoIterator<Item = &'a TaskDescriptor>,
+{
+    descriptors
+        .into_iter()
+        .find(|descriptor| descriptor.id == identity.id && descriptor.version == identity.version)
+        .cloned()
+        .ok_or_else(|| DiscoveryError::NotFound {
+            id: identity.id.clone(),
+            version: Some(identity.version.clone()),
         })
 }
 
@@ -178,6 +223,69 @@ pub fn parse_task_identity(identity: &str) -> DiscoveryResult<TaskRegistrationKe
     })
 }
 
+/// Parse a rendered descriptor identity in `<descriptor-id>@<semver-version>` form.
+///
+/// This parser is intentionally less strict than [`parse_task_identity`]. It is
+/// intended for descriptor lookup and accepts generated IDs emitted by compiled
+/// discovery, while still requiring a non-empty ID and semantic version.
+pub fn parse_task_descriptor_identity(identity: &str) -> DiscoveryResult<TaskDescriptorIdentity> {
+    if identity.is_empty() {
+        return Err(DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason: "identity must not be empty".to_string(),
+        });
+    }
+
+    if identity.matches('@').count() != 1 {
+        return Err(DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason: "identity must contain exactly one `@` separator".to_string(),
+        });
+    }
+
+    let (id, version) =
+        identity
+            .split_once('@')
+            .ok_or_else(|| DiscoveryError::InvalidIdentity {
+                identity: identity.to_string(),
+                reason: "identity must contain exactly one `@` separator".to_string(),
+            })?;
+
+    if id.is_empty() {
+        return Err(DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason: "identity must include a task id before `@`".to_string(),
+        });
+    }
+
+    if id.trim() != id {
+        return Err(DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason: "task id must not have leading or trailing whitespace".to_string(),
+        });
+    }
+
+    if version.is_empty() {
+        return Err(DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason: "identity must include a task version after `@`".to_string(),
+        });
+    }
+
+    validate_task_version(version).map_err(|error| match error {
+        TaskRegistrationError::InvalidVersion { reason, .. } => DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason,
+        },
+        error => DiscoveryError::source_failed(error),
+    })?;
+
+    Ok(TaskDescriptorIdentity {
+        id: id.to_string(),
+        version: version.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +319,21 @@ mod tests {
         )
     }
 
+    fn generated_descriptor(id: &str, version: &str) -> TaskDescriptor {
+        TaskDescriptor::generated(
+            id,
+            version,
+            TaskDescriptorMetadata {
+                name: id.replace([':', '.'], "_"),
+                description: None,
+                execution_mode: TaskExecutionMode::Async,
+                connection_plugin_name: None,
+                processor_names: Vec::new(),
+                retry: None,
+            },
+        )
+    }
+
     #[test]
     fn list_tasks_returns_descriptors_from_source() {
         let descriptors = vec![descriptor("acme.deploy", "1.0.0")];
@@ -233,6 +356,19 @@ mod tests {
         };
 
         assert_eq!(source.describe_task("acme.deploy@1.0.0"), Ok(expected));
+    }
+
+    #[test]
+    fn describe_task_uses_default_lookup_for_generated_descriptor_ids() {
+        let expected = generated_descriptor("auto:use_genja::tasks::DeployChangesTask", "0.1.0");
+        let source = StaticTaskDescriptorSource {
+            descriptors: vec![expected.clone()],
+        };
+
+        assert_eq!(
+            source.describe_task("auto:use_genja::tasks::DeployChangesTask@0.1.0"),
+            Ok(expected)
+        );
     }
 
     #[test]
@@ -264,6 +400,22 @@ mod tests {
     }
 
     #[test]
+    fn find_task_descriptor_by_identity_accepts_generated_descriptor_ids() {
+        let descriptors = vec![generated_descriptor(
+            "auto:use_genja::tasks::DeployChangesTask",
+            "0.1.0",
+        )];
+        let identity =
+            parse_task_descriptor_identity("auto:use_genja::tasks::DeployChangesTask@0.1.0")
+                .expect("generated descriptor identity should parse");
+
+        assert_eq!(
+            find_task_descriptor_by_identity(descriptors.iter(), &identity),
+            Ok(descriptors[0].clone())
+        );
+    }
+
+    #[test]
     fn parse_task_identity_preserves_original_identity_for_invalid_id() {
         // TaskRegistrationKey validates the task ID before the version. This
         // should surface an ID validation reason while preserving the complete
@@ -273,6 +425,26 @@ mod tests {
             Err(DiscoveryError::InvalidIdentity { identity, reason })
                 if identity == "Acme.deploy@1.0.0"
                     && reason == "id segments must start with an ASCII lowercase letter or digit"
+        ));
+    }
+
+    #[test]
+    fn parse_task_descriptor_identity_accepts_generated_descriptor_ids() {
+        let identity =
+            parse_task_descriptor_identity("auto:use_genja::tasks::DeployChangesTask@0.1.0")
+                .expect("generated descriptor identity should parse");
+
+        assert_eq!(identity.id(), "auto:use_genja::tasks::DeployChangesTask");
+        assert_eq!(identity.version(), "0.1.0");
+    }
+
+    #[test]
+    fn parse_task_descriptor_identity_rejects_invalid_versions() {
+        assert!(matches!(
+            parse_task_descriptor_identity("auto:use_genja::tasks::DeployChangesTask@latest"),
+            Err(DiscoveryError::InvalidIdentity { identity, reason })
+                if identity == "auto:use_genja::tasks::DeployChangesTask@latest"
+                    && reason.contains("unexpected character")
         ));
     }
 

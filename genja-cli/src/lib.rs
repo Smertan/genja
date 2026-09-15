@@ -91,10 +91,9 @@ fn execute(cli: Cli) -> Result<(), CliError> {
         Some(Command::Task(task)) => match task.command {
             TaskSubcommand::Describe(args) => {
                 let source = CompiledTaskDescriptorSource::new();
-                let descriptor =
-                    commands::task::describe_task(&source, &args.identity, args.output)
-                        .map_err(CliError::TaskDescribe)?;
-                println!("{}@{}", descriptor.id, descriptor.version);
+                let output = commands::task::describe_task(&source, &args.identity, args.output)
+                    .map_err(CliError::TaskDescribe)?;
+                println!("{output}");
             }
             TaskSubcommand::List(args) => {
                 let source = CompiledTaskDescriptorSource::new();

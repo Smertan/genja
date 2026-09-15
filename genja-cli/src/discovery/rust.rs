@@ -28,12 +28,8 @@ impl TaskDescriptorSource for CompiledTaskDescriptorSource {
         Ok(descriptors)
     }
 
-    fn describe_task(&self, identity: &str) -> DiscoveryResult<TaskDescriptor> {
-        get_compiled_task_descriptor_by_identity(identity).map_err(DiscoveryError::from)
-    }
-
     fn describe_task_by_key(&self, key: &TaskRegistrationKey) -> DiscoveryResult<TaskDescriptor> {
-        self.describe_task(&key.to_string())
+        get_compiled_task_descriptor_by_identity(&key.to_string()).map_err(DiscoveryError::from)
     }
 }
 
@@ -47,8 +43,23 @@ mod tests {
 
     const ALPHA_ID: &str = "acme.tests.cli.discovery.compiled_alpha";
     const BETA_ID: &str = "acme.tests.cli.discovery.compiled_beta";
+    const GENERATED_NAME: &str = "generated_compiled";
     const ALPHA_IDENTITY: &str = "acme.tests.cli.discovery.compiled_alpha@1.0.0";
     const BETA_IDENTITY: &str = "acme.tests.cli.discovery.compiled_beta@2.0.0";
+
+    #[derive(Default)]
+    struct GeneratedCompiledTask;
+
+    #[genja_task(name = "generated_compiled")]
+    impl GeneratedCompiledTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, genja_core::task::TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
 
     #[derive(Default)]
     struct CompiledBetaTask;
@@ -174,5 +185,25 @@ mod tests {
                 version: Some("1.0.0".to_string()),
             })
         );
+    }
+
+    #[test]
+    fn describe_task_accepts_generated_descriptor_identities() {
+        let source = CompiledTaskDescriptorSource::new();
+        let generated = source
+            .list_tasks()
+            .expect("compiled descriptors should list")
+            .into_iter()
+            .find(|descriptor| descriptor.name == GENERATED_NAME)
+            .expect("generated descriptor should be registered");
+        let identity = format!("{}@{}", generated.id, generated.version);
+
+        let descriptor = source
+            .describe_task(&identity)
+            .expect("generated descriptor should be described");
+
+        assert_eq!(descriptor.id, generated.id);
+        assert_eq!(descriptor.version, generated.version);
+        assert_eq!(descriptor.name, GENERATED_NAME);
     }
 }
