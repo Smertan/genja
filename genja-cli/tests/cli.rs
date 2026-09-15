@@ -94,7 +94,7 @@ fn task_list_rejects_unsupported_output_format() {
 }
 
 #[test]
-fn task_list_runs_successfully() {
+fn task_list_defaults_to_empty_table_output() {
     let output = genja_command()
         .arg("task")
         .arg("list")
@@ -105,6 +105,93 @@ fn task_list_runs_successfully() {
         output.status.success(),
         "genja task list should succeed: {output:?}"
     );
+
+    let stdout = String::from_utf8(output.stdout).expect("task list output should be UTF-8");
+
+    assert_eq!(stdout, "No registered tasks found.\n");
+}
+
+#[test]
+fn task_list_outputs_empty_json() {
+    let output = genja_command()
+        .arg("task")
+        .arg("list")
+        .arg("--output")
+        .arg("json")
+        .output()
+        .expect("genja task list --output json should run");
+
+    assert!(
+        output.status.success(),
+        "genja task list --output json should succeed: {output:?}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("JSON output should be UTF-8");
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("JSON should parse");
+
+    assert_eq!(value, serde_json::json!([]));
+}
+
+#[test]
+fn task_list_outputs_empty_yaml() {
+    let output = genja_command()
+        .arg("task")
+        .arg("list")
+        .arg("--output")
+        .arg("yaml")
+        .output()
+        .expect("genja task list --output yaml should run");
+
+    assert!(
+        output.status.success(),
+        "genja task list --output yaml should succeed: {output:?}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("YAML output should be UTF-8");
+    let value: yaml_serde::Value = yaml_serde::from_str(&stdout).expect("YAML should parse");
+
+    assert_eq!(value, yaml_serde::Value::Sequence(Vec::new()));
+}
+
+#[test]
+fn task_list_outputs_empty_markdown_table() {
+    let output = genja_command()
+        .arg("task")
+        .arg("list")
+        .arg("--output")
+        .arg("markdown")
+        .output()
+        .expect("genja task list --output markdown should run");
+
+    assert!(
+        output.status.success(),
+        "genja task list --output markdown should succeed: {output:?}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("Markdown output should be UTF-8");
+
+    assert!(stdout.contains("| ID | Version | Name | Mode | Constructible | Description |"));
+    assert!(stdout.contains("|----|"));
+}
+
+#[test]
+fn task_list_explicit_table_output_matches_default() {
+    let output = genja_command()
+        .arg("task")
+        .arg("list")
+        .arg("--output")
+        .arg("table")
+        .output()
+        .expect("genja task list --output table should run");
+
+    assert!(
+        output.status.success(),
+        "genja task list --output table should succeed: {output:?}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("table output should be UTF-8");
+
+    assert_eq!(stdout, "No registered tasks found.\n");
 }
 
 #[test]

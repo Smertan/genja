@@ -1,30 +1,72 @@
 //! Task command handling.
 
-use crate::discovery::{DiscoveryResult, TaskDescriptor, TaskDescriptorSource};
-use crate::output::OutputFormat;
+use crate::discovery::{DiscoveryError, TaskDescriptorSource};
+use crate::output::{OutputError, OutputFormat, render_task_list};
+use std::error::Error;
+use std::fmt;
 
-/// List task descriptors from the provided source.
-pub fn list_tasks<S>(source: &S, _output: OutputFormat) -> DiscoveryResult<Vec<TaskDescriptor>>
+/// Errors returned while listing task descriptors.
+#[derive(Debug)]
+pub enum TaskListError {
+    /// Task descriptor discovery failed.
+    Discovery(DiscoveryError),
+    /// Task descriptor output rendering failed.
+    Output(OutputError),
+}
+
+impl fmt::Display for TaskListError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Discovery(error) => write!(f, "{error}"),
+            Self::Output(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl Error for TaskListError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Discovery(error) => Some(error),
+            Self::Output(error) => Some(error),
+        }
+    }
+}
+
+impl From<DiscoveryError> for TaskListError {
+    fn from(error: DiscoveryError) -> Self {
+        Self::Discovery(error)
+    }
+}
+
+impl From<OutputError> for TaskListError {
+    fn from(error: OutputError) -> Self {
+        Self::Output(error)
+    }
+}
+
+/// List task descriptors from the provided source and render them.
+pub fn list_tasks<S>(source: &S, output: OutputFormat) -> Result<String, TaskListError>
 where
     S: TaskDescriptorSource + ?Sized,
 {
-    source.list_tasks()
+    let descriptors = source.list_tasks()?;
+    render_task_list(&descriptors, output).map_err(TaskListError::from)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::discovery::DiscoveryError;
+    use crate::discovery::{DiscoveryError, TaskDescriptor};
 
     use super::*;
     use genja_core::task::{TaskDescriptorMetadata, TaskExecutionMode};
 
     #[derive(Debug)]
     struct StaticTaskDescriptorSource {
-        result: DiscoveryResult<Vec<TaskDescriptor>>,
+        result: Result<Vec<TaskDescriptor>, DiscoveryError>,
     }
 
     impl TaskDescriptorSource for StaticTaskDescriptorSource {
-        fn list_tasks(&self) -> DiscoveryResult<Vec<TaskDescriptor>> {
+        fn list_tasks(&self) -> Result<Vec<TaskDescriptor>, DiscoveryError> {
             self.result.clone()
         }
     }
@@ -52,11 +94,11 @@ mod tests {
         let source = StaticTaskDescriptorSource {
             result: Ok(descriptors.clone()),
         };
+        let output = list_tasks(&source, OutputFormat::Json).expect("descriptors should list");
+        let rendered: Vec<TaskDescriptor> =
+            serde_json::from_str(&output).expect("JSON output should parse");
 
-        assert_eq!(
-            list_tasks(&source, OutputFormat::Table).expect("descriptors should list"),
-            descriptors
-        );
+        assert_eq!(rendered, descriptors);
     }
 
     #[test]
@@ -67,11 +109,10 @@ mod tests {
             }),
         };
 
-        assert_eq!(
+        assert!(matches!(
             list_tasks(&source, OutputFormat::Json),
-            Err(DiscoveryError::SourceFailed {
-                message: "registry unavailable".to_string(),
-            })
-        );
+            Err(TaskListError::Discovery(DiscoveryError::SourceFailed { message }))
+                if message == "registry unavailable"
+        ));
     }
 }

@@ -4,11 +4,13 @@ pub mod commands;
 pub mod discovery;
 pub mod output;
 
+use crate::commands::task::TaskListError;
 use crate::discovery::rust::CompiledTaskDescriptorSource;
-use crate::discovery::{DiscoveryError, TaskDescriptor};
 use crate::output::OutputFormat;
 use clap::{Args, Parser, Subcommand};
+use std::error::Error;
 use std::ffi::OsString;
+use std::fmt;
 use std::process::ExitCode;
 
 #[derive(Debug, Parser)]
@@ -49,13 +51,35 @@ struct TaskListArgs {
     output: OutputFormat,
 }
 
-fn execute(cli: Cli) -> Result<(), DiscoveryError> {
+#[derive(Debug)]
+enum CliError {
+    TaskList(TaskListError),
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TaskList(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl Error for CliError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::TaskList(error) => Some(error),
+        }
+    }
+}
+
+fn execute(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Some(Command::Task(task)) => match task.command {
             TaskSubcommand::List(args) => {
                 let source = CompiledTaskDescriptorSource::new();
-                let descriptors = commands::task::list_tasks(&source, args.output)?;
-                print_task_identities(&descriptors);
+                let output =
+                    commands::task::list_tasks(&source, args.output).map_err(CliError::TaskList)?;
+                println!("{output}");
             }
         },
         Some(Command::Version) => commands::version::print_version(),
@@ -63,12 +87,6 @@ fn execute(cli: Cli) -> Result<(), DiscoveryError> {
     }
 
     Ok(())
-}
-
-fn print_task_identities(descriptors: &[TaskDescriptor]) {
-    for descriptor in descriptors {
-        println!("{}@{}", descriptor.id, descriptor.version);
-    }
 }
 
 /// Runs the Genja CLI with the provided process arguments.
