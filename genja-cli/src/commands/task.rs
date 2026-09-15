@@ -1,9 +1,38 @@
 //! Task command handling.
 
-use crate::discovery::{DiscoveryError, TaskDescriptorSource};
+use crate::discovery::{DiscoveryError, TaskDescriptor, TaskDescriptorSource};
 use crate::output::{OutputError, OutputFormat, render_task_list};
 use std::error::Error;
 use std::fmt;
+
+/// Errors returned while describing one task descriptor.
+#[derive(Debug)]
+pub enum TaskDescribeError {
+    /// Task descriptor discovery failed.
+    Discovery(DiscoveryError),
+}
+
+impl fmt::Display for TaskDescribeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Discovery(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl Error for TaskDescribeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Discovery(error) => Some(error),
+        }
+    }
+}
+
+impl From<DiscoveryError> for TaskDescribeError {
+    fn from(error: DiscoveryError) -> Self {
+        Self::Discovery(error)
+    }
+}
 
 /// Errors returned while listing task descriptors.
 #[derive(Debug)]
@@ -53,9 +82,23 @@ where
     render_task_list(&descriptors, output).map_err(TaskListError::from)
 }
 
+/// Describe one task descriptor from the provided source.
+pub fn describe_task<S>(
+    source: &S,
+    identity: &str,
+    _output: OutputFormat,
+) -> Result<TaskDescriptor, TaskDescribeError>
+where
+    S: TaskDescriptorSource + ?Sized,
+{
+    source
+        .describe_task(identity)
+        .map_err(TaskDescribeError::from)
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::discovery::{DiscoveryError, TaskDescriptor};
+    use crate::discovery::DiscoveryError;
 
     use super::*;
     use genja_core::task::{TaskDescriptorMetadata, TaskExecutionMode};
@@ -113,6 +156,59 @@ mod tests {
             list_tasks(&source, OutputFormat::Json),
             Err(TaskListError::Discovery(DiscoveryError::SourceFailed { message }))
                 if message == "registry unavailable"
+        ));
+    }
+
+    #[test]
+    fn describe_task_returns_descriptor_from_source() {
+        let descriptors = vec![descriptor("acme.tests.cli.describe", "1.0.0")];
+        let source = StaticTaskDescriptorSource {
+            result: Ok(descriptors.clone()),
+        };
+
+        assert_eq!(
+            describe_task(
+                &source,
+                "acme.tests.cli.describe@1.0.0",
+                OutputFormat::Table
+            )
+            .expect("descriptor should be described"),
+            descriptors[0]
+        );
+    }
+
+    #[test]
+    fn describe_task_returns_invalid_identity_errors_from_source() {
+        let source = StaticTaskDescriptorSource {
+            result: Ok(Vec::new()),
+        };
+
+        assert!(matches!(
+            describe_task(&source, "acme.tests.cli.describe", OutputFormat::Json),
+            Err(TaskDescribeError::Discovery(DiscoveryError::InvalidIdentity {
+                identity,
+                reason
+            })) if identity == "acme.tests.cli.describe"
+                && reason == "identity must contain exactly one `@` separator"
+        ));
+    }
+
+    #[test]
+    fn describe_task_returns_not_found_errors_from_source() {
+        let source = StaticTaskDescriptorSource {
+            result: Ok(Vec::new()),
+        };
+
+        assert!(matches!(
+            describe_task(
+                &source,
+                "acme.tests.cli.describe_missing@1.0.0",
+                OutputFormat::Yaml
+            ),
+            Err(TaskDescribeError::Discovery(DiscoveryError::NotFound {
+                id,
+                version: Some(version),
+            })) if id == "acme.tests.cli.describe_missing" && version == "1.0.0"
         ));
     }
 }

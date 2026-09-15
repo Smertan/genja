@@ -116,6 +116,48 @@ fn task_describe_rejects_unsupported_output_format() {
 }
 
 #[test]
+fn task_describe_rejects_invalid_identity() {
+    let output = genja_command()
+        .arg("task")
+        .arg("describe")
+        .arg("acme.examples.backup_config")
+        .output()
+        .expect("genja task describe should run");
+
+    assert!(
+        !output.status.success(),
+        "invalid identity should fail: {output:?}"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("error output should be UTF-8");
+
+    assert!(stderr.contains("error: invalid task identity"));
+    assert!(stderr.contains("acme.examples.backup_config"));
+    assert!(stderr.contains("exactly one `@` separator"));
+}
+
+#[test]
+fn task_describe_returns_not_found_for_missing_identity() {
+    let output = genja_command()
+        .arg("task")
+        .arg("describe")
+        .arg("acme.examples.missing@1.0.0")
+        .output()
+        .expect("genja task describe should run");
+
+    assert!(
+        !output.status.success(),
+        "missing identity should fail: {output:?}"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("error output should be UTF-8");
+
+    assert!(stderr.contains("error: task descriptor"));
+    assert!(stderr.contains("acme.examples.missing@1.0.0"));
+    assert!(stderr.contains("was not found"));
+}
+
+#[test]
 fn task_list_help_prints_output_formats() {
     let output = genja_command()
         .arg("task")

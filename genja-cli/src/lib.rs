@@ -4,7 +4,7 @@ pub mod commands;
 pub mod discovery;
 pub mod output;
 
-use crate::commands::task::TaskListError;
+use crate::commands::task::{TaskDescribeError, TaskListError};
 use crate::discovery::rust::CompiledTaskDescriptorSource;
 use crate::output::OutputFormat;
 use clap::{Args, Parser, Subcommand};
@@ -64,12 +64,14 @@ struct TaskListArgs {
 
 #[derive(Debug)]
 enum CliError {
+    TaskDescribe(TaskDescribeError),
     TaskList(TaskListError),
 }
 
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::TaskDescribe(error) => write!(f, "{error}"),
             Self::TaskList(error) => write!(f, "{error}"),
         }
     }
@@ -78,6 +80,7 @@ impl fmt::Display for CliError {
 impl Error for CliError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::TaskDescribe(error) => Some(error),
             Self::TaskList(error) => Some(error),
         }
     }
@@ -86,7 +89,13 @@ impl Error for CliError {
 fn execute(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Some(Command::Task(task)) => match task.command {
-            TaskSubcommand::Describe(_args) => {}
+            TaskSubcommand::Describe(args) => {
+                let source = CompiledTaskDescriptorSource::new();
+                let descriptor =
+                    commands::task::describe_task(&source, &args.identity, args.output)
+                        .map_err(CliError::TaskDescribe)?;
+                println!("{}@{}", descriptor.id, descriptor.version);
+            }
             TaskSubcommand::List(args) => {
                 let source = CompiledTaskDescriptorSource::new();
                 let output =
