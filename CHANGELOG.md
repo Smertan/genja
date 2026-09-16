@@ -15,6 +15,7 @@ Changed packages:
 - Added a reusable CLI discovery abstraction for listing and describing task descriptors. Refs: #121
 - Added a compiled Rust task descriptor source for CLI discovery plumbing. Refs: #122
 - Added `genja task list` with table, JSON, YAML, and Markdown output for compiled Rust task descriptors available to the CLI binary. Refs: #123
+- Added `genja task describe <identity>` with table, JSON, YAML, and Markdown output for one compiled Rust task descriptor. Refs: #124
 
 ### Changed
 

@@ -42,7 +42,11 @@ struct TaskCommand {
 enum TaskSubcommand {
     /// Describe one registered task descriptor.
     Describe(TaskDescribeArgs),
-    /// List registered task descriptors.
+    /// List registered task descriptor summaries.
+    ///
+    /// Table and Markdown output are compact summary views. Use
+    /// `genja task describe <identity>` for full descriptor metadata.
+    /// JSON and YAML output include full descriptor items for the listed tasks.
     List(TaskListArgs),
 }
 

@@ -174,6 +174,10 @@ fn task_list_help_prints_output_formats() {
     let stdout = String::from_utf8(output.stdout).expect("task list help output should be UTF-8");
 
     assert!(stdout.contains("Usage: genja task list"));
+    assert!(stdout.contains("compact summary views"));
+    assert!(stdout.contains("genja task describe <identity>"));
+    assert!(stdout.contains("JSON and YAML output"));
+    assert!(stdout.contains("full descriptor items"));
     assert!(stdout.contains("--output"));
     assert!(stdout.contains("table"));
     assert!(stdout.contains("json"));
@@ -283,7 +287,7 @@ fn task_list_outputs_empty_markdown_table() {
 
     let stdout = String::from_utf8(output.stdout).expect("Markdown output should be UTF-8");
 
-    assert!(stdout.contains("| ID | Version | Name | Mode | Constructible | Description |"));
+    assert!(stdout.contains("| ID | Version | Name | Source | Mode | Constructible |"));
     assert!(stdout.contains("|----|"));
 }
 

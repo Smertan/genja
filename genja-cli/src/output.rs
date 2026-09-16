@@ -15,7 +15,7 @@ pub enum OutputFormat {
     Json,
     /// Render the serialized task descriptor list as YAML.
     Yaml,
-    /// Render a documentation-friendly Markdown table.
+    /// Render Markdown output.
     Markdown,
 }
 
@@ -82,6 +82,7 @@ fn render_task_table(descriptors: &[TaskDescriptor]) -> String {
         "ID",
         "VERSION",
         "NAME",
+        "SOURCE",
         "MODE",
         "CONSTRUCTIBLE",
     ]);
@@ -91,6 +92,7 @@ fn render_task_table(descriptors: &[TaskDescriptor]) -> String {
             descriptor.id.as_str(),
             descriptor.version.as_str(),
             descriptor.name.as_str(),
+            id_source_label(descriptor.id_source),
             execution_mode_label(descriptor.execution_mode),
             constructible_label(descriptor.constructible),
         ]);
@@ -105,9 +107,9 @@ fn render_task_markdown(descriptors: &[TaskDescriptor]) -> String {
         "ID",
         "Version",
         "Name",
+        "Source",
         "Mode",
         "Constructible",
-        "Description",
     ]);
 
     for descriptor in descriptors {
@@ -115,9 +117,9 @@ fn render_task_markdown(descriptors: &[TaskDescriptor]) -> String {
             markdown_code(&descriptor.id),
             markdown_code(&descriptor.version),
             markdown_code(&descriptor.name),
+            markdown_code(id_source_label(descriptor.id_source)),
             markdown_code(execution_mode_label(descriptor.execution_mode)),
             constructible_label(descriptor.constructible).to_string(),
-            markdown_text(descriptor.description.as_deref().unwrap_or("")),
         ]);
     }
 
@@ -436,11 +438,13 @@ mod tests {
         assert!(output.contains("ID"));
         assert!(output.contains("VERSION"));
         assert!(output.contains("NAME"));
+        assert!(output.contains("SOURCE"));
         assert!(output.contains("MODE"));
         assert!(output.contains("CONSTRUCTIBLE"));
         assert!(output.contains("acme.examples.backup_config"));
         assert!(output.contains("1.0.0"));
         assert!(output.contains("backup_config"));
+        assert!(output.contains("explicit"));
         assert!(output.contains("blocking"));
         assert!(output.contains("yes"));
         assert!(output.contains("async"));
@@ -510,13 +514,14 @@ mod tests {
         assert!(output.contains("| `acme.examples.backup_config`"));
         assert!(output.contains("| `1.0.0`"));
         assert!(output.contains("| `backup_config`"));
+        assert!(output.contains("| `explicit`"));
         assert!(output.contains("| `blocking`"));
         assert!(output.contains("| yes"));
-        assert!(output.contains("Backs up selected paths from a network device"));
+        assert!(!output.contains("Backs up selected paths from a network device"));
     }
 
     #[test]
-    fn markdown_output_escapes_description_delimiters() {
+    fn markdown_output_omits_description_for_compact_catalog() {
         let descriptors = vec![descriptor(
             "acme.examples.pipe",
             "1.0.0",
@@ -529,7 +534,8 @@ mod tests {
         let output =
             render_task_list(&descriptors, OutputFormat::Markdown).expect("Markdown should render");
 
-        assert!(output.contains("uses \\| pipes<br>across lines"));
+        assert!(!output.contains("uses | pipes"));
+        assert!(!output.contains("uses \\| pipes"));
     }
 
     #[test]

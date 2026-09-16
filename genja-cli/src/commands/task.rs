@@ -186,6 +186,61 @@ mod tests {
     }
 
     #[test]
+    fn describe_task_renders_table_output() {
+        let source = StaticTaskDescriptorSource {
+            result: Ok(vec![descriptor("acme.tests.cli.describe", "1.0.0")]),
+        };
+
+        let output = describe_task(
+            &source,
+            "acme.tests.cli.describe@1.0.0",
+            OutputFormat::Table,
+        )
+        .expect("descriptor should render as table");
+
+        assert!(output.contains("Task: acme.tests.cli.describe@1.0.0"));
+        assert!(output.contains("Field"));
+        assert!(output.contains("Value"));
+        assert!(output.contains("ID source"));
+        assert!(output.contains("explicit"));
+    }
+
+    #[test]
+    fn describe_task_renders_yaml_output() {
+        let source = StaticTaskDescriptorSource {
+            result: Ok(vec![descriptor("acme.tests.cli.describe", "1.0.0")]),
+        };
+
+        let output = describe_task(&source, "acme.tests.cli.describe@1.0.0", OutputFormat::Yaml)
+            .expect("descriptor should render as YAML");
+        let rendered: yaml_serde::Value =
+            yaml_serde::from_str(&output).expect("YAML output should parse");
+
+        assert_eq!(rendered["id"], "acme.tests.cli.describe");
+        assert_eq!(rendered["version"], "1.0.0");
+        assert_eq!(rendered["id_source"], "explicit");
+    }
+
+    #[test]
+    fn describe_task_renders_markdown_output() {
+        let source = StaticTaskDescriptorSource {
+            result: Ok(vec![descriptor("acme.tests.cli.describe", "1.0.0")]),
+        };
+
+        let output = describe_task(
+            &source,
+            "acme.tests.cli.describe@1.0.0",
+            OutputFormat::Markdown,
+        )
+        .expect("descriptor should render as Markdown");
+
+        assert!(output.starts_with("# acme.tests.cli.describe@1.0.0"));
+        assert!(output.contains("| Field"));
+        assert!(output.contains("| ID source"));
+        assert!(output.contains("| `explicit`"));
+    }
+
+    #[test]
     fn describe_task_returns_invalid_identity_errors_from_source() {
         let source = StaticTaskDescriptorSource {
             result: Ok(Vec::new()),
