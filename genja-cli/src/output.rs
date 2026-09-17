@@ -85,16 +85,55 @@ pub fn render_task_docs(
     format: TaskDocsOutputFormat,
 ) -> Result<String, OutputError> {
     match format {
-        TaskDocsOutputFormat::Markdown => Ok(render_task_docs_markdown(descriptors)),
+        TaskDocsOutputFormat::Markdown => render_task_docs_markdown(descriptors),
     }
 }
 
-fn render_task_docs_markdown(descriptors: &[TaskDescriptor]) -> String {
+fn render_task_docs_markdown(descriptors: &[TaskDescriptor]) -> Result<String, OutputError> {
     if descriptors.is_empty() {
-        return "# Task Catalogue\n\nNo registered tasks found.".to_string();
+        return Ok("# Task Catalogue\n\nNo registered tasks found.".to_string());
     }
 
-    format!("# Task Catalogue\n\n{}", render_task_markdown(descriptors))
+    let mut output = format!(
+        "# Task Catalogue\n\n{}",
+        render_task_docs_summary_markdown(descriptors)
+    );
+
+    for descriptor in descriptors {
+        output.push_str("\n\n");
+        output.push_str(&render_task_descriptor_markdown_section(
+            descriptor, "##", "###",
+        )?);
+    }
+
+    Ok(output)
+}
+
+fn render_task_docs_summary_markdown(descriptors: &[TaskDescriptor]) -> String {
+    let mut table = Table::new();
+    table.load_preset(presets::ASCII_MARKDOWN).set_header([
+        "ID",
+        "Version",
+        "Name",
+        "Source",
+        "Mode",
+        "Constructible",
+        "Description",
+    ]);
+
+    for descriptor in descriptors {
+        table.add_row([
+            markdown_code(&descriptor.id),
+            markdown_code(&descriptor.version),
+            markdown_code(&descriptor.name),
+            markdown_code(id_source_label(descriptor.id_source)),
+            markdown_code(execution_mode_label(descriptor.execution_mode)),
+            constructible_label(descriptor.constructible).to_string(),
+            markdown_text(optional_label(descriptor.description.as_deref())),
+        ]);
+    }
+
+    table.trim_fmt()
 }
 
 fn render_task_table(descriptors: &[TaskDescriptor]) -> String {
@@ -205,6 +244,14 @@ fn render_task_descriptor_table(descriptor: &TaskDescriptor) -> Result<String, O
 }
 
 fn render_task_descriptor_markdown(descriptor: &TaskDescriptor) -> Result<String, OutputError> {
+    render_task_descriptor_markdown_section(descriptor, "#", "##")
+}
+
+fn render_task_descriptor_markdown_section(
+    descriptor: &TaskDescriptor,
+    descriptor_heading: &str,
+    input_schema_heading: &str,
+) -> Result<String, OutputError> {
     let mut table = Table::new();
     table
         .load_preset(presets::ASCII_MARKDOWN)
@@ -247,13 +294,16 @@ fn render_task_descriptor_markdown(descriptor: &TaskDescriptor) -> Result<String
     ]);
 
     let mut output = format!(
-        "# {}\n\n{}",
+        "{} {}\n\n{}",
+        descriptor_heading,
         descriptor_identity(descriptor),
         table.trim_fmt()
     );
 
     if let Some(schema) = descriptor.input_schema.as_ref() {
-        output.push_str("\n\n## Input Schema\n\n```json\n");
+        output.push_str(&format!(
+            "\n\n{input_schema_heading} Input Schema\n\n```json\n"
+        ));
         output.push_str(&serde_json::to_string_pretty(schema).map_err(OutputError::Json)?);
         output.push_str("\n```");
     }
@@ -561,6 +611,55 @@ mod tests {
 
         assert!(!output.contains("uses | pipes"));
         assert!(!output.contains("uses \\| pipes"));
+    }
+
+    #[test]
+    fn docs_output_reports_empty_task_lists() {
+        let output = render_task_docs(&[], TaskDocsOutputFormat::Markdown)
+            .expect("empty docs should render");
+
+        assert_eq!(output, "# Task Catalogue\n\nNo registered tasks found.");
+    }
+
+    #[test]
+    fn docs_output_renders_summary_and_detailed_sections() {
+        let output = render_task_docs(&descriptors(), TaskDocsOutputFormat::Markdown)
+            .expect("docs should render");
+
+        assert!(output.starts_with("# Task Catalogue"));
+        assert!(output.contains("| ID"));
+        assert!(output.contains("| Description"));
+        assert!(output.contains("| `acme.examples.backup_config`"));
+        assert!(output.contains("| `1.0.0`"));
+        assert!(output.contains("| `backup_config`"));
+        assert!(output.contains("| `explicit`"));
+        assert!(output.contains("| `blocking`"));
+        assert!(output.contains("| yes"));
+        assert!(output.contains("Backs up selected paths from a network device"));
+        assert!(output.contains("## acme.examples.backup_config@1.0.0"));
+        assert!(output.contains("## acme.examples.collect_facts@1.0.0"));
+        assert!(output.contains("| Field"));
+        assert!(output.contains("| ID source"));
+        assert!(output.contains("| Execution mode"));
+        assert!(output.contains("| Connection plugin"));
+        assert!(output.contains("| Processors"));
+        assert!(output.contains("| Constructible"));
+        assert!(output.contains("| Retry"));
+        assert!(output.contains("| Input schema"));
+    }
+
+    #[test]
+    fn docs_output_renders_schema_blocks() {
+        let output = render_task_docs(&[schema_descriptor()], TaskDocsOutputFormat::Markdown)
+            .expect("docs should render");
+
+        assert!(output.contains("## acme.examples.backup_config@1.0.0"));
+        assert!(output.contains("| Input schema"));
+        assert!(output.contains("| available"));
+        assert!(output.contains("### Input Schema"));
+        assert!(output.contains("```json"));
+        assert!(output.contains("\"backup_path\""));
+        assert!(output.contains("\"compress\""));
     }
 
     #[test]
