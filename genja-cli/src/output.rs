@@ -19,6 +19,13 @@ pub enum OutputFormat {
     Markdown,
 }
 
+/// Supported output formats for task documentation generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum TaskDocsOutputFormat {
+    /// Render a Markdown task catalogue.
+    Markdown,
+}
+
 /// Errors returned while rendering CLI output.
 #[derive(Debug)]
 pub enum OutputError {
@@ -70,6 +77,24 @@ pub fn render_task_descriptor(
         OutputFormat::Yaml => yaml_serde::to_string(descriptor).map_err(OutputError::Yaml),
         OutputFormat::Markdown => render_task_descriptor_markdown(descriptor),
     }
+}
+
+/// Render task descriptors as a documentation catalogue.
+pub fn render_task_docs(
+    descriptors: &[TaskDescriptor],
+    format: TaskDocsOutputFormat,
+) -> Result<String, OutputError> {
+    match format {
+        TaskDocsOutputFormat::Markdown => Ok(render_task_docs_markdown(descriptors)),
+    }
+}
+
+fn render_task_docs_markdown(descriptors: &[TaskDescriptor]) -> String {
+    if descriptors.is_empty() {
+        return "# Task Catalogue\n\nNo registered tasks found.".to_string();
+    }
+
+    format!("# Task Catalogue\n\n{}", render_task_markdown(descriptors))
 }
 
 fn render_task_table(descriptors: &[TaskDescriptor]) -> String {

@@ -4,9 +4,9 @@ pub mod commands;
 pub mod discovery;
 pub mod output;
 
-use crate::commands::task::{TaskDescribeError, TaskListError};
+use crate::commands::task::{TaskDescribeError, TaskDocsError, TaskListError};
 use crate::discovery::rust::CompiledTaskDescriptorSource;
-use crate::output::OutputFormat;
+use crate::output::{OutputFormat, TaskDocsOutputFormat};
 use clap::{Args, Parser, Subcommand};
 use std::error::Error;
 use std::ffi::OsString;
@@ -42,6 +42,8 @@ struct TaskCommand {
 enum TaskSubcommand {
     /// Describe one registered task descriptor.
     Describe(TaskDescribeArgs),
+    /// Generate Markdown documentation for registered task descriptors.
+    Docs(TaskDocsArgs),
     /// List registered task descriptor summaries.
     ///
     /// Table and Markdown output are compact summary views. Use
@@ -66,17 +68,26 @@ struct TaskListArgs {
     output: OutputFormat,
 }
 
+#[derive(Debug, Args)]
+struct TaskDocsArgs {
+    /// Output format to render.
+    #[arg(long, value_enum, default_value = "markdown")]
+    output: TaskDocsOutputFormat,
+}
+
 #[derive(Debug)]
 enum CliError {
-    TaskDescribe(TaskDescribeError),
-    TaskList(TaskListError),
+    Describe(TaskDescribeError),
+    Docs(TaskDocsError),
+    List(TaskListError),
 }
 
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TaskDescribe(error) => write!(f, "{error}"),
-            Self::TaskList(error) => write!(f, "{error}"),
+            Self::Describe(error) => write!(f, "{error}"),
+            Self::Docs(error) => write!(f, "{error}"),
+            Self::List(error) => write!(f, "{error}"),
         }
     }
 }
@@ -84,8 +95,9 @@ impl fmt::Display for CliError {
 impl Error for CliError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::TaskDescribe(error) => Some(error),
-            Self::TaskList(error) => Some(error),
+            Self::Describe(error) => Some(error),
+            Self::Docs(error) => Some(error),
+            Self::List(error) => Some(error),
         }
     }
 }
@@ -96,13 +108,19 @@ fn execute(cli: Cli) -> Result<(), CliError> {
             TaskSubcommand::Describe(args) => {
                 let source = CompiledTaskDescriptorSource::new();
                 let output = commands::task::describe_task(&source, &args.identity, args.output)
-                    .map_err(CliError::TaskDescribe)?;
+                    .map_err(CliError::Describe)?;
+                println!("{output}");
+            }
+            TaskSubcommand::Docs(args) => {
+                let source = CompiledTaskDescriptorSource::new();
+                let output =
+                    commands::task::docs_tasks(&source, args.output).map_err(CliError::Docs)?;
                 println!("{output}");
             }
             TaskSubcommand::List(args) => {
                 let source = CompiledTaskDescriptorSource::new();
                 let output =
-                    commands::task::list_tasks(&source, args.output).map_err(CliError::TaskList)?;
+                    commands::task::list_tasks(&source, args.output).map_err(CliError::List)?;
                 println!("{output}");
             }
         },

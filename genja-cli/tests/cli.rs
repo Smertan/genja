@@ -42,7 +42,89 @@ fn task_help_prints_task_subcommands() {
     assert!(stdout.contains("Usage: genja task"));
     assert!(stdout.contains("Commands:"));
     assert!(stdout.contains("describe"));
+    assert!(stdout.contains("docs"));
     assert!(stdout.contains("list"));
+}
+
+#[test]
+fn task_docs_help_prints_markdown_output_format() {
+    let output = genja_command()
+        .arg("task")
+        .arg("docs")
+        .arg("--help")
+        .output()
+        .expect("genja task docs --help should run");
+
+    assert!(
+        output.status.success(),
+        "genja task docs --help should succeed: {output:?}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("task docs help should be UTF-8");
+
+    assert!(stdout.contains("Usage: genja task docs"));
+    assert!(stdout.contains("--output"));
+    assert!(stdout.contains("markdown"));
+}
+
+#[test]
+fn task_docs_rejects_unsupported_output_format() {
+    let output = genja_command()
+        .arg("task")
+        .arg("docs")
+        .arg("--output")
+        .arg("json")
+        .output()
+        .expect("genja task docs should run");
+
+    assert!(
+        !output.status.success(),
+        "unsupported output format should fail: {output:?}"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("error output should be UTF-8");
+
+    assert!(stderr.contains("invalid value"));
+    assert!(stderr.contains("json"));
+    assert!(stderr.contains("markdown"));
+}
+
+#[test]
+fn task_docs_defaults_to_empty_markdown_catalogue() {
+    let output = genja_command()
+        .arg("task")
+        .arg("docs")
+        .output()
+        .expect("genja task docs should run");
+
+    assert!(
+        output.status.success(),
+        "genja task docs should succeed: {output:?}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("docs output should be UTF-8");
+
+    assert_eq!(stdout, "# Task Catalogue\n\nNo registered tasks found.\n");
+}
+
+#[test]
+fn task_docs_accepts_explicit_markdown_output() {
+    let output = genja_command()
+        .arg("task")
+        .arg("docs")
+        .arg("--output")
+        .arg("markdown")
+        .output()
+        .expect("genja task docs --output markdown should run");
+
+    assert!(
+        output.status.success(),
+        "genja task docs --output markdown should succeed: {output:?}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("docs output should be UTF-8");
+
+    assert_eq!(stdout, "# Task Catalogue\n\nNo registered tasks found.\n");
 }
 
 #[test]
