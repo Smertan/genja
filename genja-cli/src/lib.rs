@@ -4,7 +4,7 @@ pub mod commands;
 pub mod discovery;
 pub mod output;
 
-use crate::commands::task::TaskListError;
+use crate::commands::task::{TaskDescribeError, TaskListError};
 use crate::discovery::rust::CompiledTaskDescriptorSource;
 use crate::output::OutputFormat;
 use clap::{Args, Parser, Subcommand};
@@ -40,8 +40,23 @@ struct TaskCommand {
 
 #[derive(Debug, Subcommand)]
 enum TaskSubcommand {
-    /// List registered task descriptors.
+    /// Describe one registered task descriptor.
+    Describe(TaskDescribeArgs),
+    /// List registered task descriptor summaries.
+    ///
+    /// Table and Markdown output are compact summary views. Use
+    /// `genja task describe <identity>` for full descriptor metadata.
+    /// JSON and YAML output include full descriptor items for the listed tasks.
     List(TaskListArgs),
+}
+
+#[derive(Debug, Args)]
+struct TaskDescribeArgs {
+    /// Task identity in `<task-id>@<task-version>` form.
+    identity: String,
+    /// Output format to render.
+    #[arg(long, value_enum, default_value = "table")]
+    output: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -53,12 +68,14 @@ struct TaskListArgs {
 
 #[derive(Debug)]
 enum CliError {
+    TaskDescribe(TaskDescribeError),
     TaskList(TaskListError),
 }
 
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::TaskDescribe(error) => write!(f, "{error}"),
             Self::TaskList(error) => write!(f, "{error}"),
         }
     }
@@ -67,6 +84,7 @@ impl fmt::Display for CliError {
 impl Error for CliError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::TaskDescribe(error) => Some(error),
             Self::TaskList(error) => Some(error),
         }
     }
@@ -75,6 +93,12 @@ impl Error for CliError {
 fn execute(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Some(Command::Task(task)) => match task.command {
+            TaskSubcommand::Describe(args) => {
+                let source = CompiledTaskDescriptorSource::new();
+                let output = commands::task::describe_task(&source, &args.identity, args.output)
+                    .map_err(CliError::TaskDescribe)?;
+                println!("{output}");
+            }
             TaskSubcommand::List(args) => {
                 let source = CompiledTaskDescriptorSource::new();
                 let output =

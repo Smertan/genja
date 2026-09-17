@@ -41,7 +41,120 @@ fn task_help_prints_task_subcommands() {
 
     assert!(stdout.contains("Usage: genja task"));
     assert!(stdout.contains("Commands:"));
+    assert!(stdout.contains("describe"));
     assert!(stdout.contains("list"));
+}
+
+#[test]
+fn task_describe_help_prints_identity_and_output_formats() {
+    let output = genja_command()
+        .arg("task")
+        .arg("describe")
+        .arg("--help")
+        .output()
+        .expect("genja task describe --help should run");
+
+    assert!(
+        output.status.success(),
+        "genja task describe --help should succeed: {output:?}"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("task describe help should be UTF-8");
+
+    assert!(stdout.contains("Usage: genja task describe"));
+    assert!(stdout.contains("<IDENTITY>"));
+    assert!(stdout.contains("--output"));
+    assert!(stdout.contains("table"));
+    assert!(stdout.contains("json"));
+    assert!(stdout.contains("yaml"));
+    assert!(stdout.contains("markdown"));
+}
+
+#[test]
+fn task_describe_requires_identity() {
+    let output = genja_command()
+        .arg("task")
+        .arg("describe")
+        .output()
+        .expect("genja task describe should run");
+
+    assert!(
+        !output.status.success(),
+        "missing identity should fail: {output:?}"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("error output should be UTF-8");
+
+    assert!(stderr.contains("required"));
+    assert!(stderr.contains("<IDENTITY>"));
+}
+
+#[test]
+fn task_describe_rejects_unsupported_output_format() {
+    let output = genja_command()
+        .arg("task")
+        .arg("describe")
+        .arg("acme.examples.backup_config@1.0.0")
+        .arg("--output")
+        .arg("toml")
+        .output()
+        .expect("genja task describe should run");
+
+    assert!(
+        !output.status.success(),
+        "unsupported output format should fail: {output:?}"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("error output should be UTF-8");
+
+    assert!(stderr.contains("invalid value"));
+    assert!(stderr.contains("toml"));
+    assert!(stderr.contains("table"));
+    assert!(stderr.contains("json"));
+    assert!(stderr.contains("yaml"));
+    assert!(stderr.contains("markdown"));
+}
+
+#[test]
+fn task_describe_rejects_invalid_identity() {
+    let output = genja_command()
+        .arg("task")
+        .arg("describe")
+        .arg("acme.examples.backup_config")
+        .output()
+        .expect("genja task describe should run");
+
+    assert!(
+        !output.status.success(),
+        "invalid identity should fail: {output:?}"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("error output should be UTF-8");
+
+    assert!(stderr.contains("error: invalid task identity"));
+    assert!(stderr.contains("acme.examples.backup_config"));
+    assert!(stderr.contains("exactly one `@` separator"));
+}
+
+#[test]
+fn task_describe_returns_not_found_for_missing_identity() {
+    let output = genja_command()
+        .arg("task")
+        .arg("describe")
+        .arg("acme.examples.missing@1.0.0")
+        .output()
+        .expect("genja task describe should run");
+
+    assert!(
+        !output.status.success(),
+        "missing identity should fail: {output:?}"
+    );
+
+    let stderr = String::from_utf8(output.stderr).expect("error output should be UTF-8");
+
+    assert!(stderr.contains("error: task descriptor"));
+    assert!(stderr.contains("acme.examples.missing@1.0.0"));
+    assert!(stderr.contains("was not found"));
 }
 
 #[test]
@@ -61,6 +174,10 @@ fn task_list_help_prints_output_formats() {
     let stdout = String::from_utf8(output.stdout).expect("task list help output should be UTF-8");
 
     assert!(stdout.contains("Usage: genja task list"));
+    assert!(stdout.contains("compact summary views"));
+    assert!(stdout.contains("genja task describe <identity>"));
+    assert!(stdout.contains("JSON and YAML output"));
+    assert!(stdout.contains("full descriptor items"));
     assert!(stdout.contains("--output"));
     assert!(stdout.contains("table"));
     assert!(stdout.contains("json"));
@@ -170,7 +287,7 @@ fn task_list_outputs_empty_markdown_table() {
 
     let stdout = String::from_utf8(output.stdout).expect("Markdown output should be UTF-8");
 
-    assert!(stdout.contains("| ID | Version | Name | Mode | Constructible | Description |"));
+    assert!(stdout.contains("| ID | Version | Name | Source | Mode | Constructible |"));
     assert!(stdout.contains("|----|"));
 }
 
