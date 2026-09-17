@@ -95,18 +95,56 @@ fn render_task_docs_markdown(descriptors: &[TaskDescriptor]) -> Result<String, O
     }
 
     let mut output = format!(
-        "# Task Catalogue\n\n{}",
+        "# Task Catalogue\n\n## Index\n\n{}\n\n## Summary\n\n{}",
+        render_task_docs_index_markdown(descriptors),
         render_task_docs_summary_markdown(descriptors)
     );
 
+    output.push_str("\n\n## Tasks");
+
     for descriptor in descriptors {
         output.push_str("\n\n");
+        output.push_str(&format!(
+            "<a id=\"{}\"></a>\n\n",
+            task_docs_anchor_id(descriptor)
+        ));
         output.push_str(&render_task_descriptor_markdown_section(
-            descriptor, "##", "###",
+            descriptor, "###", "####",
         )?);
     }
 
     Ok(output)
+}
+
+fn render_task_docs_index_markdown(descriptors: &[TaskDescriptor]) -> String {
+    let task_links = descriptors
+        .iter()
+        .map(|descriptor| {
+            format!(
+                "  - [{}](#{})",
+                markdown_code(&descriptor_identity(descriptor)),
+                task_docs_anchor_id(descriptor)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("- [Summary](#summary)\n- [Tasks](#tasks)\n{task_links}")
+}
+
+fn task_docs_anchor_id(descriptor: &TaskDescriptor) -> String {
+    let identity = descriptor_identity(descriptor);
+    let mut anchor = String::from("task-");
+
+    for character in identity.chars().flat_map(char::to_lowercase) {
+        if character.is_ascii_alphanumeric() {
+            anchor.push(character);
+        } else if !anchor.ends_with('-') {
+            anchor.push('-');
+        }
+    }
+
+    anchor.trim_end_matches('-').to_string()
 }
 
 fn render_task_docs_summary_markdown(descriptors: &[TaskDescriptor]) -> String {
@@ -627,6 +665,16 @@ mod tests {
             .expect("docs should render");
 
         assert!(output.starts_with("# Task Catalogue"));
+        assert!(output.contains("## Index"));
+        assert!(output.contains("- [Summary](#summary)"));
+        assert!(output.contains("- [Tasks](#tasks)"));
+        assert!(output.contains(
+            "  - [`acme.examples.backup_config@1.0.0`](#task-acme-examples-backup-config-1-0-0)"
+        ));
+        assert!(output.contains(
+            "  - [`acme.examples.collect_facts@1.0.0`](#task-acme-examples-collect-facts-1-0-0)"
+        ));
+        assert!(output.contains("## Summary"));
         assert!(output.contains("| ID"));
         assert!(output.contains("| Description"));
         assert!(output.contains("| `acme.examples.backup_config`"));
@@ -636,8 +684,11 @@ mod tests {
         assert!(output.contains("| `blocking`"));
         assert!(output.contains("| yes"));
         assert!(output.contains("Backs up selected paths from a network device"));
-        assert!(output.contains("## acme.examples.backup_config@1.0.0"));
-        assert!(output.contains("## acme.examples.collect_facts@1.0.0"));
+        assert!(output.contains("## Tasks"));
+        assert!(output.contains("<a id=\"task-acme-examples-backup-config-1-0-0\"></a>"));
+        assert!(output.contains("<a id=\"task-acme-examples-collect-facts-1-0-0\"></a>"));
+        assert!(output.contains("### acme.examples.backup_config@1.0.0"));
+        assert!(output.contains("### acme.examples.collect_facts@1.0.0"));
         assert!(output.contains("| Field"));
         assert!(output.contains("| ID source"));
         assert!(output.contains("| Execution mode"));
@@ -653,10 +704,14 @@ mod tests {
         let output = render_task_docs(&[schema_descriptor()], TaskDocsOutputFormat::Markdown)
             .expect("docs should render");
 
-        assert!(output.contains("## acme.examples.backup_config@1.0.0"));
+        assert!(output.contains(
+            "  - [`acme.examples.backup_config@1.0.0`](#task-acme-examples-backup-config-1-0-0)"
+        ));
+        assert!(output.contains("<a id=\"task-acme-examples-backup-config-1-0-0\"></a>"));
+        assert!(output.contains("### acme.examples.backup_config@1.0.0"));
         assert!(output.contains("| Input schema"));
         assert!(output.contains("| available"));
-        assert!(output.contains("### Input Schema"));
+        assert!(output.contains("#### Input Schema"));
         assert!(output.contains("```json"));
         assert!(output.contains("\"backup_path\""));
         assert!(output.contains("\"compress\""));
