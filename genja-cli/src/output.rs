@@ -522,6 +522,21 @@ mod tests {
         )
     }
 
+    fn generated_descriptor() -> TaskDescriptor {
+        TaskDescriptor::generated(
+            "auto:use_genja::tasks::DeployChangesTask",
+            "0.1.0",
+            TaskDescriptorMetadata {
+                name: "deploy_changes".to_string(),
+                description: Some("Deploys generated task changes".to_string()),
+                execution_mode: TaskExecutionMode::Async,
+                connection_plugin_name: None,
+                processor_names: Vec::new(),
+                retry: None,
+            },
+        )
+    }
+
     fn descriptors() -> Vec<TaskDescriptor> {
         vec![
             descriptor(
@@ -697,6 +712,14 @@ mod tests {
         assert!(output.contains("| Constructible"));
         assert!(output.contains("| Retry"));
         assert!(output.contains("| Input schema"));
+        assert!(output.contains("| `acme.examples.backup_config`"));
+        assert!(output.contains("| `1.0.0`"));
+        assert!(output.contains("| `backup_config`"));
+        assert!(output.contains("| `explicit`"));
+        assert!(output.contains("| `blocking`"));
+        assert!(output.contains("| `ssh`"));
+        assert!(output.contains("| -"));
+        assert!(output.contains("| yes"));
     }
 
     #[test]
@@ -715,6 +738,23 @@ mod tests {
         assert!(output.contains("```json"));
         assert!(output.contains("\"backup_path\""));
         assert!(output.contains("\"compress\""));
+    }
+
+    #[test]
+    fn docs_output_uses_stable_anchors_for_generated_task_ids() {
+        let output = render_task_docs(&[generated_descriptor()], TaskDocsOutputFormat::Markdown)
+            .expect("docs should render");
+
+        assert!(output.contains(
+            "  - [`auto:use_genja::tasks::DeployChangesTask@0.1.0`](#task-auto-use-genja-tasks-deploychangestask-0-1-0)"
+        ));
+        assert!(
+            output.contains("<a id=\"task-auto-use-genja-tasks-deploychangestask-0-1-0\"></a>")
+        );
+        assert!(output.contains("### auto:use_genja::tasks::DeployChangesTask@0.1.0"));
+        assert!(output.contains("| `generated`"));
+        assert!(output.contains("| `async`"));
+        assert!(output.contains("| no"));
     }
 
     #[test]
