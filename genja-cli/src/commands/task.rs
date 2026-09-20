@@ -1,7 +1,10 @@
 //! Task command handling.
 
 use crate::discovery::{DiscoveryError, TaskDescriptorSource};
-use crate::output::{OutputError, OutputFormat, render_task_descriptor, render_task_list};
+use crate::output::{
+    OutputError, OutputFormat, TaskDocsOutputFormat, render_task_descriptor, render_task_docs,
+    render_task_list,
+};
 use std::error::Error;
 use std::fmt;
 
@@ -83,6 +86,45 @@ impl From<OutputError> for TaskListError {
     }
 }
 
+/// Errors returned while generating task descriptor documentation.
+#[derive(Debug)]
+pub enum TaskDocsError {
+    /// Task descriptor discovery failed.
+    Discovery(DiscoveryError),
+    /// Task descriptor output rendering failed.
+    Output(OutputError),
+}
+
+impl fmt::Display for TaskDocsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Discovery(error) => write!(f, "{error}"),
+            Self::Output(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl Error for TaskDocsError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Discovery(error) => Some(error),
+            Self::Output(error) => Some(error),
+        }
+    }
+}
+
+impl From<DiscoveryError> for TaskDocsError {
+    fn from(error: DiscoveryError) -> Self {
+        Self::Discovery(error)
+    }
+}
+
+impl From<OutputError> for TaskDocsError {
+    fn from(error: OutputError) -> Self {
+        Self::Output(error)
+    }
+}
+
 /// List task descriptors from the provided source and render them.
 pub fn list_tasks<S>(source: &S, output: OutputFormat) -> Result<String, TaskListError>
 where
@@ -105,6 +147,15 @@ where
         .describe_task(identity)
         .map_err(TaskDescribeError::from)?;
     render_task_descriptor(&descriptor, output).map_err(TaskDescribeError::from)
+}
+
+/// Generate task descriptor documentation from the provided source.
+pub fn docs_tasks<S>(source: &S, output: TaskDocsOutputFormat) -> Result<String, TaskDocsError>
+where
+    S: TaskDescriptorSource + ?Sized,
+{
+    let descriptors = source.list_tasks()?;
+    render_task_docs(&descriptors, output).map_err(TaskDocsError::from)
 }
 
 #[cfg(test)]
@@ -166,6 +217,34 @@ mod tests {
         assert!(matches!(
             list_tasks(&source, OutputFormat::Json),
             Err(TaskListError::Discovery(DiscoveryError::SourceFailed { message }))
+                if message == "registry unavailable"
+        ));
+    }
+
+    #[test]
+    fn docs_tasks_returns_markdown_catalogue_from_source() {
+        let source = StaticTaskDescriptorSource {
+            result: Ok(vec![descriptor("acme.tests.cli.docs", "1.0.0")]),
+        };
+
+        let output = docs_tasks(&source, TaskDocsOutputFormat::Markdown)
+            .expect("task docs should render as Markdown");
+
+        assert!(output.starts_with("# Task Catalogue"));
+        assert!(output.contains("acme.tests.cli.docs"));
+    }
+
+    #[test]
+    fn docs_tasks_returns_discovery_errors_from_source() {
+        let source = StaticTaskDescriptorSource {
+            result: Err(DiscoveryError::SourceFailed {
+                message: "registry unavailable".to_string(),
+            }),
+        };
+
+        assert!(matches!(
+            docs_tasks(&source, TaskDocsOutputFormat::Markdown),
+            Err(TaskDocsError::Discovery(DiscoveryError::SourceFailed { message }))
                 if message == "registry unavailable"
         ));
     }

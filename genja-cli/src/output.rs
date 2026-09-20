@@ -19,6 +19,13 @@ pub enum OutputFormat {
     Markdown,
 }
 
+/// Supported output formats for task documentation generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum TaskDocsOutputFormat {
+    /// Render a Markdown task catalogue.
+    Markdown,
+}
+
 /// Errors returned while rendering CLI output.
 #[derive(Debug)]
 pub enum OutputError {
@@ -70,6 +77,101 @@ pub fn render_task_descriptor(
         OutputFormat::Yaml => yaml_serde::to_string(descriptor).map_err(OutputError::Yaml),
         OutputFormat::Markdown => render_task_descriptor_markdown(descriptor),
     }
+}
+
+/// Render task descriptors as a documentation catalogue.
+pub fn render_task_docs(
+    descriptors: &[TaskDescriptor],
+    format: TaskDocsOutputFormat,
+) -> Result<String, OutputError> {
+    match format {
+        TaskDocsOutputFormat::Markdown => render_task_docs_markdown(descriptors),
+    }
+}
+
+fn render_task_docs_markdown(descriptors: &[TaskDescriptor]) -> Result<String, OutputError> {
+    if descriptors.is_empty() {
+        return Ok("# Task Catalogue\n\nNo registered tasks found.".to_string());
+    }
+
+    let mut output = format!(
+        "# Task Catalogue\n\n## Index\n\n{}\n\n## Summary\n\n{}",
+        render_task_docs_index_markdown(descriptors),
+        render_task_docs_summary_markdown(descriptors)
+    );
+
+    output.push_str("\n\n## Tasks");
+
+    for descriptor in descriptors {
+        output.push_str("\n\n");
+        output.push_str(&format!(
+            "<a id=\"{}\"></a>\n\n",
+            task_docs_anchor_id(descriptor)
+        ));
+        output.push_str(&render_task_descriptor_markdown_section(
+            descriptor, "###", "####",
+        )?);
+    }
+
+    Ok(output)
+}
+
+fn render_task_docs_index_markdown(descriptors: &[TaskDescriptor]) -> String {
+    let task_links = descriptors
+        .iter()
+        .map(|descriptor| {
+            format!(
+                "  - [{}](#{})",
+                markdown_code(&descriptor_identity(descriptor)),
+                task_docs_anchor_id(descriptor)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("- [Summary](#summary)\n- [Tasks](#tasks)\n{task_links}")
+}
+
+fn task_docs_anchor_id(descriptor: &TaskDescriptor) -> String {
+    let identity = descriptor_identity(descriptor);
+    let mut anchor = String::from("task-");
+
+    for character in identity.chars().flat_map(char::to_lowercase) {
+        if character.is_ascii_alphanumeric() {
+            anchor.push(character);
+        } else if !anchor.ends_with('-') {
+            anchor.push('-');
+        }
+    }
+
+    anchor.trim_end_matches('-').to_string()
+}
+
+fn render_task_docs_summary_markdown(descriptors: &[TaskDescriptor]) -> String {
+    let mut table = Table::new();
+    table.load_preset(presets::ASCII_MARKDOWN).set_header([
+        "ID",
+        "Version",
+        "Name",
+        "Source",
+        "Mode",
+        "Constructible",
+        "Description",
+    ]);
+
+    for descriptor in descriptors {
+        table.add_row([
+            markdown_code(&descriptor.id),
+            markdown_code(&descriptor.version),
+            markdown_code(&descriptor.name),
+            markdown_code(id_source_label(descriptor.id_source)),
+            markdown_code(execution_mode_label(descriptor.execution_mode)),
+            constructible_label(descriptor.constructible).to_string(),
+            markdown_text(optional_label(descriptor.description.as_deref())),
+        ]);
+    }
+
+    table.trim_fmt()
 }
 
 fn render_task_table(descriptors: &[TaskDescriptor]) -> String {
@@ -180,6 +282,14 @@ fn render_task_descriptor_table(descriptor: &TaskDescriptor) -> Result<String, O
 }
 
 fn render_task_descriptor_markdown(descriptor: &TaskDescriptor) -> Result<String, OutputError> {
+    render_task_descriptor_markdown_section(descriptor, "#", "##")
+}
+
+fn render_task_descriptor_markdown_section(
+    descriptor: &TaskDescriptor,
+    descriptor_heading: &str,
+    input_schema_heading: &str,
+) -> Result<String, OutputError> {
     let mut table = Table::new();
     table
         .load_preset(presets::ASCII_MARKDOWN)
@@ -222,13 +332,16 @@ fn render_task_descriptor_markdown(descriptor: &TaskDescriptor) -> Result<String
     ]);
 
     let mut output = format!(
-        "# {}\n\n{}",
+        "{} {}\n\n{}",
+        descriptor_heading,
         descriptor_identity(descriptor),
         table.trim_fmt()
     );
 
     if let Some(schema) = descriptor.input_schema.as_ref() {
-        output.push_str("\n\n## Input Schema\n\n```json\n");
+        output.push_str(&format!(
+            "\n\n{input_schema_heading} Input Schema\n\n```json\n"
+        ));
         output.push_str(&serde_json::to_string_pretty(schema).map_err(OutputError::Json)?);
         output.push_str("\n```");
     }
@@ -409,6 +522,21 @@ mod tests {
         )
     }
 
+    fn generated_descriptor() -> TaskDescriptor {
+        TaskDescriptor::generated(
+            "auto:use_genja::tasks::DeployChangesTask",
+            "0.1.0",
+            TaskDescriptorMetadata {
+                name: "deploy_changes".to_string(),
+                description: Some("Deploys generated task changes".to_string()),
+                execution_mode: TaskExecutionMode::Async,
+                connection_plugin_name: None,
+                processor_names: Vec::new(),
+                retry: None,
+            },
+        )
+    }
+
     fn descriptors() -> Vec<TaskDescriptor> {
         vec![
             descriptor(
@@ -536,6 +664,97 @@ mod tests {
 
         assert!(!output.contains("uses | pipes"));
         assert!(!output.contains("uses \\| pipes"));
+    }
+
+    #[test]
+    fn docs_output_reports_empty_task_lists() {
+        let output = render_task_docs(&[], TaskDocsOutputFormat::Markdown)
+            .expect("empty docs should render");
+
+        assert_eq!(output, "# Task Catalogue\n\nNo registered tasks found.");
+    }
+
+    #[test]
+    fn docs_output_renders_summary_and_detailed_sections() {
+        let output = render_task_docs(&descriptors(), TaskDocsOutputFormat::Markdown)
+            .expect("docs should render");
+
+        assert!(output.starts_with("# Task Catalogue"));
+        assert!(output.contains("## Index"));
+        assert!(output.contains("- [Summary](#summary)"));
+        assert!(output.contains("- [Tasks](#tasks)"));
+        assert!(output.contains(
+            "  - [`acme.examples.backup_config@1.0.0`](#task-acme-examples-backup-config-1-0-0)"
+        ));
+        assert!(output.contains(
+            "  - [`acme.examples.collect_facts@1.0.0`](#task-acme-examples-collect-facts-1-0-0)"
+        ));
+        assert!(output.contains("## Summary"));
+        assert!(output.contains("| ID"));
+        assert!(output.contains("| Description"));
+        assert!(output.contains("| `acme.examples.backup_config`"));
+        assert!(output.contains("| `1.0.0`"));
+        assert!(output.contains("| `backup_config`"));
+        assert!(output.contains("| `explicit`"));
+        assert!(output.contains("| `blocking`"));
+        assert!(output.contains("| yes"));
+        assert!(output.contains("Backs up selected paths from a network device"));
+        assert!(output.contains("## Tasks"));
+        assert!(output.contains("<a id=\"task-acme-examples-backup-config-1-0-0\"></a>"));
+        assert!(output.contains("<a id=\"task-acme-examples-collect-facts-1-0-0\"></a>"));
+        assert!(output.contains("### acme.examples.backup_config@1.0.0"));
+        assert!(output.contains("### acme.examples.collect_facts@1.0.0"));
+        assert!(output.contains("| Field"));
+        assert!(output.contains("| ID source"));
+        assert!(output.contains("| Execution mode"));
+        assert!(output.contains("| Connection plugin"));
+        assert!(output.contains("| Processors"));
+        assert!(output.contains("| Constructible"));
+        assert!(output.contains("| Retry"));
+        assert!(output.contains("| Input schema"));
+        assert!(output.contains("| `acme.examples.backup_config`"));
+        assert!(output.contains("| `1.0.0`"));
+        assert!(output.contains("| `backup_config`"));
+        assert!(output.contains("| `explicit`"));
+        assert!(output.contains("| `blocking`"));
+        assert!(output.contains("| `ssh`"));
+        assert!(output.contains("| -"));
+        assert!(output.contains("| yes"));
+    }
+
+    #[test]
+    fn docs_output_renders_schema_blocks() {
+        let output = render_task_docs(&[schema_descriptor()], TaskDocsOutputFormat::Markdown)
+            .expect("docs should render");
+
+        assert!(output.contains(
+            "  - [`acme.examples.backup_config@1.0.0`](#task-acme-examples-backup-config-1-0-0)"
+        ));
+        assert!(output.contains("<a id=\"task-acme-examples-backup-config-1-0-0\"></a>"));
+        assert!(output.contains("### acme.examples.backup_config@1.0.0"));
+        assert!(output.contains("| Input schema"));
+        assert!(output.contains("| available"));
+        assert!(output.contains("#### Input Schema"));
+        assert!(output.contains("```json"));
+        assert!(output.contains("\"backup_path\""));
+        assert!(output.contains("\"compress\""));
+    }
+
+    #[test]
+    fn docs_output_uses_stable_anchors_for_generated_task_ids() {
+        let output = render_task_docs(&[generated_descriptor()], TaskDocsOutputFormat::Markdown)
+            .expect("docs should render");
+
+        assert!(output.contains(
+            "  - [`auto:use_genja::tasks::DeployChangesTask@0.1.0`](#task-auto-use-genja-tasks-deploychangestask-0-1-0)"
+        ));
+        assert!(
+            output.contains("<a id=\"task-auto-use-genja-tasks-deploychangestask-0-1-0\"></a>")
+        );
+        assert!(output.contains("### auto:use_genja::tasks::DeployChangesTask@0.1.0"));
+        assert!(output.contains("| `generated`"));
+        assert!(output.contains("| `async`"));
+        assert!(output.contains("| no"));
     }
 
     #[test]
