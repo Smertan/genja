@@ -49,6 +49,16 @@ my_project_cli task describe auto:my_project::tasks::BackupTask@0.1.0
 my_project_cli task docs > task-catalog.md
 ```
 
+During development, run the same binary through Cargo:
+
+```bash
+cargo run --bin my_project_cli -- task list
+cargo run --bin my_project_cli -- task docs
+```
+
+Use `-p <package>` as well when the binary belongs to another workspace
+package.
+
 For deployment, build the project-local binary during release or CI and copy
 the resulting executable to the target machine. The target machine does not
 need Cargo when you deploy a prebuilt binary.

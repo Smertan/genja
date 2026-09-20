@@ -88,6 +88,26 @@ Those commands inspect the task registrations linked into `my_project_cli`.
 Running the generic `genja` binary instead would inspect the registrations
 linked into that generic binary.
 
+## Development Workflow
+
+During development, you can run the project-local binary through Cargo:
+
+```bash
+cargo run --bin my_project_cli -- task list
+cargo run --bin my_project_cli -- task describe auto:my_project::tasks::BackupTask@0.1.0
+cargo run --bin my_project_cli -- task docs
+```
+
+The `--` separator matters. Arguments before `--` are handled by Cargo.
+Arguments after `--` are passed to the project-local binary.
+
+If the binary belongs to another package in a workspace, select the package as
+well:
+
+```bash
+cargo run -p my-project-cli --bin my_project_cli -- task list
+```
+
 ## Runtime Deployment
 
 For runtime deployments, build a project-local CLI binary during release or CI,
