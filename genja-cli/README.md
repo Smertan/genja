@@ -49,5 +49,9 @@ my_project_cli task describe auto:my_project::tasks::BackupTask@0.1.0
 my_project_cli task docs > task-catalog.md
 ```
 
+For deployment, build the project-local binary during release or CI and copy
+the resulting executable to the target machine. The target machine does not
+need Cargo when you deploy a prebuilt binary.
+
 For tests or embedded callers that provide their own arguments, use
 `genja_cli::run(args)` instead of `genja_cli::run_main()`.

@@ -88,6 +88,67 @@ Those commands inspect the task registrations linked into `my_project_cli`.
 Running the generic `genja` binary instead would inspect the registrations
 linked into that generic binary.
 
+## Runtime Deployment
+
+For runtime deployments, build a project-local CLI binary during release or CI,
+then deploy that executable to the target machine. The target machine does not
+need Cargo if you deploy a prebuilt binary.
+
+Build the binary:
+
+```bash
+cargo build --release --bin my_project_cli
+```
+
+The output path depends on the platform:
+
+| Platform | Example output |
+| --- | --- |
+| Linux/macOS | `target/release/my_project_cli` |
+| Windows | `target\release\my_project_cli.exe` |
+
+Copy that executable to a location that matches your deployment policy. The
+only requirement is that users or automation invoke the project-built
+executable, either by full path or through `PATH`.
+
+Common install locations include:
+
+| Platform | User-local option | System-wide option |
+| --- | --- | --- |
+| Linux | `~/.local/bin` | `/usr/local/bin` |
+| macOS | `/usr/local/bin` or `~/bin` | `/usr/local/bin` |
+| Windows | `%USERPROFILE%\.cargo\bin` or another user directory on `PATH` | `C:\Program Files\<Project>\bin` |
+
+On Linux/macOS:
+
+```bash
+./my_project_cli task list
+./my_project_cli task docs > task-catalog.md
+```
+
+On Windows PowerShell:
+
+```powershell
+.\my_project_cli.exe task list
+.\my_project_cli.exe task docs > task-catalog.md
+```
+
+On Windows cmd.exe:
+
+```bat
+my_project_cli.exe task list
+my_project_cli.exe task docs > task-catalog.md
+```
+
+For local development, Cargo can build and install the binary for you:
+
+```bash
+cargo install --path . --bin my_project_cli
+```
+
+This is a development or build-machine convenience. Production servers do not
+need Cargo when you deploy the compiled executable.
+
 ## Lower-Level Entrypoint
 
 `genja_cli::run_main()` is the recommended helper for binary `main` functions.
