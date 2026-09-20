@@ -17,6 +17,7 @@ Changed packages:
 - Added `genja task list` with table, JSON, YAML, and Markdown output for compiled Rust task descriptors available to the CLI binary. Refs: #123
 - Added `genja task describe <identity>` with table, JSON, YAML, and Markdown output for one compiled Rust task descriptor. Refs: #124
 - Added `genja task docs` for generating a Markdown task catalogue from registered task descriptors. Refs: #140
+- Added `genja_cli::run_main()` and documented the project-local binary pattern for compiled Rust task discovery. Refs: #138
 
 ### Changed
 

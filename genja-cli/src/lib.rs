@@ -8,6 +8,7 @@ use crate::commands::task::{TaskDescribeError, TaskDocsError, TaskListError};
 use crate::discovery::rust::CompiledTaskDescriptorSource;
 use crate::output::{OutputFormat, TaskDocsOutputFormat};
 use clap::{Args, Parser, Subcommand};
+use std::env;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
@@ -131,7 +132,29 @@ fn execute(cli: Cli) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Runs the Genja CLI using the current process arguments.
+///
+/// This is the standard helper for binaries that delegate their `main`
+/// function to Genja CLI behavior:
+///
+/// ```no_run
+/// fn main() -> std::process::ExitCode {
+///     genja_cli::run_main()
+/// }
+/// ```
+///
+/// Project-local binaries can use this helper to expose Genja CLI commands
+/// while linking their own compiled Rust task registrations into the running
+/// process.
+pub fn run_main() -> ExitCode {
+    run(env::args_os())
+}
+
 /// Runs the Genja CLI with the provided process arguments.
+///
+/// This lower-level entrypoint is useful for tests and callers that need to
+/// provide their own argument iterator. Binary `main` functions should usually
+/// call [`run_main`] instead.
 pub fn run<I, T>(_args: I) -> ExitCode
 where
     I: IntoIterator<Item = T>,
@@ -157,5 +180,15 @@ where
                 .map(ExitCode::from)
                 .unwrap_or(ExitCode::FAILURE)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_main_has_binary_entrypoint_shape() {
+        let _run_main: fn() -> ExitCode = run_main;
     }
 }
