@@ -14,6 +14,113 @@ only discover tasks linked into that `genja` executable. It cannot inspect task
 registrations from another Rust project just because that project is present on
 disk.
 
+```bash
+genja --help
+genja version
+```
+
+`version` prints the Genja CLI version.
+
+## Command Reference
+
+The examples below use `my_project_cli` as an example project-specific executable
+that links your task registrations. Replace it with your own binary name. See
+[Project-Local CLI Binary](#project-local-cli-binary) for setup instructions.
+The example task identities are illustrative; use the ID and version returned
+by your binary's `task list` command.
+
+### Help And Version
+
+```bash
+my_project_cli --help
+my_project_cli version
+my_project_cli task --help
+my_project_cli task list --help
+my_project_cli task describe --help
+my_project_cli task docs --help
+```
+
+`version` prints the linked Genja CLI version, not your project's package version.
+
+### List Tasks
+
+```bash
+my_project_cli task list
+my_project_cli task list --output table
+my_project_cli task list --output json
+my_project_cli task list --output yaml
+my_project_cli task list --output markdown
+```
+
+The default format is `table`. Table and Markdown lists are compact summaries
+containing task ID, version, name, ID source, execution mode, and
+constructibility. They omit descriptions, connection plugins, processors,
+retry metadata, and input schemas.
+
+JSON and YAML lists include the complete serialized descriptor for every listed
+task. Use `task describe` to inspect one task or `task docs` to document all tasks.
+
+### Describe A Task
+
+Pass an identity in `<task-id>@<task-version>` form:
+
+```bash
+my_project_cli task describe acme.examples.backup_config@1.0.0
+my_project_cli task describe acme.examples.backup_config@1.0.0 --output table
+my_project_cli task describe acme.examples.backup_config@1.0.0 --output json
+my_project_cli task describe acme.examples.backup_config@1.0.0 --output yaml
+my_project_cli task describe acme.examples.backup_config@1.0.0 --output markdown
+```
+
+Use the exact ID and version shown in the list. Explicit IDs, such as
+`acme.examples.backup_config`, and generated IDs, such as
+`auto:my_project::tasks::BackupTask`, can both be described. Preserve the
+`auto:` prefix, `::` separators, and capitalization in generated IDs:
+
+```bash
+my_project_cli task describe auto:my_project::tasks::BackupTask@0.1.0
+```
+
+The default table view displays ID, version, name, description, ID source,
+execution mode, connection plugin, processors, constructibility, retry metadata,
+and input schema availability. Missing optional metadata is shown as `-`.
+Retry metadata is shown as compact JSON when present.
+
+When an input schema is available, the table view includes pretty-printed JSON
+below the field summary. Markdown includes the same metadata and a fenced JSON
+schema block. JSON and YAML include the schema within the serialized descriptor.
+
+### Output Formats
+
+`task list` and `task describe` accept these lowercase `--output` values:
+
+| Format | `task list` | `task describe` |
+| --- | --- | --- |
+| `table` (default) | Compact task summary rows | Field/value summary with input schema below when available |
+| `json` | Array of complete descriptors | One complete descriptor object |
+| `yaml` | Sequence of complete descriptors | One complete descriptor mapping |
+| `markdown` | Compact task summary table | Task heading, metadata table, and input schema block when available |
+
+JSON and YAML use the existing `TaskDescriptor` serialization contract, including
+optional metadata and input schemas. Markdown output is raw Markdown text, not
+a rendered terminal view.
+
+### Generate A Task Catalogue
+
+```bash
+my_project_cli task docs
+my_project_cli task docs --output markdown
+```
+
+`task docs` supports Markdown only, and uses it by default. For registered tasks,
+it generates a document with a `Task Catalogue` heading, an index linking to the
+summary and individual tasks, a summary table, and detailed per-task sections.
+Each task section includes descriptor metadata and a fenced JSON input schema
+when available.
+
+Unlike the compact `task list --output markdown` table, the catalogue summary
+also includes descriptions. Use this command for complete task documentation.
+
 ## Project-Local CLI Binary
 
 For Rust projects with compiled task registrations, build a project-specific
