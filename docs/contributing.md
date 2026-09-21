@@ -290,10 +290,20 @@ Release publishing is separate from CI. Rust crates are published only from
 publishes the publishable Rust crates in dependency order after validating crate
 versions and internal dependency metadata. Genja currently uses a unified Rust
 release train: when preparing `rs-vX.Y.Z`, bump `genja`, `genja-core`,
-`genja-core-derive`, and `genja-plugin-manager` to `X.Y.Z`, even if one crate
-only changed because the release train moved. Keep internal path dependency
-version requirements aligned to the dependency crate's released version. Python
-package releases use matching `py-vX.Y.Z` tags, validate
+`genja-core-derive`, `genja-plugin-manager`, and `genja-cli` to `X.Y.Z`, even if
+one crate only changed because the release train moved. Keep internal path dependency
+version requirements aligned to the dependency crate's released version.
+The publish order is `genja-core-derive`, `genja-core`, `genja-plugin-manager`,
+`genja-cli`, then `genja`. This includes the optional CLI dependency: `genja-cli`
+must be available on crates.io before publishing `genja`.
+
+Validate release metadata locally with `python scripts/validate-release.py`.
+During release preparation, pass `--tag rs-vX.Y.Z` to check the intended version.
+Package verification against crates.io requires internal dependency versions to
+be published first; the release workflow publishes and waits for each dependency
+before packaging the next crate.
+
+Python package releases use matching `py-vX.Y.Z` tags, validate
 `genja-core-python/pyproject.toml`, build wheels plus a source distribution,
 install and test each built wheel, and publish to PyPI with trusted publishing.
 

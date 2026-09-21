@@ -87,7 +87,9 @@ Repository-specific instructions for AI coding agents working in this workspace.
   - `genja-core`
   - `genja-core-derive`
   - `genja-plugin-manager`
+  - `genja-cli`
 - Do not leave an unchanged publishable Rust crate on the previous version during a Rust release.
+- Publish in dependency order: `genja-core-derive`, `genja-core`, `genja-plugin-manager`, `genja-cli`, then `genja`.
 - Python package releases use the matching `py-vX.Y.Z` tag and bump `genja-py` / `genja-core-python` to `X.Y.Z`.
 
 ## Commit Conventions
