@@ -44,7 +44,7 @@ the quickstart to load inventory and run your first task.
 - [Quickstart](quickstart.md)
 - [Settings](settings.md)
 - [Concepts](concepts.md)
-- [Command Line Interface](cli.md)
+- [Command Line Interface (Rust)](cli.md)
 - [Inventory](inventory.md)
 - [Tasks](tasks.md)
 - [Task Registration](task-registration.md)

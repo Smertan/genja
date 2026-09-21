@@ -1,7 +1,8 @@
-# Command Line Interface
+# Command Line Interface (Rust)
 
 Genja provides a first-party CLI crate, `genja-cli`, for listing, describing,
-and documenting registered task descriptors.
+and documenting registered task descriptors. Currently, CLI discovery supports
+**compiled Rust tasks only**. **Python task discovery is planned separately.**
 
 ## Generic CLI
 
@@ -120,6 +121,108 @@ when available.
 
 Unlike the compact `task list --output markdown` table, the catalogue summary
 also includes descriptions. Use this command for complete task documentation.
+
+## Discovery Scope And Architecture
+
+The initial CLI discovery implementation supports compiled Rust task descriptors
+only. It reads registrations linked into the running executable; it does not
+scan the current directory, build another project, or load another executable's
+registry. If expected tasks are missing, check that you are running the
+project-specific binary and that it links the task crate or modules.
+
+Commands consume the shared `TaskDescriptorSource` abstraction from
+`genja_cli::discovery`. It provides list and describe operations returning
+`TaskDescriptor` values or a common `DiscoveryError`.
+`discovery::rust::CompiledTaskDescriptorSource` is the current implementation,
+backed by the compiled registry in `genja-core`.
+
+The command handlers obtain descriptors through this abstraction and pass them
+to separate output renderers. The compiled source sorts descriptors by ID and
+then version string for deterministic output. This boundary allows future
+descriptor sources to reuse the command and rendering layers.
+
+These commands inspect metadata only. A descriptor's `constructible` value
+reports its registration capability; listing or describing it does not construct
+or execute the task. Task execution is outside the initial CLI discovery scope.
+
+### Future Descriptor Sources
+
+Python CLI discovery is planned separately. Python task registration happens
+when the module defining a decorated task class is imported. Installing a
+Python package or having its files on disk does not populate that process's
+registry; the task-defining modules must be imported first.
+
+A future Python descriptor source could import explicitly declared modules,
+possibly identified by provider manifests, before reading the Python registry.
+The current CLI does not import Python task modules. Python, provider-manifest,
+and MCP-backed descriptor sources are not implemented. See
+[Task Registration](task-registration.md) for the existing registration APIs.
+
+## Empty Results And Errors
+
+### Empty Registries
+
+An empty registry is a successful result, with exit status `0`:
+
+| Command | Output when no tasks are registered |
+| --- | --- |
+| `task list` or `task list --output table` | `No registered tasks found.` |
+| `task list --output json` | An empty array: `[]` |
+| `task list --output yaml` | An empty sequence: `[]` |
+| `task list --output markdown` | The summary table header and separator, with no task rows |
+| `task docs` | A `Task Catalogue` heading followed by `No registered tasks found.` |
+
+The generic installed `genja` binary may have no project task registrations.
+Changing directories does not change which tasks are linked into it.
+
+### Invalid And Missing Identities
+
+`task describe` requires exactly one `@` separator, a non-empty task ID without
+leading or trailing whitespace, and a semantic version. A missing version does
+not select the latest version. Lookup matches the listed ID and version exactly,
+including generated IDs with `auto:` prefixes, `::` separators, and uppercase
+type names.
+
+For example, omitting `@<version>`:
+
+```bash
+my_project_cli task describe acme.examples.backup_config
+```
+
+produces this error on stderr and exits with status `1`:
+
+```text
+error: invalid task identity `acme.examples.backup_config`: identity must contain exactly one `@` separator
+```
+
+A valid identity with no matching descriptor also exits with status `1`:
+
+```text
+error: task descriptor `acme.examples.missing@1.0.0` was not found
+```
+
+Use `my_project_cli task list` to check the available IDs and versions. An ID-only
+lookup is not supported by this command, even though the shared error model can
+represent ambiguous versions for other discovery consumers.
+
+### Output Streams And Exit Status
+
+Successful command output, including help and version information, goes to
+stdout. Errors go to stderr as human-readable text, even when `--output json`
+or `--output yaml` is selected; errors are not serialized descriptors.
+
+| Outcome | Exit status |
+| --- | --- |
+| Successful discovery, including empty lists, or requested help/version | `0` |
+| Invalid identity, missing descriptor, discovery source failure, or serialization failure | `1` |
+| Invalid command arguments, such as an omitted identity argument or unsupported output format | `2` |
+
+For example, `my_project_cli task list --output xml` is rejected with an argument
+error listing the supported formats. `task docs` accepts only `markdown`.
+Discovery source failures include the backend's reason, such as a registry
+registration conflict. Command handlers complete discovery and rendering before
+printing results, so these discovery and serialization failures do not emit a
+partial descriptor document on stdout.
 
 ## Project-Local CLI Binary
 
