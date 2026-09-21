@@ -41,14 +41,16 @@ Repository-specific instructions for AI coding agents working in this workspace.
 
 - When running the workspace Rust test suite, exclude `genja-core-python` because it requires the Python-backed test environment.
 - Use:
-  - `cargo test --workspace --exclude genja-core-python`
+  - `cargo test --workspace --exclude genja-core-python --all-features`
+- Use `--all-features` to include optional feature-gated integration tests.
+- Also run `cargo check -p genja --no-default-features` to verify the base crate builds without optional features.
 
 ### Lint And Type Checks
 
 - Run Rust formatting and clippy checks from the workspace root.
 - Use:
   - `cargo fmt --all --check`
-  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - Full workspace clippy may include `genja-core-python`; it does not need the `genja-core-python` test exclusion.
 - For Python linting and type checks, run from the `genja-core-python` directory.
 - Use:
@@ -87,7 +89,9 @@ Repository-specific instructions for AI coding agents working in this workspace.
   - `genja-core`
   - `genja-core-derive`
   - `genja-plugin-manager`
+  - `genja-cli`
 - Do not leave an unchanged publishable Rust crate on the previous version during a Rust release.
+- Publish in dependency order: `genja-core-derive`, `genja-core`, `genja-plugin-manager`, `genja-cli`, then `genja`.
 - Python package releases use the matching `py-vX.Y.Z` tag and bump `genja-py` / `genja-core-python` to `X.Y.Z`.
 
 ## Commit Conventions

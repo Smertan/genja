@@ -6,11 +6,12 @@ All notable changes to this workspace should be documented in this file.
 
 Changed packages:
 
-- Rust crates: `genja-cli`, `genja-core`
+- Rust crates: `genja`, `genja-cli`, `genja-core`
 - Python package: `genja-py`, `genja-core-python`
 
 ### Added
 
+- Added an optional `genja-cli` feature to `genja`, exposing CLI helpers through `genja::cli` for project-specific binaries, with documentation for feature-based and direct CLI dependencies. Refs: #144
 - Added the `genja-cli` workspace crate with the first-party `genja` binary, top-level help, and version command. Refs: #120
 - Added a reusable CLI discovery abstraction for listing and describing task descriptors. Refs: #121
 - Added a compiled Rust task descriptor source for CLI discovery plumbing. Refs: #122
@@ -22,6 +23,7 @@ Changed packages:
 ### Changed
 
 - Expanded the CLI guide with command examples, explicit and generated task identities, output format comparisons, and task catalogue usage. Refs: #125
+- Included `genja-cli` in the unified Rust release train, with aligned version checks and publishing before its dependent `genja` crate. Refs: #144
 - **Breaking:** Changed Python task failure and message level enums to use Rust-backed bindings and reject raw string values in task result models. Use `TaskFailureKind.EXTERNAL` and `TaskMessageLevel.INFO` instead of raw strings such as `"external"` or `"info"`. Refs: #101
 - **Breaking:** Changed Python `TaskMessage` to use a Rust-backed binding while preserving constructor fields, imports, and `to_dict()` output. Use `to_dict()` instead of Pydantic APIs such as `model_dump()`, and pass `TaskMessageLevel` values instead of raw strings for `level`. Refs: #102
 

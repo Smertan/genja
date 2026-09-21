@@ -69,6 +69,7 @@ jobs:
             genja-core-derive
             genja-core
             genja-plugin-manager
+            genja-cli
             genja
           )
 

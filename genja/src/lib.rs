@@ -31,6 +31,13 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! ## Optional CLI Support
+//!
+//! Enable the `genja-cli` Cargo feature to access CLI helpers through
+//! `genja::cli`. This feature is disabled by default. A project-specific binary
+//! must link its task registrations and call `genja::cli::run_main()` to expose
+//! discovery commands. Enabling the feature does not install an executable.
+//!
 //! ## Architecture
 //!
 //! - **Inventory**: Manages hosts, groups, and defaults
@@ -59,6 +66,18 @@
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
 pub use ::async_trait::async_trait;
+/// CLI helpers for project-local task registries, enabled by the `genja-cli` feature.
+///
+/// Link your task crate or declare your task modules in the binary before
+/// delegating to this entry point; discovery sees only linked registrations.
+///
+/// ```no_run
+/// fn main() -> std::process::ExitCode {
+///     genja::cli::run_main()
+/// }
+/// ```
+#[cfg(feature = "genja-cli")]
+pub use genja_cli as cli;
 pub use genja_core;
 pub use genja_core::GenjaError;
 use genja_core::inventory::{

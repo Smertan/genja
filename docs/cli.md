@@ -160,10 +160,50 @@ path = "src/bin/my_project_cli.rs"
 In that case the package is still named `my-project`, but the executable is
 named `my_project_cli`.
 
-Add `genja-cli` to the package that owns the project-local binary:
+### Through The Genja Feature
+
+For projects already using `genja`, enable the optional `genja-cli` feature.
+This feature is disabled by default and exposes the CLI library as `genja::cli`.
+
+The feature is currently unreleased and planned for v0.5.0. Once a release
+containing it is published, add it with:
+
+```bash
+cargo add genja --features genja-cli
+```
+
+To use the current checkout before publication, use a path dependency instead
+(replace the path with the location of the `genja` crate in your checkout):
+
+```toml
+[dependencies]
+genja = { path = "../genja/genja", features = ["genja-cli"] }
+```
+
+Add the entry point to your binary:
+
+```rust
+use my_project_tasks as _;
+
+fn main() -> std::process::ExitCode {
+    genja::cli::run_main()
+}
+```
+
+### Direct CLI Dependency
+
+A dedicated CLI wrapper package can depend directly on `genja-cli` without
+depending on the full `genja` runtime. Once `genja-cli` is published:
 
 ```bash
 cargo add genja-cli
+```
+
+Before publication, use a path dependency on the checkout's `genja-cli` crate:
+
+```toml
+[dependencies]
+genja-cli = { path = "../genja/genja-cli" }
 ```
 
 Then add a binary target that references the task crate and delegates to
@@ -177,9 +217,19 @@ fn main() -> std::process::ExitCode {
 }
 ```
 
-The `use my_project_tasks as _;` line intentionally links the crate that
-contains `#[genja_task]` registrations. If your tasks live in the same package
-as the binary, declare or import the task modules from the binary crate instead.
+### Link Your Tasks
+
+In either example, replace `my_project_tasks` with your task crate and add it as
+a dependency of the binary package. The `use my_project_tasks as _;` line
+intentionally links the crate that contains `#[genja_task]` registrations.
+If your tasks live in the binary crate, declare the task modules there. If they
+live in the same package's library target, reference that library from the binary.
+
+Both dependency options expose the same CLI library and discover only tasks
+linked into the running executable. Adding a dependency or enabling the feature
+does not create a binary entry point or install the generic `genja` command.
+End users receive your project-built executable; they do not need to install
+`genja-cli` separately.
 
 ## Running Project-Local Discovery
 
@@ -278,9 +328,10 @@ need Cargo when you deploy the compiled executable.
 
 ## Lower-Level Entrypoint
 
-`genja_cli::run_main()` is the recommended helper for binary `main` functions.
+`genja::cli::run_main()` (with the feature) and `genja_cli::run_main()` (with a
+direct dependency) are the same recommended helper for binary `main` functions.
 It reads arguments from the current process and returns a
 `std::process::ExitCode`.
 
 For tests or embedded callers that need to provide their own arguments, use the
-lower-level `genja_cli::run(args)` function.
+lower-level `genja::cli::run(args)` or `genja_cli::run(args)` function.
