@@ -11,7 +11,7 @@ Changed packages:
 
 ### Added
 
-- Added an optional `genja-cli` feature to `genja`, exposing CLI helpers through `genja::cli` for project-specific binaries. Refs: #144
+- Added an optional `genja-cli` feature to `genja`, exposing CLI helpers through `genja::cli` for project-specific binaries, with documentation for feature-based and direct CLI dependencies. Refs: #144
 - Added the `genja-cli` workspace crate with the first-party `genja` binary, top-level help, and version command. Refs: #120
 - Added a reusable CLI discovery abstraction for listing and describing task descriptors. Refs: #121
 - Added a compiled Rust task descriptor source for CLI discovery plumbing. Refs: #122

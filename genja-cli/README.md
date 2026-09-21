@@ -2,6 +2,24 @@
 
 First-party command-line interface for Genja automation workflows.
 
+## Dependency Options
+
+Projects already using `genja` can enable its optional `genja-cli` feature and
+call `genja::cli::run_main()`. This feature is disabled by default and is
+currently unreleased, planned for v0.5.0. Once published:
+
+```bash
+cargo add genja --features genja-cli
+```
+
+Dedicated CLI wrapper packages can depend directly on `genja-cli` and call
+`genja_cli::run_main()`, as shown below. Both paths expose the same library.
+See the [CLI guide](../docs/cli.md) for dependency setup from a checkout before
+publication.
+
+Neither option installs an executable automatically. Build a project-specific
+binary that links your tasks, then distribute that executable to end users.
+
 ## Project-Local Task Discovery
 
 Compiled Rust task discovery is process-local. A generic installed `genja`
