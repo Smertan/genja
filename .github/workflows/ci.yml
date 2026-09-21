@@ -34,11 +34,14 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Check Genja without optional features
+        run: cargo check -p genja --no-default-features
+
+      - name: Clippy with all features
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test workspace
-        run: cargo test --workspace --exclude genja-core-python
+        run: cargo test --workspace --exclude genja-core-python --all-features
 
   python:
     name: Python bindings (${{ matrix.python-version }})
