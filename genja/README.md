@@ -29,6 +29,37 @@ The `genja` crate re-exports the common task authoring pieces so most users do
 not need to depend on `genja-core`, `genja-core-derive`, or `async-trait`
 directly.
 
+## Optional CLI Support
+
+The optional `genja-cli` feature exposes the CLI library through `genja::cli`.
+It is disabled by default and is currently unreleased, planned for v0.5.0.
+Once published, enable it with:
+
+```bash
+cargo add genja --features genja-cli
+```
+
+Provide a project-specific binary entry point that links your task crate:
+
+```rust
+use my_project_tasks as _;
+
+fn main() -> std::process::ExitCode {
+    genja::cli::run_main()
+}
+```
+
+Replace `my_project_tasks` with your own task crate and add it as a dependency.
+If your tasks live in the binary crate, declare their modules there instead.
+Use a project-specific executable name, such as `my_project_cli`, then run
+`my_project_cli task list` to discover its linked tasks.
+
+Enabling the feature makes library code available; it does not install the
+generic `genja` executable. End users only need your project-built executable.
+A direct `genja-cli` dependency remains supported for dedicated CLI wrappers.
+See the [CLI guide](../docs/cli.md) for both setups, checkout-based dependencies,
+and deployment instructions.
+
 ## Quick Start
 
 ```rust

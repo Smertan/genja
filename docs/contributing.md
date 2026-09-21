@@ -48,7 +48,17 @@ Exclude `genja-core-python` from the workspace test run; its PyO3 tests depend
 on the Python environment and should be run with the PDM commands below.
 
 ```bash
-cargo test --workspace --exclude genja-core-python
+cargo test --workspace --exclude genja-core-python --all-features
+```
+
+`--all-features` includes optional feature-gated tests, such as discovery through
+`genja::cli`. Without it, Cargo enables only default features; selecting the
+`genja-cli` workspace member does not enable the `genja-cli` feature on `genja`.
+
+Also check that `genja` builds without optional features, as CI does:
+
+```bash
+cargo check -p genja --no-default-features
 ```
 
 For focused changes, run the package that owns the behavior:
@@ -56,6 +66,8 @@ For focused changes, run the package that owns the behavior:
 ```bash
 cargo test -p genja-core
 cargo test -p genja
+cargo test -p genja --features genja-cli
+cargo test -p genja-cli
 cargo test -p genja-core-derive
 cargo test -p genja-plugin-manager
 ```
@@ -76,7 +88,7 @@ cargo fmt --all
 Run Clippy with warnings treated as errors:
 
 ```bash
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 CI does not auto-fix formatting or Clippy warnings. If you use
@@ -280,7 +292,8 @@ change and the broader checks for any shared runtime or public API changes.
 
 GitHub Actions runs CI for pull requests and for pushes to `main`, `develop`,
 `feature/**`, and issue-style `*-genja-*` branches. CI runs formatting checks,
-Clippy with `-D warnings`, Rust tests excluding `genja-core-python`, and the
+Clippy with all features and `-D warnings`, Rust tests with all features excluding
+`genja-core-python`, a separate `genja` build without optional features, and the
 Python binding lint, typecheck, Python test, and PyO3 Rust test commands. A
 separate cross-platform compatibility workflow runs on pull requests into
 `main` and checks Linux, macOS, and Windows across all supported Python versions.
@@ -290,10 +303,20 @@ Release publishing is separate from CI. Rust crates are published only from
 publishes the publishable Rust crates in dependency order after validating crate
 versions and internal dependency metadata. Genja currently uses a unified Rust
 release train: when preparing `rs-vX.Y.Z`, bump `genja`, `genja-core`,
-`genja-core-derive`, and `genja-plugin-manager` to `X.Y.Z`, even if one crate
-only changed because the release train moved. Keep internal path dependency
-version requirements aligned to the dependency crate's released version. Python
-package releases use matching `py-vX.Y.Z` tags, validate
+`genja-core-derive`, `genja-plugin-manager`, and `genja-cli` to `X.Y.Z`, even if
+one crate only changed because the release train moved. Keep internal path dependency
+version requirements aligned to the dependency crate's released version.
+The publish order is `genja-core-derive`, `genja-core`, `genja-plugin-manager`,
+`genja-cli`, then `genja`. This includes the optional CLI dependency: `genja-cli`
+must be available on crates.io before publishing `genja`.
+
+Validate release metadata locally with `python scripts/validate-release.py`.
+During release preparation, pass `--tag rs-vX.Y.Z` to check the intended version.
+Package verification against crates.io requires internal dependency versions to
+be published first; the release workflow publishes and waits for each dependency
+before packaging the next crate.
+
+Python package releases use matching `py-vX.Y.Z` tags, validate
 `genja-core-python/pyproject.toml`, build wheels plus a source distribution,
 install and test each built wheel, and publish to PyPI with trusted publishing.
 

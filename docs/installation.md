@@ -19,6 +19,44 @@ Install the Genja package for the language you are using.
     API, including `genja-core`, `genja-core-derive`, and
     `genja-plugin-manager`.
 
+    ### Optional Features
+
+    | Feature | Enabled by default | Provides |
+    | --- | --- | --- |
+    | `genja-cli` | No | CLI entry points, task discovery, and rendering through `genja::cli`. |
+
+    The `genja-cli` feature is currently unreleased and planned for v0.5.0.
+    Once a release containing it is published, enable it with:
+
+    ```bash
+    cargo add genja@0.5.0 --features genja-cli
+    ```
+
+    Or, once v0.5.0 is published, configure the dependency in `Cargo.toml`:
+
+    ```toml
+    [dependencies]
+    genja = { version = "0.5.0", features = ["genja-cli"] }
+    ```
+
+    If you already depend on `genja`, update its existing entry rather than
+    adding a second one.
+
+    Cargo automatically resolves `genja-cli` using the dependency requirement
+    declared by your selected `genja` version; you do not need to select a CLI
+    version separately. The unified release train aligns these requirements.
+    A `0.5.0` requirement allows compatible `0.5.x` patch releases, so the exact
+    patch versions may differ. `Cargo.lock` records the resolved versions;
+    exact version matching is not currently enforced.
+
+    Enabling the feature adds CLI library code to your dependencies. It does
+    not install an executable; provide a project-specific binary that links
+    your tasks and calls `genja::cli::run_main()`.
+
+    See the [CLI guide](cli.md#through-the-genja-feature) for setup from a
+    checkout before publication, binary wiring, the direct `genja-cli`
+    dependency option, and deployment instructions.
+
 === ":fontawesome-brands-python: Python"
 
     ```bash

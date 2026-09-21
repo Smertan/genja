@@ -35,6 +35,7 @@ lower-level crates when building extensions.
 | Crate | Audience | Use it for |
 | --- | --- | --- |
 | `genja` | Applications and most Rust users | Runtime construction, built-in plugins, host filtering, task execution, and re-exported task authoring APIs. |
+| `genja-cli` | Project-specific CLI binaries | Task discovery commands and rendering, available directly or through the optional `genja-cli` feature on `genja`. |
 | `genja-core` | Advanced integrations and core-model users | Inventory models, settings, task traits/results, state types, and error types without the full runtime composition layer. |
 | `genja-core-derive` | Macro internals and direct macro users | Procedural macros such as `#[genja_task]`. Most users get this through `genja`. |
 | `genja-plugin-manager` | Rust plugin authors and applications with dynamic plugins | Plugin traits, plugin registration, dynamic shared-library loading, and build support helpers. |
@@ -77,6 +78,7 @@ The `genja` crate currently re-exports:
 | Re-export | Use it for |
 | --- | --- |
 | `genja::genja_core` | Core inventory, settings, task, result, state, and error types. |
+| `genja::cli` | CLI entry points, discovery, and rendering; requires the optional `genja-cli` feature (unreleased, planned for v0.5.0). |
 | `genja::genja_plugin_manager` | Plugin manager, plugin traits, dynamic loading, and build support helpers. |
 | `genja::genja_task` | The task authoring macro from `genja-core-derive`. |
 | `genja::GenjaError` | The shared Genja runtime error type. |
@@ -85,6 +87,9 @@ The `genja` crate currently re-exports:
 
 That means most application task code can access core types through `genja`
 without adding separate `genja-core` or `genja-core-derive` dependencies.
+
+For CLI setup and project-specific binary wiring, see the
+[CLI guide](cli.md#through-the-genja-feature).
 
 Application code can also access plugin-manager APIs through `genja`:
 
