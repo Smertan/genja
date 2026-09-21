@@ -6,11 +6,12 @@ All notable changes to this workspace should be documented in this file.
 
 Changed packages:
 
-- Rust crates: `genja-cli`, `genja-core`
+- Rust crates: `genja`, `genja-cli`, `genja-core`
 - Python package: `genja-py`, `genja-core-python`
 
 ### Added
 
+- Added an optional `genja-cli` feature to `genja`, exposing CLI helpers through `genja::cli` for project-specific binaries. Refs: #144
 - Added the `genja-cli` workspace crate with the first-party `genja` binary, top-level help, and version command. Refs: #120
 - Added a reusable CLI discovery abstraction for listing and describing task descriptors. Refs: #121
 - Added a compiled Rust task descriptor source for CLI discovery plumbing. Refs: #122
