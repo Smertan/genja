@@ -122,6 +122,325 @@ when available.
 Unlike the compact `task list --output markdown` table, the catalogue summary
 also includes descriptions. Use this command for complete task documentation.
 
+## Output Examples
+
+These examples were generated from the registered task in
+`genja/examples/task_discovery_cli.rs`. It is a documentation fixture, not a
+backup implementation. The task has an explicit ID, retry metadata, and an
+input schema; other tasks may have different or absent metadata.
+
+Reproduce the output from this repository's root:
+
+```bash
+cargo run -p genja --features genja-cli --example task_discovery_cli -- task list
+cargo run -p genja --features genja-cli --example task_discovery_cli -- task describe acme.examples.backup_config@1.0.0 --output json
+cargo run -p genja --features genja-cli --example task_discovery_cli -- task docs
+```
+
+The examples below use `my_project_cli` as the executable name to match the
+rest of this guide. Replace the arguments after `--` in the Cargo command to
+reproduce each format. All displayed outputs are complete for this one-task
+fixture. JSON and YAML list commands wrap the same descriptor in an array or
+sequence.
+
+/// details | Compact task list (table)
+    type: example
+
+```bash
+my_project_cli task list
+```
+
+```text
+ ID                          | VERSION | NAME          | SOURCE   | MODE  | CONSTRUCTIBLE
+==========================================================================================
+ acme.examples.backup_config | 1.0.0   | backup_config | explicit | async | yes
+```
+///
+
+/// details | Compact task list (raw Markdown)
+    type: example
+
+```bash
+my_project_cli task list --output markdown
+```
+
+```markdown
+| ID                            | Version | Name            | Source     | Mode    | Constructible |
+|-------------------------------|---------|-----------------|------------|---------|---------------|
+| `acme.examples.backup_config` | `1.0.0` | `backup_config` | `explicit` | `async` | yes           |
+```
+///
+
+/// details | Task details and input schema (table)
+    type: example
+
+```bash
+my_project_cli task describe acme.examples.backup_config@1.0.0
+```
+
+```text
+Task: acme.examples.backup_config@1.0.0
+
+ Field             | Value
+====================================================================
+ ID                | acme.examples.backup_config
+-------------------+------------------------------------------------
+ Version           | 1.0.0
+-------------------+------------------------------------------------
+ Name              | backup_config
+-------------------+------------------------------------------------
+ Description       | Backs up selected paths from a network device
+-------------------+------------------------------------------------
+ ID source         | explicit
+-------------------+------------------------------------------------
+ Execution mode    | async
+-------------------+------------------------------------------------
+ Connection plugin | ssh
+-------------------+------------------------------------------------
+ Processors        | -
+-------------------+------------------------------------------------
+ Constructible     | yes
+-------------------+------------------------------------------------
+ Retry             | {"allow":true,"max_attempts":3,"delay_ms":250}
+-------------------+------------------------------------------------
+ Input schema      | available
+
+Input schema:
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "backup_path": {
+      "type": "string"
+    },
+    "compress": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "backup_path",
+    "compress"
+  ],
+  "title": "BackupConfig",
+  "type": "object"
+}
+```
+///
+
+/// details | Complete descriptor (JSON)
+    type: example
+
+```bash
+my_project_cli task describe acme.examples.backup_config@1.0.0 --output json
+```
+
+```json
+{
+  "id": "acme.examples.backup_config",
+  "id_source": "explicit",
+  "name": "backup_config",
+  "version": "1.0.0",
+  "description": "Backs up selected paths from a network device",
+  "execution_mode": "async",
+  "connection_plugin_name": "ssh",
+  "processor_names": [],
+  "retry": {
+    "allow": true,
+    "max_attempts": 3,
+    "delay_ms": 250
+  },
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "backup_path": {
+        "type": "string"
+      },
+      "compress": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "backup_path",
+      "compress"
+    ],
+    "title": "BackupConfig",
+    "type": "object"
+  },
+  "constructible": true
+}
+```
+///
+
+/// details | Complete descriptor (YAML)
+    type: example
+
+```bash
+my_project_cli task describe acme.examples.backup_config@1.0.0 --output yaml
+```
+
+```yaml
+id: acme.examples.backup_config
+id_source: explicit
+name: backup_config
+version: 1.0.0
+description: Backs up selected paths from a network device
+execution_mode: async
+connection_plugin_name: ssh
+processor_names: []
+retry:
+  allow: true
+  max_attempts: 3
+  delay_ms: 250
+input_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  properties:
+    backup_path:
+      type: string
+    compress:
+      type: boolean
+  required:
+  - backup_path
+  - compress
+  title: BackupConfig
+  type: object
+constructible: true
+```
+///
+
+/// details | Complete one-task catalogue (raw Markdown)
+    type: example
+
+```bash
+my_project_cli task docs
+```
+
+````markdown
+# Task Catalogue
+
+## Index
+
+- [Summary](#summary)
+- [Tasks](#tasks)
+  - [`acme.examples.backup_config@1.0.0`](#task-acme-examples-backup-config-1-0-0)
+
+## Summary
+
+| ID                            | Version | Name            | Source     | Mode    | Constructible | Description                                   |
+|-------------------------------|---------|-----------------|------------|---------|---------------|-----------------------------------------------|
+| `acme.examples.backup_config` | `1.0.0` | `backup_config` | `explicit` | `async` | yes           | Backs up selected paths from a network device |
+
+## Tasks
+
+<a id="task-acme-examples-backup-config-1-0-0"></a>
+
+### acme.examples.backup_config@1.0.0
+
+| Field             | Value                                            |
+|-------------------|--------------------------------------------------|
+| ID                | `acme.examples.backup_config`                    |
+| Version           | `1.0.0`                                          |
+| Name              | `backup_config`                                  |
+| Description       | Backs up selected paths from a network device    |
+| ID source         | `explicit`                                       |
+| Execution mode    | `async`                                          |
+| Connection plugin | `ssh`                                            |
+| Processors        | -                                                |
+| Constructible     | yes                                              |
+| Retry             | `{"allow":true,"max_attempts":3,"delay_ms":250}` |
+| Input schema      | available                                        |
+
+#### Input Schema
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "backup_path": {
+      "type": "string"
+    },
+    "compress": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "backup_path",
+    "compress"
+  ],
+  "title": "BackupConfig",
+  "type": "object"
+}
+```
+````
+///
+
+
+## Exporting Task Descriptors
+
+Commands write results to stdout. Use your shell's `>` redirection to save them
+to a file; Genja does not provide an output-file option. These examples assume
+your project-specific executable is on `PATH`.
+
+### JSON And YAML
+
+Export complete descriptor lists for automation or later processing:
+
+```bash
+my_project_cli task list --output json > tasks.json
+my_project_cli task list --output yaml > tasks.yaml
+```
+
+Export one descriptor, including any input schema, using its listed identity:
+
+```bash
+my_project_cli task describe acme.examples.backup_config@1.0.0 --output json > backup-config.json
+my_project_cli task describe acme.examples.backup_config@1.0.0 --output yaml > backup-config.yaml
+```
+
+### Markdown Documents
+
+Choose the command according to how much detail the document needs:
+
+| Command | Document contents |
+| --- | --- |
+| `task list --output markdown` | Compact summary table without descriptions or input schemas |
+| `task describe <identity> --output markdown` | One task's metadata and input schema, when available |
+| `task docs` | Catalogue index, summary including descriptions, and detailed sections for all tasks |
+
+```bash
+my_project_cli task list --output markdown > task-summary.md
+my_project_cli task describe acme.examples.backup_config@1.0.0 --output markdown > backup-config.md
+my_project_cli task docs --output markdown > task-catalog.md
+```
+
+The files contain raw Markdown. Use a Markdown renderer with table and fenced
+code-block support, such as GitHub or a suitably configured Zensical/MkDocs site,
+to display them. Catalogue navigation also depends on the renderer preserving
+heading links and the generated HTML anchors.
+
+For Confluence, check the import or conversion workflow supported by your editor
+and installed apps. Markdown formatting shortcuts are not a guarantee that a
+complete pasted Markdown catalogue will be converted correctly. Atlassian
+documents [Markdown shortcuts](https://support.atlassian.com/confluence-cloud/docs/keyboard-shortcuts-markdown-and-autocomplete/)
+separately from [legacy-editor markup insertion](https://support.atlassian.com/confluence-cloud/docs/insert-confluence-wiki-markup/).
+Check tables, code blocks, and navigation links after importing. Genja generates
+the document; it does not publish it to Confluence or another platform.
+
+### Redirection Behaviour
+
+The shell creates or overwrites the target file when using `>`, even if the
+command later fails. Errors remain on stderr, so check the command's exit status
+before treating a generated file as a successful export. Avoid combining stderr
+with stdout when producing JSON or YAML for a parser.
+
+These redirection examples also work with an executable on `PATH` in PowerShell
+or cmd.exe. For an executable in the current directory, use `./my_project_cli`
+on Linux/macOS, `.\my_project_cli.exe` in PowerShell, or `my_project_cli.exe` in
+cmd.exe. Output-file encoding is controlled by your shell; ensure UTF-8 when
+passing files between tools or platforms.
+
+Rebuild the project binary after changing task registrations, then regenerate
+the files. Discovery reflects the tasks linked into that binary, not edits to
+source files that have not been compiled.
+
 ## Discovery Scope And Architecture
 
 The initial CLI discovery implementation supports compiled Rust task descriptors

@@ -14,6 +14,10 @@ categories = ["development-tools", "asynchronous", "network-programming"]
 [features]
 genja-cli = ["dep:genja-cli"]
 
+[[example]]
+name = "task_discovery_cli"
+required-features = ["genja-cli"]
+
 [dependencies]
 async-trait = "0.1.89"
 genja-cli = { version = "0.4.0", path = "../genja-cli", optional = true }

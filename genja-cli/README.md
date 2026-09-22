@@ -67,6 +67,11 @@ my_project_cli task describe auto:my_project::tasks::BackupTask@0.1.0
 my_project_cli task docs > task-catalog.md
 ```
 
+For file exports, use JSON or YAML for complete serialized descriptors,
+`task list --output markdown` for a compact summary, and `task docs` for a
+complete Markdown catalogue. See [Exporting Task Descriptors](../docs/cli.md#exporting-task-descriptors)
+for redirection examples and documentation-platform considerations.
+
 During development, run the same binary through Cargo:
 
 ```bash

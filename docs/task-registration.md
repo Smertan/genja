@@ -451,7 +451,7 @@ For CLI workflows, remember that the compiled Rust task registry is
 process-local. A generic installed `genja` binary can only discover tasks linked
 into that binary. To list or document tasks from your own Rust project, build a
 project-specific binary that links your task crate and delegates to
-`genja_cli::run_main()`. See [Command Line Interface](cli.md).
+`genja_cli::run_main()`. See [Command Line Interface (Rust)](cli.md).
 
 ## Rust Construction APIs
 
