@@ -62,8 +62,8 @@ and deployment instructions.
 
 The optional `genja-tui` feature additionally enables `genja-cli/tui`, exposing
 the TUI architecture foundation through `genja::cli::tui`. It includes CLI
-support and is disabled by default. The browser and TUI entrypoint helpers are
-not implemented yet. See [Optional TUI Foundation](../docs/cli.md#optional-tui-foundation)
+support and is disabled by default. Browser state and descriptor loading are
+available; rendering, input handling, and TUI entrypoint helpers are not yet implemented. See [Optional TUI Foundation](../docs/cli.md#optional-tui-foundation)
 for dependency configuration.
 
 ## Quick Start

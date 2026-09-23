@@ -39,8 +39,9 @@
 //! discovery commands. Enabling the feature does not install an executable.
 //!
 //! The optional `genja-tui` feature also enables CLI support and exposes the
-//! TUI foundation through `genja::cli::tui`. It is disabled by default; the
-//! browser and TUI entrypoint helpers are not implemented yet.
+//! TUI foundation through `genja::cli::tui`. It is disabled by default. Browser
+//! state and descriptor loading are available; rendering, input handling, and
+//! TUI entrypoint helpers are not implemented yet.
 //!
 //! ## Architecture
 //!

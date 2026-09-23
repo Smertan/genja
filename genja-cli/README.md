@@ -22,13 +22,14 @@ binary that links your tasks, then distribute that executable to end users.
 
 ## Optional TUI Foundation
 
-The opt-in `tui` feature exposes the architecture skeleton at `genja_cli::tui`
+The opt-in `tui` feature exposes browser state and loading at `genja_cli::tui`
 and enables Ratatui and Crossterm support. It is disabled by default. Projects
 using `genja` can enable `genja-tui`, which forwards to `genja-cli/tui` and also
 enables CLI support, exposing the same module at `genja::cli::tui`.
 
-This is currently a foundation only: no task browser, TUI runner, `run_main()`
-helper inside `tui`, or `genja tui` command is available yet. No separate TUI
+This is currently a foundation only: `TaskBrowser` supports state and descriptor
+loading, but rendering, input handling, the TUI runner, `run_main()` helper
+inside `tui`, and the `genja tui` command are not available yet. No separate TUI
 installation is required. See the [CLI guide](../docs/cli.md#optional-tui-foundation)
 for checkout-based feature configuration and dependency behavior.
 

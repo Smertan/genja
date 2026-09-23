@@ -1,13 +1,14 @@
 //! Optional Ratatui task browser foundation.
 //!
 //! Enable the `tui` feature on `genja-cli`, or `genja-tui` on `genja`, to
-//! compile this module. It currently defines architecture boundaries only;
-//! the browser, full-screen runner, and process helper are not implemented.
+//! compile this module. [`TaskBrowser`] provides state and synchronous descriptor
+//! loading. Rendering, event handling, the full-screen runner, and the process
+//! helper are not implemented yet.
 //!
 //! # Architecture
 //!
 //! The implementation is divided into the following private modules. Public
-//! browser types and runner helpers will be re-exported here as they are added.
+//! browser types are re-exported here; runner helpers will follow in later phases.
 //!
 //! - `app`: full-screen orchestration and process entrypoint integration.
 //! - `terminal`: Crossterm terminal setup and restoration.
@@ -41,3 +42,6 @@ mod layout;
 mod state;
 mod task_browser;
 mod terminal;
+
+pub use state::{BrowserPanel, TaskBrowserState};
+pub use task_browser::TaskBrowser;

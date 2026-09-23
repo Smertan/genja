@@ -27,11 +27,26 @@ genja-cli = { path = "../genja/genja-cli", features = ["tui"] }
 ```
 
 The foundation exposes `genja::cli::tui` or `genja_cli::tui` as an architecture
-skeleton. A runnable browser, TUI main helper, and `genja tui` command are not
+foundation with browser state and descriptor loading. Rendering, input handling,
+a TUI main helper, and the `genja tui` command are not
 available yet. The design separates descriptor loading through the shared
 `TaskDescriptorSource` from browser state, events, rendering, and terminal
 ownership. Compiled task discovery will retain the project-local linking model
 of the CLI; the final TUI binary entrypoint example will accompany its helper.
+
+`TaskBrowser::new()` creates an empty browser. Call `load_from(&source)` with
+any `TaskDescriptorSource`, including a trait object, to synchronously load an
+owned snapshot. Loading calls `list_tasks()` once, preserves source ordering,
+and retains no source reference. Success selects the first descriptor or none
+for an empty result. Failure clears descriptors and selection, stores the
+`DiscoveryError` in state, and returns it to the caller. A later successful
+load clears that error. Loading does not schedule refreshes or own a terminal.
+
+Use `state()` for read access and `state_mut()` for validated selection and
+reserved presentation-state updates. `select(None)` clears selection;
+`select(Some(index))` rejects out-of-range indices without changing selection.
+Filter text and `BrowserPanel` focus are preserved across loads, but do not
+filter results or render panels yet. Quit state belongs to the host app.
 
 CLI-only users should keep using `genja-cli` on `genja`, or a direct `genja-cli`
 dependency without `tui`. This avoids activating Ratatui and its dependencies
