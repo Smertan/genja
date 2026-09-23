@@ -60,6 +60,12 @@ A direct `genja-cli` dependency remains supported for dedicated CLI wrappers.
 See the [CLI guide](../docs/cli.md) for both setups, checkout-based dependencies,
 and deployment instructions.
 
+The optional `genja-tui` feature additionally enables `genja-cli/tui`, exposing
+the TUI architecture foundation through `genja::cli::tui`. It includes CLI
+support and is disabled by default. The browser and TUI entrypoint helpers are
+not implemented yet. See [Optional TUI Foundation](../docs/cli.md#optional-tui-foundation)
+for dependency configuration.
+
 ## Quick Start
 
 ```rust

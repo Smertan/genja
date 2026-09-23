@@ -20,6 +20,18 @@ publication.
 Neither option installs an executable automatically. Build a project-specific
 binary that links your tasks, then distribute that executable to end users.
 
+## Optional TUI Foundation
+
+The opt-in `tui` feature exposes the architecture skeleton at `genja_cli::tui`
+and enables Ratatui and Crossterm support. It is disabled by default. Projects
+using `genja` can enable `genja-tui`, which forwards to `genja-cli/tui` and also
+enables CLI support, exposing the same module at `genja::cli::tui`.
+
+This is currently a foundation only: no task browser, TUI runner, `run_main()`
+helper inside `tui`, or `genja tui` command is available yet. No separate TUI
+installation is required. See the [CLI guide](../docs/cli.md#optional-tui-foundation)
+for checkout-based feature configuration and dependency behavior.
+
 ## Project-Local Task Discovery
 
 Compiled Rust task discovery is process-local. A generic installed `genja`

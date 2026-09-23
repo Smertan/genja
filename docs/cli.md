@@ -4,6 +4,42 @@ Genja provides a first-party CLI crate, `genja-cli`, for listing, describing,
 and documenting registered task descriptors. Currently, CLI discovery supports
 **compiled Rust tasks only**. **Python task discovery is planned separately.**
 
+## Optional TUI Foundation
+
+The TUI foundation is an optional part of `genja-cli`, enabled with its `tui`
+feature. Projects using the main `genja` crate can enable `genja-tui`, which
+also enables `genja-cli` and forwards to `genja-cli/tui`. Both TUI features are
+disabled by default; they do not require a separate package installation.
+
+These features are currently unreleased. Choose one dependency setup from a
+checkout, adjusting the path for your project:
+
+```toml
+[dependencies]
+genja = { path = "../genja/genja", features = ["genja-tui"] }
+```
+
+Or depend directly on the CLI crate:
+
+```toml
+[dependencies]
+genja-cli = { path = "../genja/genja-cli", features = ["tui"] }
+```
+
+The foundation exposes `genja::cli::tui` or `genja_cli::tui` as an architecture
+skeleton. A runnable browser, TUI main helper, and `genja tui` command are not
+available yet. The design separates descriptor loading through the shared
+`TaskDescriptorSource` from browser state, events, rendering, and terminal
+ownership. Compiled task discovery will retain the project-local linking model
+of the CLI; the final TUI binary entrypoint example will accompany its helper.
+
+CLI-only users should keep using `genja-cli` on `genja`, or a direct `genja-cli`
+dependency without `tui`. This avoids activating Ratatui and its dependencies
+through Genja. Crossterm is already used by the CLI table renderer. Cargo
+features are additive: another dependency enabling the TUI feature in the same
+resolved build can activate it. Cargo.lock may list optional packages even
+when they are not compiled for a CLI-only build.
+
 ## Generic CLI
 
 The `genja-cli` package builds a binary named `genja`. A generic installed

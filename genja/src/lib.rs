@@ -38,6 +38,10 @@
 //! must link its task registrations and call `genja::cli::run_main()` to expose
 //! discovery commands. Enabling the feature does not install an executable.
 //!
+//! The optional `genja-tui` feature also enables CLI support and exposes the
+//! TUI foundation through `genja::cli::tui`. It is disabled by default; the
+//! browser and TUI entrypoint helpers are not implemented yet.
+//!
 //! ## Architecture
 //!
 //! - **Inventory**: Manages hosts, groups, and defaults
@@ -67,6 +71,8 @@
 
 pub use ::async_trait::async_trait;
 /// CLI helpers for project-local task registries, enabled by the `genja-cli` feature.
+///
+/// The `genja-tui` feature also enables this export and the `cli::tui` foundation.
 ///
 /// Link your task crate or declare your task modules in the binary before
 /// delegating to this entry point; discovery sees only linked registrations.

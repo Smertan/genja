@@ -11,6 +11,8 @@ Changed packages:
 
 ### Added
 
+- Added an opt-in TUI architecture foundation in `genja-cli` behind the `tui` feature, with optional Ratatui/Crossterm support and a forwarding `genja-tui` feature on `genja`. Browser behavior and TUI entrypoint helpers will follow in later phases.
+
 - Added an optional `genja-cli` feature to `genja`, exposing CLI helpers through `genja::cli` for project-specific binaries, with documentation for feature-based and direct CLI dependencies. Refs: #144
 - Added the `genja-cli` workspace crate with the first-party `genja` binary, top-level help, and version command. Refs: #120
 - Added a reusable CLI discovery abstraction for listing and describing task descriptors. Refs: #121
