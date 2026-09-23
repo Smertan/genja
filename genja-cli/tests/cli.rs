@@ -5,6 +5,82 @@ fn genja_command() -> Command {
 }
 
 #[test]
+fn successful_commands_write_only_to_stdout() {
+    let cases: &[&[&str]] = &[
+        &["--help"],
+        &["version"],
+        &["task", "list"],
+        &["task", "list", "--output", "json"],
+        &["task", "list", "--output", "yaml"],
+        &["task", "list", "--output", "markdown"],
+        &["task", "docs"],
+    ];
+
+    for args in cases {
+        let output = genja_command()
+            .args(*args)
+            .output()
+            .expect("CLI should run");
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        assert!(!output.stdout.is_empty(), "{args:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+    }
+}
+
+#[test]
+fn describe_errors_preserve_clean_stdout_for_every_format() {
+    let cases = [
+        ("acme.examples.backup_config", "invalid task identity"),
+        (
+            "acme.examples.backup_config@invalid",
+            "invalid task identity",
+        ),
+        ("acme.examples.missing@1.0.0", "was not found"),
+    ];
+
+    for format in ["table", "json", "yaml", "markdown"] {
+        for (identity, message) in cases {
+            let output = genja_command()
+                .args(["task", "describe", identity, "--output", format])
+                .output()
+                .expect("CLI should run");
+            assert_eq!(output.status.code(), Some(1), "{output:?}");
+            assert!(output.stdout.is_empty(), "{output:?}");
+            let stderr = String::from_utf8(output.stderr).expect("UTF-8 error");
+            assert!(stderr.starts_with("error: "), "{stderr}");
+            assert!(stderr.contains(message), "{stderr}");
+            assert!(stderr.contains(identity), "{stderr}");
+        }
+    }
+}
+
+#[test]
+fn argument_errors_exit_with_two_and_write_only_to_stderr() {
+    let cases: &[&[&str]] = &[
+        &["task", "describe"],
+        &["task", "list", "--output", "xml"],
+        &[
+            "task",
+            "describe",
+            "acme.examples.backup_config@1.0.0",
+            "--output",
+            "xml",
+        ],
+        &["task", "docs", "--output", "json"],
+    ];
+
+    for args in cases {
+        let output = genja_command()
+            .args(*args)
+            .output()
+            .expect("CLI should run");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        assert!(!output.stderr.is_empty(), "{args:?}");
+    }
+}
+
+#[test]
 fn help_prints_top_level_usage() {
     let output = genja_command()
         .arg("--help")
