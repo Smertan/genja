@@ -2,7 +2,8 @@
 
 Genja is developing a terminal user interface for browsing task descriptors.
 Today, Rust applications can embed a basic browser screen in an existing
-Ratatui application. There is no standalone TUI command yet.
+Ratatui application or run that screen in a full-screen terminal session.
+There is no `genja tui` command yet.
 
 The browser is an optional part of `genja-cli`, enabled with its `tui` feature.
 Projects using the main `genja` crate can enable `genja-tui`, which also enables
@@ -25,12 +26,39 @@ genja-cli = { path = "../genja/genja-cli", features = ["tui"] }
 ```
 
 The `genja::cli::tui` or `genja_cli::tui` module provides browser state,
-descriptor loading, event handling, and a basic screen. A TUI main
-helper and the `genja tui` command are not available yet. The design separates
+descriptor loading, event handling, a basic screen, and a full-screen runner.
+A project-local `run_main()` helper and the `genja tui` command are not available
+yet. The design separates
 descriptor loading through the shared `TaskDescriptorSource` from browser state,
 events, rendering, and terminal ownership. Compiled task discovery will retain
 the project-local linking model of the [CLI](cli.md); the final TUI binary
 entrypoint example will accompany its helper.
+
+To run the basic screen in a terminal, pass any `TaskDescriptorSource` to
+`run_tui`. For compiled Rust tasks, the binary must link its task crate:
+
+```rust
+use my_project_tasks as _;
+use genja_cli::discovery::rust::CompiledTaskDescriptorSource;
+use genja_cli::tui::{TuiOptions, run_tui};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let source = CompiledTaskDescriptorSource::new();
+    run_tui(&source, TuiOptions::default())?;
+    Ok(())
+}
+```
+
+Replace `my_project_tasks` with your task crate. If the tasks live in the
+binary crate, declare their modules there instead. A generic installed binary
+can only discover tasks linked into that binary.
+
+The runner loads descriptors before entering raw mode, then draws on startup,
+selection changes, and terminal resize. Press `q` or Escape to exit. It restores
+the terminal on normal exit, errors, and panic unwinding. `TuiOptions` has no
+configurable settings yet. Discovery failures return before terminal setup;
+terminal failures return a `TuiError`. The screen currently shows task counts
+and placeholder panels rather than a complete browser.
 
 `TaskBrowser::new()` creates an empty browser. Call `load_from(&source)` with
 any `TaskDescriptorSource`, including a trait object, to synchronously load an

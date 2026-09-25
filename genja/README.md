@@ -63,7 +63,8 @@ and deployment instructions.
 The optional `genja-tui` feature enables a basic terminal task browser screen
 through `genja::cli::tui`. It includes CLI support and is disabled by default.
 Browser state, descriptor loading, event handling, and minimal rendering are
-available; TUI entrypoint helpers are not yet implemented. See the
+available, along with a full-screen runner. A project-local TUI main helper is
+not yet implemented. See the
 [Terminal UI guide](../docs/tui.md) for dependency configuration.
 
 ## Quick Start

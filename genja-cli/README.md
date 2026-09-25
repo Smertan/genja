@@ -24,7 +24,7 @@ binary that links your tasks, then distribute that executable to end users.
 
 Genja's terminal user interface is being developed to browse task descriptors
 in a terminal. The opt-in `tui` feature currently exposes a basic browser
-screen that applications can embed through `genja_cli::tui`.
+screen that applications can embed or run full-screen through `genja_cli::tui`.
 
 The feature enables Ratatui and Crossterm support and is disabled by default.
 Projects using `genja` can enable `genja-tui`, which forwards to
@@ -32,8 +32,9 @@ Projects using `genja` can enable `genja-tui`, which forwards to
 `genja::cli::tui`.
 
 `TaskBrowser` supports descriptor loading, action handling, and minimal
-rendering inside an existing Ratatui application. The full-screen TUI runner,
-`run_main()` helper inside `tui`, and the `genja tui` command are not available
+rendering inside an existing Ratatui application. `run_tui(source, options)`
+provides a full-screen runner for callers with a descriptor source. The
+`run_main()` helper inside `tui` and the `genja tui` command are not available
 yet. No separate TUI installation is required. See the
 [Terminal UI guide](../docs/tui.md) for checkout-based feature configuration
 and dependency behavior.

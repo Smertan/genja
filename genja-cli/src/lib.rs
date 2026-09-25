@@ -1,7 +1,7 @@
 //! First-party command-line interface for Genja automation workflows.
 //!
-//! The optional `tui` feature exposes the task browser architecture in `genja_cli::tui`.
-//! This foundation does not yet provide a runnable terminal interface.
+//! The optional `tui` feature exposes an embeddable browser and a full-screen
+//! runner in `genja_cli::tui`. A project-local TUI main helper is planned.
 
 pub mod commands;
 pub mod discovery;

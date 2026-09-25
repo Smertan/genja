@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added a full-screen TUI runner that loads task descriptors before taking terminal control, redraws on selection and resize, and restores the terminal after exit or errors. Refs: #126
 - Added an embeddable TUI browser shell with host-owned Ratatui rendering, Crossterm event translation, selection actions, and quit requests. Refs: #126
 - Added terminal-independent TUI browser state and synchronous loading through the shared task descriptor discovery abstraction, with validated selection and retained discovery errors. Refs: #126
 
