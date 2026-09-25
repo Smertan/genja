@@ -13,6 +13,7 @@ nav = [
   {"Settings" = "settings.md"},
   {"API Surface" = "api-surface.md"},
   {"Command Line Interface (Rust)" = "cli.md"},
+  {"Terminal UI (Rust)" = "tui.md"},
   {"Inventory" = "inventory.md"},
   {"Tasks" = [
     "tasks.md",

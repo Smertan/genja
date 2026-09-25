@@ -20,18 +20,23 @@ publication.
 Neither option installs an executable automatically. Build a project-specific
 binary that links your tasks, then distribute that executable to end users.
 
-## Optional TUI Foundation
+## Terminal User Interface (TUI)
 
-The opt-in `tui` feature exposes browser state and loading at `genja_cli::tui`
-and enables Ratatui and Crossterm support. It is disabled by default. Projects
-using `genja` can enable `genja-tui`, which forwards to `genja-cli/tui` and also
-enables CLI support, exposing the same module at `genja::cli::tui`.
+Genja's terminal user interface is being developed to browse task descriptors
+in a terminal. The opt-in `tui` feature currently exposes a basic browser
+screen that applications can embed through `genja_cli::tui`.
 
-This is currently a foundation only: `TaskBrowser` supports state and descriptor
-loading, but rendering, input handling, the TUI runner, `run_main()` helper
-inside `tui`, and the `genja tui` command are not available yet. No separate TUI
-installation is required. See the [CLI guide](../docs/cli.md#optional-tui-foundation)
-for checkout-based feature configuration and dependency behavior.
+The feature enables Ratatui and Crossterm support and is disabled by default.
+Projects using `genja` can enable `genja-tui`, which forwards to
+`genja-cli/tui` and also enables CLI support, exposing the same module at
+`genja::cli::tui`.
+
+`TaskBrowser` supports descriptor loading, action handling, and minimal
+rendering inside an existing Ratatui application. The full-screen TUI runner,
+`run_main()` helper inside `tui`, and the `genja tui` command are not available
+yet. No separate TUI installation is required. See the
+[Terminal UI guide](../docs/tui.md) for checkout-based feature configuration
+and dependency behavior.
 
 ## Project-Local Task Discovery
 

@@ -2,8 +2,8 @@
 //!
 //! Enable the `tui` feature on `genja-cli`, or `genja-tui` on `genja`, to
 //! compile this module. [`TaskBrowser`] provides state and synchronous descriptor
-//! loading. Rendering, event handling, the full-screen runner, and the process
-//! helper are not implemented yet.
+//! loading, event handling, and a minimal renderable shell. The full-screen
+//! runner and process helper are not implemented yet.
 //!
 //! # Architecture
 //!
@@ -43,5 +43,6 @@ mod state;
 mod task_browser;
 mod terminal;
 
+pub use event::{BrowserAction, BrowserOutcome, action_from_event};
 pub use state::{BrowserPanel, TaskBrowserState};
 pub use task_browser::TaskBrowser;

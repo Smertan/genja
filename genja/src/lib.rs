@@ -40,8 +40,8 @@
 //!
 //! The optional `genja-tui` feature also enables CLI support and exposes the
 //! TUI foundation through `genja::cli::tui`. It is disabled by default. Browser
-//! state and descriptor loading are available; rendering, input handling, and
-//! TUI entrypoint helpers are not implemented yet.
+//! state, descriptor loading, event handling, and minimal rendering are
+//! available; TUI entrypoint helpers are not implemented yet.
 //!
 //! ## Architecture
 //!

@@ -1,11 +1,14 @@
 //! Embeddable browser and synchronous descriptor loading boundary.
 //!
 //! Loading owns a descriptor snapshot and retains no source reference. State
-//! access never performs discovery. Rendering and action handling will be added
-//! separately; the browser never owns terminal setup, polling, or shutdown.
+//! access never performs discovery. Action handling stays separate from terminal
+//! event polling; the browser never owns terminal setup or shutdown.
 
-use super::TaskBrowserState;
+use super::layout::render_browser;
+use super::{BrowserAction, BrowserOutcome, TaskBrowserState, action_from_event};
 use crate::discovery::{DiscoveryResult, TaskDescriptorSource};
+use crossterm::event::Event;
+use ratatui::{Frame, layout::Rect};
 
 /// Terminal-independent task browser with an owned descriptor snapshot.
 ///
@@ -47,6 +50,51 @@ impl TaskBrowser {
     /// Access validated state updates without exposing mutable descriptors.
     pub fn state_mut(&mut self) -> &mut TaskBrowserState {
         &mut self.state
+    }
+
+    /// Apply a browser action without polling terminal input.
+    ///
+    /// Selection stops at either end of the loaded snapshot. Quit requests are
+    /// returned to the host and do not alter browser state.
+    pub fn handle_action(&mut self, action: BrowserAction) -> BrowserOutcome {
+        let selection = match action {
+            BrowserAction::SelectNext => self
+                .state
+                .selected_index()
+                .map(|index| index.saturating_add(1))
+                .or_else(|| (!self.state.descriptors().is_empty()).then_some(0)),
+            BrowserAction::SelectPrevious => self
+                .state
+                .selected_index()
+                .map(|index| index.saturating_sub(1))
+                .or_else(|| (!self.state.descriptors().is_empty()).then_some(0)),
+            BrowserAction::Quit => return BrowserOutcome::QuitRequested,
+        };
+
+        if selection == self.state.selected_index() || !self.state.select(selection) {
+            BrowserOutcome::Ignored
+        } else {
+            BrowserOutcome::Changed
+        }
+    }
+
+    /// Translate and dispatch one supplied Crossterm event.
+    ///
+    /// Unrecognized events return [`BrowserOutcome::Ignored`] for the host to
+    /// handle. This method never reads from the terminal or quits the process.
+    pub fn handle_event(&mut self, event: &Event) -> BrowserOutcome {
+        action_from_event(event)
+            .map(|action| self.handle_action(action))
+            .unwrap_or(BrowserOutcome::Ignored)
+    }
+
+    /// Render the minimal browser shell inside a caller-owned Ratatui frame.
+    ///
+    /// The area is clipped to the frame and may be empty. Rendering does not
+    /// load tasks or change browser state. The caller retains terminal and
+    /// drawing ownership, so this component can be embedded in another app.
+    pub fn render(&self, frame: &mut Frame<'_>, area: Rect) {
+        render_browser(&self.state, frame, area);
     }
 
     /// Load one owned snapshot synchronously using the shared discovery source.

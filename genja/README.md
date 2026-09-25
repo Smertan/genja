@@ -60,11 +60,11 @@ A direct `genja-cli` dependency remains supported for dedicated CLI wrappers.
 See the [CLI guide](../docs/cli.md) for both setups, checkout-based dependencies,
 and deployment instructions.
 
-The optional `genja-tui` feature additionally enables `genja-cli/tui`, exposing
-the TUI architecture foundation through `genja::cli::tui`. It includes CLI
-support and is disabled by default. Browser state and descriptor loading are
-available; rendering, input handling, and TUI entrypoint helpers are not yet implemented. See [Optional TUI Foundation](../docs/cli.md#optional-tui-foundation)
-for dependency configuration.
+The optional `genja-tui` feature enables a basic terminal task browser screen
+through `genja::cli::tui`. It includes CLI support and is disabled by default.
+Browser state, descriptor loading, event handling, and minimal rendering are
+available; TUI entrypoint helpers are not yet implemented. See the
+[Terminal UI guide](../docs/tui.md) for dependency configuration.
 
 ## Quick Start
 

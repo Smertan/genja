@@ -4,56 +4,12 @@ Genja provides a first-party CLI crate, `genja-cli`, for listing, describing,
 and documenting registered task descriptors. Currently, CLI discovery supports
 **compiled Rust tasks only**. **Python task discovery is planned separately.**
 
-## Optional TUI Foundation
+## Terminal User Interface (TUI)
 
-The TUI foundation is an optional part of `genja-cli`, enabled with its `tui`
-feature. Projects using the main `genja` crate can enable `genja-tui`, which
-also enables `genja-cli` and forwards to `genja-cli/tui`. Both TUI features are
-disabled by default; they do not require a separate package installation.
-
-These features are currently unreleased. Choose one dependency setup from a
-checkout, adjusting the path for your project:
-
-```toml
-[dependencies]
-genja = { path = "../genja/genja", features = ["genja-tui"] }
-```
-
-Or depend directly on the CLI crate:
-
-```toml
-[dependencies]
-genja-cli = { path = "../genja/genja-cli", features = ["tui"] }
-```
-
-The foundation exposes `genja::cli::tui` or `genja_cli::tui` as an architecture
-foundation with browser state and descriptor loading. Rendering, input handling,
-a TUI main helper, and the `genja tui` command are not
-available yet. The design separates descriptor loading through the shared
-`TaskDescriptorSource` from browser state, events, rendering, and terminal
-ownership. Compiled task discovery will retain the project-local linking model
-of the CLI; the final TUI binary entrypoint example will accompany its helper.
-
-`TaskBrowser::new()` creates an empty browser. Call `load_from(&source)` with
-any `TaskDescriptorSource`, including a trait object, to synchronously load an
-owned snapshot. Loading calls `list_tasks()` once, preserves source ordering,
-and retains no source reference. Success selects the first descriptor or none
-for an empty result. Failure clears descriptors and selection, stores the
-`DiscoveryError` in state, and returns it to the caller. A later successful
-load clears that error. Loading does not schedule refreshes or own a terminal.
-
-Use `state()` for read access and `state_mut()` for validated selection and
-reserved presentation-state updates. `select(None)` clears selection;
-`select(Some(index))` rejects out-of-range indices without changing selection.
-Filter text and `BrowserPanel` focus are preserved across loads, but do not
-filter results or render panels yet. Quit state belongs to the host app.
-
-CLI-only users should keep using `genja-cli` on `genja`, or a direct `genja-cli`
-dependency without `tui`. This avoids activating Ratatui and its dependencies
-through Genja. Crossterm is already used by the CLI table renderer. Cargo
-features are additive: another dependency enabling the TUI feature in the same
-resolved build can activate it. Cargo.lock may list optional packages even
-when they are not compiled for a CLI-only build.
+Genja is developing an interactive task browser for the terminal. The current
+TUI feature lets Rust applications embed a basic browser screen; a standalone
+TUI command is not available yet. See the [Terminal UI guide](tui.md) for setup,
+usage, and current capabilities.
 
 ## Generic CLI
 
