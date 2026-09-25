@@ -27,12 +27,44 @@ genja-cli = { path = "../genja/genja-cli", features = ["tui"] }
 
 The `genja::cli::tui` or `genja_cli::tui` module provides browser state,
 descriptor loading, event handling, a basic screen, and a full-screen runner.
-A project-local `run_main()` helper and the `genja tui` command are not available
-yet. The design separates
-descriptor loading through the shared `TaskDescriptorSource` from browser state,
-events, rendering, and terminal ownership. Compiled task discovery will retain
-the project-local linking model of the [CLI](cli.md); the final TUI binary
-entrypoint example will accompany its helper.
+The TUI's `run_main()` helper is available for project-local binaries. A
+`genja tui` command is not available yet. The design separates descriptor
+loading through the shared `TaskDescriptorSource` from browser state, events,
+rendering, and terminal ownership.
+
+## Project-local TUI binary
+
+Compiled Rust task discovery is process-local. A generic installed binary only
+sees tasks linked into that binary. Link your task crate in a project-specific
+binary, then call the TUI helper:
+
+```rust
+use my_project_tasks as _;
+
+fn main() -> std::process::ExitCode {
+    genja_cli::tui::run_main()
+}
+```
+
+Replace `my_project_tasks` with your task crate. If your tasks live in the
+binary crate, declare their modules there instead. For a dependency on `genja`
+with the `genja-tui` feature, use the forwarded helper path:
+
+```rust
+use my_project_tasks as _;
+
+fn main() -> std::process::ExitCode {
+    genja::cli::tui::run_main()
+}
+```
+
+Name the binary for your project, such as `my_project_tui`. Enabling the feature
+provides library code; it does not install a TUI executable automatically.
+`run_main()` chooses the compiled Rust descriptor source and returns an exit
+code. It does not parse CLI arguments. See the [CLI binary guide](cli.md#project-local-cli-binary)
+for Cargo package and binary naming examples.
+
+## Runner for a selected descriptor source
 
 To run the basic screen in a terminal, pass any `TaskDescriptorSource` to
 `run_tui`. For compiled Rust tasks, the binary must link its task crate:
@@ -49,9 +81,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Replace `my_project_tasks` with your task crate. If the tasks live in the
-binary crate, declare their modules there instead. A generic installed binary
-can only discover tasks linked into that binary.
+This form lets callers choose a source instead of using the compiled Rust
+source selected by `run_main()`.
 
 The runner loads descriptors before entering raw mode, then draws on startup,
 selection changes, and terminal resize. Press `q` or Escape to exit. It restores

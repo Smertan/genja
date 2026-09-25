@@ -3,13 +3,14 @@
 //! Enable the `tui` feature on `genja-cli`, or `genja-tui` on `genja`, to
 //! compile this module. [`TaskBrowser`] provides state and synchronous descriptor
 //! loading, event handling, and a minimal renderable shell. [`run_tui`] owns a
-//! full-screen terminal session; the process helper is not implemented yet.
+//! full-screen terminal session. [`run_main`] selects compiled Rust tasks for
+//! project-local binaries.
 //!
 //! # Architecture
 //!
 //! The implementation is divided into the following private modules. Public
-//! browser types and the lower-level runner are re-exported here; the process
-//! helper will follow in a later phase.
+//! browser types, the lower-level runner, and the process helper are re-exported
+//! here.
 //!
 //! - `app`: full-screen orchestration and runner errors.
 //! - `terminal`: Crossterm terminal setup and restoration.
@@ -44,7 +45,7 @@ mod state;
 mod task_browser;
 mod terminal;
 
-pub use app::{TuiError, TuiOptions, run_tui};
+pub use app::{TuiError, TuiOptions, run_main, run_tui};
 pub use event::{BrowserAction, BrowserOutcome, action_from_event};
 pub use state::{BrowserPanel, TaskBrowserState};
 pub use task_browser::TaskBrowser;

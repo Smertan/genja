@@ -41,8 +41,8 @@
 //! The optional `genja-tui` feature also enables CLI support and exposes the
 //! TUI foundation through `genja::cli::tui`. It is disabled by default. Browser
 //! state, descriptor loading, event handling, minimal rendering, and the
-//! full-screen `run_tui` runner are available. A project-local TUI main helper
-//! is not implemented yet.
+//! full-screen `run_tui` runner are available. Project-local binaries can call
+//! `genja::cli::tui::run_main()` after linking their task crate.
 //!
 //! ## Architecture
 //!
@@ -74,7 +74,7 @@
 pub use ::async_trait::async_trait;
 /// CLI helpers for project-local task registries, enabled by the `genja-cli` feature.
 ///
-/// The `genja-tui` feature also enables this export and the `cli::tui` foundation.
+/// The `genja-tui` feature also enables this export and the `cli::tui` browser.
 ///
 /// Link your task crate or declare your task modules in the binary before
 /// delegating to this entry point; discovery sees only linked registrations.
@@ -83,6 +83,18 @@ pub use ::async_trait::async_trait;
 /// fn main() -> std::process::ExitCode {
 ///     genja::cli::run_main()
 /// }
+/// ```
+///
+/// With `genja-tui`, a project-local TUI binary can use the same linked task
+/// registrations through the TUI helper:
+///
+/// ```no_run
+/// # #[cfg(feature = "genja-tui")]
+/// fn main() -> std::process::ExitCode {
+///     genja::cli::tui::run_main()
+/// }
+/// # #[cfg(not(feature = "genja-tui"))]
+/// # fn main() -> std::process::ExitCode { std::process::ExitCode::SUCCESS }
 /// ```
 #[cfg(feature = "genja-cli")]
 pub use genja_cli as cli;

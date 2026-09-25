@@ -33,11 +33,11 @@ Projects using `genja` can enable `genja-tui`, which forwards to
 
 `TaskBrowser` supports descriptor loading, action handling, and minimal
 rendering inside an existing Ratatui application. `run_tui(source, options)`
-provides a full-screen runner for callers with a descriptor source. The
-`run_main()` helper inside `tui` and the `genja tui` command are not available
-yet. No separate TUI installation is required. See the
-[Terminal UI guide](../docs/tui.md) for checkout-based feature configuration
-and dependency behavior.
+provides a full-screen runner for callers with a descriptor source. A
+project-local binary can call `genja_cli::tui::run_main()` to use compiled Rust
+tasks linked into that binary. The `genja tui` command is not available yet.
+No separate TUI installation is required. See the
+[Terminal UI guide](../docs/tui.md) for the binary pattern and dependency setup.
 
 ## Project-Local Task Discovery
 

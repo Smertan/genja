@@ -2,14 +2,14 @@
 //!
 //! The runner loads descriptors before taking terminal ownership, then draws
 //! the browser and dispatches events until the app receives a quit request.
-//! The process helper that selects compiled Rust discovery is a later phase.
+//! The process helper selects compiled Rust discovery for project-local binaries.
 
-use std::{error::Error, fmt, io};
+use std::{error::Error, fmt, io, process::ExitCode};
 
 use crossterm::event::{self, Event};
 
 use super::{BrowserOutcome, TaskBrowser, terminal::TerminalSession};
-use crate::discovery::{DiscoveryError, TaskDescriptorSource};
+use crate::discovery::{DiscoveryError, TaskDescriptorSource, rust::CompiledTaskDescriptorSource};
 
 /// Options for the full-screen task browser runner.
 ///
@@ -100,9 +100,9 @@ impl FullScreenApp {
 /// unwinding. A discovery error returns without touching terminal modes.
 ///
 /// This is a minimal shell: task rows, filtering, details, and execution are
-/// not implemented. The process helper and `genja tui` command are separate
-/// follow-up work. Applications that already own a terminal should embed
-/// [`TaskBrowser`] instead.
+/// not implemented. [`run_main`] selects compiled Rust discovery for
+/// project-local binaries; a `genja tui` command is separate follow-up work.
+/// Applications that already own a terminal should embed [`TaskBrowser`].
 pub fn run_tui<S>(source: &S, _options: TuiOptions) -> Result<(), TuiError>
 where
     S: TaskDescriptorSource + ?Sized,
@@ -126,6 +126,29 @@ where
         (Err(run), Ok(())) => Err(TuiError::Terminal(run)),
         (Ok(()), Err(restore)) => Err(TuiError::Terminal(restore)),
         (Err(run), Err(restore)) => Err(TuiError::RunAndRestore { run, restore }),
+    }
+}
+
+/// Run the full-screen task browser using compiled Rust tasks in this process.
+///
+/// Project-local binaries must link their task crate before calling this
+/// helper. A generic installed binary only sees registrations linked into that
+/// binary. The helper reports errors to stderr after terminal restoration and
+/// returns a process exit code. It does not parse CLI arguments.
+///
+/// ```no_run
+/// fn main() -> std::process::ExitCode {
+///     genja_cli::tui::run_main()
+/// }
+/// ```
+pub fn run_main() -> ExitCode {
+    let source = CompiledTaskDescriptorSource::new();
+    match run_tui(&source, TuiOptions::default()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
