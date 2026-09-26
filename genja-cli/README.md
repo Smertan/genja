@@ -20,6 +20,25 @@ publication.
 Neither option installs an executable automatically. Build a project-specific
 binary that links your tasks, then distribute that executable to end users.
 
+## Terminal User Interface (TUI)
+
+Genja's terminal user interface is being developed to browse task descriptors
+in a terminal. The opt-in `tui` feature currently exposes a basic browser
+screen that applications can embed or run full-screen through `genja_cli::tui`.
+
+The feature enables Ratatui and Crossterm support and is disabled by default.
+Projects using `genja` can enable `genja-tui`, which forwards to
+`genja-cli/tui` and also enables CLI support, exposing the same module at
+`genja::cli::tui`.
+
+`TaskBrowser` supports descriptor loading, action handling, and minimal
+rendering inside an existing Ratatui application. `run_tui(source, options)`
+provides a full-screen runner for callers with a descriptor source. A
+project-local binary can call `genja_cli::tui::run_main()` to use compiled Rust
+tasks linked into that binary. The `genja tui` command is not available yet.
+No separate TUI installation is required. See the
+[Terminal UI guide](../docs/tui.md) for the binary pattern and dependency setup.
+
 ## Project-Local Task Discovery
 
 Compiled Rust task discovery is process-local. A generic installed `genja`

@@ -13,6 +13,7 @@ categories = ["development-tools", "asynchronous", "network-programming"]
 
 [features]
 genja-cli = ["dep:genja-cli"]
+genja-tui = ["genja-cli", "genja-cli/tui"]
 
 [[example]]
 name = "task_discovery_cli"

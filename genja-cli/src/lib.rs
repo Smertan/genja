@@ -1,8 +1,13 @@
 //! First-party command-line interface for Genja automation workflows.
+//!
+//! The optional `tui` feature exposes an embeddable browser and a full-screen
+//! runner in `genja_cli::tui`, including a project-local `tui::run_main()` helper.
 
 pub mod commands;
 pub mod discovery;
 pub mod output;
+#[cfg(feature = "tui")]
+pub mod tui;
 
 use crate::commands::task::{TaskDescribeError, TaskDocsError, TaskListError};
 use crate::discovery::rust::CompiledTaskDescriptorSource;

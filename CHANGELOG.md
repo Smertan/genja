@@ -11,6 +11,13 @@ Changed packages:
 
 ### Added
 
+- Added `genja_cli::tui::run_main()` for project-local TUI binaries, with `genja::cli::tui::run_main()` available through the `genja-tui` feature. Refs: #126
+- Added a full-screen TUI runner that loads task descriptors before taking terminal control, redraws on selection and resize, and restores the terminal after exit or errors. Refs: #126
+- Added an embeddable TUI browser shell with host-owned Ratatui rendering, Crossterm event translation, selection actions, and quit requests. Refs: #126
+- Added terminal-independent TUI browser state and synchronous loading through the shared task descriptor discovery abstraction, with validated selection and retained discovery errors. Refs: #126
+
+- Added optional terminal user interface support in `genja-cli` behind the `tui` feature, with Ratatui/Crossterm dependencies and a forwarding `genja-tui` feature on `genja`. Refs: #126
+
 - Added an optional `genja-cli` feature to `genja`, exposing CLI helpers through `genja::cli` for project-specific binaries, with documentation for feature-based and direct CLI dependencies. Refs: #144
 - Added the `genja-cli` workspace crate with the first-party `genja` binary, top-level help, and version command. Refs: #120
 - Added a reusable CLI discovery abstraction for listing and describing task descriptors. Refs: #121
@@ -22,6 +29,7 @@ Changed packages:
 
 ### Changed
 
+- Moved the terminal user interface guide to its own page with a top-level documentation navigation entry. Refs: #126
 - Expanded the CLI guide with command examples, reproducible output samples, task identities, output formats and file exports, catalogue usage, discovery architecture and scope, and empty-result and error behaviour. Refs: #125
 - Included `genja-cli` in the unified Rust release train, with aligned version checks and publishing before its dependent `genja` crate. Refs: #144
 - **Breaking:** Changed Python task failure and message level enums to use Rust-backed bindings and reject raw string values in task result models. Use `TaskFailureKind.EXTERNAL` and `TaskMessageLevel.INFO` instead of raw strings such as `"external"` or `"info"`. Refs: #101

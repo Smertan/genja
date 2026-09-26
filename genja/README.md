@@ -60,6 +60,13 @@ A direct `genja-cli` dependency remains supported for dedicated CLI wrappers.
 See the [CLI guide](../docs/cli.md) for both setups, checkout-based dependencies,
 and deployment instructions.
 
+The optional `genja-tui` feature enables a basic terminal task browser screen
+through `genja::cli::tui`. It includes CLI support and is disabled by default.
+Browser state, descriptor loading, event handling, and minimal rendering are
+available, along with a full-screen runner. Project-local TUI binaries can call
+`genja::cli::tui::run_main()` after linking their task crate. See the
+[Terminal UI guide](../docs/tui.md) for the binary pattern and dependency setup.
+
 ## Quick Start
 
 ```rust

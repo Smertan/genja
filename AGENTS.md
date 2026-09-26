@@ -2,6 +2,12 @@
 
 Repository-specific instructions for AI coding agents working in this workspace.
 
+## Editing Workflow
+
+- Make small, focused edits with `apply_patch` when practical so changes are easy to review as they happen.
+- Explain each logical edit briefly before applying it, and share progress after each stage of a larger task.
+- Avoid bulk scripts that rewrite multiple files at once. Use them only when a focused patch would be impractical, and explain why first.
+
 ## Changelog Policy
 
 ### Scope
