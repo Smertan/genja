@@ -228,35 +228,64 @@ mod tests {
 
     #[test]
     fn failed_setup_restores_modes_that_may_have_changed() {
-        let (ops, calls) = fake(Some("enter_alternate"));
-        assert!(TerminalGuard::new(ops).is_err());
-        assert_eq!(
-            *calls.borrow(),
-            [
-                "enable_raw",
+        let cases: &[(&str, &[&str])] = &[
+            ("enable_raw", &["enable_raw", "disable_raw"]),
+            (
                 "enter_alternate",
-                "leave_alternate",
-                "disable_raw",
-            ]
-        );
+                &[
+                    "enable_raw",
+                    "enter_alternate",
+                    "leave_alternate",
+                    "disable_raw",
+                ],
+            ),
+            (
+                "hide_cursor",
+                &[
+                    "enable_raw",
+                    "enter_alternate",
+                    "hide_cursor",
+                    "show_cursor",
+                    "leave_alternate",
+                    "disable_raw",
+                ],
+            ),
+        ];
+        for &(failure, expected) in cases {
+            let (ops, calls) = fake(Some(failure));
+            let error = TerminalGuard::new(ops).err().expect("setup should fail");
+            assert_eq!(error.to_string(), format!("{failure} failed"));
+            assert_eq!(calls.borrow().as_slice(), expected, "{failure}");
+        }
     }
 
     #[test]
     fn restoration_continues_after_one_command_fails() {
-        let (ops, calls) = fake(Some("show_cursor"));
-        let mut guard = TerminalGuard::new(ops).unwrap_or_else(|_| panic!("setup failed"));
-        assert!(guard.restore().is_err());
-        assert_eq!(
-            *calls.borrow(),
-            [
-                "enable_raw",
-                "enter_alternate",
-                "hide_cursor",
-                "show_cursor",
-                "leave_alternate",
-                "disable_raw",
-            ]
-        );
+        for failure in ["show_cursor", "leave_alternate", "disable_raw"] {
+            let (ops, calls) = fake(Some(failure));
+            let mut guard = TerminalGuard::new(ops).unwrap_or_else(|_| panic!("setup failed"));
+            let error = guard.restore().unwrap_err();
+            assert_eq!(error.to_string(), format!("{failure} failed"));
+            assert_eq!(
+                *calls.borrow(),
+                [
+                    "enable_raw",
+                    "enter_alternate",
+                    "hide_cursor",
+                    "show_cursor",
+                    "leave_alternate",
+                    "disable_raw",
+                ],
+                "{failure}"
+            );
+            calls.borrow_mut().clear();
+            drop(guard);
+            assert_eq!(
+                *calls.borrow(),
+                [failure],
+                "Drop should retry only {failure}"
+            );
+        }
     }
 
     #[test]
