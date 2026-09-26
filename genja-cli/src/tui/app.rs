@@ -101,7 +101,7 @@ impl FullScreenApp {
 ///
 /// This is a minimal shell: task rows, filtering, details, and execution are
 /// not implemented. [`run_main`] selects compiled Rust discovery for
-/// project-local binaries; a `genja tui` command is separate follow-up work.
+/// project-local binaries. The CLI's `genja tui` command uses the same runner.
 /// Applications that already own a terminal should embed [`TaskBrowser`].
 pub fn run_tui<S>(source: &S, _options: TuiOptions) -> Result<(), TuiError>
 where

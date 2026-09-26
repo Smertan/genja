@@ -133,6 +133,24 @@ fn tui_command_is_unavailable_in_cli_only_builds() {
     assert!(stderr.contains("unrecognized subcommand 'tui'"), "{stderr}");
 }
 
+#[cfg(feature = "tui")]
+#[test]
+fn tui_startup_errors_report_failure_without_terminal_output() {
+    let output = genja_command()
+        .arg("tui")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("TUI command should run");
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 error");
+    assert_eq!(
+        stderr.trim_end(),
+        "error: terminal error: the TUI requires an interactive terminal"
+    );
+}
+
 #[test]
 fn task_help_prints_task_subcommands() {
     let output = genja_command()

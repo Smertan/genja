@@ -90,7 +90,7 @@ enum CliError {
     Docs(TaskDocsError),
     List(TaskListError),
     #[cfg(feature = "tui")]
-    TuiNotWired,
+    Tui(tui::TuiError),
 }
 
 impl fmt::Display for CliError {
@@ -100,7 +100,7 @@ impl fmt::Display for CliError {
             Self::Docs(error) => write!(f, "{error}"),
             Self::List(error) => write!(f, "{error}"),
             #[cfg(feature = "tui")]
-            Self::TuiNotWired => write!(f, "TUI command launching is not wired yet"),
+            Self::Tui(error) => write!(f, "{error}"),
         }
     }
 }
@@ -112,7 +112,7 @@ impl Error for CliError {
             Self::Docs(error) => Some(error),
             Self::List(error) => Some(error),
             #[cfg(feature = "tui")]
-            Self::TuiNotWired => None,
+            Self::Tui(error) => Some(error),
         }
     }
 }
@@ -141,7 +141,10 @@ fn execute(cli: Cli) -> Result<(), CliError> {
         },
         Some(Command::Version) => commands::version::print_version(),
         #[cfg(feature = "tui")]
-        Some(Command::Tui) => return Err(CliError::TuiNotWired),
+        Some(Command::Tui) => {
+            let source = CompiledTaskDescriptorSource::new();
+            tui::run_tui(&source, tui::TuiOptions::default()).map_err(CliError::Tui)?;
+        }
         None => {}
     }
 
