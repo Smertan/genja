@@ -52,6 +52,21 @@ my_project_cli task docs --help
 
 `version` prints the linked Genja CLI version, not your project's package version.
 
+### Terminal Task Browser
+
+With the `tui` feature on `genja-cli`, or `genja-tui` on `genja`, a
+project-local CLI binary can launch the basic terminal browser:
+
+```bash
+my_project_cli tui --help
+my_project_cli tui
+```
+
+Run it in an interactive terminal and press `q` or Escape to exit. The screen
+currently shows task counts and placeholder panels. Task rows, search, details,
+and execution are not implemented yet. Builds without TUI support omit this
+command. See the [Terminal UI guide](tui.md) for setup and terminal behaviour.
+
 ### List Tasks
 
 ```bash

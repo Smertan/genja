@@ -2,6 +2,7 @@
 //!
 //! The optional `tui` feature exposes an embeddable browser and a full-screen
 //! runner in `genja_cli::tui`, including a project-local `tui::run_main()` helper.
+//! It also enables the `genja tui` command, which launches the same basic screen.
 
 pub mod commands;
 pub mod discovery;

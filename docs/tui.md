@@ -122,7 +122,10 @@ source selected by `run_main()`.
 
 The runner loads descriptors before entering raw mode, then draws on startup,
 selection changes, and terminal resize. Press `q` or Escape to exit. It restores
-the terminal on normal exit, errors, and panic unwinding. `TuiOptions` has no
+the terminal on normal exit, errors, and panic unwinding: it leaves the alternate
+screen, makes the cursor visible, and restores normal keyboard input so the
+shell can be used again. If a cleanup operation fails, the runner reports the
+error and its guard retries unfinished cleanup when dropped. `TuiOptions` has no
 configurable settings yet. Discovery failures return before terminal setup;
 terminal failures return a `TuiError`. The screen currently shows task counts
 and placeholder panels rather than a complete browser.
