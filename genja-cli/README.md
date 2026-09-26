@@ -35,7 +35,8 @@ Projects using `genja` can enable `genja-tui`, which forwards to
 rendering inside an existing Ratatui application. `run_tui(source, options)`
 provides a full-screen runner for callers with a descriptor source. A
 project-local binary can call `genja_cli::tui::run_main()` to use compiled Rust
-tasks linked into that binary. The `genja tui` command is not available yet.
+tasks linked into that binary. With `tui` enabled, `genja tui` launches the
+same basic screen. Press `q` or Escape to exit.
 No separate TUI installation is required. See the
 [Terminal UI guide](../docs/tui.md) for the binary pattern and dependency setup.
 

@@ -3,7 +3,10 @@
 Genja is developing a terminal user interface for browsing task descriptors.
 Today, Rust applications can embed a basic browser screen in an existing
 Ratatui application or run that screen in a full-screen terminal session.
-There is no `genja tui` command yet.
+Run `genja tui` in a build with the `tui` feature to open the basic screen.
+Press `q` or Escape to quit. The screen currently shows task counts and
+placeholder panels; task list rows, search, details, and execution are not
+implemented yet.
 
 The browser is an optional part of `genja-cli`, enabled with its `tui` feature.
 Projects using the main `genja` crate can enable `genja-tui`, which also enables
@@ -27,10 +30,43 @@ genja-cli = { path = "../genja/genja-cli", features = ["tui"] }
 
 The `genja::cli::tui` or `genja_cli::tui` module provides browser state,
 descriptor loading, event handling, a basic screen, and a full-screen runner.
-The TUI's `run_main()` helper is available for project-local binaries. A
-`genja tui` command is not available yet. The design separates descriptor
-loading through the shared `TaskDescriptorSource` from browser state, events,
-rendering, and terminal ownership.
+The TUI's `run_main()` helper is available for project-local binaries.
+
+## Launch from the CLI
+
+From a checkout, launch the screen in an interactive terminal:
+
+```bash
+cargo run -p genja-cli --features tui -- tui
+```
+
+You can inspect the command help without entering terminal mode:
+
+```bash
+cargo run -p genja-cli --features tui -- tui --help
+```
+
+Without the `tui` feature, the command is omitted from help and rejected by
+the parser. Piped or redirected input/output is rejected before terminal setup.
+Startup and runtime errors return a failure exit code; errors are reported
+after the runner's terminal cleanup.
+
+A project-local CLI binary that calls `genja_cli::run_main()` can also expose
+this command when built with `tui`. For `genja::cli::run_main()`, enable
+`genja-tui`. Link the project task crate as described in the
+[CLI binary guide](cli.md#project-local-cli-binary), then run:
+
+```bash
+my_project_cli tui
+```
+
+Discovery sees compiled Rust tasks linked into the running binary, including
+when launched through the CLI command. It does not inspect another project's
+registrations on disk or call another CLI command.
+
+The design separates descriptor loading through the shared
+`TaskDescriptorSource` from browser state, events, rendering, and terminal
+ownership.
 
 ## Project-local TUI binary
 
@@ -86,7 +122,10 @@ source selected by `run_main()`.
 
 The runner loads descriptors before entering raw mode, then draws on startup,
 selection changes, and terminal resize. Press `q` or Escape to exit. It restores
-the terminal on normal exit, errors, and panic unwinding. `TuiOptions` has no
+the terminal on normal exit, errors, and panic unwinding: it leaves the alternate
+screen, makes the cursor visible, and restores normal keyboard input so the
+shell can be used again. If a cleanup operation fails, the runner reports the
+error and its guard retries unfinished cleanup when dropped. `TuiOptions` has no
 configurable settings yet. Discovery failures return before terminal setup;
 terminal failures return a `TuiError`. The screen currently shows task counts
 and placeholder panels rather than a complete browser.

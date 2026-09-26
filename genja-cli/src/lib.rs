@@ -2,6 +2,7 @@
 //!
 //! The optional `tui` feature exposes an embeddable browser and a full-screen
 //! runner in `genja_cli::tui`, including a project-local `tui::run_main()` helper.
+//! It also enables the `genja tui` command, which launches the same basic screen.
 
 pub mod commands;
 pub mod discovery;
@@ -34,6 +35,9 @@ struct Cli {
 enum Command {
     /// Discover and inspect registered tasks.
     Task(TaskCommand),
+    /// Open the terminal task browser.
+    #[cfg(feature = "tui")]
+    Tui,
     /// Print the Genja CLI version.
     Version,
 }
@@ -86,6 +90,8 @@ enum CliError {
     Describe(TaskDescribeError),
     Docs(TaskDocsError),
     List(TaskListError),
+    #[cfg(feature = "tui")]
+    Tui(tui::TuiError),
 }
 
 impl fmt::Display for CliError {
@@ -94,6 +100,8 @@ impl fmt::Display for CliError {
             Self::Describe(error) => write!(f, "{error}"),
             Self::Docs(error) => write!(f, "{error}"),
             Self::List(error) => write!(f, "{error}"),
+            #[cfg(feature = "tui")]
+            Self::Tui(error) => write!(f, "{error}"),
         }
     }
 }
@@ -104,6 +112,8 @@ impl Error for CliError {
             Self::Describe(error) => Some(error),
             Self::Docs(error) => Some(error),
             Self::List(error) => Some(error),
+            #[cfg(feature = "tui")]
+            Self::Tui(error) => Some(error),
         }
     }
 }
@@ -131,6 +141,11 @@ fn execute(cli: Cli) -> Result<(), CliError> {
             }
         },
         Some(Command::Version) => commands::version::print_version(),
+        #[cfg(feature = "tui")]
+        Some(Command::Tui) => {
+            let source = CompiledTaskDescriptorSource::new();
+            tui::run_tui(&source, tui::TuiOptions::default()).map_err(CliError::Tui)?;
+        }
         None => {}
     }
 
@@ -195,5 +210,19 @@ mod tests {
     #[test]
     fn run_main_has_binary_entrypoint_shape() {
         let _run_main: fn() -> ExitCode = run_main;
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn tui_parses_as_a_top_level_command() {
+        let cli = Cli::try_parse_from(["genja", "tui"]).expect("TUI command should parse");
+        assert!(matches!(cli.command, Some(Command::Tui)));
+    }
+
+    #[cfg(not(feature = "tui"))]
+    #[test]
+    fn tui_is_rejected_without_the_feature() {
+        let error = Cli::try_parse_from(["genja", "tui"]).expect_err("TUI should be disabled");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 }
