@@ -3,7 +3,9 @@
 Genja is developing a terminal user interface for browsing task descriptors.
 Today, Rust applications can embed a basic browser screen in an existing
 Ratatui application or run that screen in a full-screen terminal session.
-There is no `genja tui` command yet.
+The command name is `genja tui`. Builds with the `tui` feature include it in
+help, but launching the browser through that command is not wired yet.
+Use the project-local helper below to launch the screen today.
 
 The browser is an optional part of `genja-cli`, enabled with its `tui` feature.
 Projects using the main `genja` crate can enable `genja-tui`, which also enables
@@ -27,8 +29,15 @@ genja-cli = { path = "../genja/genja-cli", features = ["tui"] }
 
 The `genja::cli::tui` or `genja_cli::tui` module provides browser state,
 descriptor loading, event handling, a basic screen, and a full-screen runner.
-The TUI's `run_main()` helper is available for project-local binaries. A
-`genja tui` command is not available yet. The design separates descriptor
+The TUI's `run_main()` helper is available for project-local binaries.
+You can inspect the command help from a checkout without entering terminal mode:
+
+```bash
+cargo run -p genja-cli --features tui -- tui --help
+```
+
+Without the `tui` feature, the command is omitted from help and rejected by
+the parser. The design separates descriptor
 loading through the shared `TaskDescriptorSource` from browser state, events,
 rendering, and terminal ownership.
 

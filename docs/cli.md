@@ -8,7 +8,9 @@ and documenting registered task descriptors. Currently, CLI discovery supports
 
 Genja is developing an interactive task browser for the terminal. The current
 TUI feature lets Rust applications embed a basic browser screen or run it in a
-full-screen terminal session. A `genja tui` command is not available yet. See
+full-screen terminal session. Builds with the `tui` feature expose
+`genja tui --help`; launching the browser through that command is not wired
+yet. Builds without the feature omit the command. See
 the [Terminal UI guide](tui.md) for setup, usage, and current capabilities.
 
 ## Generic CLI

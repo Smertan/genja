@@ -98,6 +98,39 @@ fn help_prints_top_level_usage() {
     assert!(stdout.contains("Commands:"));
     assert!(stdout.contains("task"));
     assert!(stdout.contains("version"));
+    let has_tui_command = stdout
+        .lines()
+        .any(|line| line.split_whitespace().next() == Some("tui"));
+    assert_eq!(has_tui_command, cfg!(feature = "tui"));
+}
+
+#[cfg(feature = "tui")]
+#[test]
+fn tui_help_succeeds_without_starting_a_terminal_session() {
+    let output = genja_command()
+        .args(["tui", "--help"])
+        .output()
+        .expect("TUI help should run");
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 help");
+    assert!(stdout.contains("Usage: genja tui"), "{stdout}");
+    assert!(
+        stdout.contains("Open the terminal task browser"),
+        "{stdout}"
+    );
+}
+
+#[cfg(not(feature = "tui"))]
+#[test]
+fn tui_command_is_unavailable_in_cli_only_builds() {
+    let output = genja_command().arg("tui").output().expect("CLI should run");
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 error");
+    assert!(stderr.contains("unrecognized subcommand 'tui'"), "{stderr}");
 }
 
 #[test]
