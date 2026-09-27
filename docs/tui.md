@@ -161,8 +161,20 @@ if browser.handle_event(&event) == BrowserOutcome::QuitRequested {
 ```
 
 `handle_action()` accepts browser actions without Crossterm. `handle_event()`
-translates pressed Up and Down keys into selection changes and `q` or Escape
-into a quit request. Unhandled events return `Ignored` to the host. The shell
+supports these keyboard controls:
+
+| Keys | Action |
+| --- | --- |
+| Up / `k` | Select the previous task |
+| Down / `j` | Select the next task |
+| Home | Select the first task |
+| End | Select the last task |
+| `q` / Escape | Request quit |
+
+Navigation stops at either end and does nothing for an empty list. If selection
+has been cleared, Up/Down, `j`/`k`, and Home select the first task; End selects
+the last. Navigation keys require no modifiers. Key releases and repeats are
+ignored. Unhandled events return `Ignored` to the host. The shell
 shows a task count, reserved navigation and inspection areas, and status or
 discovery errors; task rows, filtering, and descriptor details are future work.
 The browser never enters raw mode, polls events, or restores the terminal.

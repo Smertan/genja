@@ -54,8 +54,10 @@ impl TaskBrowser {
 
     /// Apply a browser action without polling terminal input.
     ///
-    /// Selection stops at either end of the loaded snapshot. Quit requests are
-    /// returned to the host and do not alter browser state.
+    /// Selection stops at either end of the loaded snapshot. First/last actions
+    /// jump to the corresponding descriptor. With no selection, next/previous
+    /// select the first descriptor. Empty snapshots ignore navigation. Quit
+    /// requests are returned to the host and do not alter browser state.
     pub fn handle_action(&mut self, action: BrowserAction) -> BrowserOutcome {
         let selection = match action {
             BrowserAction::SelectNext => self
@@ -68,6 +70,8 @@ impl TaskBrowser {
                 .selected_index()
                 .map(|index| index.saturating_sub(1))
                 .or_else(|| (!self.state.descriptors().is_empty()).then_some(0)),
+            BrowserAction::SelectFirst => (!self.state.descriptors().is_empty()).then_some(0),
+            BrowserAction::SelectLast => self.state.descriptors().len().checked_sub(1),
             BrowserAction::Quit => return BrowserOutcome::QuitRequested,
         };
 

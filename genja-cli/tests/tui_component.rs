@@ -75,6 +75,85 @@ fn action_dispatch_changes_selection_and_asks_host_to_quit() {
 }
 
 #[test]
+fn navigation_keys_move_selection_and_stop_at_both_ends() {
+    let mut browser = TaskBrowser::new();
+    browser
+        .load_from(&Source(Ok(vec![
+            descriptor("first"),
+            descriptor("middle"),
+            descriptor("last"),
+        ])))
+        .unwrap();
+
+    let cases = [
+        (KeyCode::End, 2, BrowserOutcome::Changed),
+        (KeyCode::End, 2, BrowserOutcome::Ignored),
+        (KeyCode::Down, 2, BrowserOutcome::Ignored),
+        (KeyCode::Char('j'), 2, BrowserOutcome::Ignored),
+        (KeyCode::Char('k'), 1, BrowserOutcome::Changed),
+        (KeyCode::Home, 0, BrowserOutcome::Changed),
+        (KeyCode::Home, 0, BrowserOutcome::Ignored),
+        (KeyCode::Up, 0, BrowserOutcome::Ignored),
+        (KeyCode::Char('k'), 0, BrowserOutcome::Ignored),
+        (KeyCode::Char('j'), 1, BrowserOutcome::Changed),
+        (KeyCode::Down, 2, BrowserOutcome::Changed),
+        (KeyCode::Char('q'), 2, BrowserOutcome::QuitRequested),
+        (KeyCode::Esc, 2, BrowserOutcome::QuitRequested),
+    ];
+    for (code, selection, outcome) in cases {
+        assert_eq!(
+            browser.handle_event(&key(code, KeyModifiers::NONE, KeyEventKind::Press)),
+            outcome,
+            "{code:?}"
+        );
+        assert_eq!(
+            browser.state().selected_index(),
+            Some(selection),
+            "{code:?}"
+        );
+    }
+}
+
+#[test]
+fn navigation_handles_empty_single_task_and_cleared_selection() {
+    let actions = [
+        BrowserAction::SelectNext,
+        BrowserAction::SelectPrevious,
+        BrowserAction::SelectFirst,
+        BrowserAction::SelectLast,
+    ];
+    let mut browser = TaskBrowser::new();
+    for action in actions {
+        assert_eq!(browser.handle_action(action), BrowserOutcome::Ignored);
+        assert_eq!(browser.state().selected_index(), None);
+    }
+
+    for count in [1, 3] {
+        browser
+            .load_from(&Source(Ok((0..count)
+                .map(|index| descriptor(&format!("task-{index}")))
+                .collect())))
+            .unwrap();
+        for action in actions {
+            assert!(browser.state_mut().select(None));
+            assert_eq!(browser.handle_action(action), BrowserOutcome::Changed);
+            let expected = if action == BrowserAction::SelectLast {
+                count - 1
+            } else {
+                0
+            };
+            assert_eq!(browser.state().selected_index(), Some(expected));
+        }
+    }
+
+    browser.load_from(&Source(Ok(Vec::new()))).unwrap();
+    for action in actions {
+        assert_eq!(browser.handle_action(action), BrowserOutcome::Ignored);
+        assert_eq!(browser.state().selected_index(), None);
+    }
+}
+
+#[test]
 fn unselected_and_empty_browsers_keep_selection_valid() {
     let mut browser = TaskBrowser::new();
     assert_eq!(
@@ -130,6 +209,32 @@ fn event_translation_leaves_unrecognized_events_to_host() {
     for event in ignored {
         assert_eq!(action_from_event(&event), None);
         assert_eq!(browser.handle_event(&event), BrowserOutcome::Ignored);
+    }
+
+    for code in [
+        KeyCode::Up,
+        KeyCode::Down,
+        KeyCode::Char('j'),
+        KeyCode::Char('k'),
+        KeyCode::Home,
+        KeyCode::End,
+    ] {
+        for modifiers in [
+            KeyModifiers::SHIFT,
+            KeyModifiers::CONTROL,
+            KeyModifiers::ALT,
+        ] {
+            assert_eq!(
+                action_from_event(&key(code, modifiers, KeyEventKind::Press)),
+                None
+            );
+        }
+        for kind in [KeyEventKind::Release, KeyEventKind::Repeat] {
+            assert_eq!(
+                action_from_event(&key(code, KeyModifiers::NONE, kind)),
+                None
+            );
+        }
     }
 }
 

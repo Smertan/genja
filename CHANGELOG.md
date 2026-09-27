@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added `j`/`k` and Home/End task selection controls to the optional terminal user interface, with bounded navigation for empty and loaded task lists. Refs: #128
 - Added `genja tui` behind the optional `tui` feature to launch the basic terminal task browser using compiled Rust task discovery. Press `q` or Escape to exit; full task browsing is not implemented yet. Refs: #127
 - Added `genja_cli::tui::run_main()` for project-local TUI binaries, with `genja::cli::tui::run_main()` available through the `genja-tui` feature. Refs: #126
 - Added a full-screen TUI runner that loads task descriptors before taking terminal control, redraws on selection and resize, and restores the terminal after exit or errors. Refs: #126
