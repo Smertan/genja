@@ -42,6 +42,15 @@ fn row(terminal: &Terminal<TestBackend>, y: u16) -> String {
         .collect()
 }
 
+fn assert_selected_visible(terminal: &Terminal<TestBackend>, id: &str) {
+    let selected: Vec<_> = (0..terminal.backend().buffer().area.height)
+        .map(|y| row(terminal, y))
+        .filter(|line| line.contains('>'))
+        .collect();
+    assert_eq!(selected.len(), 1, "{selected:?}");
+    assert!(selected[0].contains(id), "{selected:?}");
+}
+
 #[test]
 fn action_dispatch_changes_selection_and_asks_host_to_quit() {
     let mut browser = TaskBrowser::new();
@@ -335,6 +344,121 @@ fn task_table_renders_fields_in_discovery_order_and_moves_highlight() {
     assert!(!row(&terminal, 3).contains('>'));
     assert!(!row(&terminal, 4).contains('>'));
     assert_eq!(browser.state().selected_index(), None);
+}
+
+#[test]
+fn long_list_navigation_keeps_selection_visible_without_changing_descriptors() {
+    let descriptors: Vec<_> = (0..30)
+        .map(|index| descriptor(&format!("task-{index:02}")))
+        .collect();
+    let mut browser = TaskBrowser::new();
+    browser.load_from(&Source(Ok(descriptors.clone()))).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(120, 9)).unwrap();
+
+    for index in 0..30 {
+        terminal
+            .draw(|frame| browser.render(frame, frame.area()))
+            .unwrap();
+        assert_selected_visible(&terminal, &format!("task-{index:02}"));
+        browser.handle_action(BrowserAction::SelectNext);
+    }
+    assert_eq!(browser.state().selected_index(), Some(29));
+    for index in (0..30).rev() {
+        terminal
+            .draw(|frame| browser.render(frame, frame.area()))
+            .unwrap();
+        assert_selected_visible(&terminal, &format!("task-{index:02}"));
+        browser.handle_action(BrowserAction::SelectPrevious);
+    }
+    assert_eq!(browser.state().selected_index(), Some(0));
+    for (action, id, index) in [
+        (BrowserAction::SelectLast, "task-29", 29),
+        (BrowserAction::SelectFirst, "task-00", 0),
+    ] {
+        browser.handle_action(action);
+        terminal
+            .draw(|frame| browser.render(frame, frame.area()))
+            .unwrap();
+        assert_selected_visible(&terminal, id);
+        assert_eq!(browser.state().selected_index(), Some(index));
+    }
+    assert_eq!(browser.state().descriptors(), descriptors);
+}
+
+#[test]
+fn resize_and_cleared_selection_recompute_the_viewport() {
+    let mut browser = TaskBrowser::new();
+    browser
+        .load_from(&Source(Ok((0..30)
+            .map(|index| descriptor(&format!("t{index:02}")))
+            .collect())))
+        .unwrap();
+    assert!(browser.state_mut().select(Some(20)));
+    let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
+    for (width, height) in [(120, 12), (80, 6), (50, 6), (30, 8), (120, 35)] {
+        terminal.backend_mut().resize(width, height);
+        terminal
+            .draw(|frame| browser.render(frame, frame.area()))
+            .unwrap();
+        assert_selected_visible(&terminal, "t20");
+        assert_eq!(browser.state().selected_index(), Some(20));
+    }
+
+    assert!(browser.state_mut().select(None));
+    terminal.backend_mut().resize(120, 9);
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!(row(&terminal, 3).contains("t00"));
+    assert!(!(0..9).any(|y| row(&terminal, y).contains('>')));
+    assert_eq!(browser.state().selected_index(), None);
+}
+
+#[test]
+fn narrow_tables_prioritize_identity_and_keep_quit_guidance() {
+    let mut task = descriptor("task-id");
+    task.name = "task-name".to_string();
+    task.constructible = true;
+    let mut browser = TaskBrowser::new();
+    browser.load_from(&Source(Ok(vec![task]))).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(120, 8)).unwrap();
+    for width in [120, 80, 50, 30] {
+        terminal.backend_mut().resize(width, 8);
+        terminal
+            .draw(|frame| browser.render(frame, frame.area()))
+            .unwrap();
+        assert_selected_visible(&terminal, "task-id");
+        let header = row(&terminal, 2);
+        assert!(header.contains("ID"));
+        assert_eq!(header.contains("NAME"), width >= 64);
+        assert_eq!(header.contains("MODE"), width >= 40);
+        if width >= 40 {
+            assert!(row(&terminal, 3).contains("1.0.0"));
+            assert!(row(&terminal, 3).contains("blocking"));
+            assert!(row(&terminal, 3).contains("yes"));
+        }
+        assert!(row(&terminal, 7).contains("quit"));
+    }
+}
+
+#[test]
+fn unicode_rows_render_safely_in_tiny_areas() {
+    let mut browser = TaskBrowser::new();
+    browser
+        .load_from(&Source(Ok(vec![descriptor(
+            "例子🌱.a_very_long_task_identifier",
+        )])))
+        .unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
+    for width in [0, 1, 2, 3, 8, 20, 39, 40, 63, 64, 99, 100] {
+        for height in 0..=6 {
+            terminal.backend_mut().resize(width, height);
+            terminal
+                .draw(|frame| browser.render(frame, frame.area()))
+                .unwrap();
+            assert_eq!(browser.state().selected_index(), Some(0));
+        }
+    }
 }
 
 #[test]

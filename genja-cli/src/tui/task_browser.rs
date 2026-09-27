@@ -97,8 +97,9 @@ impl TaskBrowser {
     /// The area is clipped to the frame and may be empty. Rendering does not
     /// load tasks or change browser state. The caller retains terminal and
     /// drawing ownership, so this component can be embedded in another app.
-    /// Rows preserve discovery order. Scrolling is not implemented yet, so
-    /// tasks beyond the available table height are clipped.
+    /// Rows preserve discovery order. The visible range follows selection and
+    /// is recomputed on resize without changing state. Narrow areas shorten
+    /// headers and omit lower-priority columns; cell text is clipped to fit.
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect) {
         render_browser(&self.state, frame, area);
     }

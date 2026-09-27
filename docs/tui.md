@@ -149,9 +149,24 @@ shell can be used again. If a cleanup operation fails, the runner reports the
 error and its guard retries unfinished cleanup when dropped. `TuiOptions` has no
 configurable settings yet. Discovery failures return before terminal setup;
 terminal failures return a `TuiError`. The table preserves discovery ordering.
-Scrolling and narrow-terminal column refinements are not implemented yet;
-rows beyond the available table height are clipped, including the selected
-row if navigation moves beyond the visible area.
+The visible range follows selection, keeping it near the middle where possible.
+Home and End reveal the first and last task; resizing recomputes the visible
+range without changing selection or descriptor ordering. A browser area needs
+at least six lines to display a task row with the title, borders, header, and
+quit guidance.
+
+Columns adapt to the browser area's width:
+
+| Width in terminal cells | Visible columns |
+| --- | --- |
+| 100 or more | ID, version, name, mode, constructible |
+| 64–99 | All five fields, with shorter headers |
+| 40–63 | ID, version, mode, constructible |
+| Under 40 | ID only |
+
+Long cell values are clipped to fit. Widen the terminal to reveal more text and
+columns. The `CONSTR.` header means constructible. Quit guidance is shortened
+on narrow screens, and rendering safely handles areas too small for task rows.
 
 `TaskBrowser::new()` creates an empty browser. Call `load_from(&source)` with
 any `TaskDescriptorSource`, including a trait object, to synchronously load an

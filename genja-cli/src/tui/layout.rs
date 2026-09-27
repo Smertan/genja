@@ -36,7 +36,16 @@ pub(super) fn render_browser(state: &TaskBrowserState, frame: &mut Frame<'_>, ar
 
     if rows[2].height > 0 {
         let status = state.error().map_or_else(
-            || "Up/k Down/j: move | Home/End: first/last | q / Esc: quit".to_string(),
+            || {
+                if rows[2].width >= 56 {
+                    "Up/k Down/j: move | Home/End: first/last | q / Esc: quit"
+                } else if rows[2].width >= 25 {
+                    "j/k: move | q / Esc: quit"
+                } else {
+                    "q/Esc: quit"
+                }
+                .to_string()
+            },
             |error| format!("Discovery error: {error}"),
         );
         frame.render_widget(Paragraph::new(status), rows[2]);
