@@ -462,23 +462,96 @@ fn unicode_rows_render_safely_in_tiny_areas() {
 }
 
 #[test]
-fn shell_shows_empty_count_and_discovery_error() {
+fn empty_and_error_screens_are_distinct_and_keep_quit_guidance() {
     let mut browser = TaskBrowser::new();
     browser.load_from(&Source(Ok(Vec::new()))).unwrap();
-    let mut terminal = Terminal::new(TestBackend::new(80, 4)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 14)).unwrap();
     terminal
         .draw(|frame| browser.render(frame, frame.area()))
         .unwrap();
     assert!(row(&terminal, 0).contains("Genja tasks (0)"));
+    assert!(row(&terminal, 2).contains("No registered tasks available."));
+    let empty_text = (0..14)
+        .map(|y| row(&terminal, y))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(empty_text.contains("link your task crate"));
+    assert!(empty_text.contains("#[genja_task(name = \"my_task\")]"));
+    assert!(empty_text.contains("impl MyTask"));
+    assert!(empty_text.contains("use my_project_tasks as _;"));
+    assert!(row(&terminal, 5).starts_with("│  #[genja_task"));
+    assert_eq!(
+        terminal.backend().buffer()[(3, 5)].fg,
+        ratatui::style::Color::Cyan
+    );
+    assert_eq!(
+        terminal.backend().buffer()[(3, 5)].bg,
+        ratatui::style::Color::DarkGray
+    );
+    assert!(
+        terminal.backend().buffer()[(1, 4)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+    assert!(row(&terminal, 13).contains("q / Esc: quit"));
+    assert_eq!(browser.state().selected_index(), None);
 
     let error = DiscoveryError::source_failed("registry unavailable");
     assert_eq!(browser.load_from(&Source(Err(error.clone()))), Err(error));
     terminal
         .draw(|frame| browser.render(frame, frame.area()))
         .unwrap();
-    assert!(
-        row(&terminal, 3)
-            .contains("Discovery error: task descriptor source failed: registry unavailable")
+    let error_text = (0..14)
+        .map(|y| row(&terminal, y))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(error_text.contains("Discovery error"));
+    assert!(error_text.contains("Unable to load task descriptors."));
+    assert!(error_text.contains("registry unavailable"));
+    assert!(error_text.contains("my_project_cli task list"));
+    assert!(error_text.contains("Replace my_project_cli with your binary name."));
+    assert!(!error_text.contains("No registered tasks available."));
+    assert!(row(&terminal, 13).contains("q / Esc: quit"));
+    assert_eq!(browser.state().selected_index(), None);
+
+    browser
+        .load_from(&Source(Ok(vec![descriptor("recovered")])))
+        .unwrap();
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert_selected_visible(&terminal, "recovered");
+    assert!(browser.state().error().is_none());
+    assert_eq!(browser.state().selected_index(), Some(0));
+    assert!(!(0..14).any(|y| row(&terminal, y).contains("Discovery error")));
+}
+
+#[test]
+fn loading_error_renders_safely_in_small_embedded_areas() {
+    let error = DiscoveryError::source_failed(
+        "例子: registry unavailable; check the descriptor source configuration",
+    );
+    let mut browser = TaskBrowser::new();
+    assert_eq!(
+        browser.load_from(&Source(Err(error.clone()))),
+        Err(error.clone())
+    );
+    let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+    for area in [
+        Rect::new(0, 0, 40, 12),
+        Rect::new(2, 2, 25, 8),
+        Rect::new(0, 0, 8, 6),
+        Rect::new(0, 0, 1, 1),
+        Rect::new(0, 0, 0, 0),
+        Rect::new(50, 50, 8, 8),
+    ] {
+        terminal.draw(|frame| browser.render(frame, area)).unwrap();
+        assert_eq!(browser.state().error(), Some(&error));
+        assert_eq!(browser.state().selected_index(), None);
+    }
+    assert_eq!(
+        browser.handle_action(BrowserAction::Quit),
+        BrowserOutcome::QuitRequested
     );
 }
 

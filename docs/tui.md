@@ -147,8 +147,8 @@ the terminal on normal exit, errors, and panic unwinding: it leaves the alternat
 screen, makes the cursor visible, and restores normal keyboard input so the
 shell can be used again. If a cleanup operation fails, the runner reports the
 error and its guard retries unfinished cleanup when dropped. `TuiOptions` has no
-configurable settings yet. Discovery failures return before terminal setup;
-terminal failures return a `TuiError`. The table preserves discovery ordering.
+configurable settings yet. Terminal failures return a `TuiError`. The table
+preserves discovery ordering.
 The visible range follows selection, keeping it near the middle where possible.
 Home and End reveal the first and last task; resizing recomputes the visible
 range without changing selection or descriptor ordering. A browser area needs
@@ -167,6 +167,45 @@ Columns adapt to the browser area's width:
 Long cell values are clipped to fit. Widen the terminal to reveal more text and
 columns. The `CONSTR.` header means constructible. Quit guidance is shortened
 on narrow screens, and rendering safely handles areas too small for task rows.
+
+### Empty Results And Loading Errors
+
+An empty result shows **No registered tasks available**, with a reminder that
+compiled Rust tasks must be linked into a project-local CLI/TUI binary. This
+is a successful discovery result; quitting returns a success exit code. The
+screen shows the minimum annotation for discovering an existing task
+implementation and the line that links its crate into your CLI/TUI binary:
+
+```rust
+#[genja_task(name = "my_task")]
+impl MyTask { /* start or start_async method */ }
+```
+
+```rust
+use my_project_tasks as _;
+```
+
+These are illustrative snippets: replace the names and supply the task's
+implementation. The annotation enables descriptor discovery with a generated
+ID; explicit `registration(...)` adds a stable ID and construction factory.
+See [Task Registration](task-registration.md) for complete construction and
+registration guidance, or run the
+[task browser example](examples.md#cli-and-tui-task-browser) from a repository
+checkout to inspect working sample tasks.
+
+A discovery failure shows a **Discovery error** screen with the source's error
+message. The screen suggests checking compiled Rust discovery with
+`my_project_cli task list`; replace `my_project_cli` with your project-local CLI
+binary's name. Press `q` or Escape to close the screen. The runner restores the
+terminal, then returns `TuiError::Discovery`; the CLI reports the error on stderr
+and exits with failure. A terminal startup, rendering, or cleanup failure takes
+precedence over the discovery error.
+
+Discovery still finishes before terminal setup, but a discovery failure no
+longer returns immediately from `run_tui`. Embedded callers retain the existing
+`TaskBrowser::load_from()` behaviour: it returns the error immediately and stores
+it in browser state so the host can choose whether to render it. A later
+successful load clears that error and shows the loaded tasks or empty state.
 
 `TaskBrowser::new()` creates an empty browser. Call `load_from(&source)` with
 any `TaskDescriptorSource`, including a trait object, to synchronously load an

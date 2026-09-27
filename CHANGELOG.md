@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added distinct TUI empty-result and descriptor-loading error screens with task-linking guidance, example next steps, and visible quit controls. Refs: #128
 - Added selection-following scrolling and responsive TUI task table columns, preserving selection on resize and compact quit guidance on narrow screens. Refs: #128
 - Added a TUI task table displaying descriptor IDs, versions, names, execution modes, and constructible status, with a visible selection marker and highlight. Refs: #128
 - Added a `task_browser` Rust example with two linked sample tasks for exploring CLI descriptor listing, inspection, and the optional terminal user interface. Refs: #128
@@ -34,6 +35,7 @@ Changed packages:
 
 ### Changed
 
+- The full-screen TUI now displays discovery failures until the user quits, then returns the loading error after terminal cleanup; embedded descriptor loading still returns errors immediately. Refs: #128
 - Clarified the constructible descriptor field in the task registration, CLI, and TUI guides, including how example task structs determine its value. Refs: #128
 - Moved the terminal user interface guide to its own page with a top-level documentation navigation entry. Refs: #126
 - Expanded the CLI guide with command examples, reproducible output samples, task identities, output formats and file exports, catalogue usage, discovery architecture and scope, and empty-result and error behaviour. Refs: #125
