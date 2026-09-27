@@ -13,6 +13,10 @@ pub enum BrowserAction {
     SelectNext,
     /// Select the previous descriptor, if one exists.
     SelectPrevious,
+    /// Select the first descriptor, if one exists.
+    SelectFirst,
+    /// Select the last descriptor, if one exists.
+    SelectLast,
     /// Ask the host application to quit.
     Quit,
 }
@@ -31,9 +35,10 @@ pub enum BrowserOutcome {
 
 /// Translate a Crossterm event into a browser action.
 ///
-/// Key releases and repeats are ignored. Arrow keys change selection; `q`
-/// without Control or Alt and Escape request exit. Resize, focus, mouse, and
-/// paste events remain available to the host application.
+/// Key releases and repeats are ignored. Unmodified Down/`j` and Up/`k` change
+/// selection; Home and End select the first and last descriptor. `q` without
+/// Control or Alt and unmodified Escape request exit. Resize, focus, mouse,
+/// and paste events remain available to the host application.
 pub fn action_from_event(event: &Event) -> Option<BrowserAction> {
     let Event::Key(key) = event else {
         return None;
@@ -43,8 +48,14 @@ pub fn action_from_event(event: &Event) -> Option<BrowserAction> {
     }
 
     match key.code {
-        KeyCode::Down if key.modifiers.is_empty() => Some(BrowserAction::SelectNext),
-        KeyCode::Up if key.modifiers.is_empty() => Some(BrowserAction::SelectPrevious),
+        KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+            Some(BrowserAction::SelectNext)
+        }
+        KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+            Some(BrowserAction::SelectPrevious)
+        }
+        KeyCode::Home if key.modifiers.is_empty() => Some(BrowserAction::SelectFirst),
+        KeyCode::End if key.modifiers.is_empty() => Some(BrowserAction::SelectLast),
         KeyCode::Char('q')
             if !key
                 .modifiers

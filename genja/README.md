@@ -62,7 +62,7 @@ and deployment instructions.
 
 The optional `genja-tui` feature enables a basic terminal task browser screen
 through `genja::cli::tui`. It includes CLI support and is disabled by default.
-Browser state, descriptor loading, event handling, and minimal rendering are
+Browser state, descriptor loading, event handling, and task table rendering are
 available, along with a full-screen runner. Project-local TUI binaries can call
 `genja::cli::tui::run_main()` after linking their task crate. Project-local CLI
 binaries using `genja::cli::run_main()` also expose the `tui` command when this

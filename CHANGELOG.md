@@ -11,6 +11,11 @@ Changed packages:
 
 ### Added
 
+- Added distinct TUI empty-result and descriptor-loading error screens with task-linking guidance, example next steps, and visible quit controls. Refs: #128
+- Added selection-following scrolling and responsive TUI task table columns, preserving selection on resize and compact quit guidance on narrow screens. Refs: #128
+- Added a TUI task table displaying descriptor IDs, versions, names, execution modes, and constructible status, with a visible selection marker and highlight. Refs: #128
+- Added a `task_browser` Rust example with two linked sample tasks for exploring CLI descriptor listing, inspection, and the optional terminal user interface. Refs: #128
+- Added `j`/`k` and Home/End task selection controls to the optional terminal user interface, with bounded navigation for empty and loaded task lists. Refs: #128
 - Added `genja tui` behind the optional `tui` feature to launch the basic terminal task browser using compiled Rust task discovery. Press `q` or Escape to exit; full task browsing is not implemented yet. Refs: #127
 - Added `genja_cli::tui::run_main()` for project-local TUI binaries, with `genja::cli::tui::run_main()` available through the `genja-tui` feature. Refs: #126
 - Added a full-screen TUI runner that loads task descriptors before taking terminal control, redraws on selection and resize, and restores the terminal after exit or errors. Refs: #126
@@ -30,6 +35,8 @@ Changed packages:
 
 ### Changed
 
+- The full-screen TUI now displays discovery failures until the user quits, then returns the loading error after terminal cleanup; embedded descriptor loading still returns errors immediately. Refs: #128
+- Clarified the constructible descriptor field in the task registration, CLI, and TUI guides, including how example task structs determine its value. Refs: #128
 - Moved the terminal user interface guide to its own page with a top-level documentation navigation entry. Refs: #126
 - Expanded the CLI guide with command examples, reproducible output samples, task identities, output formats and file exports, catalogue usage, discovery architecture and scope, and empty-result and error behaviour. Refs: #125
 - Included `genja-cli` in the unified Rust release train, with aligned version checks and publishing before its dependent `genja` crate. Refs: #144

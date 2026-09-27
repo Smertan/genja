@@ -23,7 +23,7 @@ pub struct TuiOptions {}
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum TuiError {
-    /// The descriptor source failed before terminal setup.
+    /// Descriptor loading failed; returned after displaying the error and quitting.
     Discovery(DiscoveryError),
     /// Terminal setup, drawing, event reading, or restoration failed.
     Terminal(io::Error),
@@ -67,16 +67,25 @@ struct FullScreenApp {
 }
 
 impl FullScreenApp {
-    fn load<S>(source: &S) -> Result<Self, TuiError>
+    fn load<S>(source: &S) -> Self
     where
         S: TaskDescriptorSource + ?Sized,
     {
         let mut browser = TaskBrowser::new();
-        browser.load_from(source).map_err(TuiError::Discovery)?;
-        Ok(Self {
+        // Loading records failures in browser state for the initial error screen.
+        let _ = browser.load_from(source);
+        Self {
             browser,
             quit_requested: false,
-        })
+        }
+    }
+
+    fn finish(&self, terminal_result: Result<(), TuiError>) -> Result<(), TuiError> {
+        terminal_result?;
+        match self.browser.state().error() {
+            Some(error) => Err(TuiError::Discovery(error.clone())),
+            None => Ok(()),
+        }
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
@@ -94,22 +103,23 @@ impl FullScreenApp {
 /// Run the minimal task browser in a full-screen terminal session.
 ///
 /// Descriptor loading is synchronous and finishes before raw mode or the
-/// alternate screen is entered. On success, the runner draws once, then redraws
+/// alternate screen is entered. The runner draws the task or error screen once, then redraws
 /// after selection changes or resize events. Press `q` or Escape to leave.
 /// The terminal is restored after normal exit, returned errors, and panic
-/// unwinding. A discovery error returns without touching terminal modes.
+/// unwinding. Discovery failures are displayed until the user quits, then
+/// returned after terminal cleanup. Terminal failures take precedence.
 ///
-/// This is a minimal shell: task rows, filtering, details, and execution are
-/// not implemented. [`run_main`] selects compiled Rust discovery for
+/// The table displays descriptors and keeps selection visible. Filtering, details,
+/// and execution are not implemented. [`run_main`] selects compiled Rust discovery for
 /// project-local binaries. The CLI's `genja tui` command uses the same runner.
 /// Applications that already own a terminal should embed [`TaskBrowser`].
 pub fn run_tui<S>(source: &S, _options: TuiOptions) -> Result<(), TuiError>
 where
     S: TaskDescriptorSource + ?Sized,
 {
-    let mut app = FullScreenApp::load(source)?;
+    let mut app = FullScreenApp::load(source);
     let mut session = TerminalSession::new().map_err(TuiError::Terminal)?;
-    run_and_restore(
+    let terminal_result = run_and_restore(
         &mut session,
         |session| {
             run_loop(
@@ -124,7 +134,8 @@ where
             )
         },
         TerminalSession::restore,
-    )
+    );
+    app.finish(terminal_result)
 }
 
 // Keep cleanup in one path, including when running and restoring both fail.
@@ -223,19 +234,84 @@ mod tests {
     }
 
     #[test]
-    fn discovery_fails_before_terminal_ownership() {
+    fn discovery_error_is_retained_until_quit_and_returned_after_cleanup() {
         let error = DiscoveryError::source_failed("registry unavailable");
         let source = Source(Err(error.clone()));
+        let mut app = FullScreenApp::load(&source);
+        assert_eq!(app.browser.state().error(), Some(&error));
+        assert_eq!(app.browser.state().selected_index(), None);
+        let mut calls = Vec::new();
+        let terminal_result = run_and_restore(
+            &mut calls,
+            |calls| {
+                calls.push("run");
+                run_loop(
+                    &mut app,
+                    |browser| {
+                        assert_eq!(browser.state().error(), Some(&error));
+                        Ok(())
+                    },
+                    || Ok(key(KeyCode::Char('q'))),
+                )
+            },
+            |calls| {
+                calls.push("restore");
+                Ok(())
+            },
+        );
+        assert_eq!(calls, ["run", "restore"]);
+        assert!(app.quit_requested);
         assert!(matches!(
-            run_tui(&source, TuiOptions::default()),
+            app.finish(terminal_result),
             Err(TuiError::Discovery(actual)) if actual == error
         ));
     }
 
     #[test]
+    fn terminal_errors_take_precedence_over_discovery_errors() {
+        let app = FullScreenApp::load(&Source(Err(DiscoveryError::source_failed(
+            "registry unavailable",
+        ))));
+        for (run_fails, restore_fails) in [(true, false), (false, true), (true, true)] {
+            let terminal_result = run_and_restore(
+                &mut (),
+                |_| {
+                    if run_fails {
+                        Err(io::Error::other("run failed"))
+                    } else {
+                        Ok(())
+                    }
+                },
+                |_| {
+                    if restore_fails {
+                        Err(io::Error::other("restore failed"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            let error = app.finish(terminal_result).unwrap_err();
+            assert!(!matches!(error, TuiError::Discovery(_)));
+            assert!(error.to_string().contains(if run_fails {
+                "run failed"
+            } else {
+                "restore failed"
+            }));
+        }
+    }
+
+    #[test]
+    fn empty_browser_quits_successfully() {
+        let mut app = FullScreenApp::load(&Source(Ok(Vec::new())));
+        run_loop(&mut app, |_| Ok(()), || Ok(key(KeyCode::Esc))).unwrap();
+        assert!(app.quit_requested);
+        assert!(app.finish(Ok(())).is_ok());
+    }
+
+    #[test]
     fn runner_restores_after_initial_draw_redraw_and_event_read_errors() {
         for failure in ["initial draw", "redraw", "event read"] {
-            let mut app = FullScreenApp::load(&Source(Ok(Vec::new()))).unwrap();
+            let mut app = FullScreenApp::load(&Source(Ok(Vec::new())));
             let mut calls = Vec::new();
             let draws = Cell::new(0);
             let result = run_and_restore(
@@ -307,8 +383,7 @@ mod tests {
     #[test]
     fn loop_draws_on_startup_resize_and_selection_then_quits() {
         let mut app =
-            FullScreenApp::load(&Source(Ok(vec![descriptor("first"), descriptor("second")])))
-                .unwrap();
+            FullScreenApp::load(&Source(Ok(vec![descriptor("first"), descriptor("second")])));
         let mut terminal = Terminal::new(TestBackend::new(40, 6)).unwrap();
         let events = VecDeque::from([
             Event::Resize(40, 6),
@@ -338,7 +413,7 @@ mod tests {
 
     #[test]
     fn loop_propagates_event_read_errors() {
-        let mut app = FullScreenApp::load(&Source(Ok(Vec::new()))).unwrap();
+        let mut app = FullScreenApp::load(&Source(Ok(Vec::new())));
         let draws = Cell::new(0);
         let result = run_loop(
             &mut app,
@@ -355,7 +430,7 @@ mod tests {
 
     #[test]
     fn loop_propagates_redraw_errors_without_reading_more_events() {
-        let mut app = FullScreenApp::load(&Source(Ok(vec![descriptor("only")]))).unwrap();
+        let mut app = FullScreenApp::load(&Source(Ok(vec![descriptor("only")])));
         let draws = Cell::new(0);
         let reads = Cell::new(0);
         let result = run_loop(

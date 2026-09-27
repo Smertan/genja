@@ -4,9 +4,20 @@ Genja is developing a terminal user interface for browsing task descriptors.
 Today, Rust applications can embed a basic browser screen in an existing
 Ratatui application or run that screen in a full-screen terminal session.
 Run `genja tui` in a build with the `tui` feature to open the basic screen.
-Press `q` or Escape to quit. The screen currently shows task counts and
-placeholder panels; task list rows, search, details, and execution are not
-implemented yet.
+Press `q` or Escape to quit. The table shows task ID, version, name, execution
+mode, and constructible status. The selected row has a `>` marker and colour
+highlight. Search, details, and execution are not implemented yet.
+
+The **CONSTRUCTIBLE** column shows `yes` when the running binary has a registered
+factory to create that task from JSON input, and `no` when only its descriptor
+is available through discovery. It does not indicate whether the task has run
+or will succeed. The TUI does not construct or execute tasks.
+
+The `no` value means registry-based creation by task identity and JSON input
+is unavailable until a construction factory is registered. Direct creation
+of the Rust task struct remains possible. See
+[Constructible Descriptor Field](task-registration.md#constructible-descriptor-field)
+for the registration rules and example structs.
 
 The browser is an optional part of `genja-cli`, enabled with its `tui` feature.
 Projects using the main `genja` crate can enable `genja-tui`, which also enables
@@ -38,6 +49,16 @@ From a checkout, launch the screen in an interactive terminal:
 
 ```bash
 cargo run -p genja-cli --features tui -- tui
+```
+
+To launch with two sample task registrations, use the
+[task browser example](examples.md#cli-and-tui-task-browser).
+**This requires a local checkout of the Genja GitHub repository.** Run the
+command from the checkout's root; `cargo add genja` does not make dependency
+examples runnable from your own project:
+
+```bash
+cargo run -p genja --features genja-tui --example task_browser -- tui
 ```
 
 You can inspect the command help without entering terminal mode:
@@ -126,9 +147,65 @@ the terminal on normal exit, errors, and panic unwinding: it leaves the alternat
 screen, makes the cursor visible, and restores normal keyboard input so the
 shell can be used again. If a cleanup operation fails, the runner reports the
 error and its guard retries unfinished cleanup when dropped. `TuiOptions` has no
-configurable settings yet. Discovery failures return before terminal setup;
-terminal failures return a `TuiError`. The screen currently shows task counts
-and placeholder panels rather than a complete browser.
+configurable settings yet. Terminal failures return a `TuiError`. The table
+preserves discovery ordering.
+The visible range follows selection, keeping it near the middle where possible.
+Home and End reveal the first and last task; resizing recomputes the visible
+range without changing selection or descriptor ordering. A browser area needs
+at least six lines to display a task row with the title, borders, header, and
+quit guidance.
+
+Columns adapt to the browser area's width:
+
+| Width in terminal cells | Visible columns |
+| --- | --- |
+| 100 or more | ID, version, name, mode, constructible |
+| 64–99 | All five fields, with shorter headers |
+| 40–63 | ID, version, mode, constructible |
+| Under 40 | ID only |
+
+Long cell values are clipped to fit. Widen the terminal to reveal more text and
+columns. The `CONSTR.` header means constructible. Quit guidance is shortened
+on narrow screens, and rendering safely handles areas too small for task rows.
+
+### Empty Results And Loading Errors
+
+An empty result shows **No registered tasks available**, with a reminder that
+compiled Rust tasks must be linked into a project-local CLI/TUI binary. This
+is a successful discovery result; quitting returns a success exit code. The
+screen shows the minimum annotation for discovering an existing task
+implementation and the line that links its crate into your CLI/TUI binary:
+
+```rust
+#[genja_task(name = "my_task")]
+impl MyTask { /* start or start_async method */ }
+```
+
+```rust
+use my_project_tasks as _;
+```
+
+These are illustrative snippets: replace the names and supply the task's
+implementation. The annotation enables descriptor discovery with a generated
+ID; explicit `registration(...)` adds a stable ID and construction factory.
+See [Task Registration](task-registration.md) for complete construction and
+registration guidance, or run the
+[task browser example](examples.md#cli-and-tui-task-browser) from a repository
+checkout to inspect working sample tasks.
+
+A discovery failure shows a **Discovery error** screen with the source's error
+message. The screen suggests checking compiled Rust discovery with
+`my_project_cli task list`; replace `my_project_cli` with your project-local CLI
+binary's name. Press `q` or Escape to close the screen. The runner restores the
+terminal, then returns `TuiError::Discovery`; the CLI reports the error on stderr
+and exits with failure. A terminal startup, rendering, or cleanup failure takes
+precedence over the discovery error.
+
+Discovery still finishes before terminal setup, but a discovery failure no
+longer returns immediately from `run_tui`. Embedded callers retain the existing
+`TaskBrowser::load_from()` behaviour: it returns the error immediately and stores
+it in browser state so the host can choose whether to render it. A later
+successful load clears that error and shows the loaded tasks or empty state.
 
 `TaskBrowser::new()` creates an empty browser. Call `load_from(&source)` with
 any `TaskDescriptorSource`, including a trait object, to synchronously load an
@@ -161,10 +238,22 @@ if browser.handle_event(&event) == BrowserOutcome::QuitRequested {
 ```
 
 `handle_action()` accepts browser actions without Crossterm. `handle_event()`
-translates pressed Up and Down keys into selection changes and `q` or Escape
-into a quit request. Unhandled events return `Ignored` to the host. The shell
-shows a task count, reserved navigation and inspection areas, and status or
-discovery errors; task rows, filtering, and descriptor details are future work.
+supports these keyboard controls:
+
+| Keys | Action |
+| --- | --- |
+| Up / `k` | Select the previous task |
+| Down / `j` | Select the next task |
+| Home | Select the first task |
+| End | Select the last task |
+| `q` / Escape | Request quit |
+
+Navigation stops at either end and does nothing for an empty list. If selection
+has been cleared, Up/Down, `j`/`k`, and Home select the first task; End selects
+the last. Navigation keys require no modifiers. Key releases and repeats are
+ignored. Unhandled events return `Ignored` to the host. The browser
+shows a task count, descriptor table, selection highlight, and status or
+discovery errors; filtering and descriptor details are future work.
 The browser never enters raw mode, polls events, or restores the terminal.
 
 CLI-only users should keep using `genja-cli` on `genja`, or a direct `genja-cli`

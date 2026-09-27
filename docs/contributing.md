@@ -41,6 +41,59 @@ cd genja-core-python
 pdm install
 ```
 
+## VS Code And Rust Analyzer
+
+### Optional Feature Analysis
+
+Rust Analyzer normally analyses the default Cargo features. Code behind a
+feature gate, such as `genja-cli`'s `tui` module, can be treated as inactive
+unless that feature is enabled for the editor. The CLI's `commands`,
+`discovery`, and `output` modules are not feature-gated within `genja-cli`,
+so they do not need the same configuration.
+
+For TUI work, add this to your private VS Code workspace settings, preserving
+any other features you already enable:
+
+```json
+{
+  "rust-analyzer.cargo.features": ["genja-cli/tui"]
+}
+```
+
+Alternatively, use `"rust-analyzer.cargo.features": "all"` to analyse all
+optional features. This can increase analysis time and compile additional
+dependencies. These editor settings do not change the crate's default features
+or enable features for separate Cargo commands you run in a terminal.
+
+Reload the Rust Analyzer workspace after changing the configuration.
+
+### Inline Type Hints
+
+Inlay type hints display inferred types alongside variables in the editor;
+they are not part of the source code. If hover and autocomplete work but
+inline hints are missing, enable inlay hints in VS Code's Settings UI and
+check this Rust Analyzer setting:
+
+```json
+{
+  "rust-analyzer.inlayHints.typeHints.enable": true
+}
+```
+
+Showing inline hints is an editor preference, separate from enabling feature
+analysis. Enabling hints alone does not activate optional Cargo modules.
+Explicitly typed declarations may not need an inferred type hint; hover can
+still show their type information. See the
+[Rust Analyzer configuration reference](https://rust-analyzer.github.io/book/configuration)
+for available hint settings.
+
+### Personal Editor Settings
+
+Keep personal settings in VS Code's user settings or an untracked workspace
+configuration. The examples above are optional contributor setup; they do not
+require adding `.vscode/settings.json` to the repository. Agree on shared
+editor settings with maintainers before committing them.
+
 ## Rust Checks
 
 Run the Rust workspace tests before sending changes that affect Rust behavior.
@@ -363,3 +416,17 @@ User-facing compatibility information belongs in
 [Versions And Compatibility](version-compatibility.md). Maintainer-only publish
 steps should stay out of the user guides unless they are needed by contributors
 building release artifacts.
+
+## Contributor FAQ
+
+### Why are type hints or autocomplete missing in optional Rust modules?
+
+Rust Analyzer may be analysing only default features. Enable the feature you
+are working on, such as `genja-cli/tui`. See
+[Optional Feature Analysis](#optional-feature-analysis) for configuration and
+[Inline Type Hints](#inline-type-hints) for hint display settings.
+
+### Should I commit my VS Code settings?
+
+Keep personal settings private unless maintainers agree to share them. See
+[Personal Editor Settings](#personal-editor-settings) for where to keep them.

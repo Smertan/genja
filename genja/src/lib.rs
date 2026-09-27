@@ -39,8 +39,8 @@
 //! discovery commands. Enabling the feature does not install an executable.
 //!
 //! The optional `genja-tui` feature also enables CLI support and exposes the
-//! TUI foundation through `genja::cli::tui`. It is disabled by default. Browser
-//! state, descriptor loading, event handling, minimal rendering, and the
+//! terminal task browser through `genja::cli::tui`. It is disabled by default. Browser
+//! state, descriptor loading, keyboard navigation, task table rendering, and the
 //! full-screen `run_tui` runner are available. Project-local binaries can call
 //! `genja::cli::tui::run_main()` after linking their task crate.
 //!
