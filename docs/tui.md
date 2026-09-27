@@ -40,6 +40,16 @@ From a checkout, launch the screen in an interactive terminal:
 cargo run -p genja-cli --features tui -- tui
 ```
 
+To launch with two sample task registrations, use the
+[task browser example](examples.md#cli-and-tui-task-browser).
+**This requires a local checkout of the Genja GitHub repository.** Run the
+command from the checkout's root; `cargo add genja` does not make dependency
+examples runnable from your own project:
+
+```bash
+cargo run -p genja --features genja-tui --example task_browser -- tui
+```
+
 You can inspect the command help without entering terminal mode:
 
 ```bash

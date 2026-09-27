@@ -67,6 +67,33 @@ currently shows task counts and placeholder panels. Task rows, search, details,
 and execution are not implemented yet. Builds without TUI support omit this
 command. See the [Terminal UI guide](tui.md) for setup and terminal behaviour.
 
+### Try The Sample Tasks
+
+**These commands require a local checkout of the Genja GitHub repository.**
+Run them from that checkout's root, where its workspace `Cargo.toml` lives.
+Running `cargo add genja` in your own project does not make Genja's example
+executables available through `cargo run --example`. See
+[Examples](examples.md) for checkout instructions.
+
+In the checkout, run `task_browser` to explore two sample tasks without
+creating your own project-local binary:
+
+```bash
+cargo run -p genja --features genja-cli --example task_browser -- task list
+cargo run -p genja --features genja-cli --example task_browser -- task describe acme.examples.backup_config@1.0.0
+cargo run -p genja --features genja-tui --example task_browser -- tui
+```
+
+The example links a blocking, constructible `backup_config` task and an async,
+descriptor-only `collect_facts` task with a generated local ID. To describe the
+second task, use its ID and version from `task list` in `<id>@<version>` form.
+Add `--output json` to a list or describe command to inspect the descriptor data.
+
+The sample implementations do not perform backups or connect to hosts.
+Registrations belong only to the example executable. The TUI currently loads
+both descriptors and displays their count with placeholder panels. See
+[CLI And TUI Task Browser](examples.md#cli-and-tui-task-browser) for details.
+
 ### List Tasks
 
 ```bash
