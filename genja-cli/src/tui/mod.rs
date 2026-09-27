@@ -22,7 +22,7 @@
 //!
 //! Descriptor loading must use [`crate::discovery::TaskDescriptorSource`].
 //! Rendering and state transitions must neither load descriptors nor shell out
-//! to CLI commands. Only the process helper will select
+//! to CLI commands. The process helper and CLI launch command select
 //! [`crate::discovery::rust::CompiledTaskDescriptorSource`] by default; the
 //! browser and lower-level runner must accept the shared source abstraction.
 //!
