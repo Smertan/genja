@@ -31,8 +31,8 @@ Projects using `genja` can enable `genja-tui`, which forwards to
 `genja-cli/tui` and also enables CLI support, exposing the same module at
 `genja::cli::tui`.
 
-`TaskBrowser` supports descriptor loading, action handling, and minimal
-rendering inside an existing Ratatui application. `run_tui(source, options)`
+`TaskBrowser` supports descriptor loading, action handling, and a task table
+with selection highlighting inside an existing Ratatui application. `run_tui(source, options)`
 provides a full-screen runner for callers with a descriptor source. A
 project-local binary can call `genja_cli::tui::run_main()` to use compiled Rust
 tasks linked into that binary. With `tui` enabled, `genja tui` launches the

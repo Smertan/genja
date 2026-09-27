@@ -1,16 +1,16 @@
 //! Task browser layout and rendering.
 //!
-//! The shell reserves navigation, inspection, and status space. It renders an
-//! owned snapshot without discovery or terminal lifecycle changes. Task rows
-//! and descriptor detail widgets belong to later browser work.
+//! The browser reserves title, task table, and status space. It renders an
+//! owned snapshot without discovery or terminal lifecycle changes.
 
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 use super::TaskBrowserState;
+use super::widgets::render_tasks;
 
 pub(super) fn render_browser(state: &TaskBrowserState, frame: &mut Frame<'_>, area: Rect) {
     let area = area.intersection(frame.area());
@@ -31,28 +31,12 @@ pub(super) fn render_browser(state: &TaskBrowserState, frame: &mut Frame<'_>, ar
     );
 
     if rows[1].height > 0 {
-        if rows[1].width >= 48 {
-            let panels =
-                Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
-                    .split(rows[1]);
-            frame.render_widget(
-                Paragraph::new("Task list coming soon")
-                    .block(Block::default().title("Tasks").borders(Borders::ALL)),
-                panels[0],
-            );
-            frame.render_widget(
-                Paragraph::new("Descriptor details coming soon")
-                    .block(Block::default().title("Details").borders(Borders::ALL)),
-                panels[1],
-            );
-        } else {
-            frame.render_widget(Paragraph::new("Task browser foundation"), rows[1]);
-        }
+        render_tasks(state, frame, rows[1]);
     }
 
     if rows[2].height > 0 {
         let status = state.error().map_or_else(
-            || "q / Esc: quit".to_string(),
+            || "Up/k Down/j: move | Home/End: first/last | q / Esc: quit".to_string(),
             |error| format!("Discovery error: {error}"),
         );
         frame.render_widget(Paragraph::new(status), rows[2]);

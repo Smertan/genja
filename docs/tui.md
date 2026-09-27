@@ -4,9 +4,9 @@ Genja is developing a terminal user interface for browsing task descriptors.
 Today, Rust applications can embed a basic browser screen in an existing
 Ratatui application or run that screen in a full-screen terminal session.
 Run `genja tui` in a build with the `tui` feature to open the basic screen.
-Press `q` or Escape to quit. The screen currently shows task counts and
-placeholder panels; task list rows, search, details, and execution are not
-implemented yet.
+Press `q` or Escape to quit. The table shows task ID, version, name, execution
+mode, and constructible status. The selected row has a `>` marker and colour
+highlight. Search, details, and execution are not implemented yet.
 
 The browser is an optional part of `genja-cli`, enabled with its `tui` feature.
 Projects using the main `genja` crate can enable `genja-tui`, which also enables
@@ -137,8 +137,10 @@ screen, makes the cursor visible, and restores normal keyboard input so the
 shell can be used again. If a cleanup operation fails, the runner reports the
 error and its guard retries unfinished cleanup when dropped. `TuiOptions` has no
 configurable settings yet. Discovery failures return before terminal setup;
-terminal failures return a `TuiError`. The screen currently shows task counts
-and placeholder panels rather than a complete browser.
+terminal failures return a `TuiError`. The table preserves discovery ordering.
+Scrolling and narrow-terminal column refinements are not implemented yet;
+rows beyond the available table height are clipped, including the selected
+row if navigation moves beyond the visible area.
 
 `TaskBrowser::new()` creates an empty browser. Call `load_from(&source)` with
 any `TaskDescriptorSource`, including a trait object, to synchronously load an
@@ -184,9 +186,9 @@ supports these keyboard controls:
 Navigation stops at either end and does nothing for an empty list. If selection
 has been cleared, Up/Down, `j`/`k`, and Home select the first task; End selects
 the last. Navigation keys require no modifiers. Key releases and repeats are
-ignored. Unhandled events return `Ignored` to the host. The shell
-shows a task count, reserved navigation and inspection areas, and status or
-discovery errors; task rows, filtering, and descriptor details are future work.
+ignored. Unhandled events return `Ignored` to the host. The browser
+shows a task count, descriptor table, selection highlight, and status or
+discovery errors; filtering and descriptor details are future work.
 The browser never enters raw mode, polls events, or restores the terminal.
 
 CLI-only users should keep using `genja-cli` on `genja`, or a direct `genja-cli`

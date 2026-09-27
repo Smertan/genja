@@ -99,8 +99,8 @@ impl FullScreenApp {
 /// The terminal is restored after normal exit, returned errors, and panic
 /// unwinding. A discovery error returns without touching terminal modes.
 ///
-/// This is a minimal shell: task rows, filtering, details, and execution are
-/// not implemented. [`run_main`] selects compiled Rust discovery for
+/// The table displays descriptors and selection. Scrolling, filtering, details,
+/// and execution are not implemented. [`run_main`] selects compiled Rust discovery for
 /// project-local binaries. The CLI's `genja tui` command uses the same runner.
 /// Applications that already own a terminal should embed [`TaskBrowser`].
 pub fn run_tui<S>(source: &S, _options: TuiOptions) -> Result<(), TuiError>

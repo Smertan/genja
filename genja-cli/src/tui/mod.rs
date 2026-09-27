@@ -2,7 +2,7 @@
 //!
 //! Enable the `tui` feature on `genja-cli`, or `genja-tui` on `genja`, to
 //! compile this module. [`TaskBrowser`] provides state and synchronous descriptor
-//! loading, event handling, and a minimal renderable shell. [`run_tui`] owns a
+//! loading, event handling, and a renderable task table. [`run_tui`] owns a
 //! full-screen terminal session. [`run_main`] selects compiled Rust tasks for
 //! project-local binaries.
 //!
@@ -18,6 +18,7 @@
 //! - `state`: descriptor snapshot, selection, filter text, panel, and error state.
 //! - `event`: browser actions and translation from Crossterm events.
 //! - `layout`: layout calculation and rendering within a caller-provided area.
+//! - `widgets`: descriptor row formatting and task table rendering.
 //!
 //! Descriptor loading must use [`crate::discovery::TaskDescriptorSource`].
 //! Rendering and state transitions must neither load descriptors nor shell out
@@ -44,6 +45,7 @@ mod layout;
 mod state;
 mod task_browser;
 mod terminal;
+mod widgets;
 
 pub use app::{TuiError, TuiOptions, run_main, run_tui};
 pub use event::{BrowserAction, BrowserOutcome, action_from_event};

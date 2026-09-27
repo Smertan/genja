@@ -88,8 +88,8 @@ cargo run -p genja --features genja-tui --example task_browser -- tui
 ```
 
 Run this in an interactive terminal and press `q` or Escape to exit. The TUI
-currently loads the two descriptors and shows their count with placeholder
-panels; visible task rows are not implemented yet. See the
+loads the two descriptors and shows their fields in a table with the selected
+row highlighted. Use Up/Down or `k`/`j` to navigate. See the
 [Terminal UI guide](tui.md) for feature setup and the project-local binary pattern.
 
 ## Python Examples

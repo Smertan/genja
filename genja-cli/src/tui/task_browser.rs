@@ -92,11 +92,13 @@ impl TaskBrowser {
             .unwrap_or(BrowserOutcome::Ignored)
     }
 
-    /// Render the minimal browser shell inside a caller-owned Ratatui frame.
+    /// Render the task table and selection inside a caller-owned Ratatui frame.
     ///
     /// The area is clipped to the frame and may be empty. Rendering does not
     /// load tasks or change browser state. The caller retains terminal and
     /// drawing ownership, so this component can be embedded in another app.
+    /// Rows preserve discovery order. Scrolling is not implemented yet, so
+    /// tasks beyond the available table height are clipped.
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect) {
         render_browser(&self.state, frame, area);
     }

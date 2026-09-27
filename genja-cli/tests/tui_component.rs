@@ -239,7 +239,7 @@ fn event_translation_leaves_unrecognized_events_to_host() {
 }
 
 #[test]
-fn shell_renders_count_panels_and_status_without_terminal_ownership() {
+fn browser_renders_count_table_and_controls_without_terminal_ownership() {
     let mut browser = TaskBrowser::new();
     browser
         .load_from(&Source(Ok(vec![descriptor("first")])))
@@ -251,9 +251,90 @@ fn shell_renders_count_panels_and_status_without_terminal_ownership() {
 
     assert!(row(&terminal, 0).contains("Genja tasks (1)"));
     assert!(row(&terminal, 1).contains("Tasks"));
-    assert!(row(&terminal, 1).contains("Details"));
+    assert!(row(&terminal, 2).contains("ID"));
+    assert!(row(&terminal, 3).contains("first"));
     assert!(row(&terminal, 7).contains("q / Esc: quit"));
     assert_eq!(browser.state().selected_index(), Some(0));
+}
+
+#[test]
+fn task_table_renders_fields_in_discovery_order_and_moves_highlight() {
+    let mut first = descriptor("z.examples.backup_config");
+    first.version = "2.1.0".to_string();
+    first.name = "backup_config".to_string();
+    first.constructible = true;
+    let mut second = descriptor("a.examples.collect_facts");
+    second.name = "collect_facts".to_string();
+    second.execution_mode = TaskExecutionMode::Async;
+
+    let expected = vec![first, second];
+    let mut browser = TaskBrowser::new();
+    browser.load_from(&Source(Ok(expected.clone()))).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(120, 8)).unwrap();
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+
+    let header = row(&terminal, 2);
+    for label in ["ID", "VERSION", "NAME", "MODE", "CONSTRUCTIBLE"] {
+        assert!(header.contains(label), "{header}");
+    }
+    let first_row = row(&terminal, 3);
+    for value in [
+        ">",
+        "z.examples.backup_config",
+        "2.1.0",
+        "backup_config",
+        "blocking",
+        "yes",
+    ] {
+        assert!(first_row.contains(value), "{first_row}");
+    }
+    let second_row = row(&terminal, 4);
+    for value in [
+        "a.examples.collect_facts",
+        "1.0.0",
+        "collect_facts",
+        "async",
+        "no",
+    ] {
+        assert!(second_row.contains(value), "{second_row}");
+    }
+    assert!(!second_row.contains('>'));
+    assert_eq!(
+        terminal.backend().buffer()[(1, 3)].bg,
+        ratatui::style::Color::Blue
+    );
+    assert_eq!(browser.state().descriptors(), expected);
+    assert_eq!(browser.state().selected_index(), Some(0));
+
+    assert_eq!(
+        browser.handle_action(BrowserAction::SelectNext),
+        BrowserOutcome::Changed
+    );
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!(!row(&terminal, 3).contains('>'));
+    assert!(row(&terminal, 4).contains('>'));
+    assert_ne!(
+        terminal.backend().buffer()[(1, 3)].bg,
+        ratatui::style::Color::Blue
+    );
+    assert_eq!(
+        terminal.backend().buffer()[(1, 4)].bg,
+        ratatui::style::Color::Blue
+    );
+    assert_eq!(browser.state().descriptors(), expected);
+    assert_eq!(browser.state().selected_index(), Some(1));
+
+    assert!(browser.state_mut().select(None));
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!(!row(&terminal, 3).contains('>'));
+    assert!(!row(&terminal, 4).contains('>'));
+    assert_eq!(browser.state().selected_index(), None);
 }
 
 #[test]
@@ -279,7 +360,10 @@ fn shell_shows_empty_count_and_discovery_error() {
 
 #[test]
 fn rendering_clips_to_supplied_area_and_handles_tiny_areas() {
-    let browser = TaskBrowser::new();
+    let mut browser = TaskBrowser::new();
+    browser
+        .load_from(&Source(Ok(vec![descriptor("first")])))
+        .unwrap();
     let mut terminal = Terminal::new(TestBackend::new(20, 6)).unwrap();
     terminal
         .draw(|frame| browser.render(frame, Rect::new(2, 2, 10, 3)))

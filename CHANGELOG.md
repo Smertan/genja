@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added a TUI task table displaying descriptor IDs, versions, names, execution modes, and constructible status, with a visible selection marker and highlight. Refs: #128
 - Added a `task_browser` Rust example with two linked sample tasks for exploring CLI descriptor listing, inspection, and the optional terminal user interface. Refs: #128
 - Added `j`/`k` and Home/End task selection controls to the optional terminal user interface, with bounded navigation for empty and loaded task lists. Refs: #128
 - Added `genja tui` behind the optional `tui` feature to launch the basic terminal task browser using compiled Rust task discovery. Press `q` or Escape to exit; full task browsing is not implemented yet. Refs: #127

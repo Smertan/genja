@@ -63,7 +63,7 @@ my_project_cli tui
 ```
 
 Run it in an interactive terminal and press `q` or Escape to exit. The screen
-currently shows task counts and placeholder panels. Task rows, search, details,
+shows a task table with the selected row highlighted. Search, details,
 and execution are not implemented yet. Builds without TUI support omit this
 command. See the [Terminal UI guide](tui.md) for setup and terminal behaviour.
 
@@ -91,7 +91,7 @@ Add `--output json` to a list or describe command to inspect the descriptor data
 
 The sample implementations do not perform backups or connect to hosts.
 Registrations belong only to the example executable. The TUI currently loads
-both descriptors and displays their count with placeholder panels. See
+both descriptors and displays them in a navigable table. See
 [CLI And TUI Task Browser](examples.md#cli-and-tui-task-browser) for details.
 
 ### List Tasks
