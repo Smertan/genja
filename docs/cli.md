@@ -112,6 +112,23 @@ retry metadata, and input schemas.
 JSON and YAML lists include the complete serialized descriptor for every listed
 task. Use `task describe` to inspect one task or `task docs` to document all tasks.
 
+#### What Does Constructible Mean?
+
+`CONSTRUCTIBLE` reports whether the running binary has a registered factory
+that can create the task from JSON input. A factory turns input into a task
+instance; it does not run the task.
+
+- `yes` means a construction factory is registered.
+- `no` means the task can be discovered and inspected, but has no registered
+  factory. Creation by task identity and JSON input is unavailable until a
+  factory is registered through `registration(...)`. Application code may
+  still create the task struct directly.
+
+JSON and YAML output express the same field as `constructible: true` or
+`constructible: false`. A `yes` value does not guarantee valid input or successful
+execution. See [Constructible Descriptor Field](task-registration.md#constructible-descriptor-field)
+for how Rust task structs and registration determine this value.
+
 ### Describe A Task
 
 Pass an identity in `<task-id>@<task-version>` form:

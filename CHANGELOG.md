@@ -33,6 +33,7 @@ Changed packages:
 
 ### Changed
 
+- Clarified the constructible descriptor field in the task registration, CLI, and TUI guides, including how example task structs determine its value. Refs: #128
 - Moved the terminal user interface guide to its own page with a top-level documentation navigation entry. Refs: #126
 - Expanded the CLI guide with command examples, reproducible output samples, task identities, output formats and file exports, catalogue usage, discovery architecture and scope, and empty-result and error behaviour. Refs: #125
 - Included `genja-cli` in the unified Rust release train, with aligned version checks and publishing before its dependent `genja` crate. Refs: #144

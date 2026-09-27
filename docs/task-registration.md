@@ -72,6 +72,53 @@ has JSON-compatible input:
     )
     ```
 
+## Constructible Descriptor Field
+
+In the Rust `TaskDescriptor` struct, `constructible: bool` reports whether the
+current process has a registered factory that can create a task instance from
+JSON-compatible input. A factory is the code that turns that input into a
+task value; constructing the value does not execute it.
+
+| Descriptor value | CLI/TUI table value | Meaning |
+| --- | --- | --- |
+| `true` | `yes` | A construction factory is registered for this task. |
+| `false` | `no` | The descriptor can be discovered and inspected, but no construction factory is registered. |
+
+For Rust tasks, `#[genja_task(..., registration(...))]` registers a factory
+and sets the generated descriptor's `constructible` field to `true`.
+By default the factory deserializes JSON into the task struct using Serde. A no-input
+struct can implement `Default` and use `factory = "default"`; a task can also
+use a custom factory. See [Default JSON Construction](#default-json-construction)
+for the supported construction strategies.
+
+A Rust task annotated without `registration(...)` gets a generated local ID
+and `constructible: false`. It can still be created directly in application
+code and run through the runtime; this field only describes registry-based
+construction from JSON input.
+
+This distinction matters when a caller knows only a task ID and input, rather
+than the Rust struct type. With `constructible: false`, registry-based creation
+by identity cannot create the task and returns a `NotConstructible` error.
+Future declarative CLI invocation using task identity and input would also
+require a registered factory; discoverability alone is not enough.
+
+To support that path, add `registration(...)` to the task's `#[genja_task]`
+attribute and provide the construction strategy it requires: Serde
+deserialization, `Default` with `factory = "default"` for no-input tasks, or
+a custom factory. For example, the no-input `CollectFacts` struct could derive
+`Default` and add an explicit registration with `factory = "default"` to make
+its descriptor report `constructible: true`. CLI task execution is not
+implemented yet; this describes the capability the registry already provides.
+
+In the [task browser example](examples.md#cli-and-tui-task-browser),
+`BackupConfig` has explicit registration and a Serde factory, so it shows
+`yes`. `CollectFacts` omits `registration(...)`, so it shows `no`.
+
+`true` does not guarantee that every input will be accepted or that execution
+will succeed. Input schemas describe expected input separately, and are not
+required for a task to be constructible. CLI discovery commands and the current
+TUI display this metadata without constructing or executing tasks.
+
 ## Discovery And Stable IDs
 
 Rust tasks annotated with `#[genja_task(...)]` are submitted to the compiled

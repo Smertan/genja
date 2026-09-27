@@ -8,6 +8,17 @@ Press `q` or Escape to quit. The table shows task ID, version, name, execution
 mode, and constructible status. The selected row has a `>` marker and colour
 highlight. Search, details, and execution are not implemented yet.
 
+The **CONSTRUCTIBLE** column shows `yes` when the running binary has a registered
+factory to create that task from JSON input, and `no` when only its descriptor
+is available through discovery. It does not indicate whether the task has run
+or will succeed. The TUI does not construct or execute tasks.
+
+The `no` value means registry-based creation by task identity and JSON input
+is unavailable until a construction factory is registered. Direct creation
+of the Rust task struct remains possible. See
+[Constructible Descriptor Field](task-registration.md#constructible-descriptor-field)
+for the registration rules and example structs.
+
 The browser is an optional part of `genja-cli`, enabled with its `tui` feature.
 Projects using the main `genja` crate can enable `genja-tui`, which also enables
 `genja-cli` and forwards to `genja-cli/tui`. Both TUI features are disabled by
