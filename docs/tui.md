@@ -210,16 +210,28 @@ successful load clears that error and shows the loaded tasks or empty state.
 `TaskBrowser::new()` creates an empty browser. Call `load_from(&source)` with
 any `TaskDescriptorSource`, including a trait object, to synchronously load an
 owned snapshot. Loading calls `list_tasks()` once, preserves source ordering,
-and retains no source reference. Success selects the first descriptor or none
-for an empty result. Failure clears descriptors and selection, stores the
+and retains no source reference. Success reapplies the query and selects the
+first matching descriptor, or none when there are no matches. Failure clears descriptors and selection, stores the
 `DiscoveryError` in state, and returns it to the caller. A later successful
 load clears that error. Loading does not schedule refreshes or own a terminal.
 
 Use `state()` for read access and `state_mut()` for validated selection and
-reserved presentation-state updates. `select(None)` clears selection;
-`select(Some(index))` rejects out-of-range indices without changing selection.
-Filter text and `BrowserPanel` focus are preserved across loads, but do not
-filter results or render panels yet. Quit state belongs to the host app.
+presentation-state updates. `select(None)` clears selection;
+`select(Some(index))` uses the full snapshot index and rejects out-of-range or
+filtered-out indices without changing selection. `descriptors()` always returns
+the full snapshot; `matching_indices()` and `filtered_descriptors()` expose matches.
+`selected_visible_index()` gives the selected task's filtered position.
+
+`set_filter_text()` filters immediately using a case-insensitive substring of
+ID, name, version, description, or execution mode (`blocking` or `async`).
+Surrounding whitespace is ignored; blank queries show all tasks. Matching uses
+Unicode lowercase conversion without fuzzy matching or accent normalization.
+Selection stays on the same task when it matches; otherwise the previous visible
+position is clamped to the new list. No matches clears selection; clearing the
+query restores all tasks. Filter text and `BrowserPanel` focus survive loads.
+Interactive search input and filtered rendering are not implemented yet; this
+API currently supplies filtering state and navigation for embedding applications.
+Panel rendering is reserved. Quit state belongs to the host app.
 
 Applications that already own a Ratatui frame and Crossterm event loop can
 embed the component directly:
@@ -253,7 +265,7 @@ has been cleared, Up/Down, `j`/`k`, and Home select the first task; End selects
 the last. Navigation keys require no modifiers. Key releases and repeats are
 ignored. Unhandled events return `Ignored` to the host. The browser
 shows a task count, descriptor table, selection highlight, and status or
-discovery errors; filtering and descriptor details are future work.
+discovery errors; interactive search rendering and descriptor details are future work.
 The browser never enters raw mode, polls events, or restores the terminal.
 
 CLI-only users should keep using `genja-cli` on `genja`, or a direct `genja-cli`

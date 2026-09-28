@@ -54,28 +54,36 @@ impl TaskBrowser {
 
     /// Apply a browser action without polling terminal input.
     ///
-    /// Selection stops at either end of the loaded snapshot. First/last actions
+    /// Selection stops at either end of the filtered list. First/last actions
     /// jump to the corresponding descriptor. With no selection, next/previous
     /// select the first descriptor. Empty snapshots ignore navigation. Quit
     /// requests are returned to the host and do not alter browser state.
     pub fn handle_action(&mut self, action: BrowserAction) -> BrowserOutcome {
+        let visible = self.state.matching_indices();
+        let position = self.state.selected_visible_index();
         let selection = match action {
             BrowserAction::SelectNext => self
                 .state
-                .selected_index()
+                .selected_visible_index()
                 .map(|index| index.saturating_add(1))
-                .or_else(|| (!self.state.descriptors().is_empty()).then_some(0)),
+                .or_else(|| (!visible.is_empty()).then_some(0)),
             BrowserAction::SelectPrevious => self
                 .state
-                .selected_index()
+                .selected_visible_index()
                 .map(|index| index.saturating_sub(1))
-                .or_else(|| (!self.state.descriptors().is_empty()).then_some(0)),
-            BrowserAction::SelectFirst => (!self.state.descriptors().is_empty()).then_some(0),
-            BrowserAction::SelectLast => self.state.descriptors().len().checked_sub(1),
+                .or_else(|| (!visible.is_empty()).then_some(0)),
+            BrowserAction::SelectFirst => (!visible.is_empty()).then_some(0),
+            BrowserAction::SelectLast => visible.len().checked_sub(1),
             BrowserAction::Quit => return BrowserOutcome::QuitRequested,
         };
 
-        if selection == self.state.selected_index() || !self.state.select(selection) {
+        if selection == position {
+            return BrowserOutcome::Ignored;
+        }
+        let Some(selection) = selection.and_then(|index| visible.get(index).copied()) else {
+            return BrowserOutcome::Ignored;
+        };
+        if !self.state.select(Some(selection)) {
             BrowserOutcome::Ignored
         } else {
             BrowserOutcome::Changed
@@ -107,7 +115,7 @@ impl TaskBrowser {
     /// Load one owned snapshot synchronously using the shared discovery source.
     ///
     /// Calls `list_tasks()` once and preserves its ordering. Success replaces
-    /// the snapshot, selects its first task (or none when empty), and clears
+    /// the snapshot, reapplies the query, selects its first match, and clears
     /// any prior error. Failure clears the snapshot and selection, records the
     /// discovery error for presentation, and returns the same error to the host.
     /// Filter text and panel focus are preserved in either case.

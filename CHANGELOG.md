@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added programmatic TUI descriptor filtering by ID, name, version, description, and execution mode, with case-insensitive matching, stable selection where possible, and navigation through matching tasks. Interactive search input and filtered rendering will follow. Refs: #129
 - Added distinct TUI empty-result and descriptor-loading error screens with task-linking guidance, example next steps, and visible quit controls. Refs: #128
 - Added selection-following scrolling and responsive TUI task table columns, preserving selection on resize and compact quit guidance on narrow screens. Refs: #128
 - Added a TUI task table displaying descriptor IDs, versions, names, execution modes, and constructible status, with a visible selection marker and highlight. Refs: #128
