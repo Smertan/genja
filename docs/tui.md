@@ -4,9 +4,11 @@ Genja is developing a terminal user interface for browsing task descriptors.
 Today, Rust applications can embed a basic browser screen in an existing
 Ratatui application or run that screen in a full-screen terminal session.
 Run `genja tui` in a build with the `tui` feature to open the basic screen.
-Press `q` or Escape to quit. The table shows task ID, version, name, execution
+Press `q` in task mode to quit; Escape first leaves search or clears a query.
+The table shows task ID, version, name, execution
 mode, and constructible status. The selected row has a `>` marker and colour
-highlight. Search, details, and execution are not implemented yet.
+highlight. Search input handling is available, but its field and filtered table
+rendering are not implemented yet. Details and execution are also future work.
 
 The **CONSTRUCTIBLE** column shows `yes` when the running binary has a registered
 factory to create that task from JSON input, and `no` when only its descriptor
@@ -142,7 +144,8 @@ This form lets callers choose a source instead of using the compiled Rust
 source selected by `run_main()`.
 
 The runner loads descriptors before entering raw mode, then draws on startup,
-selection changes, and terminal resize. Press `q` or Escape to exit. It restores
+selection or search-state changes, and terminal resize. Press `q` in task mode
+to exit; Escape first leaves search or clears a query. It restores
 the terminal on normal exit, errors, and panic unwinding: it leaves the alternate
 screen, makes the cursor visible, and restores normal keyboard input so the
 shell can be used again. If a cleanup operation fails, the runner reports the
@@ -196,7 +199,7 @@ checkout to inspect working sample tasks.
 A discovery failure shows a **Discovery error** screen with the source's error
 message. The screen suggests checking compiled Rust discovery with
 `my_project_cli task list`; replace `my_project_cli` with your project-local CLI
-binary's name. Press `q` or Escape to close the screen. The runner restores the
+binary's name. Press `q` in task mode to close the screen. The runner restores the
 terminal, then returns `TuiError::Discovery`; the CLI reports the error on stderr
 and exits with failure. A terminal startup, rendering, or cleanup failure takes
 precedence over the discovery error.
@@ -229,8 +232,8 @@ Unicode lowercase conversion without fuzzy matching or accent normalization.
 Selection stays on the same task when it matches; otherwise the previous visible
 position is clamped to the new list. No matches clears selection; clearing the
 query restores all tasks. Filter text and `BrowserPanel` focus survive loads.
-Interactive search input and filtered rendering are not implemented yet; this
-API currently supplies filtering state and navigation for embedding applications.
+Search keyboard handling is available through `handle_event()`; a visible
+search field and filtered table rendering will follow in a later phase.
 Panel rendering is reserved. Quit state belongs to the host app.
 
 Applications that already own a Ratatui frame and Crossterm event loop can
@@ -258,14 +261,32 @@ supports these keyboard controls:
 | Down / `j` | Select the next task |
 | Home | Select the first task |
 | End | Select the last task |
-| `q` / Escape | Request quit |
+| `/` | Focus search input |
+| `q` | Request quit in task-navigation mode |
+| Escape | Clear a retained query in task mode, or quit if the query is empty |
+
+While search input is focused, printable characters append to the query and
+filter immediately. This includes `q`, `j`, `k`, and `/`; those characters do
+not quit or navigate in search mode. Shift is supported for printable input.
+Backspace removes the last Unicode scalar value, and Ctrl+u clears the query
+without leaving search. Enter or Escape leaves search mode while keeping the
+query. Arrow keys and Home/End are ignored in search mode; leave search to
+navigate matches. Releases, repeats, and paste events are not handled.
+
+Embedding applications can inspect `is_search_active()` and dispatch
+`FocusSearch`, `LeaveSearch`, `AppendSearchCharacter(char)`,
+`DeleteSearchCharacter`, `ClearSearch`, or `Escape` actions directly.
+`action_from_event()` translates task-navigation controls; use `handle_event()`
+for context-aware editing. An explicit `Quit` action always requests exit,
+including during search; keyboard `q` requests exit only in task mode.
 
 Navigation stops at either end and does nothing for an empty list. If selection
 has been cleared, Up/Down, `j`/`k`, and Home select the first task; End selects
 the last. Navigation keys require no modifiers. Key releases and repeats are
 ignored. Unhandled events return `Ignored` to the host. The browser
 shows a task count, descriptor table, selection highlight, and status or
-discovery errors; interactive search rendering and descriptor details are future work.
+discovery errors; search field and filtered table rendering, and descriptor details,
+are future work.
 The browser never enters raw mode, polls events, or restores the terminal.
 
 CLI-only users should keep using `genja-cli` on `genja`, or a direct `genja-cli`

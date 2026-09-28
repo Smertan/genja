@@ -29,6 +29,7 @@ pub struct TaskBrowserState {
     matching_indices: Vec<usize>,
     selected_index: Option<usize>,
     filter_text: String,
+    search_active: bool,
     active_panel: BrowserPanel,
     error: Option<DiscoveryError>,
 }
@@ -86,6 +87,17 @@ impl TaskBrowserState {
     /// Return the search text as supplied, including surrounding whitespace.
     pub fn filter_text(&self) -> &str {
         &self.filter_text
+    }
+
+    /// Return whether keyboard input is editing the search query.
+    /// Search focus is independent of the retained query and panel focus.
+    pub fn is_search_active(&self) -> bool {
+        self.search_active
+    }
+
+    /// Set search focus without changing the query or selection.
+    pub(super) fn set_search_active(&mut self, active: bool) {
+        self.search_active = active;
     }
 
     /// Filter immediately using a case-insensitive substring of ID, name,

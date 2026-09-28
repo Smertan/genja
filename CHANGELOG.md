@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added TUI search input handling with `/` to focus, live character filtering, Unicode-safe Backspace, Ctrl+u to clear, and Enter/Escape to leave search. Escape clears retained queries before quitting in task mode; `q`, `j`, and `k` enter text during search. A visible search field and filtered rendering will follow. Refs: #129
 - Added programmatic TUI descriptor filtering by ID, name, version, description, and execution mode, with case-insensitive matching, stable selection where possible, and navigation through matching tasks. Interactive search input and filtered rendering will follow. Refs: #129
 - Added distinct TUI empty-result and descriptor-loading error screens with task-linking guidance, example next steps, and visible quit controls. Refs: #128
 - Added selection-following scrolling and responsive TUI task table columns, preserving selection on resize and compact quit guidance on narrow screens. Refs: #128

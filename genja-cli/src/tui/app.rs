@@ -104,13 +104,15 @@ impl FullScreenApp {
 ///
 /// Descriptor loading is synchronous and finishes before raw mode or the
 /// alternate screen is entered. The runner draws the task or error screen once, then redraws
-/// after selection changes or resize events. Press `q` or Escape to leave.
+/// after browser state changes or resize events. Press `q` in task mode to leave;
+/// Escape first leaves search focus or clears a query before requesting exit.
 /// The terminal is restored after normal exit, returned errors, and panic
 /// unwinding. Discovery failures are displayed until the user quits, then
 /// returned after terminal cleanup. Terminal failures take precedence.
 ///
-/// The table displays descriptors and keeps selection visible. Filtering, details,
-/// and execution are not implemented. [`run_main`] selects compiled Rust discovery for
+/// Search input updates filtering state; a search field and filtered table
+/// rendering are not implemented yet. Details and execution are also future
+/// work. [`run_main`] selects compiled Rust discovery for
 /// project-local binaries. The CLI's `genja tui` command uses the same runner.
 /// Applications that already own a terminal should embed [`TaskBrowser`].
 pub fn run_tui<S>(source: &S, _options: TuiOptions) -> Result<(), TuiError>
