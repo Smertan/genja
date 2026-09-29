@@ -194,7 +194,7 @@ impl TaskBrowser {
         }
     }
 
-    /// Render search input, matching tasks, and counts in a caller-owned frame.
+    /// Render the active task-list or Details view in a caller-owned frame.
     ///
     /// The area is clipped to the frame and may be empty. Rendering does not
     /// load tasks or change browser state. The caller retains terminal and
@@ -205,6 +205,9 @@ impl TaskBrowser {
     /// Search focus is styled without taking over the terminal cursor. Short
     /// areas omit the title and count; empty matches and discovery failures
     /// have separate messages. Footer controls reflect the current input mode.
+    /// Details formats the selected snapshot descriptor and wraps its text.
+    /// Its scroll offset is not applied yet; Schema is a placeholder until the
+    /// next rendering phase. Inspection never loads or constructs a task.
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect) {
         render_browser(&self.state, frame, area);
     }

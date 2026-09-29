@@ -8,7 +8,10 @@ Press `q` in task mode to quit; Escape first leaves search or clears a query.
 The table shows task ID, version, name, execution mode, and constructible
 status. The selected row has a `>` marker and colour
 highlight. The search field filters tasks as you type and shows matching and
-total task counts. Details and execution are future work.
+total task counts. Embedded applications can open a descriptor Details view
+through direct actions. Keyboard access, schema rendering, and inspection
+scrolling are pending; the CLI currently exposes the searchable list. Task
+execution is not implemented.
 
 The **CONSTRUCTIBLE** column shows `yes` when the running binary has a registered
 factory to create that task from JSON input, and `no` when only its descriptor
@@ -333,7 +336,8 @@ query restores all tasks. Filter text survives loads; inspection focus survives
 only when the replacement snapshot has a matching selected task.
 Search keyboard handling is available through `handle_event()`, and `render()`
 draws the search field, matching tasks, and result counts.
-Detail/schema rendering and their keyboard bindings are not implemented yet.
+Details rendering is available through direct actions; schema rendering,
+inspection scrolling, and new keyboard bindings are not implemented yet.
 Quit state belongs to the host app.
 
 The inspection state API supports `BrowserPanel::Tasks`, `Details`, and `Schema`.
@@ -356,6 +360,36 @@ Clearing selection, filtering to no matches, empty discovery, and loading errors
 return to Tasks. `set_active_panel()` now ignores inspection requests without
 selection; callers using the formerly reserved panel state should select a
 matching task before requesting Details or Schema.
+
+To render the selected task's details in an embedded application:
+
+```rust
+use genja_cli::tui::BrowserAction;
+
+browser.handle_action(BrowserAction::OpenDetails);
+terminal.draw(|frame| browser.render(frame, browser_area))?;
+
+// Return without changing the selected task or search query.
+browser.handle_action(BrowserAction::ReturnToTasks);
+```
+
+Details displays identity (`ID@version`), ID source, version, name, description,
+execution mode, constructible status, and whether input schema metadata is
+available. It also shows recorded connection plugin, processors, and retry
+overrides. Missing descriptions and optional metadata have explicit labels.
+Retry fields are descriptor values, not resolved execution policy; unspecified
+fields fall back to runner or built-in defaults. Maximum attempts includes the
+first attempt. Constructible refers to a registered JSON input factory and
+does not indicate execution success or prevent direct construction of the task
+struct when false.
+
+Description paragraphs wrap to the available width. The current Details
+renderer starts at the top and clips content exceeding the area height;
+scrolling follows in the next phase. The Schema view currently displays a
+placeholder. Rendering does not reload descriptors, mutate browser state,
+or own the terminal cursor. Escape already returns from inspection to Tasks,
+and `q` requests quit; Enter/Tab bindings to open or switch inspection views
+will be added later.
 
 Applications that already own a Ratatui frame and Crossterm event loop can
 embed the component directly:
@@ -396,7 +430,8 @@ has been cleared, Up/Down, `j`/`k`, and Home select the first task; End selects
 the last. Navigation keys require no modifiers. Key releases and repeats are
 ignored. Unhandled events return `Ignored` to the host. The browser
 shows search input, result counts, a filtered descriptor table, selection
-highlight, and empty/error messages. Descriptor details are future work.
+highlight, and empty/error messages. Direct actions also select the Details
+renderer; new inspection keyboard controls are pending.
 The browser never enters raw mode, polls events, or restores the terminal.
 
 CLI-only users should keep using `genja-cli` on `genja`, or a direct `genja-cli`

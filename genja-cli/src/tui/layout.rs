@@ -12,13 +12,18 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use super::TaskBrowserState;
+use super::detail::detail_content;
 use super::widgets::render_tasks;
+use super::{BrowserPanel, TaskBrowserState};
 
 /// Draw a browser inside the clipped host area without changing its state.
 pub(super) fn render_browser(state: &TaskBrowserState, frame: &mut Frame<'_>, area: Rect) {
     let area = area.intersection(frame.area());
     if area.width == 0 || area.height == 0 {
+        return;
+    }
+    if state.active_panel() != BrowserPanel::Tasks {
+        render_inspection(state, frame, area);
         return;
     }
 
@@ -79,6 +84,53 @@ pub(super) fn render_browser(state: &TaskBrowserState, frame: &mut Frame<'_>, ar
         );
     }
     frame.render_widget(Paragraph::new(controls(state, rows[4].width)), rows[4]);
+}
+
+/// Draw selected-descriptor inspection without polling events or changing state.
+/// Detail content wraps to the host area. Schema rendering and scrolling follow
+/// in the next phase; the reserved Schema view currently states that limitation.
+fn render_inspection(state: &TaskBrowserState, frame: &mut Frame<'_>, area: Rect) {
+    let rows = Layout::vertical([
+        Constraint::Length(u16::from(area.height >= 4)),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    let schema = state.active_panel() == BrowserPanel::Schema;
+    let title = if schema { "Schema" } else { "Details" };
+    frame.render_widget(
+        Paragraph::new(format!("Genja Task Browser - {title}")),
+        rows[0],
+    );
+    if let Some(task) = state.selected_descriptor() {
+        if schema {
+            render_message(
+                frame,
+                rows[1],
+                title,
+                "Schema view rendering is not implemented yet.",
+            );
+        } else {
+            render_message(frame, rows[1], title, detail_content(task));
+        }
+    } else {
+        render_message(
+            frame,
+            rows[1],
+            title,
+            "No task selected. Return to the task list to select one.",
+        );
+    }
+    let controls = [
+        "Esc: tasks | q: quit",
+        "Esc: back | q: quit",
+        "q: quit",
+        "q",
+    ]
+    .into_iter()
+    .find(|text| text.len() <= usize::from(rows[2].width))
+    .unwrap_or("");
+    frame.render_widget(Paragraph::new(controls), rows[2]);
 }
 
 /// Show search focus and keep the end of an edited query visible.

@@ -9,7 +9,8 @@ use crate::discovery::{DiscoveryError, TaskDescriptor};
 use genja_core::task::TaskExecutionMode;
 
 /// Browser view selection, independent of terminal ownership.
-/// Inspection rendering and keyboard transitions are not implemented yet.
+/// Details rendering is available through direct actions. Schema rendering,
+/// bounded scrolling, and new inspection keyboard transitions are pending.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BrowserPanel {
@@ -167,7 +168,8 @@ impl TaskBrowserState {
     /// Return `false` for Tasks or when no task is selected, leaving offsets
     /// unchanged. This state-only operation has no content or viewport bounds;
     /// callers supplying custom inspection rendering must clamp appropriately.
-    /// Browser-owned bounded scrolling will be added with inspection rendering.
+    /// The Details renderer currently starts at the top; browser-owned bounded
+    /// scrolling will be added with schema rendering.
     pub fn set_inspection_scroll_offset(&mut self, panel: BrowserPanel, offset: usize) -> bool {
         if self.selected_index.is_none() {
             return false;

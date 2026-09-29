@@ -111,7 +111,9 @@ impl FullScreenApp {
 /// returned after terminal cleanup. Terminal failures take precedence.
 ///
 /// The browser displays search input, matching tasks, and result counts. The
-/// visible range follows selection. Details and execution are future work.
+/// visible range follows selection. A Details renderer is available to embedded
+/// callers through direct actions; schema, scrolling, and inspection keyboard
+/// bindings are pending. Task execution is not implemented.
 /// [`run_main`] selects compiled Rust discovery for
 /// project-local binaries. The CLI's `genja tui` command uses the same runner.
 /// Applications that already own a terminal should embed [`TaskBrowser`].
