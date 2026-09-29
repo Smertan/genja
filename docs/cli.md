@@ -91,8 +91,11 @@ Add `--output json` to a list or describe command to inspect the descriptor data
 
 The sample implementations do not perform backups or connect to hosts.
 Registrations belong only to the example executable. The TUI currently loads
-both descriptors and displays them in a navigable table. See
-[CLI And TUI Task Browser](examples.md#cli-and-tui-task-browser) for details.
+both descriptors and displays them in a navigable, searchable table. Press `/`
+to search and Enter to return to navigation. See the
+[TUI search walkthrough](tui.md#try-search-with-the-sample-tasks) for matching and
+clearing examples, or [CLI And TUI Task Browser](examples.md#cli-and-tui-task-browser)
+for the sample binary's CLI commands.
 
 ### List Tasks
 

@@ -5,8 +5,8 @@ Today, Rust applications can embed a basic browser screen in an existing
 Ratatui application or run that screen in a full-screen terminal session.
 Run `genja tui` in a build with the `tui` feature to open the basic screen.
 Press `q` in task mode to quit; Escape first leaves search or clears a query.
-The table shows task ID, version, name, execution
-mode, and constructible status. The selected row has a `>` marker and colour
+The table shows task ID, version, name, execution mode, and constructible
+status. The selected row has a `>` marker and colour
 highlight. The search field filters tasks as you type and shows matching and
 total task counts. Details and execution are future work.
 
@@ -90,6 +90,91 @@ registrations on disk or call another CLI command.
 The design separates descriptor loading through the shared
 `TaskDescriptorSource` from browser state, events, rendering, and terminal
 ownership.
+
+## Search And Navigation
+
+Press `/` to focus the search field. Type text to filter immediately; Enter
+returns to task navigation while keeping the query. The search field shows
+`Search [editing]:` while focused, and the footer shows the available controls.
+
+### Keyboard Controls
+
+In task-navigation mode:
+
+| Keys | Action |
+| --- | --- |
+| Up / `k` | Select the previous matching task |
+| Down / `j` | Select the next matching task |
+| Home | Select the first matching task |
+| End | Select the last matching task |
+| `/` | Focus search, retaining the current query |
+| Escape | Clear a retained query, or quit if the query is empty |
+| `q` | Quit, including when a query is active |
+
+While search is focused:
+
+| Keys | Action |
+| --- | --- |
+| Printable characters | Append to the query and filter immediately |
+| Backspace | Remove the last Unicode scalar value |
+| Ctrl+u | Clear the query and stay in search mode |
+| Enter / Escape | Leave search mode, retaining the query |
+
+`q`, `j`, `k`, and `/` enter text during search. To quit from search mode,
+press Enter or Escape, then `q`. To clear and quit using Escape alone, press it
+once to leave search, again to clear a nonempty query, and again to quit.
+Arrow keys and Home/End are ignored during search; leave search to navigate.
+Shift is supported for printable input. Key releases, repeats, and paste events
+are not handled. The input edits at the end of the query; it has no movable
+text cursor.
+
+### Matching And Selection
+
+The query is a case-insensitive substring matched against task ID, name,
+version, description, and execution mode (`blocking` or `async`). A match in
+any one field includes the task. Descriptions can match even though the table
+does not display them; tasks without descriptions can still match other fields.
+Constructible status and input schema contents are not searched.
+
+The whole query is used as one substring: `backup config` does not mean two
+separate search terms. Surrounding whitespace is ignored, and an empty or
+whitespace-only query shows all tasks. Matching uses Unicode lowercase
+conversion without accent normalization. Regex, fuzzy matching, saved filters,
+and an advanced query language are **not supported**.
+
+Results stay in discovery order. Filtering keeps the selected task when it
+still matches. Otherwise, selection moves to its previous position in the
+filtered list, clamped to the last available result. No matches clears
+selection; when matches return without a selected task, the first is selected.
+Clearing a query restores all tasks and retains the currently selected task
+where possible. Navigation stops at either end without wrapping.
+
+### Try Search With The Sample Tasks
+
+**Use a local checkout of the Genja GitHub repository and run from its root.**
+Adding Genja as a dependency with `cargo add` does not make this example runnable
+from your own project. Launch the example in an interactive terminal:
+
+```bash
+cargo run -p genja --features genja-tui --example task_browser -- tui
+```
+
+1. Press `/` and type `backup`. Only `backup_config` remains, with
+   `1 task shown, 2 total` on terminals tall enough to show the count.
+2. Press Enter. The query stays active, and navigation operates on the matching
+   task. Press Escape to clear it and restore both tasks.
+3. Press `/` and type `ASYNC`. The case-insensitive execution-mode match shows
+   only `collect_facts`.
+4. While still editing, press Ctrl+u and type `JSON input schema`. Only
+   `backup_config` matches, through its description.
+5. Press Ctrl+u and type `missing`. The browser shows
+   **No tasks match the current search**. Press Ctrl+u to restore both tasks.
+6. Press Enter, then `q`, to quit and return to your shell.
+
+To try ID and version matching, search for `acme.examples.backup_config` or a
+version displayed in the table. Generated task versions follow the example
+crate's version, so a version query can match one or both tasks. Search only
+narrows descriptors; it does not construct or execute tasks.
 
 ## Project-local TUI binary
 
@@ -226,7 +311,8 @@ successful load clears that error and shows the loaded tasks or empty state.
 any `TaskDescriptorSource`, including a trait object, to synchronously load an
 owned snapshot. Loading calls `list_tasks()` once, preserves source ordering,
 and retains no source reference. Success reapplies the query and selects the
-first matching descriptor, or none when there are no matches. Failure clears descriptors and selection, stores the
+first matching descriptor, or none when there are no matches. Failure clears
+descriptors and selection, stores the
 `DiscoveryError` in state, and returns it to the caller. A later successful
 load clears that error. Loading does not schedule refreshes or own a terminal.
 
@@ -264,26 +350,16 @@ if browser.handle_event(&event) == BrowserOutcome::QuitRequested {
 }
 ```
 
+To set a query programmatically, use the same filtering entry point as keyboard
+editing:
+
+```rust
+browser.state_mut().set_filter_text("backup");
+let matches = browser.state().filtered_descriptors();
+```
+
 `handle_action()` accepts browser actions without Crossterm. `handle_event()`
-supports these keyboard controls:
-
-| Keys | Action |
-| --- | --- |
-| Up / `k` | Select the previous task |
-| Down / `j` | Select the next task |
-| Home | Select the first task |
-| End | Select the last task |
-| `/` | Focus search input |
-| `q` | Request quit in task-navigation mode |
-| Escape | Clear a retained query in task mode, or quit if the query is empty |
-
-While search input is focused, printable characters append to the query and
-filter immediately. This includes `q`, `j`, `k`, and `/`; those characters do
-not quit or navigate in search mode. Shift is supported for printable input.
-Backspace removes the last Unicode scalar value, and Ctrl+u clears the query
-without leaving search. Enter or Escape leaves search mode while keeping the
-query. Arrow keys and Home/End are ignored in search mode; leave search to
-navigate matches. Releases, repeats, and paste events are not handled.
+uses the [keyboard controls](#keyboard-controls) according to search focus.
 
 Embedding applications can inspect `is_search_active()` and dispatch
 `FocusSearch`, `LeaveSearch`, `AppendSearchCharacter(char)`,
@@ -292,7 +368,7 @@ Embedding applications can inspect `is_search_active()` and dispatch
 for context-aware editing. An explicit `Quit` action always requests exit,
 including during search; keyboard `q` requests exit only in task mode.
 
-Navigation stops at either end and does nothing for an empty list. If selection
+Navigation stops at either end and does nothing for an empty filtered list. If selection
 has been cleared, Up/Down, `j`/`k`, and Home select the first task; End selects
 the last. Navigation keys require no modifiers. Key releases and repeats are
 ignored. Unhandled events return `Ignored` to the host. The browser

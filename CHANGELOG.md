@@ -12,8 +12,8 @@ Changed packages:
 ### Added
 
 - Added a visible TUI search field with focus styling and scrolling for long input, filtered task-table rendering, matching/total counts, and a distinct no-match message with clearing guidance. Controls adapt to search mode and terminal width; short areas prioritize search and tasks. Refs: #129
-- Added TUI search input handling with `/` to focus, live character filtering, Unicode-safe Backspace, Ctrl+u to clear, and Enter/Escape to leave search. Escape clears retained queries before quitting in task mode; `q`, `j`, and `k` enter text during search. A visible search field and filtered rendering will follow. Refs: #129
-- Added programmatic TUI descriptor filtering by ID, name, version, description, and execution mode, with case-insensitive matching, stable selection where possible, and navigation through matching tasks. Interactive search input and filtered rendering will follow. Refs: #129
+- Added TUI search input handling with `/` to focus, live character filtering, Unicode-safe Backspace, Ctrl+u to clear, and Enter/Escape to leave search. Escape clears retained queries before quitting in task mode; `q`, `j`, and `k` enter text during search. Refs: #129
+- Added programmatic TUI descriptor filtering by ID, name, version, description, and execution mode, with case-insensitive matching, stable selection where possible, and navigation through matching tasks. Refs: #129
 - Added distinct TUI empty-result and descriptor-loading error screens with task-linking guidance, example next steps, and visible quit controls. Refs: #128
 - Added selection-following scrolling and responsive TUI task table columns, preserving selection on resize and compact quit guidance on narrow screens. Refs: #128
 - Added a TUI task table displaying descriptor IDs, versions, names, execution modes, and constructible status, with a visible selection marker and highlight. Refs: #128
@@ -38,6 +38,7 @@ Changed packages:
 
 ### Changed
 
+- Expanded the Terminal UI guide with search controls, matching and selection rules, and a walkthrough using the existing sample tasks; linked the walkthrough from the CLI and examples guides. Refs: #129
 - The full-screen TUI now displays discovery failures until the user quits, then returns the loading error after terminal cleanup; embedded descriptor loading still returns errors immediately. Refs: #128
 - Clarified the constructible descriptor field in the task registration, CLI, and TUI guides, including how example task structs determine its value. Refs: #128
 - Moved the terminal user interface guide to its own page with a top-level documentation navigation entry. Refs: #126
