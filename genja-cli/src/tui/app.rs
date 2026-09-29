@@ -110,9 +110,9 @@ impl FullScreenApp {
 /// unwinding. Discovery failures are displayed until the user quits, then
 /// returned after terminal cleanup. Terminal failures take precedence.
 ///
-/// Search input updates filtering state; a search field and filtered table
-/// rendering are not implemented yet. Details and execution are also future
-/// work. [`run_main`] selects compiled Rust discovery for
+/// The browser displays search input, matching tasks, and result counts. The
+/// visible range follows selection. Details and execution are future work.
+/// [`run_main`] selects compiled Rust discovery for
 /// project-local binaries. The CLI's `genja tui` command uses the same runner.
 /// Applications that already own a terminal should embed [`TaskBrowser`].
 pub fn run_tui<S>(source: &S, _options: TuiOptions) -> Result<(), TuiError>

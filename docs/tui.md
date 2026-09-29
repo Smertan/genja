@@ -7,8 +7,8 @@ Run `genja tui` in a build with the `tui` feature to open the basic screen.
 Press `q` in task mode to quit; Escape first leaves search or clears a query.
 The table shows task ID, version, name, execution
 mode, and constructible status. The selected row has a `>` marker and colour
-highlight. Search input handling is available, but its field and filtered table
-rendering are not implemented yet. Details and execution are also future work.
+highlight. The search field filters tasks as you type and shows matching and
+total task counts. Details and execution are future work.
 
 The **CONSTRUCTIBLE** column shows `yes` when the running binary has a registered
 factory to create that task from JSON input, and `no` when only its descriptor
@@ -155,8 +155,15 @@ preserves discovery ordering.
 The visible range follows selection, keeping it near the middle where possible.
 Home and End reveal the first and last task; resizing recomputes the visible
 range without changing selection or descriptor ordering. A browser area needs
-at least six lines to display a task row with the title, borders, header, and
-quit guidance.
+at least six lines to display search input, a task row, table borders and
+header, and controls. Areas shorter than eight lines omit the title and result
+count to prioritize search, tasks, and controls.
+
+The search row shows `Search [editing]:` in a distinct colour while focused.
+Long queries scroll horizontally during editing to keep the newest characters
+visible. The count shows, for example, `1 task shown, 2 total`; filtering does
+not change the total number of loaded descriptors. Rendering does not move the
+host application's terminal cursor or mutate browser state.
 
 Columns adapt to the browser area's width:
 
@@ -172,6 +179,11 @@ columns. The `CONSTR.` header means constructible. Quit guidance is shortened
 on narrow screens, and rendering safely handles areas too small for task rows.
 
 ### Empty Results And Loading Errors
+
+When descriptors are loaded but none match the query, the browser shows
+**No tasks match the current search**, with guidance to clear or edit the query.
+In search mode, Ctrl+u clears it; in task mode, Escape clears it. Clearing restores
+the full list. This is distinct from an empty discovery snapshot or loading error.
 
 An empty result shows **No registered tasks available**, with a reminder that
 compiled Rust tasks must be linked into a project-local CLI/TUI binary. This
@@ -232,8 +244,8 @@ Unicode lowercase conversion without fuzzy matching or accent normalization.
 Selection stays on the same task when it matches; otherwise the previous visible
 position is clamped to the new list. No matches clears selection; clearing the
 query restores all tasks. Filter text and `BrowserPanel` focus survive loads.
-Search keyboard handling is available through `handle_event()`; a visible
-search field and filtered table rendering will follow in a later phase.
+Search keyboard handling is available through `handle_event()`, and `render()`
+draws the search field, matching tasks, and result counts.
 Panel rendering is reserved. Quit state belongs to the host app.
 
 Applications that already own a Ratatui frame and Crossterm event loop can
@@ -284,9 +296,8 @@ Navigation stops at either end and does nothing for an empty list. If selection
 has been cleared, Up/Down, `j`/`k`, and Home select the first task; End selects
 the last. Navigation keys require no modifiers. Key releases and repeats are
 ignored. Unhandled events return `Ignored` to the host. The browser
-shows a task count, descriptor table, selection highlight, and status or
-discovery errors; search field and filtered table rendering, and descriptor details,
-are future work.
+shows search input, result counts, a filtered descriptor table, selection
+highlight, and empty/error messages. Descriptor details are future work.
 The browser never enters raw mode, polls events, or restores the terminal.
 
 CLI-only users should keep using `genja-cli` on `genja`, or a direct `genja-cli`

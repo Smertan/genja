@@ -161,7 +161,7 @@ impl TaskBrowser {
         BrowserOutcome::Changed
     }
 
-    /// Render the task table and selection inside a caller-owned Ratatui frame.
+    /// Render search input, matching tasks, and counts in a caller-owned frame.
     ///
     /// The area is clipped to the frame and may be empty. Rendering does not
     /// load tasks or change browser state. The caller retains terminal and
@@ -169,6 +169,9 @@ impl TaskBrowser {
     /// Rows preserve discovery order. The visible range follows selection and
     /// is recomputed on resize without changing state. Narrow areas shorten
     /// headers and omit lower-priority columns; cell text is clipped to fit.
+    /// Search focus is styled without taking over the terminal cursor. Short
+    /// areas omit the title and count; empty matches and discovery failures
+    /// have separate messages. Footer controls reflect the current input mode.
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect) {
         render_browser(&self.state, frame, area);
     }
