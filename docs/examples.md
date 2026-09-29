@@ -51,7 +51,7 @@ cargo run -p genja --example task_registration_spec
 | `task_registration.rs` | Registering a Rust task, listing compiled descriptors, printing schema JSON, and constructing by `<id>@<version>`. |
 | `task_registration_custom_factory.rs` | Registering a Rust task with a custom factory for prepared JSON input and sanitized validation errors. |
 | `task_registration_spec.rs` | Constructing a registered Rust task from YAML and JSON task spec strings, including retry and session verification overrides. |
-| `task_browser.rs` | Exploring CLI task listing and descriptor inspection, or launching the optional TUI with two linked sample tasks. |
+| `task_browser.rs` | Exploring CLI task listing and descriptor inspection, or navigating and searching two sample tasks in the optional TUI. |
 
 Use the Rust examples when you want to see the public `genja` crate, the
 `#[genja_task]` macro, and Rust plugin traits in context.
@@ -87,10 +87,17 @@ For the terminal UI, enable `genja-tui`, which also enables CLI support:
 cargo run -p genja --features genja-tui --example task_browser -- tui
 ```
 
-Run this in an interactive terminal and press `q` or Escape to exit. The TUI
+Run this in an interactive terminal. The TUI
 loads the two descriptors and shows their fields in a table with the selected
-row highlighted. Use Up/Down or `k`/`j` to navigate. See the
-[Terminal UI guide](tui.md) for feature setup and the project-local binary pattern.
+row highlighted. Use Up/Down or `k`/`j` to navigate. Press `/` and type `backup`
+to show only `backup_config`; press Enter to return to navigation with the query
+retained. Escape then clears it. While editing, Ctrl+u clears the query without
+leaving search. Press `q` in navigation mode to exit.
+
+Follow the [search walkthrough](tui.md#try-search-with-the-sample-tasks) to try
+case-insensitive matching, execution-mode and description searches, and no-match
+recovery. See the [Terminal UI guide](tui.md) for feature setup and the
+project-local binary pattern.
 
 ## Python Examples
 

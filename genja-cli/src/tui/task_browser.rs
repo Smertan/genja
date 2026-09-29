@@ -4,6 +4,7 @@
 //! access never performs discovery. Action handling stays separate from terminal
 //! event polling; the browser never owns terminal setup or shutdown.
 
+use super::event::search_action_from_event;
 use super::layout::render_browser;
 use super::{BrowserAction, BrowserOutcome, TaskBrowserState, action_from_event};
 use crate::discovery::{DiscoveryResult, TaskDescriptorSource};
@@ -54,28 +55,77 @@ impl TaskBrowser {
 
     /// Apply a browser action without polling terminal input.
     ///
-    /// Selection stops at either end of the loaded snapshot. First/last actions
+    /// Selection stops at either end of the filtered list. First/last actions
     /// jump to the corresponding descriptor. With no selection, next/previous
     /// select the first descriptor. Empty snapshots ignore navigation. Quit
     /// requests are returned to the host and do not alter browser state.
+    /// Search editing actions filter immediately. Escape leaves search focus,
+    /// then clears a retained query on a subsequent action, then requests quit.
+    /// Explicit quit actions always request exit, even while search is focused.
     pub fn handle_action(&mut self, action: BrowserAction) -> BrowserOutcome {
+        let visible = self.state.matching_indices();
+        let position = self.state.selected_visible_index();
         let selection = match action {
             BrowserAction::SelectNext => self
                 .state
-                .selected_index()
+                .selected_visible_index()
                 .map(|index| index.saturating_add(1))
-                .or_else(|| (!self.state.descriptors().is_empty()).then_some(0)),
+                .or_else(|| (!visible.is_empty()).then_some(0)),
             BrowserAction::SelectPrevious => self
                 .state
-                .selected_index()
+                .selected_visible_index()
                 .map(|index| index.saturating_sub(1))
-                .or_else(|| (!self.state.descriptors().is_empty()).then_some(0)),
-            BrowserAction::SelectFirst => (!self.state.descriptors().is_empty()).then_some(0),
-            BrowserAction::SelectLast => self.state.descriptors().len().checked_sub(1),
+                .or_else(|| (!visible.is_empty()).then_some(0)),
+            BrowserAction::SelectFirst => (!visible.is_empty()).then_some(0),
+            BrowserAction::SelectLast => visible.len().checked_sub(1),
+            BrowserAction::FocusSearch => return self.set_search_focus(true),
+            BrowserAction::LeaveSearch => return self.set_search_focus(false),
+            BrowserAction::AppendSearchCharacter(character) => {
+                if !self.state.is_search_active() || character.is_control() {
+                    return BrowserOutcome::Ignored;
+                }
+                let mut query = self.state.filter_text().to_owned();
+                query.push(character);
+                self.state.set_filter_text(query);
+                return BrowserOutcome::Changed;
+            }
+            BrowserAction::DeleteSearchCharacter => {
+                if !self.state.is_search_active() {
+                    return BrowserOutcome::Ignored;
+                }
+                let mut query = self.state.filter_text().to_owned();
+                if query.pop().is_none() {
+                    return BrowserOutcome::Ignored;
+                }
+                self.state.set_filter_text(query);
+                return BrowserOutcome::Changed;
+            }
+            BrowserAction::ClearSearch => {
+                if self.state.filter_text().is_empty() {
+                    return BrowserOutcome::Ignored;
+                }
+                self.state.set_filter_text("");
+                return BrowserOutcome::Changed;
+            }
+            BrowserAction::Escape => {
+                if self.state.is_search_active() {
+                    return self.set_search_focus(false);
+                }
+                if !self.state.filter_text().is_empty() {
+                    return self.handle_action(BrowserAction::ClearSearch);
+                }
+                return BrowserOutcome::QuitRequested;
+            }
             BrowserAction::Quit => return BrowserOutcome::QuitRequested,
         };
 
-        if selection == self.state.selected_index() || !self.state.select(selection) {
+        if selection == position {
+            return BrowserOutcome::Ignored;
+        }
+        let Some(selection) = selection.and_then(|index| visible.get(index).copied()) else {
+            return BrowserOutcome::Ignored;
+        };
+        if !self.state.select(Some(selection)) {
             BrowserOutcome::Ignored
         } else {
             BrowserOutcome::Changed
@@ -86,13 +136,32 @@ impl TaskBrowser {
     ///
     /// Unrecognized events return [`BrowserOutcome::Ignored`] for the host to
     /// handle. This method never reads from the terminal or quits the process.
+    /// `/` focuses search; printable characters then append to the query.
+    /// Backspace deletes its last Unicode scalar value and Ctrl+u clears it.
+    /// Enter/Escape leave search with the query retained. In task mode, Escape
+    /// clears a nonempty query before quitting; `q` always requests quit there.
+    /// Search mode does not translate task-navigation keys into navigation.
     pub fn handle_event(&mut self, event: &Event) -> BrowserOutcome {
-        action_from_event(event)
+        let action = if self.state.is_search_active() {
+            search_action_from_event(event)
+        } else {
+            action_from_event(event)
+        };
+        action
             .map(|action| self.handle_action(action))
             .unwrap_or(BrowserOutcome::Ignored)
     }
 
-    /// Render the task table and selection inside a caller-owned Ratatui frame.
+    /// Update search focus and report whether a redraw is needed.
+    fn set_search_focus(&mut self, active: bool) -> BrowserOutcome {
+        if self.state.is_search_active() == active {
+            return BrowserOutcome::Ignored;
+        }
+        self.state.set_search_active(active);
+        BrowserOutcome::Changed
+    }
+
+    /// Render search input, matching tasks, and counts in a caller-owned frame.
     ///
     /// The area is clipped to the frame and may be empty. Rendering does not
     /// load tasks or change browser state. The caller retains terminal and
@@ -100,6 +169,9 @@ impl TaskBrowser {
     /// Rows preserve discovery order. The visible range follows selection and
     /// is recomputed on resize without changing state. Narrow areas shorten
     /// headers and omit lower-priority columns; cell text is clipped to fit.
+    /// Search focus is styled without taking over the terminal cursor. Short
+    /// areas omit the title and count; empty matches and discovery failures
+    /// have separate messages. Footer controls reflect the current input mode.
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect) {
         render_browser(&self.state, frame, area);
     }
@@ -107,7 +179,7 @@ impl TaskBrowser {
     /// Load one owned snapshot synchronously using the shared discovery source.
     ///
     /// Calls `list_tasks()` once and preserves its ordering. Success replaces
-    /// the snapshot, selects its first task (or none when empty), and clears
+    /// the snapshot, reapplies the query, selects its first match, and clears
     /// any prior error. Failure clears the snapshot and selection, records the
     /// discovery error for presentation, and returns the same error to the host.
     /// Filter text and panel focus are preserved in either case.

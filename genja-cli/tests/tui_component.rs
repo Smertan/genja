@@ -259,11 +259,188 @@ fn browser_renders_count_table_and_controls_without_terminal_ownership() {
         .unwrap();
 
     assert!(row(&terminal, 0).contains("Genja tasks (1)"));
-    assert!(row(&terminal, 1).contains("Tasks"));
-    assert!(row(&terminal, 2).contains("ID"));
-    assert!(row(&terminal, 3).contains("first"));
+    assert!(row(&terminal, 1).contains("Search:"));
+    assert!(row(&terminal, 2).contains("Tasks"));
+    assert!(row(&terminal, 3).contains("ID"));
+    assert!(row(&terminal, 4).contains("first"));
+    assert!(row(&terminal, 6).contains("1 task shown, 1 total"));
     assert!(row(&terminal, 7).contains("q / Esc: quit"));
     assert_eq!(browser.state().selected_index(), Some(0));
+}
+
+#[test]
+fn search_renders_matches_counts_focus_and_mode_specific_controls() {
+    let mut browser = TaskBrowser::new();
+    let tasks = vec![descriptor("backup"), descriptor("collect")];
+    browser.load_from(&Source(Ok(tasks.clone()))).unwrap();
+    browser.state_mut().set_filter_text("collect");
+    let mut terminal = Terminal::new(TestBackend::new(120, 10)).unwrap();
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!(row(&terminal, 1).contains("Search: collect"));
+    assert_selected_visible(&terminal, "collect");
+    assert!(!(0..10).any(|y| row(&terminal, y).contains("backup")));
+    assert!(row(&terminal, 8).contains("1 task shown, 2 total"));
+    assert!(row(&terminal, 9).contains("Esc: clear"));
+    assert!(row(&terminal, 9).contains("/: search"));
+
+    browser.handle_action(BrowserAction::FocusSearch);
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!(row(&terminal, 1).contains("Search [editing]: collect"));
+    assert_eq!(
+        terminal.backend().buffer()[(0, 1)].fg,
+        ratatui::style::Color::Cyan
+    );
+    assert!(row(&terminal, 9).contains("Enter/Esc: done"));
+    assert!(row(&terminal, 9).contains("Ctrl+u: clear"));
+    assert!(!row(&terminal, 9).contains("q: quit"));
+    assert_eq!(browser.state().selected_index(), Some(1));
+    assert_eq!(browser.state().matching_indices(), [1]);
+    assert_eq!(browser.state().descriptors(), tasks);
+    assert_eq!(browser.state().filter_text(), "collect");
+    assert!(browser.state().is_search_active());
+}
+
+#[test]
+fn no_matches_shows_clear_guidance_and_clearing_restores_rows() {
+    let mut browser = TaskBrowser::new();
+    browser
+        .load_from(&Source(Ok(vec![
+            descriptor("backup"),
+            descriptor("collect"),
+        ])))
+        .unwrap();
+    browser.state_mut().set_filter_text("missing");
+    let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    let text = (0..12)
+        .map(|y| row(&terminal, y))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("No tasks match the current search."));
+    assert!(text.contains("Press Esc to clear"));
+    assert!(!text.contains("No registered tasks available."));
+    assert!(row(&terminal, 10).contains("0 tasks shown, 2 total"));
+    assert_eq!(browser.state().selected_index(), None);
+
+    browser.handle_action(BrowserAction::FocusSearch);
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!((0..12).any(|y| row(&terminal, y).contains("Press Ctrl+u to clear")));
+    browser.handle_action(BrowserAction::ClearSearch);
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert_selected_visible(&terminal, "backup");
+    assert!((0..12).any(|y| row(&terminal, y).contains("collect")));
+    assert!(row(&terminal, 10).contains("2 tasks shown, 2 total"));
+    assert!(!(0..12).any(|y| row(&terminal, y).contains("No tasks match")));
+}
+
+#[test]
+fn filtered_scrolling_and_resize_use_visible_positions() {
+    let tasks: Vec<_> = (0..60)
+        .map(|index| {
+            let prefix = if index % 2 == 0 { "hidden" } else { "keep" };
+            descriptor(&format!("{prefix}-{index:02}"))
+        })
+        .collect();
+    let mut browser = TaskBrowser::new();
+    browser.load_from(&Source(Ok(tasks.clone()))).unwrap();
+    browser.state_mut().set_filter_text("keep");
+    let mut terminal = Terminal::new(TestBackend::new(120, 10)).unwrap();
+    for index in (1..60).step_by(2) {
+        terminal
+            .draw(|frame| browser.render(frame, frame.area()))
+            .unwrap();
+        assert_selected_visible(&terminal, &format!("keep-{index:02}"));
+        assert!(!(0..10).any(|y| row(&terminal, y).contains("hidden")));
+        assert_eq!(browser.state().selected_index(), Some(index));
+        assert_eq!(browser.state().selected_visible_index(), Some(index / 2));
+        browser.handle_action(BrowserAction::SelectNext);
+    }
+    for (width, height) in [(80, 6), (30, 6), (120, 12)] {
+        terminal.backend_mut().resize(width, height);
+        terminal
+            .draw(|frame| browser.render(frame, frame.area()))
+            .unwrap();
+        assert_selected_visible(&terminal, "keep-59");
+        assert_eq!(browser.state().selected_index(), Some(59));
+    }
+    browser.handle_action(BrowserAction::SelectFirst);
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert_selected_visible(&terminal, "keep-01");
+    browser.handle_action(BrowserAction::SelectLast);
+    browser.handle_action(BrowserAction::ClearSearch);
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert_selected_visible(&terminal, "keep-59");
+    assert_eq!(browser.state().descriptors(), tasks);
+}
+
+#[test]
+fn long_unicode_search_stays_visible_and_tiny_areas_preserve_state() {
+    let mut browser = TaskBrowser::new();
+    browser
+        .load_from(&Source(Ok(vec![descriptor("backup")])))
+        .unwrap();
+    browser
+        .state_mut()
+        .set_filter_text("a_long_search_query_with_unicode_é東京終点");
+    browser.handle_action(BrowserAction::FocusSearch);
+    let mut terminal = Terminal::new(TestBackend::new(35, 10)).unwrap();
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!(row(&terminal, 1).contains("Search [editing]:"));
+    // Wide characters occupy two cells; row() includes their blank continuation cells.
+    assert!(row(&terminal, 1).contains('終'), "{}", row(&terminal, 1));
+    assert!(row(&terminal, 1).contains('点'), "{}", row(&terminal, 1));
+    assert!(!row(&terminal, 1).contains("a_long"));
+    let query = browser.state().filter_text().to_owned();
+    for width in [0, 1, 2, 8, 18, 20, 40] {
+        for height in 0..=8 {
+            terminal.backend_mut().resize(width, height);
+            terminal
+                .draw(|frame| browser.render(frame, frame.area()))
+                .unwrap();
+            assert_eq!(browser.state().filter_text(), query);
+            assert!(browser.state().matching_indices().is_empty());
+            assert_eq!(browser.state().selected_index(), None);
+            assert!(browser.state().is_search_active());
+        }
+    }
+}
+
+#[test]
+fn empty_snapshot_and_discovery_error_take_precedence_over_no_matches() {
+    let mut browser = TaskBrowser::new();
+    browser.state_mut().set_filter_text("missing");
+    browser.load_from(&Source(Ok(Vec::new()))).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!((0..16).any(|y| row(&terminal, y).contains("No registered tasks available.")));
+    assert!(!(0..16).any(|y| row(&terminal, y).contains("No tasks match")));
+    browser
+        .load_from(&Source(Err(DiscoveryError::source_failed("unavailable"))))
+        .unwrap_err();
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!((0..16).any(|y| row(&terminal, y).contains("Unable to load task descriptors.")));
+    assert!(!(0..16).any(|y| row(&terminal, y).contains("No tasks match")));
+    assert!(row(&terminal, 14).trim().is_empty());
 }
 
 #[test]
@@ -279,16 +456,16 @@ fn task_table_renders_fields_in_discovery_order_and_moves_highlight() {
     let expected = vec![first, second];
     let mut browser = TaskBrowser::new();
     browser.load_from(&Source(Ok(expected.clone()))).unwrap();
-    let mut terminal = Terminal::new(TestBackend::new(120, 8)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(120, 10)).unwrap();
     terminal
         .draw(|frame| browser.render(frame, frame.area()))
         .unwrap();
 
-    let header = row(&terminal, 2);
+    let header = row(&terminal, 3);
     for label in ["ID", "VERSION", "NAME", "MODE", "CONSTRUCTIBLE"] {
         assert!(header.contains(label), "{header}");
     }
-    let first_row = row(&terminal, 3);
+    let first_row = row(&terminal, 4);
     for value in [
         ">",
         "z.examples.backup_config",
@@ -299,7 +476,7 @@ fn task_table_renders_fields_in_discovery_order_and_moves_highlight() {
     ] {
         assert!(first_row.contains(value), "{first_row}");
     }
-    let second_row = row(&terminal, 4);
+    let second_row = row(&terminal, 5);
     for value in [
         "a.examples.collect_facts",
         "1.0.0",
@@ -311,7 +488,7 @@ fn task_table_renders_fields_in_discovery_order_and_moves_highlight() {
     }
     assert!(!second_row.contains('>'));
     assert_eq!(
-        terminal.backend().buffer()[(1, 3)].bg,
+        terminal.backend().buffer()[(1, 4)].bg,
         ratatui::style::Color::Blue
     );
     assert_eq!(browser.state().descriptors(), expected);
@@ -324,14 +501,14 @@ fn task_table_renders_fields_in_discovery_order_and_moves_highlight() {
     terminal
         .draw(|frame| browser.render(frame, frame.area()))
         .unwrap();
-    assert!(!row(&terminal, 3).contains('>'));
-    assert!(row(&terminal, 4).contains('>'));
+    assert!(!row(&terminal, 4).contains('>'));
+    assert!(row(&terminal, 5).contains('>'));
     assert_ne!(
-        terminal.backend().buffer()[(1, 3)].bg,
+        terminal.backend().buffer()[(1, 4)].bg,
         ratatui::style::Color::Blue
     );
     assert_eq!(
-        terminal.backend().buffer()[(1, 4)].bg,
+        terminal.backend().buffer()[(1, 5)].bg,
         ratatui::style::Color::Blue
     );
     assert_eq!(browser.state().descriptors(), expected);
@@ -341,8 +518,8 @@ fn task_table_renders_fields_in_discovery_order_and_moves_highlight() {
     terminal
         .draw(|frame| browser.render(frame, frame.area()))
         .unwrap();
-    assert!(!row(&terminal, 3).contains('>'));
     assert!(!row(&terminal, 4).contains('>'));
+    assert!(!row(&terminal, 5).contains('>'));
     assert_eq!(browser.state().selected_index(), None);
 }
 
@@ -409,7 +586,7 @@ fn resize_and_cleared_selection_recompute_the_viewport() {
     terminal
         .draw(|frame| browser.render(frame, frame.area()))
         .unwrap();
-    assert!(row(&terminal, 3).contains("t00"));
+    assert!(row(&terminal, 4).contains("t00"));
     assert!(!(0..9).any(|y| row(&terminal, y).contains('>')));
     assert_eq!(browser.state().selected_index(), None);
 }
@@ -428,14 +605,14 @@ fn narrow_tables_prioritize_identity_and_keep_quit_guidance() {
             .draw(|frame| browser.render(frame, frame.area()))
             .unwrap();
         assert_selected_visible(&terminal, "task-id");
-        let header = row(&terminal, 2);
+        let header = row(&terminal, 3);
         assert!(header.contains("ID"));
         assert_eq!(header.contains("NAME"), width >= 64);
         assert_eq!(header.contains("MODE"), width >= 40);
         if width >= 40 {
-            assert!(row(&terminal, 3).contains("1.0.0"));
-            assert!(row(&terminal, 3).contains("blocking"));
-            assert!(row(&terminal, 3).contains("yes"));
+            assert!(row(&terminal, 4).contains("1.0.0"));
+            assert!(row(&terminal, 4).contains("blocking"));
+            assert!(row(&terminal, 4).contains("yes"));
         }
         assert!(row(&terminal, 7).contains("quit"));
     }
@@ -470,7 +647,7 @@ fn empty_and_error_screens_are_distinct_and_keep_quit_guidance() {
         .draw(|frame| browser.render(frame, frame.area()))
         .unwrap();
     assert!(row(&terminal, 0).contains("Genja tasks (0)"));
-    assert!(row(&terminal, 2).contains("No registered tasks available."));
+    assert!(row(&terminal, 3).contains("No registered tasks available."));
     let empty_text = (0..14)
         .map(|y| row(&terminal, y))
         .collect::<Vec<_>>()
@@ -479,17 +656,17 @@ fn empty_and_error_screens_are_distinct_and_keep_quit_guidance() {
     assert!(empty_text.contains("#[genja_task(name = \"my_task\")]"));
     assert!(empty_text.contains("impl MyTask"));
     assert!(empty_text.contains("use my_project_tasks as _;"));
-    assert!(row(&terminal, 5).starts_with("│  #[genja_task"));
+    assert!(row(&terminal, 6).starts_with("│  #[genja_task"));
     assert_eq!(
-        terminal.backend().buffer()[(3, 5)].fg,
+        terminal.backend().buffer()[(3, 6)].fg,
         ratatui::style::Color::Cyan
     );
     assert_eq!(
-        terminal.backend().buffer()[(3, 5)].bg,
+        terminal.backend().buffer()[(3, 6)].bg,
         ratatui::style::Color::DarkGray
     );
     assert!(
-        terminal.backend().buffer()[(1, 4)]
+        terminal.backend().buffer()[(1, 5)]
             .modifier
             .contains(ratatui::style::Modifier::BOLD)
     );
@@ -566,7 +743,7 @@ fn rendering_clips_to_supplied_area_and_handles_tiny_areas() {
         .draw(|frame| browser.render(frame, Rect::new(2, 2, 10, 3)))
         .unwrap();
     assert!(row(&terminal, 0).trim().is_empty());
-    assert!(row(&terminal, 2).starts_with("  Genja"));
+    assert!(row(&terminal, 2).starts_with("  Search:"));
     assert!(row(&terminal, 2)[12..].trim().is_empty());
     assert!(row(&terminal, 5).trim().is_empty());
 
