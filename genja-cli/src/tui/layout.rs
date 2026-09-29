@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use super::detail::detail_content;
+use super::inspection::{inspection_rows, inspection_viewport};
 use super::widgets::render_tasks;
 use super::{BrowserPanel, TaskBrowserState};
 
@@ -87,32 +87,38 @@ pub(super) fn render_browser(state: &TaskBrowserState, frame: &mut Frame<'_>, ar
 }
 
 /// Draw selected-descriptor inspection without polling events or changing state.
-/// Detail content wraps to the host area. Schema rendering and scrolling follow
-/// in the next phase; the reserved Schema view currently states that limitation.
+/// Drawing clamps the effective offset after resize without mutating state.
 fn render_inspection(state: &TaskBrowserState, frame: &mut Frame<'_>, area: Rect) {
-    let rows = Layout::vertical([
-        Constraint::Length(u16::from(area.height >= 4)),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .split(area);
+    let rows = inspection_rows(area);
     let schema = state.active_panel() == BrowserPanel::Schema;
     let title = if schema { "Schema" } else { "Details" };
     frame.render_widget(
         Paragraph::new(format!("Genja Task Browser - {title}")),
         rows[0],
     );
-    if let Some(task) = state.selected_descriptor() {
-        if schema {
-            render_message(
-                frame,
-                rows[1],
-                title,
-                "Schema view rendering is not implemented yet.",
-            );
-        } else {
-            render_message(frame, rows[1], title, detail_content(task));
+    let mut position = None;
+    if let Some(viewport) = inspection_viewport(state, area) {
+        let requested = state
+            .inspection_scroll_offset(state.active_panel())
+            .unwrap_or(0);
+        let offset = viewport.effective_offset(requested);
+        if viewport.inner.height > 0 && viewport.line_count > 0 {
+            position = Some(format!(
+                "Lines {}-{} of {}",
+                offset + 1,
+                offset
+                    .saturating_add(usize::from(viewport.inner.height))
+                    .min(viewport.line_count),
+                viewport.line_count
+            ));
         }
+        frame.render_widget(viewport.block, viewport.body);
+        frame.render_widget(
+            viewport
+                .paragraph
+                .scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0)),
+            viewport.inner,
+        );
     } else {
         render_message(
             frame,
@@ -130,7 +136,11 @@ fn render_inspection(state: &TaskBrowserState, frame: &mut Frame<'_>, area: Rect
     .into_iter()
     .find(|text| text.len() <= usize::from(rows[2].width))
     .unwrap_or("");
-    frame.render_widget(Paragraph::new(controls), rows[2]);
+    let status = position
+        .map(|position| format!("{position} | {controls}"))
+        .filter(|text| text.len() <= usize::from(rows[2].width))
+        .unwrap_or_else(|| controls.to_string());
+    frame.render_widget(Paragraph::new(status), rows[2]);
 }
 
 /// Show search focus and keep the end of an edited query visible.

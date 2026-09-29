@@ -5,6 +5,7 @@
 //! event polling; the browser never owns terminal setup or shutdown.
 
 use super::event::search_action_from_event;
+use super::inspection::inspection_viewport;
 use super::layout::render_browser;
 use super::{BrowserAction, BrowserOutcome, BrowserPanel, TaskBrowserState, action_from_event};
 use crate::discovery::{DiscoveryResult, TaskDescriptorSource};
@@ -63,6 +64,7 @@ impl TaskBrowser {
     /// Search editing actions filter immediately. Escape leaves search focus
     /// or inspection before clearing a retained query or requesting quit.
     /// Explicit quit actions always request exit, even while search is focused.
+    /// Scroll actions require [`Self::handle_action_in_area`] and are ignored here.
     pub fn handle_action(&mut self, action: BrowserAction) -> BrowserOutcome {
         let visible = self.state.matching_indices();
         let position = self.state.selected_visible_index();
@@ -82,6 +84,14 @@ impl TaskBrowser {
             BrowserAction::OpenDetails => return self.set_panel(BrowserPanel::Details),
             BrowserAction::OpenSchema => return self.set_panel(BrowserPanel::Schema),
             BrowserAction::ReturnToTasks => return self.set_panel(BrowserPanel::Tasks),
+            BrowserAction::ScrollUp
+            | BrowserAction::ScrollDown
+            | BrowserAction::PageUp
+            | BrowserAction::PageDown
+            | BrowserAction::ScrollToTop
+            | BrowserAction::ScrollToBottom => {
+                return BrowserOutcome::Ignored;
+            }
             BrowserAction::ToggleInspectionView => {
                 let panel = match self.state.active_panel() {
                     BrowserPanel::Tasks => return BrowserOutcome::Ignored,
@@ -147,6 +157,52 @@ impl TaskBrowser {
         }
     }
 
+    /// Apply an action with the host's current browser area for bounded scrolling.
+    ///
+    /// Pass the same clipped browser area used for [`Self::render`], including
+    /// its title and footer. Scroll actions use wrapped content and inner-area
+    /// height; they do nothing in Tasks or when there is no usable viewport.
+    /// After resize, actions start from the effective clamped offset. Other
+    /// actions delegate to [`Self::handle_action`]. No terminal is accessed.
+    pub fn handle_action_in_area(&mut self, action: BrowserAction, area: Rect) -> BrowserOutcome {
+        if !matches!(
+            action,
+            BrowserAction::ScrollUp
+                | BrowserAction::ScrollDown
+                | BrowserAction::PageUp
+                | BrowserAction::PageDown
+                | BrowserAction::ScrollToTop
+                | BrowserAction::ScrollToBottom
+        ) {
+            return self.handle_action(action);
+        }
+        let Some(viewport) = inspection_viewport(&self.state, area) else {
+            return BrowserOutcome::Ignored;
+        };
+        if viewport.inner.width == 0 || viewport.inner.height == 0 {
+            return BrowserOutcome::Ignored;
+        }
+        let panel = self.state.active_panel();
+        let requested = self.state.inspection_scroll_offset(panel).unwrap_or(0);
+        let current = viewport.effective_offset(requested);
+        let maximum = viewport.max_offset();
+        let page = usize::from(viewport.inner.height);
+        let next = match action {
+            BrowserAction::ScrollUp => current.saturating_sub(1),
+            BrowserAction::ScrollDown => current.saturating_add(1).min(maximum),
+            BrowserAction::PageUp => current.saturating_sub(page),
+            BrowserAction::PageDown => current.saturating_add(page).min(maximum),
+            BrowserAction::ScrollToTop => 0,
+            BrowserAction::ScrollToBottom => maximum,
+            _ => return BrowserOutcome::Ignored,
+        };
+        if next == requested {
+            return BrowserOutcome::Ignored;
+        }
+        self.state.set_inspection_scroll_offset(panel, next);
+        BrowserOutcome::Changed
+    }
+
     /// Translate and dispatch one supplied Crossterm event.
     ///
     /// Unrecognized events return [`BrowserOutcome::Ignored`] for the host to
@@ -206,8 +262,9 @@ impl TaskBrowser {
     /// areas omit the title and count; empty matches and discovery failures
     /// have separate messages. Footer controls reflect the current input mode.
     /// Details formats the selected snapshot descriptor and wraps its text.
-    /// Its scroll offset is not applied yet; Schema is a placeholder until the
-    /// next rendering phase. Inspection never loads or constructs a task.
+    /// Schema shows formatted JSON metadata or an explicit absence message.
+    /// Inspection offsets are clamped against wrapped content and the current
+    /// viewport without changing state. Inspection never loads or constructs tasks.
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect) {
         render_browser(&self.state, frame, area);
     }

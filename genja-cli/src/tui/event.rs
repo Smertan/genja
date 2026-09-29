@@ -26,6 +26,18 @@ pub enum BrowserAction {
     ToggleInspectionView,
     /// Return to Tasks without clearing the query or changing selection.
     ReturnToTasks,
+    /// Scroll the active inspection view up one display row; requires an area.
+    ScrollUp,
+    /// Scroll the active inspection view down one display row; requires an area.
+    ScrollDown,
+    /// Scroll inspection up by its visible content height; requires an area.
+    PageUp,
+    /// Scroll inspection down by its visible content height; requires an area.
+    PageDown,
+    /// Scroll to the first inspection row; requires an area.
+    ScrollToTop,
+    /// Scroll to the last inspection page; requires an area.
+    ScrollToBottom,
     /// Focus search input without clearing the current query.
     FocusSearch,
     /// Leave search input while retaining the current query.

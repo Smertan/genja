@@ -9,8 +9,8 @@ The table shows task ID, version, name, execution mode, and constructible
 status. The selected row has a `>` marker and colour
 highlight. The search field filters tasks as you type and shows matching and
 total task counts. Embedded applications can open a descriptor Details view
-through direct actions. Keyboard access, schema rendering, and inspection
-scrolling are pending; the CLI currently exposes the searchable list. Task
+through direct actions, inspect schema metadata, and scroll either view using
+area-aware actions. Keyboard access is pending; the CLI currently exposes the searchable list. Task
 execution is not implemented.
 
 The **CONSTRUCTIBLE** column shows `yes` when the running binary has a registered
@@ -336,8 +336,8 @@ query restores all tasks. Filter text survives loads; inspection focus survives
 only when the replacement snapshot has a matching selected task.
 Search keyboard handling is available through `handle_event()`, and `render()`
 draws the search field, matching tasks, and result counts.
-Details rendering is available through direct actions; schema rendering,
-inspection scrolling, and new keyboard bindings are not implemented yet.
+Details/Schema rendering and scrolling are available through direct actions;
+new inspection keyboard bindings are not implemented yet.
 Quit state belongs to the host app.
 
 The inspection state API supports `BrowserPanel::Tasks`, `Details`, and `Schema`.
@@ -353,8 +353,9 @@ in Tasks. Escape returns from inspection before clearing a query or quitting.
 `inspection_scroll_offset(panel)` reads each inspection view's independent
 requested display-row offset. `set_inspection_scroll_offset(panel, offset)`
 stores it for hosts providing their own rendering; it rejects Tasks and missing
-selection. These state-only offsets are not yet bounded by content or viewport
-size. Switching views or returning to the list retains offsets for the same
+selection. These requested state-only offsets have no content or viewport bounds.
+The browser clamps the effective offset for rendering; area-aware scroll actions
+also clamp their updates. Switching views or returning to the list retains offsets for the same
 selected task. A selection change or descriptor reload resets both offsets.
 Clearing selection, filtering to no matches, empty discovery, and loading errors
 return to Tasks. `set_active_panel()` now ignores inspection requests without
@@ -383,13 +384,40 @@ first attempt. Constructible refers to a registered JSON input factory and
 does not indicate execution success or prevent direct construction of the task
 struct when false.
 
-Description paragraphs wrap to the available width. The current Details
-renderer starts at the top and clips content exceeding the area height;
-scrolling follows in the next phase. The Schema view currently displays a
-placeholder. Rendering does not reload descriptors, mutate browser state,
+Description paragraphs and formatted schema JSON wrap to the available width.
+Schema displays the selected task's identity followed by its JSON metadata.
+Tasks without metadata show **No input schema available**; this does not imply
+the task accepts no input. Present empty objects, booleans, and JSON `null` are
+displayed as supplied rather than treated as missing. Schema inspection does
+not generate an input form or execute a task.
+
+Rendering does not reload descriptors, mutate browser state,
 or own the terminal cursor. Escape already returns from inspection to Tasks,
 and `q` requests quit; Enter/Tab bindings to open or switch inspection views
 will be added later.
+
+To scroll inspection content, pass the same clipped browser area used for
+rendering, including the title and footer:
+
+```rust
+browser.handle_action(BrowserAction::OpenSchema);
+browser.handle_action_in_area(BrowserAction::PageDown, browser_area);
+terminal.draw(|frame| browser.render(frame, browser_area))?;
+```
+
+The scroll actions are `ScrollUp`, `ScrollDown`, `PageUp`, `PageDown`,
+`ScrollToTop`, and `ScrollToBottom`. Line actions move one wrapped display row;
+page actions move by the visible content height. Bounds use the same Ratatui
+wrapping and border geometry as rendering. Offsets address up to 65,535 wrapped
+rows, matching Ratatui's paragraph scrolling range. On resize, drawing clamps
+the effective offset without modifying the requested state; the next scroll
+action uses the new bounds. A line-range indicator appears when the footer has
+room. The views retain independent offsets for the same selected task.
+
+Scroll actions are ignored by `handle_action()` because it has no viewport.
+Use `handle_action_in_area()` for scrolling; it delegates other actions to
+`handle_action()`. Scrolling is also ignored in Tasks, without selection, or
+when the area has no usable content rows or columns.
 
 Applications that already own a Ratatui frame and Crossterm event loop can
 embed the component directly:

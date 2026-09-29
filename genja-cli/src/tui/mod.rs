@@ -4,8 +4,8 @@
 //! compile this module. [`TaskBrowser`] provides state and synchronous descriptor
 //! loading, context-aware search input, and a renderable filtered task table
 //! with result counts and empty/error states.
-//! Direct actions open a rendered Details view for the selected descriptor.
-//! Schema rendering, inspection scrolling, and new keyboard bindings are pending.
+//! Direct actions open Details/Schema views for the selected descriptor.
+//! Area-aware actions scroll wrapped content; new keyboard bindings are pending.
 //! [`run_tui`] owns a full-screen terminal session. [`run_main`] selects compiled Rust tasks for
 //! project-local binaries.
 //!
@@ -19,6 +19,7 @@
 //! - `terminal`: Crossterm terminal setup and restoration.
 //! - `task_browser`: embeddable browser and descriptor loading boundary.
 //! - `detail`: descriptor metadata formatting without state or terminal ownership.
+//! - `inspection`: schema formatting and shared wrapped-content viewport bounds.
 //! - `state`: snapshot, selection, search, views, inspection scroll offsets, and errors.
 //! - `event`: browser actions and translation from Crossterm events.
 //! - `layout`: layout calculation and rendering within a caller-provided area.
@@ -46,6 +47,7 @@
 mod app;
 mod detail;
 mod event;
+mod inspection;
 mod layout;
 mod state;
 mod task_browser;
