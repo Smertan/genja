@@ -18,6 +18,14 @@ pub enum BrowserAction {
     SelectFirst,
     /// Select the last descriptor, if one exists.
     SelectLast,
+    /// Open metadata inspection for the selected task, leaving search input.
+    OpenDetails,
+    /// Open input-schema inspection for the selected task, leaving search input.
+    OpenSchema,
+    /// Switch between Details and Schema; ignored in Tasks.
+    ToggleInspectionView,
+    /// Return to Tasks without clearing the query or changing selection.
+    ReturnToTasks,
     /// Focus search input without clearing the current query.
     FocusSearch,
     /// Leave search input while retaining the current query.
@@ -28,7 +36,7 @@ pub enum BrowserAction {
     DeleteSearchCharacter,
     /// Clear the query without changing search focus.
     ClearSearch,
-    /// Leave search mode, otherwise clear a query, otherwise request quit.
+    /// Leave search, then inspection, otherwise clear a query or request quit.
     Escape,
     /// Ask the host application to quit.
     Quit,

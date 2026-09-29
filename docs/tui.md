@@ -329,10 +329,33 @@ Surrounding whitespace is ignored; blank queries show all tasks. Matching uses
 Unicode lowercase conversion without fuzzy matching or accent normalization.
 Selection stays on the same task when it matches; otherwise the previous visible
 position is clamped to the new list. No matches clears selection; clearing the
-query restores all tasks. Filter text and `BrowserPanel` focus survive loads.
+query restores all tasks. Filter text survives loads; inspection focus survives
+only when the replacement snapshot has a matching selected task.
 Search keyboard handling is available through `handle_event()`, and `render()`
 draws the search field, matching tasks, and result counts.
-Panel rendering is reserved. Quit state belongs to the host app.
+Detail/schema rendering and their keyboard bindings are not implemented yet.
+Quit state belongs to the host app.
+
+The inspection state API supports `BrowserPanel::Tasks`, `Details`, and `Schema`.
+Dispatch `OpenDetails` or `OpenSchema` to inspect the selected snapshot descriptor,
+`ToggleInspectionView` to switch between inspection views, and `ReturnToTasks`
+to restore the list without changing the query or selection. Inspection requests
+are ignored without a selected task. `selected_descriptor()` supplies the data;
+view transitions do not copy descriptors or call discovery again. Schema
+inspection is allowed when metadata is absent so its renderer can show an empty
+state. Entering inspection leaves search input, and search can only be focused
+in Tasks. Escape returns from inspection before clearing a query or quitting.
+
+`inspection_scroll_offset(panel)` reads each inspection view's independent
+requested display-row offset. `set_inspection_scroll_offset(panel, offset)`
+stores it for hosts providing their own rendering; it rejects Tasks and missing
+selection. These state-only offsets are not yet bounded by content or viewport
+size. Switching views or returning to the list retains offsets for the same
+selected task. A selection change or descriptor reload resets both offsets.
+Clearing selection, filtering to no matches, empty discovery, and loading errors
+return to Tasks. `set_active_panel()` now ignores inspection requests without
+selection; callers using the formerly reserved panel state should select a
+matching task before requesting Details or Schema.
 
 Applications that already own a Ratatui frame and Crossterm event loop can
 embed the component directly:
