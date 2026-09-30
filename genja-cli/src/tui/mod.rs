@@ -4,8 +4,9 @@
 //! compile this module. [`TaskBrowser`] provides state and synchronous descriptor
 //! loading, context-aware search input, and a renderable filtered task table
 //! with result counts and empty/error states.
-//! Direct actions open Details/Schema views for the selected descriptor.
-//! Area-aware actions scroll wrapped content; new keyboard bindings are pending.
+//! Enter opens Details for the selected descriptor; Tab switches Details/Schema.
+//! [`TaskBrowser::handle_event_in_area`] supports context-aware navigation and
+//! bounded scrolling while embedded hosts retain event-loop ownership.
 //! [`run_tui`] owns a full-screen terminal session. [`run_main`] selects compiled Rust tasks for
 //! project-local binaries.
 //!

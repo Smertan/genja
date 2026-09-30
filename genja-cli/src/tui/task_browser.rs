@@ -4,7 +4,7 @@
 //! access never performs discovery. Action handling stays separate from terminal
 //! event polling; the browser never owns terminal setup or shutdown.
 
-use super::event::search_action_from_event;
+use super::event::{inspection_action_from_event, search_action_from_event};
 use super::inspection::inspection_viewport;
 use super::layout::render_browser;
 use super::{BrowserAction, BrowserOutcome, BrowserPanel, TaskBrowserState, action_from_event};
@@ -209,19 +209,41 @@ impl TaskBrowser {
     /// handle. This method never reads from the terminal or quits the process.
     /// `/` focuses search; printable characters then append to the query.
     /// Backspace deletes its last Unicode scalar value and Ctrl+u clears it.
-    /// Enter/Escape leave search with the query retained. In task mode, Escape
-    /// returns from inspection or clears a nonempty query before quitting;
+    /// Enter/Escape leave search with the query retained. In task mode, Enter
+    /// opens Details. Tab switches Details/Schema; Escape returns to Tasks
+    /// or clears a nonempty query before quitting;
     /// `q` always requests quit outside search.
     /// Search mode does not translate task-navigation keys into navigation.
+    /// Inspection scroll keys are ignored without an area; use
+    /// [`Self::handle_event_in_area`] for complete inspection controls.
     pub fn handle_event(&mut self, event: &Event) -> BrowserOutcome {
-        let action = if self.state.is_search_active() {
-            search_action_from_event(event)
-        } else {
-            action_from_event(event)
-        };
-        action
+        self.action_for_event(event)
             .map(|action| self.handle_action(action))
             .unwrap_or(BrowserOutcome::Ignored)
+    }
+
+    /// Dispatch supplied events with the current clipped browser area.
+    ///
+    /// This supports all [`Self::handle_event`] controls plus bounded inspection
+    /// scrolling: Up/`k`, Down/`j`, PageUp/PageDown, and Home/End. Pass the same
+    /// area used for [`Self::render`], including the title and footer. Resize
+    /// events remain available to the host, which must redraw and provide the
+    /// updated area. No terminal input is read and the host decides when to quit.
+    pub fn handle_event_in_area(&mut self, event: &Event, area: Rect) -> BrowserOutcome {
+        self.action_for_event(event)
+            .map(|action| self.handle_action_in_area(action, area))
+            .unwrap_or(BrowserOutcome::Ignored)
+    }
+
+    /// Select event translation rules without falling through between modes.
+    fn action_for_event(&self, event: &Event) -> Option<BrowserAction> {
+        if self.state.is_search_active() {
+            search_action_from_event(event)
+        } else if self.state.active_panel() != BrowserPanel::Tasks {
+            inspection_action_from_event(event)
+        } else {
+            action_from_event(event)
+        }
     }
 
     /// Update search focus and report whether a redraw is needed.
@@ -250,7 +272,7 @@ impl TaskBrowser {
         }
     }
 
-    /// Render the active task-list or Details view in a caller-owned frame.
+    /// Render the active task-list, Details, or Schema view in a caller-owned frame.
     ///
     /// The area is clipped to the frame and may be empty. Rendering does not
     /// load tasks or change browser state. The caller retains terminal and

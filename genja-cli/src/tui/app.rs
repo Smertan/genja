@@ -7,6 +7,7 @@
 use std::{error::Error, fmt, io, process::ExitCode};
 
 use crossterm::event::{self, Event};
+use ratatui::layout::Rect;
 
 use super::{BrowserOutcome, TaskBrowser, terminal::TerminalSession};
 use crate::discovery::{DiscoveryError, TaskDescriptorSource, rust::CompiledTaskDescriptorSource};
@@ -88,8 +89,8 @@ impl FullScreenApp {
         }
     }
 
-    fn handle_event(&mut self, event: &Event) -> bool {
-        match self.browser.handle_event(event) {
+    fn handle_event(&mut self, event: &Event, area: Rect) -> bool {
+        match self.browser.handle_event_in_area(event, area) {
             BrowserOutcome::QuitRequested => {
                 self.quit_requested = true;
                 false
@@ -105,15 +106,16 @@ impl FullScreenApp {
 /// Descriptor loading is synchronous and finishes before raw mode or the
 /// alternate screen is entered. The runner draws the task or error screen once, then redraws
 /// after browser state changes or resize events. Press `q` in task mode to leave;
-/// Escape first leaves search focus or clears a query before requesting exit.
+/// Escape first leaves search focus, returns from inspection, or clears a query
+/// before requesting exit.
 /// The terminal is restored after normal exit, returned errors, and panic
 /// unwinding. Discovery failures are displayed until the user quits, then
 /// returned after terminal cleanup. Terminal failures take precedence.
 ///
 /// The browser displays search input, matching tasks, and result counts. The
-/// visible range follows selection. A Details renderer is available to embedded
-/// callers through direct actions, alongside Schema and area-aware scrolling.
-/// Inspection keyboard bindings are pending. Task execution is not implemented.
+/// visible range follows selection. Enter opens Details; Tab switches Details
+/// and Schema. Up/Down or `k`/`j`, PageUp/PageDown, and Home/End scroll inspection
+/// content using the last drawn area. Task execution is not implemented.
 /// [`run_main`] selects compiled Rust discovery for
 /// project-local binaries. The CLI's `genja tui` command uses the same runner.
 /// Applications that already own a terminal should embed [`TaskBrowser`].
@@ -132,7 +134,7 @@ where
                     session
                         .terminal()
                         .draw(|frame| browser.render(frame, frame.area()))
-                        .map(|_| ())
+                        .map(|frame| frame.area)
                 },
                 event::read,
             )
@@ -184,14 +186,14 @@ pub fn run_main() -> ExitCode {
 
 fn run_loop<D, R>(app: &mut FullScreenApp, mut draw: D, mut read_event: R) -> io::Result<()>
 where
-    D: FnMut(&TaskBrowser) -> io::Result<()>,
+    D: FnMut(&TaskBrowser) -> io::Result<Rect>,
     R: FnMut() -> io::Result<Event>,
 {
-    draw(&app.browser)?;
+    let mut area = draw(&app.browser)?;
     while !app.quit_requested {
         let event = read_event()?;
-        if app.handle_event(&event) {
-            draw(&app.browser)?;
+        if app.handle_event(&event, area) {
+            area = draw(&app.browser)?;
         }
     }
     Ok(())
@@ -253,7 +255,7 @@ mod tests {
                     &mut app,
                     |browser| {
                         assert_eq!(browser.state().error(), Some(&error));
-                        Ok(())
+                        Ok(Rect::new(0, 0, 40, 6))
                     },
                     || Ok(key(KeyCode::Char('q'))),
                 )
@@ -307,7 +309,12 @@ mod tests {
     #[test]
     fn empty_browser_quits_successfully() {
         let mut app = FullScreenApp::load(&Source(Ok(Vec::new())));
-        run_loop(&mut app, |_| Ok(()), || Ok(key(KeyCode::Esc))).unwrap();
+        run_loop(
+            &mut app,
+            |_| Ok(Rect::new(0, 0, 40, 6)),
+            || Ok(key(KeyCode::Esc)),
+        )
+        .unwrap();
         assert!(app.quit_requested);
         assert!(app.finish(Ok(())).is_ok());
     }
@@ -331,7 +338,7 @@ mod tests {
                             {
                                 Err(io::Error::other(failure))
                             } else {
-                                Ok(())
+                                Ok(Rect::new(0, 0, 40, 6))
                             }
                         },
                         || {
@@ -401,10 +408,10 @@ mod tests {
             &mut app,
             |browser| {
                 draws.set(draws.get() + 1);
-                terminal
+                let frame = terminal
                     .draw(|frame| browser.render(frame, frame.area()))
                     .unwrap();
-                Ok(())
+                Ok(frame.area)
             },
             || Ok(events.next().expect("quit event was not handled")),
         )
@@ -416,6 +423,77 @@ mod tests {
     }
 
     #[test]
+    fn loop_uses_redrawn_area_for_inspection_scrolling_and_restores_after_quit() {
+        let mut task = descriptor("inspect");
+        task.description = Some("Long description\n".repeat(40));
+        task.input_schema = Some(serde_json::json!({"properties": (0..60)
+            .map(|index| (format!("field_{index:02}"), serde_json::json!({"type": "string"})))
+            .collect::<serde_json::Map<String, serde_json::Value>>() }));
+        let mut app = FullScreenApp::load(&Source(Ok(vec![task])));
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        let size = Cell::new((100, 12));
+        let events = [
+            key(KeyCode::Enter),
+            key(KeyCode::PageDown),
+            key(KeyCode::Tab),
+            key(KeyCode::End),
+            Event::Resize(100, 24),
+            key(KeyCode::Home),
+            key(KeyCode::PageDown),
+            key(KeyCode::Esc),
+            key(KeyCode::Char('q')),
+        ];
+        let mut events = events.into_iter();
+        let mut frames = Vec::new();
+        let mut restored = false;
+        let result = run_and_restore(
+            &mut restored,
+            |_| {
+                run_loop(
+                    &mut app,
+                    |browser| {
+                        let (width, height) = size.get();
+                        terminal.backend_mut().resize(width, height);
+                        let area = terminal
+                            .draw(|frame| browser.render(frame, frame.area()))
+                            .unwrap()
+                            .area;
+                        let panel = browser.state().active_panel();
+                        frames.push((panel, browser.state().inspection_scroll_offset(panel), area));
+                        Ok(area)
+                    },
+                    || {
+                        let event = events.next().expect("quit event was not handled");
+                        if let Event::Resize(width, height) = event {
+                            size.set((width, height));
+                        }
+                        Ok(event)
+                    },
+                )
+            },
+            |restored| {
+                *restored = true;
+                Ok(())
+            },
+        );
+        assert!(restored);
+        assert!(app.finish(result).is_ok());
+        assert!(app.quit_requested);
+        use super::super::BrowserPanel;
+        assert_eq!(frames.len(), 9);
+        assert_eq!(frames[1].0, BrowserPanel::Details);
+        assert_eq!(frames[2].1, Some(8));
+        assert_eq!(frames[3].0, BrowserPanel::Schema);
+        assert!(frames[4].1.unwrap() > 20);
+        assert_eq!(frames[5].1, frames[4].1); // Resize drawing preserves requested state.
+        assert_eq!(frames[5].2.height, 24);
+        assert_eq!(frames[6].1, Some(0));
+        assert_eq!(frames[7].1, Some(20)); // New height, excluding title/footer/borders.
+        assert_eq!(frames[8].0, BrowserPanel::Tasks);
+        assert_eq!(app.browser.state().selected_index(), Some(0));
+    }
+
+    #[test]
     fn loop_propagates_event_read_errors() {
         let mut app = FullScreenApp::load(&Source(Ok(Vec::new())));
         let draws = Cell::new(0);
@@ -423,7 +501,7 @@ mod tests {
             &mut app,
             |_| {
                 draws.set(draws.get() + 1);
-                Ok(())
+                Ok(Rect::new(0, 0, 40, 6))
             },
             || Err(io::Error::other("event read failed")),
         );
@@ -444,7 +522,7 @@ mod tests {
                 if draws.get() == 2 {
                     Err(io::Error::other("draw failed"))
                 } else {
-                    Ok(())
+                    Ok(Rect::new(0, 0, 40, 6))
                 }
             },
             || {

@@ -10,7 +10,7 @@ use genja_core::task::TaskExecutionMode;
 
 /// Browser view selection, independent of terminal ownership.
 /// Details and Schema rendering and bounded scrolling are available through
-/// direct actions. New inspection keyboard transitions are pending.
+/// direct actions or context-aware keyboard events.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BrowserPanel {

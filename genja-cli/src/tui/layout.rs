@@ -2,6 +2,7 @@
 //!
 //! The browser reserves search, filtered task table, result count, and control
 //! space. Short areas omit the title and count to prioritize input and tasks.
+//! Inspection uses a wrapped descriptor view with scroll and return controls.
 //! Rendering never changes state, performs discovery, or owns the terminal.
 
 use ratatui::{
@@ -128,6 +129,9 @@ fn render_inspection(state: &TaskBrowserState, frame: &mut Frame<'_>, area: Rect
         );
     }
     let controls = [
+        "Up/k Down/j: scroll | PgUp/PgDn | Home/End | Tab: details/schema | Esc: tasks | q: quit",
+        "j/k: scroll | Tab: details/schema | Esc: tasks | q: quit",
+        "Tab: view | Esc: tasks | q: quit",
         "Esc: tasks | q: quit",
         "Esc: back | q: quit",
         "q: quit",
@@ -188,6 +192,9 @@ fn controls(state: &TaskBrowserState, width: u16) -> &'static str {
         ]
     } else if !state.filter_text().is_empty() {
         &[
+            "/: search | Up/k Down/j: move | Home/End | Enter: details | q: quit | Esc: clear",
+            "/: search | j/k: move | Enter: details | q: quit | Esc: clear",
+            "Enter: details | /: search | q: quit | Esc: clear",
             "/: search | Up/k Down/j: move | Home/End: first/last | q: quit | Esc: clear",
             "/: search | j/k: move | q: quit | Esc: clear",
             "Esc: clear | q: quit | /: edit",
@@ -204,6 +211,9 @@ fn controls(state: &TaskBrowserState, width: u16) -> &'static str {
         ]
     } else {
         &[
+            "/: search | Up/k Down/j: move | Home/End | Enter: details | q / Esc: quit",
+            "/: search | j/k: move | Enter: details | q / Esc: quit",
+            "Enter: details | /: search | q / Esc: quit",
             "/: search | Up/k Down/j: move | Home/End: first/last | q / Esc: quit",
             "/: search | j/k: move | q / Esc: quit",
             "/: search | q/Esc: quit",

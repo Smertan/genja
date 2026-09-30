@@ -1,5 +1,6 @@
 #![cfg(feature = "tui")]
 
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use genja_cli::discovery::{DiscoveryResult, TaskDescriptor, TaskDescriptorSource};
 use genja_cli::tui::{BrowserAction, BrowserOutcome, BrowserPanel, TaskBrowser};
 use genja_core::task::{TaskDescriptorMetadata, TaskExecutionMode};
@@ -68,6 +69,214 @@ fn long_schema() -> Value {
         .map(|index| (format!("field_{index:02}"), json!({"type": "string"})))
         .collect();
     json!({"type": "object", "properties": properties, "zz_final": "schema_end_marker"})
+}
+
+fn press(browser: &mut TaskBrowser, code: KeyCode, area: Rect) -> BrowserOutcome {
+    browser.handle_event_in_area(&Event::Key(KeyEvent::new(code, KeyModifiers::NONE)), area)
+}
+
+#[test]
+fn keyboard_inspection_preserves_query_selection_and_independent_scroll_positions() {
+    let mut browser = browser(Some(long_schema()));
+    let area = Rect::new(0, 0, 100, 12);
+    browser.state_mut().set_filter_text("inspect");
+    let selected = browser.state().selected_index();
+    assert_eq!(
+        press(&mut browser, KeyCode::Enter, area),
+        BrowserOutcome::Changed
+    );
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Details);
+    let rendered = text(&draw(&browser, area.width, area.height));
+    assert!(rendered.contains("Tab: details/schema"));
+    assert!(rendered.contains("Esc: tasks"));
+    for (code, offset) in [
+        (KeyCode::Down, 1),
+        (KeyCode::Char('j'), 2),
+        (KeyCode::Up, 1),
+        (KeyCode::Char('k'), 0),
+        (KeyCode::PageDown, 8),
+        (KeyCode::PageUp, 0),
+    ] {
+        assert_eq!(press(&mut browser, code, area), BrowserOutcome::Changed);
+        assert_eq!(
+            browser
+                .state()
+                .inspection_scroll_offset(BrowserPanel::Details),
+            Some(offset)
+        );
+        assert_eq!(browser.state().selected_index(), selected);
+    }
+    press(&mut browser, KeyCode::PageDown, area);
+    assert_eq!(
+        press(&mut browser, KeyCode::Tab, area),
+        BrowserOutcome::Changed
+    );
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Schema);
+    assert_eq!(
+        press(&mut browser, KeyCode::End, area),
+        BrowserOutcome::Changed
+    );
+    let bottom = browser
+        .state()
+        .inspection_scroll_offset(BrowserPanel::Schema)
+        .unwrap();
+    assert!(bottom > 8);
+    assert!(text(&draw(&browser, area.width, area.height)).contains("schema_end_marker"));
+    assert_eq!(
+        press(&mut browser, KeyCode::Down, area),
+        BrowserOutcome::Ignored
+    );
+    assert_eq!(
+        press(&mut browser, KeyCode::Home, area),
+        BrowserOutcome::Changed
+    );
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(0)
+    );
+    press(&mut browser, KeyCode::End, area);
+    press(&mut browser, KeyCode::Tab, area);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Details),
+        Some(8)
+    );
+    press(&mut browser, KeyCode::Tab, area);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(bottom)
+    );
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('q'), area),
+        BrowserOutcome::QuitRequested
+    );
+    assert_eq!(
+        press(&mut browser, KeyCode::Esc, area),
+        BrowserOutcome::Changed
+    );
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+    assert_eq!(browser.state().filter_text(), "inspect");
+    assert_eq!(browser.state().selected_index(), selected);
+    assert_eq!(
+        press(&mut browser, KeyCode::Esc, area),
+        BrowserOutcome::Changed
+    );
+    assert!(browser.state().filter_text().is_empty());
+    assert_eq!(
+        press(&mut browser, KeyCode::Esc, area),
+        BrowserOutcome::QuitRequested
+    );
+}
+
+#[test]
+fn search_enter_leaves_input_before_another_enter_opens_details() {
+    let mut browser = browser(None);
+    let area = Rect::new(0, 0, 100, 12);
+    press(&mut browser, KeyCode::Char('/'), area);
+    for character in "inspect".chars() {
+        press(&mut browser, KeyCode::Char(character), area);
+    }
+    assert_eq!(
+        press(&mut browser, KeyCode::Enter, area),
+        BrowserOutcome::Changed
+    );
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+    assert!(!browser.state().is_search_active());
+    assert_eq!(
+        press(&mut browser, KeyCode::Tab, area),
+        BrowserOutcome::Ignored
+    );
+    press(&mut browser, KeyCode::Enter, area);
+    press(&mut browser, KeyCode::Tab, area);
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Schema);
+    assert!(text(&draw(&browser, area.width, area.height)).contains("No input schema available"));
+    assert_eq!(
+        press(&mut browser, KeyCode::Char('/'), area),
+        BrowserOutcome::Ignored
+    );
+    assert_eq!(
+        press(&mut browser, KeyCode::Enter, area),
+        BrowserOutcome::Ignored
+    );
+    assert!(!browser.state().is_search_active());
+    press(&mut browser, KeyCode::Esc, area);
+    browser.state_mut().set_filter_text("missing");
+    assert_eq!(
+        press(&mut browser, KeyCode::Enter, area),
+        BrowserOutcome::Ignored
+    );
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+    let mut empty = TaskBrowser::new();
+    assert_eq!(
+        press(&mut empty, KeyCode::Enter, area),
+        BrowserOutcome::Ignored
+    );
+}
+
+#[test]
+fn embedded_inspection_events_require_area_for_scrolling_and_leave_host_events_available() {
+    let mut browser = browser(Some(long_schema()));
+    let area = Rect::new(5, 3, 50, 10);
+    assert_eq!(
+        browser.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE
+        ))),
+        BrowserOutcome::Changed
+    );
+    assert_eq!(
+        browser.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::NONE
+        ))),
+        BrowserOutcome::Ignored
+    );
+    assert_eq!(browser.state().selected_index(), Some(0));
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Details),
+        Some(0)
+    );
+    assert_eq!(
+        press(&mut browser, KeyCode::Down, area),
+        BrowserOutcome::Changed
+    );
+    let ignored = [
+        Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL)),
+        Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::ALT)),
+        Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )),
+        Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        )),
+        Event::Resize(80, 24),
+        Event::FocusGained,
+        Event::Paste("q".into()),
+    ];
+    for event in ignored {
+        assert_eq!(
+            browser.handle_event_in_area(&event, area),
+            BrowserOutcome::Ignored
+        );
+        assert_eq!(browser.state().active_panel(), BrowserPanel::Details);
+        assert_eq!(
+            browser
+                .state()
+                .inspection_scroll_offset(BrowserPanel::Details),
+            Some(1)
+        );
+    }
 }
 
 #[test]
