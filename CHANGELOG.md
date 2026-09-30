@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added syntax colouring for JSON metadata in the TUI Schema view using the optional `tui-syntax-highlight` adapter. Keys and values are distinguished while indentation, scrolling, and the terminal background remain intact; plain JSON is shown if highlighting fails. Refs: #130
 - Added keyboard access to TUI descriptor inspection: Enter opens Details, Tab switches Details/Schema, and navigation keys scroll content. Escape returns to the filtered task list with selection retained. Full-screen and embedded browsers share area-aware event handling, and footer hints show inspection controls. Refs: #130
 - Added formatted TUI schema inspection with a clear missing-metadata state, plus bounded line/page scrolling for Details and Schema through viewport-aware library actions. Wrapped content and resize use shared Ratatui measurements, and a line-range indicator shows progress when space permits. Refs: #130
 - Added an embeddable TUI descriptor Details renderer with identity, description, execution metadata, constructibility, schema availability, and clear missing-value labels. Text wraps to the host area, and retry fields show recorded overrides rather than resolved runner policy. Refs: #130

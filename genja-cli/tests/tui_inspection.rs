@@ -4,7 +4,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use genja_cli::discovery::{DiscoveryResult, TaskDescriptor, TaskDescriptorSource};
 use genja_cli::tui::{BrowserAction, BrowserOutcome, BrowserPanel, TaskBrowser};
 use genja_core::task::{TaskDescriptorMetadata, TaskExecutionMode};
-use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Color};
 use serde_json::{Value, json};
 
 struct Source(TaskDescriptor);
@@ -62,6 +62,39 @@ fn text(terminal: &Terminal<TestBackend>) -> String {
         .map(|y| row(terminal, y))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn color_at(terminal: &Terminal<TestBackend>, needle: &str) -> (Color, Color) {
+    let area = terminal.backend().buffer().area;
+    let (x, y) = (0..area.height)
+        .find_map(|y| row(terminal, y).find(needle).map(|x| (x as u16, y)))
+        .unwrap_or_else(|| panic!("missing rendered token {needle:?}"));
+    let cell = &terminal.backend().buffer()[(x, y)];
+    (cell.fg, cell.bg)
+}
+
+#[test]
+fn schema_json_highlights_keys_and_values_without_a_coloured_background() {
+    let mut browser = browser(Some(json!({
+        "count": 42,
+        "flag": true,
+        "label": "value",
+        "nothing": null
+    })));
+    browser.handle_action(BrowserAction::OpenSchema);
+    let terminal = draw(&browser, 100, 24);
+    let key = color_at(&terminal, "\"count\"");
+    let number = color_at(&terminal, "42");
+    let boolean = color_at(&terminal, "true");
+    let string = color_at(&terminal, "\"value\"");
+    let null = color_at(&terminal, "null");
+    for style in [key, number, boolean, string, null] {
+        assert_ne!(style.0, Color::Reset);
+        assert_eq!(style.1, Color::Reset);
+    }
+    assert_ne!(key.0, number.0);
+    assert_ne!(string.0, boolean.0);
+    assert!(text(&terminal).contains("\"count\": 42"));
 }
 
 fn long_schema() -> Value {

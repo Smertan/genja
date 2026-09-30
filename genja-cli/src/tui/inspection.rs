@@ -2,16 +2,34 @@
 //!
 //! Ratatui's optional rendered-line measurement uses its own word wrapping,
 //! keeping scroll bounds consistent with styled and Unicode paragraph output.
+//! JSON highlighting uses Syntect through `tui-syntax-highlight`; its syntax
+//! and theme assets are loaded once, independently of terminal ownership.
 //! No measurements are retained in browser state or require a live terminal.
+
+use std::sync::LazyLock;
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
+    style::Color,
     text::{Line, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use syntect::{highlighting::ThemeSet, parsing::SyntaxSet};
+use tui_syntax_highlight::Highlighter;
 
 use super::{BrowserPanel, TaskBrowserState, detail::detail_content};
 use crate::discovery::TaskDescriptor;
+
+/// Reuse grammar and theme data rather than loading bundled assets per frame.
+static JSON_HIGHLIGHT_ASSETS: LazyLock<(SyntaxSet, syntect::highlighting::Theme)> =
+    LazyLock::new(|| {
+        let syntaxes = SyntaxSet::load_defaults_newlines();
+        let theme = ThemeSet::load_defaults()
+            .themes
+            .remove("base16-ocean.dark")
+            .unwrap_or_default();
+        (syntaxes, theme)
+    });
 
 /// Measured content and inner area shared by inspection drawing and actions.
 pub(super) struct InspectionViewport<'a> {
@@ -89,7 +107,7 @@ fn schema_content(task: &TaskDescriptor) -> Text<'static> {
     ]);
     let schema = match task.input_schema.as_ref() {
         Some(schema) => match serde_json::to_string_pretty(schema) {
-            Ok(json) => Text::from(json),
+            Ok(json) => highlighted_json(&json).unwrap_or_else(|| Text::from(json)),
             Err(error) => Text::from(format!("Unable to format input schema: {error}")),
         },
         None => Text::from(
@@ -98,4 +116,16 @@ fn schema_content(task: &TaskDescriptor) -> Text<'static> {
     };
     text.lines.extend(schema.lines);
     text
+}
+
+/// Colour JSON without changing the pretty-printed bytes or adding a gutter.
+/// If grammar lookup or highlighting fails, the caller displays plain JSON.
+fn highlighted_json(json: &str) -> Option<Text<'static>> {
+    let (syntaxes, theme) = &*JSON_HIGHLIGHT_ASSETS;
+    let syntax = syntaxes.find_syntax_by_extension("json")?;
+    Highlighter::new(theme.clone())
+        .line_numbers(false)
+        .override_background(Color::Reset)
+        .highlight_reader(json.as_bytes(), syntax, syntaxes)
+        .ok()
 }

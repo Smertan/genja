@@ -6,7 +6,8 @@
 //! with result counts and empty/error states.
 //! Enter opens Details for the selected descriptor; Tab switches Details/Schema.
 //! [`TaskBrowser::handle_event_in_area`] supports context-aware navigation and
-//! bounded scrolling while embedded hosts retain event-loop ownership.
+//! bounded scrolling while embedded hosts retain event-loop ownership. Schema
+//! JSON uses optional syntax highlighting; missing metadata remains plain text.
 //! [`run_tui`] owns a full-screen terminal session. [`run_main`] selects compiled Rust tasks for
 //! project-local binaries.
 //!
@@ -20,7 +21,7 @@
 //! - `terminal`: Crossterm terminal setup and restoration.
 //! - `task_browser`: embeddable browser and descriptor loading boundary.
 //! - `detail`: descriptor metadata formatting without state or terminal ownership.
-//! - `inspection`: schema formatting and shared wrapped-content viewport bounds.
+//! - `inspection`: highlighted schema formatting and shared wrapped-content viewport bounds.
 //! - `state`: snapshot, selection, search, views, inspection scroll offsets, and errors.
 //! - `event`: browser actions and translation from Crossterm events.
 //! - `layout`: layout calculation and rendering within a caller-provided area.

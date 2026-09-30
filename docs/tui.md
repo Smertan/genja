@@ -426,7 +426,11 @@ does not indicate execution success or prevent direct construction of the task
 struct when false.
 
 Description paragraphs and formatted schema JSON wrap to the available width.
-Schema displays the selected task's identity followed by its JSON metadata.
+Schema displays the selected task's identity followed by its syntax-coloured,
+pretty-printed JSON metadata. Keys and values use distinct colours; JSON
+indentation and punctuation remain visible, and the terminal supplies the
+background colour. This highlighting is part of the optional TUI feature and
+does not affect CLI JSON output or CLI-only builds.
 Tasks without metadata show **No input schema available**; this does not imply
 the task accepts no input. Present empty objects, booleans, and JSON `null` are
 displayed as supplied rather than treated as missing. Schema inspection does

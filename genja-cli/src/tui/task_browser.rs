@@ -284,7 +284,8 @@ impl TaskBrowser {
     /// areas omit the title and count; empty matches and discovery failures
     /// have separate messages. Footer controls reflect the current input mode.
     /// Details formats the selected snapshot descriptor and wraps its text.
-    /// Schema shows formatted JSON metadata or an explicit absence message.
+    /// Schema shows syntax-coloured, formatted JSON metadata or an explicit
+    /// plain-text absence message.
     /// Inspection offsets are clamped against wrapped content and the current
     /// viewport without changing state. Inspection never loads or constructs tasks.
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect) {
