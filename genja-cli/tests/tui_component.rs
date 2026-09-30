@@ -487,9 +487,14 @@ fn task_table_renders_fields_in_discovery_order_and_moves_highlight() {
         assert!(second_row.contains(value), "{second_row}");
     }
     assert!(!second_row.contains('>'));
+    assert!(
+        terminal.backend().buffer()[(1, 4)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
     assert_eq!(
         terminal.backend().buffer()[(1, 4)].bg,
-        ratatui::style::Color::Blue
+        ratatui::style::Color::Reset
     );
     assert_eq!(browser.state().descriptors(), expected);
     assert_eq!(browser.state().selected_index(), Some(0));
@@ -503,13 +508,15 @@ fn task_table_renders_fields_in_discovery_order_and_moves_highlight() {
         .unwrap();
     assert!(!row(&terminal, 4).contains('>'));
     assert!(row(&terminal, 5).contains('>'));
-    assert_ne!(
-        terminal.backend().buffer()[(1, 4)].bg,
-        ratatui::style::Color::Blue
+    assert!(
+        !terminal.backend().buffer()[(1, 4)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
     );
-    assert_eq!(
-        terminal.backend().buffer()[(1, 5)].bg,
-        ratatui::style::Color::Blue
+    assert!(
+        terminal.backend().buffer()[(1, 5)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
     );
     assert_eq!(browser.state().descriptors(), expected);
     assert_eq!(browser.state().selected_index(), Some(1));
@@ -663,7 +670,7 @@ fn empty_and_error_screens_are_distinct_and_keep_quit_guidance() {
     );
     assert_eq!(
         terminal.backend().buffer()[(3, 6)].bg,
-        ratatui::style::Color::DarkGray
+        ratatui::style::Color::Reset
     );
     assert!(
         terminal.backend().buffer()[(1, 5)]

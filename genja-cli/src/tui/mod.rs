@@ -8,6 +8,8 @@
 //! [`TaskBrowser::handle_event_in_area`] supports context-aware navigation and
 //! bounded scrolling while embedded hosts retain event-loop ownership. Schema
 //! JSON uses optional syntax highlighting; missing metadata remains plain text.
+//! Ordinary text and backgrounds inherit terminal defaults; inspection accents
+//! use ANSI palette colours, and selection reverses terminal foreground/background.
 //! [`run_tui`] owns a full-screen terminal session. [`run_main`] selects compiled Rust tasks for
 //! project-local binaries.
 //!

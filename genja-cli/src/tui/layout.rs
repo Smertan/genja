@@ -231,7 +231,9 @@ fn controls(state: &TaskBrowserState, width: u16) -> &'static str {
 /// Provide registration and linking guidance for a genuinely empty snapshot.
 fn empty_message() -> Text<'static> {
     let heading = Style::default().add_modifier(Modifier::BOLD);
-    let code = Style::default().fg(Color::Cyan).bg(Color::DarkGray);
+    let code = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
     let code_line = |text| Line::from(vec![Span::raw("  "), Span::styled(text, code)]);
     Text::from(vec![
         Line::from("No registered tasks available."),

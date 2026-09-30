@@ -7,12 +7,17 @@ Run `genja tui` in a build with the `tui` feature to open the basic screen.
 Press `q` outside search to quit; Escape first leaves search, returns from
 inspection, or clears a query.
 The table shows task ID, version, name, execution mode, and constructible
-status. The selected row has a `>` marker and colour
-highlight. The search field filters tasks as you type and shows matching and
+status. The selected row has a `>` marker and reversed terminal colours.
+The search field filters tasks as you type and shows matching and
 total task counts. Press Enter on a selected task to inspect its descriptor
 details, and Tab to switch to its input schema metadata. Both views support
 scrolling. Applications can also embed these views in their own terminal event
 loop. Task execution is not implemented.
+
+The TUI uses the terminal's default foreground and background for ordinary text.
+Selected rows reverse those colours, while search and metadata labels use
+terminal-defined ANSI accents. It does not detect light or dark mode; the
+terminal's own palette controls how those accents appear.
 
 The **CONSTRUCTIBLE** column shows `yes` when the running binary has a registered
 factory to create that task from JSON input, and `no` when only its descriptor
@@ -419,6 +424,8 @@ Details displays identity (`ID@version`), ID source, version, name, description,
 execution mode, constructible status, and whether input schema metadata is
 available. It also shows recorded connection plugin, processors, and retry
 overrides. Missing descriptions and optional metadata have explicit labels.
+Field labels use a terminal-palette accent and bold text; values retain the
+terminal's default foreground for readability on light and dark backgrounds.
 Retry fields are descriptor values, not resolved execution policy; unspecified
 fields fall back to runner or built-in defaults. Maximum attempts includes the
 first attempt. Constructible refers to a registered JSON input factory and
@@ -427,9 +434,10 @@ struct when false.
 
 Description paragraphs and formatted schema JSON wrap to the available width.
 Schema displays the selected task's identity followed by its syntax-coloured,
-pretty-printed JSON metadata. Keys and values use distinct colours; JSON
-indentation and punctuation remain visible, and the terminal supplies the
-background colour. This highlighting is part of the optional TUI feature and
+pretty-printed JSON metadata. Keys, strings, numbers, and boolean/null values
+use distinct terminal-palette colours; JSON indentation and punctuation retain
+the terminal's default foreground and background. This highlighting is part
+of the optional TUI feature and
 does not affect CLI JSON output or CLI-only builds.
 Tasks without metadata show **No input schema available**; this does not imply
 the task accepts no input. Present empty objects, booleans, and JSON `null` are

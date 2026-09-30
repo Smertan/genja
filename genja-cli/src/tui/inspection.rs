@@ -3,7 +3,8 @@
 //! Ratatui's optional rendered-line measurement uses its own word wrapping,
 //! keeping scroll bounds consistent with styled and Unicode paragraph output.
 //! JSON highlighting uses Syntect through `tui-syntax-highlight`; its syntax
-//! and theme assets are loaded once, independently of terminal ownership.
+//! grammar assets and a terminal-palette theme are loaded once, independently
+//! of terminal ownership.
 //! No measurements are retained in browser state or require a live terminal.
 
 use std::sync::LazyLock;
@@ -14,22 +15,71 @@ use ratatui::{
     text::{Line, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
-use syntect::{highlighting::ThemeSet, parsing::SyntaxSet};
+use syntect::{
+    highlighting::{Color as SyntaxColor, StyleModifier, Theme, ThemeItem, ThemeSettings},
+    parsing::SyntaxSet,
+};
 use tui_syntax_highlight::Highlighter;
 
-use super::{BrowserPanel, TaskBrowserState, detail::detail_content};
+use super::{
+    BrowserPanel, TaskBrowserState,
+    detail::{detail_content, field},
+};
 use crate::discovery::TaskDescriptor;
 
 /// Reuse grammar and theme data rather than loading bundled assets per frame.
-static JSON_HIGHLIGHT_ASSETS: LazyLock<(SyntaxSet, syntect::highlighting::Theme)> =
-    LazyLock::new(|| {
-        let syntaxes = SyntaxSet::load_defaults_newlines();
-        let theme = ThemeSet::load_defaults()
-            .themes
-            .remove("base16-ocean.dark")
-            .unwrap_or_default();
-        (syntaxes, theme)
-    });
+static JSON_HIGHLIGHT_ASSETS: LazyLock<(SyntaxSet, Theme)> =
+    LazyLock::new(|| (SyntaxSet::load_defaults_newlines(), terminal_theme()));
+
+/// Encode terminal palette colours in Syntect's ANSI colour representation.
+/// The adapter converts these to Ratatui's terminal-defined colour variants.
+const fn ansi(index: u8) -> SyntaxColor {
+    SyntaxColor {
+        r: index,
+        g: 0,
+        b: 0,
+        a: 0,
+    }
+}
+
+/// Let unstyled JSON and all backgrounds inherit terminal defaults.
+const TERMINAL_DEFAULT: SyntaxColor = SyntaxColor {
+    r: 0,
+    g: 0,
+    b: 0,
+    a: 1,
+};
+
+/// Let the terminal theme supply ANSI colours for JSON semantics.
+fn terminal_theme() -> Theme {
+    let rule = |selector: &str, colour| ThemeItem {
+        scope: selector
+            .parse()
+            .expect("valid built-in JSON scope selector"),
+        style: StyleModifier {
+            foreground: Some(colour),
+            ..StyleModifier::default()
+        },
+    };
+    Theme {
+        name: Some("Genja terminal palette".into()),
+        settings: ThemeSettings {
+            foreground: Some(TERMINAL_DEFAULT),
+            background: Some(TERMINAL_DEFAULT),
+            ..ThemeSettings::default()
+        },
+        scopes: vec![
+            rule(
+                "meta.structure.dictionary.key.json string.quoted.double.json",
+                ansi(6),
+            ),
+            rule("string", ansi(2)),
+            rule("constant.numeric.json", ansi(5)),
+            rule("constant.language.json", ansi(3)),
+        ],
+        ..Theme::default()
+    }
+}
 
 /// Measured content and inner area shared by inspection drawing and actions.
 pub(super) struct InspectionViewport<'a> {
@@ -102,7 +152,7 @@ pub(super) fn inspection_viewport(
 /// Missing metadata is distinct from a present empty object, boolean, or null.
 fn schema_content(task: &TaskDescriptor) -> Text<'static> {
     let mut text = Text::from(vec![
-        Line::raw(format!("Identity: {}@{}", task.id, task.version)),
+        field("Identity", format!("{}@{}", task.id, task.version)),
         Line::default(),
     ]);
     let schema = match task.input_schema.as_ref() {

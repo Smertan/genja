@@ -5,7 +5,12 @@ use std::cell::Cell;
 use genja_cli::discovery::{DiscoveryResult, TaskDescriptor, TaskDescriptorSource};
 use genja_cli::tui::{BrowserAction, BrowserPanel, TaskBrowser};
 use genja_core::task::{RetryConfig, TaskDescriptorMetadata, TaskExecutionMode};
-use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+use ratatui::{
+    Terminal,
+    backend::TestBackend,
+    layout::Rect,
+    style::{Color, Modifier},
+};
 
 struct Source {
     tasks: Vec<TaskDescriptor>,
@@ -100,6 +105,27 @@ fn details_render_core_metadata_from_selected_discovery_descriptor() {
     assert_eq!(browser.state().descriptors(), source.tasks);
     assert_eq!(browser.state().active_panel(), BrowserPanel::Details);
     assert_eq!(source.calls.get(), 1);
+}
+
+#[test]
+fn details_colour_labels_and_leave_values_on_terminal_defaults() {
+    let mut browser = TaskBrowser::new();
+    browser.load_from(&Source::new(vec![backup()])).unwrap();
+    browser.handle_action(BrowserAction::OpenDetails);
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let label = &buffer[(1, 2)];
+    let value = &buffer[(1 + "Identity: ".len() as u16, 2)];
+    assert_eq!(label.symbol(), "I");
+    assert_eq!(label.fg, Color::Cyan);
+    assert_eq!(label.bg, Color::Reset);
+    assert!(label.modifier.contains(Modifier::BOLD));
+    assert_eq!(value.symbol(), "a");
+    assert_eq!(value.fg, Color::Reset);
+    assert_eq!(value.bg, Color::Reset);
 }
 
 #[test]

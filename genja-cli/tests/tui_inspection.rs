@@ -67,7 +67,11 @@ fn text(terminal: &Terminal<TestBackend>) -> String {
 fn color_at(terminal: &Terminal<TestBackend>, needle: &str) -> (Color, Color) {
     let area = terminal.backend().buffer().area;
     let (x, y) = (0..area.height)
-        .find_map(|y| row(terminal, y).find(needle).map(|x| (x as u16, y)))
+        .find_map(|y| {
+            let line = row(terminal, y);
+            line.find(needle)
+                .map(|byte| (line[..byte].chars().count() as u16, y))
+        })
         .unwrap_or_else(|| panic!("missing rendered token {needle:?}"));
     let cell = &terminal.backend().buffer()[(x, y)];
     (cell.fg, cell.bg)
@@ -88,12 +92,21 @@ fn schema_json_highlights_keys_and_values_without_a_coloured_background() {
     let boolean = color_at(&terminal, "true");
     let string = color_at(&terminal, "\"value\"");
     let null = color_at(&terminal, "null");
-    for style in [key, number, boolean, string, null] {
-        assert_ne!(style.0, Color::Reset);
-        assert_eq!(style.1, Color::Reset);
+    for (name, style) in [
+        ("key", key),
+        ("number", number),
+        ("boolean", boolean),
+        ("string", string),
+        ("null", null),
+    ] {
+        assert_ne!(style.0, Color::Reset, "{name}");
+        assert_eq!(style.1, Color::Reset, "{name}");
     }
-    assert_ne!(key.0, number.0);
-    assert_ne!(string.0, boolean.0);
+    assert_eq!(key.0, Color::Cyan);
+    assert_eq!(string.0, Color::Green);
+    assert_eq!(number.0, Color::Magenta);
+    assert_eq!(boolean.0, Color::Yellow);
+    assert_eq!(null.0, Color::Yellow);
     assert!(text(&terminal).contains("\"count\": 42"));
 }
 

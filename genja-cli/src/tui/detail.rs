@@ -7,7 +7,7 @@ use std::{borrow::Cow, fmt::Display};
 
 use genja_core::task::{TaskExecutionMode, TaskIdSource};
 use ratatui::{
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
 };
 
@@ -97,12 +97,15 @@ pub(super) fn detail_content(task: &TaskDescriptor) -> Text<'_> {
     Text::from(lines)
 }
 
-/// Format one labelled value while borrowing descriptor strings where possible.
-fn field<'a>(label: &str, value: impl Into<Cow<'a, str>>) -> Line<'a> {
+/// Colour labels with the terminal's ANSI palette and leave values in its
+/// default foreground, while borrowing descriptor strings where possible.
+pub(super) fn field<'a>(label: &str, value: impl Into<Cow<'a, str>>) -> Line<'a> {
     Line::from(vec![
         Span::styled(
             format!("{label}: "),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(value),
     ])
