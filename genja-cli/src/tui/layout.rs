@@ -2,6 +2,7 @@
 //!
 //! The browser reserves search, filtered task table, result count, and control
 //! space. Short areas omit the title and count to prioritize input and tasks.
+//! Inspection uses a wrapped descriptor view with scroll and return controls.
 //! Rendering never changes state, performs discovery, or owns the terminal.
 
 use ratatui::{
@@ -12,13 +13,18 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use super::TaskBrowserState;
+use super::inspection::{inspection_rows, inspection_viewport};
 use super::widgets::render_tasks;
+use super::{BrowserPanel, TaskBrowserState};
 
 /// Draw a browser inside the clipped host area without changing its state.
 pub(super) fn render_browser(state: &TaskBrowserState, frame: &mut Frame<'_>, area: Rect) {
     let area = area.intersection(frame.area());
     if area.width == 0 || area.height == 0 {
+        return;
+    }
+    if state.active_panel() != BrowserPanel::Tasks {
+        render_inspection(state, frame, area);
         return;
     }
 
@@ -81,6 +87,66 @@ pub(super) fn render_browser(state: &TaskBrowserState, frame: &mut Frame<'_>, ar
     frame.render_widget(Paragraph::new(controls(state, rows[4].width)), rows[4]);
 }
 
+/// Draw selected-descriptor inspection without polling events or changing state.
+/// Drawing clamps the effective offset after resize without mutating state.
+fn render_inspection(state: &TaskBrowserState, frame: &mut Frame<'_>, area: Rect) {
+    let rows = inspection_rows(area);
+    let schema = state.active_panel() == BrowserPanel::Schema;
+    let title = if schema { "Schema" } else { "Details" };
+    frame.render_widget(
+        Paragraph::new(format!("Genja Task Browser - {title}")),
+        rows[0],
+    );
+    let mut position = None;
+    if let Some(viewport) = inspection_viewport(state, area) {
+        let requested = state
+            .inspection_scroll_offset(state.active_panel())
+            .unwrap_or(0);
+        let offset = viewport.effective_offset(requested);
+        if viewport.inner.height > 0 && viewport.line_count > 0 {
+            position = Some(format!(
+                "Lines {}-{} of {}",
+                offset + 1,
+                offset
+                    .saturating_add(usize::from(viewport.inner.height))
+                    .min(viewport.line_count),
+                viewport.line_count
+            ));
+        }
+        frame.render_widget(viewport.block, viewport.body);
+        frame.render_widget(
+            viewport
+                .paragraph
+                .scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0)),
+            viewport.inner,
+        );
+    } else {
+        render_message(
+            frame,
+            rows[1],
+            title,
+            "No task selected. Return to the task list to select one.",
+        );
+    }
+    let controls = [
+        "Up/k Down/j: scroll | PgUp/PgDn | Home/End | Tab: details/schema | Esc: tasks | q: quit",
+        "j/k: scroll | Tab: details/schema | Esc: tasks | q: quit",
+        "Tab: view | Esc: tasks | q: quit",
+        "Esc: tasks | q: quit",
+        "Esc: back | q: quit",
+        "q: quit",
+        "q",
+    ]
+    .into_iter()
+    .find(|text| text.len() <= usize::from(rows[2].width))
+    .unwrap_or("");
+    let status = position
+        .map(|position| format!("{position} | {controls}"))
+        .filter(|text| text.len() <= usize::from(rows[2].width))
+        .unwrap_or_else(|| controls.to_string());
+    frame.render_widget(Paragraph::new(status), rows[2]);
+}
+
 /// Show search focus and keep the end of an edited query visible.
 /// Use widget styling rather than taking control of the host's terminal cursor.
 fn render_search(state: &TaskBrowserState, frame: &mut Frame<'_>, area: Rect) {
@@ -126,6 +192,9 @@ fn controls(state: &TaskBrowserState, width: u16) -> &'static str {
         ]
     } else if !state.filter_text().is_empty() {
         &[
+            "/: search | Up/k Down/j: move | Home/End | Enter: details | q: quit | Esc: clear",
+            "/: search | j/k: move | Enter: details | q: quit | Esc: clear",
+            "Enter: details | /: search | q: quit | Esc: clear",
             "/: search | Up/k Down/j: move | Home/End: first/last | q: quit | Esc: clear",
             "/: search | j/k: move | q: quit | Esc: clear",
             "Esc: clear | q: quit | /: edit",
@@ -142,6 +211,9 @@ fn controls(state: &TaskBrowserState, width: u16) -> &'static str {
         ]
     } else {
         &[
+            "/: search | Up/k Down/j: move | Home/End | Enter: details | q / Esc: quit",
+            "/: search | j/k: move | Enter: details | q / Esc: quit",
+            "Enter: details | /: search | q / Esc: quit",
             "/: search | Up/k Down/j: move | Home/End: first/last | q / Esc: quit",
             "/: search | j/k: move | q / Esc: quit",
             "/: search | q/Esc: quit",
@@ -159,7 +231,9 @@ fn controls(state: &TaskBrowserState, width: u16) -> &'static str {
 /// Provide registration and linking guidance for a genuinely empty snapshot.
 fn empty_message() -> Text<'static> {
     let heading = Style::default().add_modifier(Modifier::BOLD);
-    let code = Style::default().fg(Color::Cyan).bg(Color::DarkGray);
+    let code = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
     let code_line = |text| Line::from(vec![Span::raw("  "), Span::styled(text, code)]);
     Text::from(vec![
         Line::from("No registered tasks available."),

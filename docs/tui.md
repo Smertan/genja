@@ -4,11 +4,20 @@ Genja is developing a terminal user interface for browsing task descriptors.
 Today, Rust applications can embed a basic browser screen in an existing
 Ratatui application or run that screen in a full-screen terminal session.
 Run `genja tui` in a build with the `tui` feature to open the basic screen.
-Press `q` in task mode to quit; Escape first leaves search or clears a query.
+Press `q` outside search to quit; Escape first leaves search, returns from
+inspection, or clears a query.
 The table shows task ID, version, name, execution mode, and constructible
-status. The selected row has a `>` marker and colour
-highlight. The search field filters tasks as you type and shows matching and
-total task counts. Details and execution are future work.
+status. The selected row has a `>` marker and reversed terminal colours.
+The search field filters tasks as you type and shows matching and
+total task counts. Press Enter on a selected task to inspect its descriptor
+details, and Tab to switch to its input schema metadata. Both views support
+scrolling. Applications can also embed these views in their own terminal event
+loop. Task execution is not implemented.
+
+The TUI uses the terminal's default foreground and background for ordinary text.
+Selected rows reverse those colours, while search and metadata labels use
+terminal-defined ANSI accents. It does not detect light or dark mode; the
+terminal's own palette controls how those accents appear.
 
 The **CONSTRUCTIBLE** column shows `yes` when the running binary has a registered
 factory to create that task from JSON input, and `no` when only its descriptor
@@ -107,9 +116,26 @@ In task-navigation mode:
 | Down / `j` | Select the next matching task |
 | Home | Select the first matching task |
 | End | Select the last matching task |
+| Enter | Open Details for the selected task |
 | `/` | Focus search, retaining the current query |
 | Escape | Clear a retained query, or quit if the query is empty |
 | `q` | Quit, including when a query is active |
+
+In Details or Schema:
+
+| Keys | Action |
+| --- | --- |
+| Tab | Switch between Details and Schema |
+| Up / `k` | Scroll up one wrapped row |
+| Down / `j` | Scroll down one wrapped row |
+| PageUp / PageDown | Scroll by one visible page |
+| Home / End | Scroll to the first / last page |
+| Escape | Return to the task list, retaining selection and search |
+| `q` | Quit |
+
+Each inspection view retains its scroll position for the selected task.
+Changing the selected task resets both positions. Search is available in the
+task list; `/` and Enter do nothing during inspection.
 
 While search is focused:
 
@@ -124,9 +150,32 @@ While search is focused:
 press Enter or Escape, then `q`. To clear and quit using Escape alone, press it
 once to leave search, again to clear a nonempty query, and again to quit.
 Arrow keys and Home/End are ignored during search; leave search to navigate.
+Enter while editing only leaves search; press Enter again to open Details.
 Shift is supported for printable input. Key releases, repeats, and paste events
 are not handled. The input edits at the end of the query; it has no movable
 text cursor.
+
+### Try Descriptor Inspection With The Sample Tasks
+
+From a local checkout, launch the example in an interactive terminal:
+
+```bash
+cargo run -p genja --features genja-tui --example task_browser -- tui
+```
+
+1. Select `backup_config` and press Enter. Details shows its identity, version,
+   description, blocking execution mode, and registered JSON factory status.
+2. Press Tab to inspect its input schema, including the `backup_path` field.
+   Use Down/Up, PageDown/PageUp, or Home/End to scroll as needed.
+3. Press Escape to return to the list, select `collect_facts`, and press Enter.
+   It has a generated ID, async execution mode, and no registered JSON factory.
+4. Press Tab. This task has no input schema metadata, so the view explains that
+   no schema is available. Press Escape to return or `q` to quit.
+
+To try inspection after filtering, press `/`, type `backup`, then Enter to leave
+search and Enter again to open Details. Escape returns to the filtered list
+without clearing the query. The sample tasks are linked into this example
+binary; a generic CLI binary may have no tasks to inspect.
 
 ### Matching And Selection
 
@@ -329,10 +378,100 @@ Surrounding whitespace is ignored; blank queries show all tasks. Matching uses
 Unicode lowercase conversion without fuzzy matching or accent normalization.
 Selection stays on the same task when it matches; otherwise the previous visible
 position is clamped to the new list. No matches clears selection; clearing the
-query restores all tasks. Filter text and `BrowserPanel` focus survive loads.
-Search keyboard handling is available through `handle_event()`, and `render()`
+query restores all tasks. Filter text survives loads; inspection focus survives
+only when the replacement snapshot has a matching selected task.
+Search keyboard handling is available through either event helper, and `render()`
 draws the search field, matching tasks, and result counts.
-Panel rendering is reserved. Quit state belongs to the host app.
+`handle_event_in_area()` also provides the inspection keyboard controls and
+bounded scrolling. Direct actions remain available for hosts with custom controls.
+Quit state belongs to the host app.
+
+The inspection state API supports `BrowserPanel::Tasks`, `Details`, and `Schema`.
+Dispatch `OpenDetails` or `OpenSchema` to inspect the selected snapshot descriptor,
+`ToggleInspectionView` to switch between inspection views, and `ReturnToTasks`
+to restore the list without changing the query or selection. Inspection requests
+are ignored without a selected task. `selected_descriptor()` supplies the data;
+view transitions do not copy descriptors or call discovery again. Schema
+inspection is allowed when metadata is absent so its renderer can show an empty
+state. Entering inspection leaves search input, and search can only be focused
+in Tasks. Escape returns from inspection before clearing a query or quitting.
+
+`inspection_scroll_offset(panel)` reads each inspection view's independent
+requested display-row offset. `set_inspection_scroll_offset(panel, offset)`
+stores it for hosts providing their own rendering; it rejects Tasks and missing
+selection. These requested state-only offsets have no content or viewport bounds.
+The browser clamps the effective offset for rendering; area-aware scroll actions
+also clamp their updates. Switching views or returning to the list retains offsets for the same
+selected task. A selection change or descriptor reload resets both offsets.
+Clearing selection, filtering to no matches, empty discovery, and loading errors
+return to Tasks. `set_active_panel()` now ignores inspection requests without
+selection; callers using the formerly reserved panel state should select a
+matching task before requesting Details or Schema.
+
+To render the selected task's details in an embedded application:
+
+```rust
+use genja_cli::tui::BrowserAction;
+
+browser.handle_action(BrowserAction::OpenDetails);
+terminal.draw(|frame| browser.render(frame, browser_area))?;
+
+// Return without changing the selected task or search query.
+browser.handle_action(BrowserAction::ReturnToTasks);
+```
+
+Details displays identity (`ID@version`), ID source, version, name, description,
+execution mode, constructible status, and whether input schema metadata is
+available. It also shows recorded connection plugin, processors, and retry
+overrides. Missing descriptions and optional metadata have explicit labels.
+Field labels use a terminal-palette accent and bold text; values retain the
+terminal's default foreground for readability on light and dark backgrounds.
+Retry fields are descriptor values, not resolved execution policy; unspecified
+fields fall back to runner or built-in defaults. Maximum attempts includes the
+first attempt. Constructible refers to a registered JSON input factory and
+does not indicate execution success or prevent direct construction of the task
+struct when false.
+
+Description paragraphs and formatted schema JSON wrap to the available width.
+Schema displays the selected task's identity followed by its syntax-coloured,
+pretty-printed JSON metadata. Keys, strings, numbers, and boolean/null values
+use distinct terminal-palette colours; JSON indentation and punctuation retain
+the terminal's default foreground and background. This highlighting is part
+of the optional TUI feature and
+does not affect CLI JSON output or CLI-only builds.
+Tasks without metadata show **No input schema available**; this does not imply
+the task accepts no input. Present empty objects, booleans, and JSON `null` are
+displayed as supplied rather than treated as missing. Schema inspection does
+not generate an input form or execute a task.
+
+Rendering does not reload descriptors, mutate browser state, or own the terminal
+cursor. Enter opens Details from Tasks; Tab switches Details/Schema. Escape
+returns from inspection to Tasks, and `q` requests quit outside search.
+
+To scroll inspection content, pass the same clipped browser area used for
+rendering, including the title and footer:
+
+```rust
+browser.handle_action(BrowserAction::OpenSchema);
+browser.handle_action_in_area(BrowserAction::PageDown, browser_area);
+terminal.draw(|frame| browser.render(frame, browser_area))?;
+```
+
+The scroll actions are `ScrollUp`, `ScrollDown`, `PageUp`, `PageDown`,
+`ScrollToTop`, and `ScrollToBottom`. Line actions move one wrapped display row;
+page actions move by the visible content height. Bounds use the same Ratatui
+wrapping and border geometry as rendering. Offsets address up to 65,535 wrapped
+rows, matching Ratatui's paragraph scrolling range. On resize, drawing clamps
+the effective offset without modifying the requested state; the next scroll
+action uses the new bounds. A line-range indicator appears when the footer has
+room. The views retain independent offsets for the same selected task.
+
+Scroll actions are ignored by `handle_action()` because it has no viewport.
+Use `handle_action_in_area()` for scrolling; it delegates other actions to
+`handle_action()`. Likewise, `handle_event()` supports view transitions but
+ignores inspection scroll keys; use `handle_event_in_area()` for scrolling.
+Scrolling is also ignored in Tasks, without selection, or
+when the area has no usable content rows or columns.
 
 Applications that already own a Ratatui frame and Crossterm event loop can
 embed the component directly:
@@ -345,7 +484,7 @@ browser.load_from(&source)?;
 
 // Within the host's existing draw and event loop:
 terminal.draw(|frame| browser.render(frame, browser_area))?;
-if browser.handle_event(&event) == BrowserOutcome::QuitRequested {
+if browser.handle_event_in_area(&event, browser_area) == BrowserOutcome::QuitRequested {
     // The host decides whether to exit its loop.
 }
 ```
@@ -358,22 +497,25 @@ browser.state_mut().set_filter_text("backup");
 let matches = browser.state().filtered_descriptors();
 ```
 
-`handle_action()` accepts browser actions without Crossterm. `handle_event()`
-uses the [keyboard controls](#keyboard-controls) according to search focus.
+`handle_action()` accepts browser actions without Crossterm. Event helpers
+choose the [keyboard controls](#keyboard-controls) according to search focus
+and the active view. The host must redraw on resize and pass the updated,
+clipped area used for rendering to `handle_event_in_area()`.
 
 Embedding applications can inspect `is_search_active()` and dispatch
 `FocusSearch`, `LeaveSearch`, `AppendSearchCharacter(char)`,
 `DeleteSearchCharacter`, `ClearSearch`, or `Escape` actions directly.
-`action_from_event()` translates task-navigation controls; use `handle_event()`
-for context-aware editing. An explicit `Quit` action always requests exit,
-including during search; keyboard `q` requests exit only in task mode.
+`action_from_event()` translates task-navigation controls; use the browser's
+event helpers for context-aware editing and inspection. An explicit `Quit`
+action always requests exit, including during search; keyboard `q` requests
+exit from Tasks, Details, or Schema when search is not focused.
 
 Navigation stops at either end and does nothing for an empty filtered list. If selection
 has been cleared, Up/Down, `j`/`k`, and Home select the first task; End selects
 the last. Navigation keys require no modifiers. Key releases and repeats are
 ignored. Unhandled events return `Ignored` to the host. The browser
 shows search input, result counts, a filtered descriptor table, selection
-highlight, and empty/error messages. Descriptor details are future work.
+highlight, and empty/error messages, plus Details and Schema inspection views.
 The browser never enters raw mode, polls events, or restores the terminal.
 
 CLI-only users should keep using `genja-cli` on `genja`, or a direct `genja-cli`

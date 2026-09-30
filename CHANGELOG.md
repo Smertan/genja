@@ -11,6 +11,11 @@ Changed packages:
 
 ### Added
 
+- Added syntax colouring for JSON metadata in the TUI Schema view using the optional `tui-syntax-highlight` adapter. Keys and values are distinguished while indentation, scrolling, and the terminal background remain intact; plain JSON is shown if highlighting fails. Refs: #130
+- Added keyboard access to TUI descriptor inspection: Enter opens Details, Tab switches Details/Schema, and navigation keys scroll content. Escape returns to the filtered task list with selection retained. Full-screen and embedded browsers share area-aware event handling, and footer hints show inspection controls. Refs: #130
+- Added formatted TUI schema inspection with a clear missing-metadata state, plus bounded line/page scrolling for Details and Schema through viewport-aware library actions. Wrapped content and resize use shared Ratatui measurements, and a line-range indicator shows progress when space permits. Refs: #130
+- Added an embeddable TUI descriptor Details renderer with identity, description, execution metadata, constructibility, schema availability, and clear missing-value labels. Text wraps to the host area, and retry fields show recorded overrides rather than resolved runner policy. Refs: #130
+- Added reusable TUI Details/Schema view state and direct inspection actions for the selected descriptor, preserving filtered selection and separate scroll positions between views. Selection changes and descriptor reloads reset inspection offsets; missing selection returns to Tasks. Refs: #130
 - Added a visible TUI search field with focus styling and scrolling for long input, filtered task-table rendering, matching/total counts, and a distinct no-match message with clearing guidance. Controls adapt to search mode and terminal width; short areas prioritize search and tasks. Refs: #129
 - Added TUI search input handling with `/` to focus, live character filtering, Unicode-safe Backspace, Ctrl+u to clear, and Enter/Escape to leave search. Escape clears retained queries before quitting in task mode; `q`, `j`, and `k` enter text during search. Refs: #129
 - Added programmatic TUI descriptor filtering by ID, name, version, description, and execution mode, with case-insensitive matching, stable selection where possible, and navigation through matching tasks. Refs: #129
@@ -38,6 +43,7 @@ Changed packages:
 
 ### Changed
 
+- Changed TUI inspection labels and JSON syntax accents to use terminal ANSI palette colours, while ordinary values and backgrounds inherit terminal defaults. Task selection now reverses terminal foreground/background, improving compatibility with light and dark terminal themes. Refs: #130
 - Expanded the Terminal UI guide with search controls, matching and selection rules, and a walkthrough using the existing sample tasks; linked the walkthrough from the CLI and examples guides. Refs: #129
 - The full-screen TUI now displays discovery failures until the user quits, then returns the loading error after terminal cleanup; embedded descriptor loading still returns errors immediately. Refs: #128
 - Clarified the constructible descriptor field in the task registration, CLI, and TUI guides, including how example task structs determine its value. Refs: #128

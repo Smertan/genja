@@ -4,7 +4,7 @@ use genja_core::task::TaskExecutionMode;
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     widgets::{Block, Borders, Row, Table, TableState},
 };
 
@@ -86,12 +86,7 @@ pub(super) fn render_tasks(state: &TaskBrowserState, frame: &mut Frame<'_>, area
             ];
             let row = Row::new(columns.fields.iter().map(|index| fields[*index]));
             if selected {
-                row.style(
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(Color::Blue)
-                        .add_modifier(Modifier::BOLD),
-                )
+                row.style(Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED))
             } else {
                 row
             }

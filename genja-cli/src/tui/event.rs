@@ -2,7 +2,7 @@
 //!
 //! Hosts own event polling. They can translate a supplied Crossterm event here
 //! or dispatch actions directly, while retaining events the browser ignores.
-//! The browser selects translation rules according to its search focus.
+//! The browser selects translation rules according to its search focus and view.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
@@ -18,6 +18,26 @@ pub enum BrowserAction {
     SelectFirst,
     /// Select the last descriptor, if one exists.
     SelectLast,
+    /// Open metadata inspection for the selected task, leaving search input.
+    OpenDetails,
+    /// Open input-schema inspection for the selected task, leaving search input.
+    OpenSchema,
+    /// Switch between Details and Schema; ignored in Tasks.
+    ToggleInspectionView,
+    /// Return to Tasks without clearing the query or changing selection.
+    ReturnToTasks,
+    /// Scroll the active inspection view up one display row; requires an area.
+    ScrollUp,
+    /// Scroll the active inspection view down one display row; requires an area.
+    ScrollDown,
+    /// Scroll inspection up by its visible content height; requires an area.
+    PageUp,
+    /// Scroll inspection down by its visible content height; requires an area.
+    PageDown,
+    /// Scroll to the first inspection row; requires an area.
+    ScrollToTop,
+    /// Scroll to the last inspection page; requires an area.
+    ScrollToBottom,
     /// Focus search input without clearing the current query.
     FocusSearch,
     /// Leave search input while retaining the current query.
@@ -28,7 +48,7 @@ pub enum BrowserAction {
     DeleteSearchCharacter,
     /// Clear the query without changing search focus.
     ClearSearch,
-    /// Leave search mode, otherwise clear a query, otherwise request quit.
+    /// Leave search, then inspection, otherwise clear a query or request quit.
     Escape,
     /// Ask the host application to quit.
     Quit,
@@ -50,9 +70,9 @@ pub enum BrowserOutcome {
 ///
 /// Key releases and repeats are ignored. Unmodified Down/`j` and Up/`k` change
 /// selection; Home and End select the first and last descriptor. `q` without
-/// Control or Alt requests exit. `/` focuses search. Escape yields
+/// Control or Alt requests exit. Enter opens Details; `/` focuses search. Escape yields
 /// [`BrowserAction::Escape`], whose effect depends on browser state.
-/// For context-aware search editing, use [`super::TaskBrowser::handle_event`].
+/// For search and inspection, use [`super::TaskBrowser::handle_event_in_area`].
 /// Resize, focus, mouse, and paste events remain available to the host.
 pub fn action_from_event(event: &Event) -> Option<BrowserAction> {
     let Event::Key(key) = event else {
@@ -71,6 +91,7 @@ pub fn action_from_event(event: &Event) -> Option<BrowserAction> {
         }
         KeyCode::Home if key.modifiers.is_empty() => Some(BrowserAction::SelectFirst),
         KeyCode::End if key.modifiers.is_empty() => Some(BrowserAction::SelectLast),
+        KeyCode::Enter if key.modifiers.is_empty() => Some(BrowserAction::OpenDetails),
         KeyCode::Char('q')
             if !key
                 .modifiers
@@ -83,6 +104,32 @@ pub fn action_from_event(event: &Event) -> Option<BrowserAction> {
         }
         KeyCode::Esc if key.modifiers.is_empty() => Some(BrowserAction::Escape),
         _ => None,
+    }
+}
+
+/// Translate inspection key presses without polling input or selecting tasks.
+/// Scrolling requires the host's browser area when the action is dispatched.
+pub(super) fn inspection_action_from_event(event: &Event) -> Option<BrowserAction> {
+    let Event::Key(key) = event else {
+        return None;
+    };
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+    match key.code {
+        KeyCode::Up | KeyCode::Char('k') if key.modifiers.is_empty() => {
+            Some(BrowserAction::ScrollUp)
+        }
+        KeyCode::Down | KeyCode::Char('j') if key.modifiers.is_empty() => {
+            Some(BrowserAction::ScrollDown)
+        }
+        KeyCode::PageUp if key.modifiers.is_empty() => Some(BrowserAction::PageUp),
+        KeyCode::PageDown if key.modifiers.is_empty() => Some(BrowserAction::PageDown),
+        KeyCode::Home if key.modifiers.is_empty() => Some(BrowserAction::ScrollToTop),
+        KeyCode::End if key.modifiers.is_empty() => Some(BrowserAction::ScrollToBottom),
+        KeyCode::Tab if key.modifiers.is_empty() => Some(BrowserAction::ToggleInspectionView),
+        _ => action_from_event(event)
+            .filter(|action| matches!(action, BrowserAction::Quit | BrowserAction::Escape)),
     }
 }
 

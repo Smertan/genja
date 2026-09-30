@@ -51,7 +51,7 @@ cargo run -p genja --example task_registration_spec
 | `task_registration.rs` | Registering a Rust task, listing compiled descriptors, printing schema JSON, and constructing by `<id>@<version>`. |
 | `task_registration_custom_factory.rs` | Registering a Rust task with a custom factory for prepared JSON input and sanitized validation errors. |
 | `task_registration_spec.rs` | Constructing a registered Rust task from YAML and JSON task spec strings, including retry and session verification overrides. |
-| `task_browser.rs` | Exploring CLI task listing and descriptor inspection, or navigating and searching two sample tasks in the optional TUI. |
+| `task_browser.rs` | Exploring CLI task listing and descriptor inspection, or navigating, searching, and inspecting two sample tasks in the optional TUI. |
 
 Use the Rust examples when you want to see the public `genja` crate, the
 `#[genja_task]` macro, and Rust plugin traits in context.
@@ -98,6 +98,13 @@ Follow the [search walkthrough](tui.md#try-search-with-the-sample-tasks) to try
 case-insensitive matching, execution-mode and description searches, and no-match
 recovery. See the [Terminal UI guide](tui.md) for feature setup and the
 project-local binary pattern.
+
+Press Enter on a selected task to open Details, then Tab to inspect its schema.
+`backup_config` includes JSON schema metadata; `collect_facts` shows the missing
+schema message. Scroll with Up/Down, PageUp/PageDown, or Home/End; Escape returns
+to the list while retaining selection and search. Follow the
+[descriptor inspection walkthrough](tui.md#try-descriptor-inspection-with-the-sample-tasks)
+for a complete example.
 
 ## Python Examples
 

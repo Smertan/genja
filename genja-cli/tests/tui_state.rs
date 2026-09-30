@@ -99,7 +99,7 @@ fn selection_rejects_invalid_indices_and_can_be_cleared() {
 }
 
 #[test]
-fn replacing_snapshot_reapplies_filter_and_preserves_panel() {
+fn replacing_snapshot_reapplies_filter_without_inspectable_selection() {
     let mut browser = TaskBrowser::new();
     browser
         .load_from(&FakeSource::new(Ok(vec![
@@ -124,16 +124,16 @@ fn replacing_snapshot_reapplies_filter_and_preserves_panel() {
     assert!(browser.state().descriptors().is_empty());
     assert_eq!(browser.state().selected_index(), None);
     assert_eq!(browser.state().filter_text(), "does not match any task");
-    assert_eq!(browser.state().active_panel(), BrowserPanel::Details);
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
 }
 
 #[test]
-fn failure_clears_snapshot_returns_error_and_preserves_filter_and_panel() {
+fn failure_clears_snapshot_returns_error_and_preserves_filter() {
     let mut browser = TaskBrowser::new();
     browser
         .load_from(&FakeSource::new(Ok(vec![descriptor("a.task", "1.0.0")])))
         .unwrap();
-    browser.state_mut().set_filter_text("query");
+    browser.state_mut().set_filter_text("a.task");
     browser.state_mut().set_active_panel(BrowserPanel::Details);
     let error = DiscoveryError::source_failed("registry unavailable");
     let source = FakeSource::new(Err(error.clone()));
@@ -145,8 +145,321 @@ fn failure_clears_snapshot_returns_error_and_preserves_filter_and_panel() {
     assert!(browser.state().matching_indices().is_empty());
     assert_eq!(browser.state().selected_index(), None);
     assert!(browser.state().selected_descriptor().is_none());
-    assert_eq!(browser.state().filter_text(), "query");
+    assert_eq!(browser.state().filter_text(), "a.task");
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+}
+
+#[test]
+fn inspection_transitions_preserve_query_selection_and_independent_offsets() {
+    let source = FakeSource::new(Ok(vec![
+        descriptor("a.task", "1.0.0"),
+        descriptor("b.task", "1.0.0"),
+    ]));
+    let mut browser = TaskBrowser::new();
+    browser.load_from(&source).unwrap();
+    browser.state_mut().set_filter_text("b.task");
+    assert_eq!(
+        browser.handle_action(BrowserAction::OpenDetails),
+        BrowserOutcome::Changed
+    );
     assert_eq!(browser.state().active_panel(), BrowserPanel::Details);
+    assert_eq!(
+        browser.handle_action(BrowserAction::OpenDetails),
+        BrowserOutcome::Ignored
+    );
+    assert!(
+        browser
+            .state_mut()
+            .set_inspection_scroll_offset(BrowserPanel::Details, 10)
+    );
+    assert!(
+        browser
+            .state_mut()
+            .set_inspection_scroll_offset(BrowserPanel::Schema, 20)
+    );
+    assert_eq!(
+        browser.handle_action(BrowserAction::ToggleInspectionView),
+        BrowserOutcome::Changed
+    );
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Schema);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(20)
+    );
+    browser.handle_action(BrowserAction::ToggleInspectionView);
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Details);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Details),
+        Some(10)
+    );
+    browser.handle_action(BrowserAction::ReturnToTasks);
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Tasks),
+        None
+    );
+    assert!(
+        !browser
+            .state_mut()
+            .set_inspection_scroll_offset(BrowserPanel::Tasks, 1)
+    );
+    browser.handle_action(BrowserAction::OpenSchema);
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Schema);
+    browser.handle_action(BrowserAction::Escape);
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+    assert_eq!(browser.state().filter_text(), "b.task");
+    assert_eq!(browser.state().selected_index(), Some(1));
+    assert_eq!(browser.state().selected_descriptor().unwrap().id, "b.task");
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(20)
+    );
+    assert_eq!(source.calls.get(), 1);
+}
+
+#[test]
+fn inspection_requires_selection_even_with_missing_schema_or_loading_errors() {
+    let mut browser = TaskBrowser::new();
+    for result in [
+        Ok(Vec::new()),
+        Err(DiscoveryError::source_failed("unavailable")),
+        Ok(vec![descriptor("a", "1.0.0")]),
+    ] {
+        let _ = browser.load_from(&FakeSource::new(result));
+        browser.state_mut().set_filter_text("missing");
+        for action in [
+            BrowserAction::OpenDetails,
+            BrowserAction::OpenSchema,
+            BrowserAction::ToggleInspectionView,
+        ] {
+            assert_eq!(browser.handle_action(action), BrowserOutcome::Ignored);
+        }
+        browser.state_mut().set_active_panel(BrowserPanel::Details);
+        assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+        assert!(
+            !browser
+                .state_mut()
+                .set_inspection_scroll_offset(BrowserPanel::Schema, 2)
+        );
+    }
+    browser.state_mut().set_filter_text("");
+    assert!(
+        browser
+            .state()
+            .selected_descriptor()
+            .unwrap()
+            .input_schema
+            .is_none()
+    );
+    assert_eq!(
+        browser.handle_action(BrowserAction::OpenSchema),
+        BrowserOutcome::Changed
+    );
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Schema);
+}
+
+#[test]
+fn selection_changes_reset_offsets_and_clearing_selection_returns_to_tasks() {
+    let mut browser = TaskBrowser::new();
+    browser
+        .load_from(&FakeSource::new(Ok(vec![
+            descriptor("a", "1.0.0"),
+            descriptor("b", "1.0.0"),
+        ])))
+        .unwrap();
+    browser.handle_action(BrowserAction::OpenDetails);
+    browser
+        .state_mut()
+        .set_inspection_scroll_offset(BrowserPanel::Details, 10);
+    browser
+        .state_mut()
+        .set_inspection_scroll_offset(BrowserPanel::Schema, 20);
+    assert!(!browser.state_mut().select(Some(99)));
+    assert!(browser.state_mut().select(Some(0)));
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Details),
+        Some(10)
+    );
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(20)
+    );
+    assert!(browser.state_mut().select(Some(1)));
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Details);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Details),
+        Some(0)
+    );
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(0)
+    );
+    browser
+        .state_mut()
+        .set_inspection_scroll_offset(BrowserPanel::Details, 10);
+    browser
+        .state_mut()
+        .set_inspection_scroll_offset(BrowserPanel::Schema, usize::MAX);
+    browser.state_mut().select(None);
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Details),
+        Some(0)
+    );
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(0)
+    );
+}
+
+#[test]
+fn filtering_resets_inspection_only_when_selection_changes() {
+    let mut browser = TaskBrowser::new();
+    browser
+        .load_from(&FakeSource::new(Ok(vec![
+            descriptor("a.task", "1.0.0"),
+            descriptor("b.task", "1.0.0"),
+        ])))
+        .unwrap();
+    browser.handle_action(BrowserAction::OpenSchema);
+    browser
+        .state_mut()
+        .set_inspection_scroll_offset(BrowserPanel::Details, 10);
+    browser
+        .state_mut()
+        .set_inspection_scroll_offset(BrowserPanel::Schema, 20);
+    browser.state_mut().set_filter_text("b.task");
+    assert_eq!(browser.state().selected_index(), Some(1));
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Schema);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Details),
+        Some(0)
+    );
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(0)
+    );
+    browser
+        .state_mut()
+        .set_inspection_scroll_offset(BrowserPanel::Schema, 5);
+    browser.state_mut().set_filter_text("B.TASK");
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(5)
+    );
+    browser.state_mut().set_filter_text("missing");
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+    assert_eq!(browser.state().selected_index(), None);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(0)
+    );
+}
+
+#[test]
+fn reload_resets_offsets_and_failure_leaves_inspection() {
+    let source = FakeSource::new(Ok(vec![descriptor("a", "1.0.0")]));
+    let mut browser = TaskBrowser::new();
+    browser.load_from(&source).unwrap();
+    browser.state_mut().set_filter_text("a");
+    browser.handle_action(BrowserAction::OpenDetails);
+    browser
+        .state_mut()
+        .set_inspection_scroll_offset(BrowserPanel::Details, 10);
+    browser
+        .state_mut()
+        .set_inspection_scroll_offset(BrowserPanel::Schema, 20);
+    browser.load_from(&source).unwrap();
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Details);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Details),
+        Some(0)
+    );
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Schema),
+        Some(0)
+    );
+    browser
+        .state_mut()
+        .set_inspection_scroll_offset(BrowserPanel::Details, 10);
+    browser
+        .load_from(&FakeSource::new(Err(DiscoveryError::source_failed(
+            "failed",
+        ))))
+        .unwrap_err();
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+    assert_eq!(
+        browser
+            .state()
+            .inspection_scroll_offset(BrowserPanel::Details),
+        Some(0)
+    );
+    assert_eq!(browser.state().filter_text(), "a");
+    browser.load_from(&source).unwrap();
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+    browser.handle_action(BrowserAction::OpenSchema);
+    browser.load_from(&FakeSource::new(Ok(Vec::new()))).unwrap();
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Tasks);
+}
+
+#[test]
+fn inspection_leaves_search_without_clearing_query_and_blocks_search_focus() {
+    let mut browser = TaskBrowser::new();
+    browser
+        .load_from(&FakeSource::new(Ok(vec![descriptor("a", "1.0.0")])))
+        .unwrap();
+    browser.state_mut().set_filter_text("a");
+    browser.handle_action(BrowserAction::FocusSearch);
+    assert!(browser.state().is_search_active());
+    browser.handle_action(BrowserAction::OpenDetails);
+    assert!(!browser.state().is_search_active());
+    assert_eq!(browser.state().filter_text(), "a");
+    assert_eq!(
+        browser.handle_action(BrowserAction::FocusSearch),
+        BrowserOutcome::Ignored
+    );
+    assert_eq!(
+        browser.handle_action(BrowserAction::Quit),
+        BrowserOutcome::QuitRequested
+    );
+    assert_eq!(browser.state().active_panel(), BrowserPanel::Details);
+    browser.handle_action(BrowserAction::ReturnToTasks);
+    assert_eq!(
+        browser.handle_action(BrowserAction::FocusSearch),
+        BrowserOutcome::Changed
+    );
 }
 
 #[test]

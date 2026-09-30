@@ -4,6 +4,12 @@
 //! compile this module. [`TaskBrowser`] provides state and synchronous descriptor
 //! loading, context-aware search input, and a renderable filtered task table
 //! with result counts and empty/error states.
+//! Enter opens Details for the selected descriptor; Tab switches Details/Schema.
+//! [`TaskBrowser::handle_event_in_area`] supports context-aware navigation and
+//! bounded scrolling while embedded hosts retain event-loop ownership. Schema
+//! JSON uses optional syntax highlighting; missing metadata remains plain text.
+//! Ordinary text and backgrounds inherit terminal defaults; inspection accents
+//! use ANSI palette colours, and selection reverses terminal foreground/background.
 //! [`run_tui`] owns a full-screen terminal session. [`run_main`] selects compiled Rust tasks for
 //! project-local binaries.
 //!
@@ -16,7 +22,9 @@
 //! - `app`: full-screen orchestration and runner errors.
 //! - `terminal`: Crossterm terminal setup and restoration.
 //! - `task_browser`: embeddable browser and descriptor loading boundary.
-//! - `state`: descriptor snapshot, selection, filter text and focus, panel, and errors.
+//! - `detail`: descriptor metadata formatting without state or terminal ownership.
+//! - `inspection`: highlighted schema formatting and shared wrapped-content viewport bounds.
+//! - `state`: snapshot, selection, search, views, inspection scroll offsets, and errors.
 //! - `event`: browser actions and translation from Crossterm events.
 //! - `layout`: layout calculation and rendering within a caller-provided area.
 //! - `widgets`: descriptor row formatting and task table rendering.
@@ -41,7 +49,9 @@
 //! crate. Crossterm is already a transitive dependency of CLI table output.
 
 mod app;
+mod detail;
 mod event;
+mod inspection;
 mod layout;
 mod state;
 mod task_browser;

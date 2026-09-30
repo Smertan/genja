@@ -1,28 +1,34 @@
 //! Terminal-independent browser state and selection invariants.
 //!
 //! Descriptor snapshots are replaced only by loading. Callers can update
-//! selection, live filter text, and panel focus without terminal access.
+//! selection, live filter text, panel focus, and inspection scroll positions
+//! without terminal access. Inspection reads the selected snapshot descriptor.
 //! Quit state belongs to the host app rather than the embedded browser.
 
 use crate::discovery::{DiscoveryError, TaskDescriptor};
 use genja_core::task::TaskExecutionMode;
 
-/// Browser panel focus, reserved for the future rendering and event layers.
+/// Browser view selection, independent of terminal ownership.
+/// Details and Schema rendering and bounded scrolling are available through
+/// direct actions or context-aware keyboard events.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BrowserPanel {
     /// Task navigation panel; the initial focus.
     #[default]
     Tasks,
-    /// Descriptor inspection panel; detail rendering is not implemented yet.
+    /// Inspect the selected descriptor's metadata.
     Details,
+    /// Inspect the selected descriptor's optional input schema.
+    Schema,
 }
 
 /// Owned task snapshot and terminal-independent browser presentation state.
 ///
 /// Private fields ensure selection is absent or points to a matching descriptor
 /// in the full snapshot. Filtering preserves discovery order and never reloads
-/// descriptors. Panel focus is reserved; full-screen quit belongs to the host.
+/// descriptors. Inspection requires a selected task; full-screen quit belongs
+/// to the host. Detail and schema scroll positions belong to that selection.
 #[derive(Debug, Default)]
 pub struct TaskBrowserState {
     descriptors: Vec<TaskDescriptor>,
@@ -31,6 +37,8 @@ pub struct TaskBrowserState {
     filter_text: String,
     search_active: bool,
     active_panel: BrowserPanel,
+    detail_scroll_offset: usize,
+    schema_scroll_offset: usize,
     error: Option<DiscoveryError>,
 }
 
@@ -80,7 +88,11 @@ impl TaskBrowserState {
         if index.is_some_and(|index| !self.matching_indices.contains(&index)) {
             return false;
         }
+        if self.selected_index != index {
+            self.reset_inspection_scroll();
+        }
         self.selected_index = index;
+        self.ensure_inspectable_selection();
         true
     }
 
@@ -90,7 +102,8 @@ impl TaskBrowserState {
     }
 
     /// Return whether keyboard input is editing the search query.
-    /// Search focus is independent of the retained query and panel focus.
+    /// Search focus is independent of the retained query and is available only
+    /// in Tasks; entering inspection leaves search without clearing its text.
     pub fn is_search_active(&self) -> bool {
         self.search_active
     }
@@ -108,6 +121,8 @@ impl TaskBrowserState {
     /// accent normalization. A still-visible selected task is retained;
     /// otherwise its previous visible position is clamped to the new list.
     /// No matches clears selection; new matches without selection select first.
+    /// A changed selection resets inspection offsets; losing selection also
+    /// returns to Tasks. Retaining the selected task preserves its view offsets.
     pub fn set_filter_text(&mut self, text: impl Into<String>) {
         let text = text.into();
         if self.filter_text == text {
@@ -123,9 +138,48 @@ impl TaskBrowserState {
         self.active_panel
     }
 
-    /// Set panel focus without loading descriptors or rendering.
+    /// Set the view without loading descriptors or rendering.
+    ///
+    /// Details/Schema requests are ignored without a selected task. Entering
+    /// inspection leaves search input while retaining the query and selection.
+    /// Switching views preserves their independent scroll offsets.
     pub fn set_active_panel(&mut self, panel: BrowserPanel) {
+        if panel != BrowserPanel::Tasks && self.selected_index.is_none() {
+            return;
+        }
+        if panel != BrowserPanel::Tasks {
+            self.search_active = false;
+        }
         self.active_panel = panel;
+    }
+
+    /// Return an inspection view's requested scroll offset in display rows.
+    /// Task-list scrolling follows selection and has no inspection offset.
+    pub fn inspection_scroll_offset(&self, panel: BrowserPanel) -> Option<usize> {
+        match panel {
+            BrowserPanel::Tasks => None,
+            BrowserPanel::Details => Some(self.detail_scroll_offset),
+            BrowserPanel::Schema => Some(self.schema_scroll_offset),
+        }
+    }
+
+    /// Store a requested display-row offset for an inspection view.
+    ///
+    /// Return `false` for Tasks or when no task is selected, leaving offsets
+    /// unchanged. This state-only operation has no content or viewport bounds;
+    /// callers supplying custom inspection rendering must clamp appropriately.
+    /// Browser rendering clamps the effective offset without changing this
+    /// requested value. Area-aware scroll actions also clamp using the viewport.
+    pub fn set_inspection_scroll_offset(&mut self, panel: BrowserPanel, offset: usize) -> bool {
+        if self.selected_index.is_none() {
+            return false;
+        }
+        match panel {
+            BrowserPanel::Tasks => return false,
+            BrowserPanel::Details => self.detail_scroll_offset = offset,
+            BrowserPanel::Schema => self.schema_scroll_offset = offset,
+        }
+        true
     }
 
     /// Return the most recent loading error, cleared by a successful load.
@@ -136,6 +190,7 @@ impl TaskBrowserState {
     /// Replace the discovery snapshot, reapply the query, and select its first
     /// match. A successful load also clears any previous discovery error.
     pub(super) fn replace_descriptors(&mut self, descriptors: Vec<TaskDescriptor>) {
+        self.reset_inspection_scroll();
         self.selected_index = None;
         self.descriptors = descriptors;
         self.rebuild_matches(0);
@@ -143,11 +198,13 @@ impl TaskBrowserState {
     }
 
     /// Record a discovery failure and clear tasks, matches, and selection.
-    /// The query and panel focus are preserved for a later successful load.
+    /// Preserve the query, reset inspection offsets, and return to Tasks.
     pub(super) fn record_load_error(&mut self, error: DiscoveryError) {
         self.descriptors.clear();
         self.matching_indices.clear();
         self.selected_index = None;
+        self.reset_inspection_scroll();
+        self.ensure_inspectable_selection();
         self.error = Some(error);
     }
 
@@ -158,6 +215,7 @@ impl TaskBrowserState {
     /// its position in the previous filtered list, clamped to the new list.
     /// An empty result clears selection. The full snapshot remains unchanged.
     fn rebuild_matches(&mut self, previous_position: usize) {
+        let previous_selection = self.selected_index;
         let query = self.filter_text.trim().to_lowercase();
         self.matching_indices = self
             .descriptors
@@ -173,6 +231,23 @@ impl TaskBrowserState {
                 .matching_indices
                 .get(previous_position.min(self.matching_indices.len().saturating_sub(1)))
                 .copied();
+        }
+        if self.selected_index != previous_selection {
+            self.reset_inspection_scroll();
+        }
+        self.ensure_inspectable_selection();
+    }
+
+    /// Reset both view offsets when their selected descriptor changes.
+    fn reset_inspection_scroll(&mut self) {
+        self.detail_scroll_offset = 0;
+        self.schema_scroll_offset = 0;
+    }
+
+    /// Leave inspection when there is no descriptor to inspect.
+    fn ensure_inspectable_selection(&mut self) {
+        if self.selected_index.is_none() {
+            self.active_panel = BrowserPanel::Tasks;
         }
     }
 }
