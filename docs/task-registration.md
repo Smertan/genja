@@ -871,9 +871,28 @@ descriptors = list_registered_tasks()
 Genja does not scan Python files looking for decorators. A task module that
 exists on disk but has not been imported has not executed its class definition,
 so its decorator has not run and its descriptor is not in the registry yet.
-Provider manifests, entry points, or task-directory discovery can import known
-task modules automatically in future features; this API only lists Python tasks
-that are already imported in the current process.
+
+For a project that declares its task modules explicitly, add them to
+`pyproject.toml`:
+
+```toml
+[tool.genja.tasks]
+modules = ["acme.tasks.network", "acme.tasks.backups"]
+```
+
+Export their registered descriptors with:
+
+```bash
+python -m genja._discovery_cli --pyproject path/to/pyproject.toml
+```
+
+The helper adds the directory containing `pyproject.toml` to Python's import
+path, imports the listed modules, and writes a JSON descriptor list to stdout.
+Task authors do not need another registry call. Import-time Python stdout is
+redirected to stderr. Invalid configuration or a failed import exits with an
+error on stderr and no descriptor JSON. An empty module list, or modules with
+no registered tasks, produces `[]`. The helper does not scan directories or
+connect its output to the Rust CLI or TUI.
 
 ## Python Design Constraints
 
