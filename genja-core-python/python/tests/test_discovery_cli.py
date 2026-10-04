@@ -1,8 +1,15 @@
 """Subprocess checks for the Python task discovery module command."""
 
 import json
+from pathlib import Path
+import shutil
 import subprocess
 import sys
+
+
+def _copy_fixture_module(project_root, module_name):
+    source = Path(__file__).parent / "fixtures" / f"{module_name}.py"
+    shutil.copyfile(source, project_root / source.name)
 
 
 def _run_discovery(pyproject_path):
@@ -22,19 +29,9 @@ def _run_discovery(pyproject_path):
 
 
 def test_discovery_command_imports_declared_project_module(tmp_path):
-    (tmp_path / "discovered_tasks.py").write_text(
-        'print("import message")\n'
-        "import os\n"
-        'os.write(1, b"native import message\\n")\n'
-        "from genja.task import TaskRegistration, TaskSuccessResult, task\n"
-        '@task(name="discovered", registration=TaskRegistration('
-        'id="acme.discovered", version="1.0.0"))\n'
-        "class DiscoveredTask:\n"
-        "    def start(self, task, host, context):\n"
-        '        return TaskSuccessResult(summary="done")\n'
-    )
+    _copy_fixture_module(tmp_path, "discovery_tasks")
     project_file = tmp_path / "pyproject.toml"
-    project_file.write_text('[tool.genja.tasks]\nmodules = ["discovered_tasks"]\n')
+    project_file.write_text('[tool.genja.tasks]\nmodules = ["discovery_tasks"]\n')
 
     result = _run_discovery(project_file)
 
@@ -48,10 +45,10 @@ def test_discovery_command_imports_declared_project_module(tmp_path):
     assert descriptors[0]["version"] == "1.0.0"
 
 
-def test_discovery_command_emits_empty_json_list(tmp_path):
-    (tmp_path / "empty_tasks.py").write_text("")
+def test_discovery_command_ignores_tasks_without_registration(tmp_path):
+    _copy_fixture_module(tmp_path, "discovery_empty")
     project_file = tmp_path / "pyproject.toml"
-    project_file.write_text('[tool.genja.tasks]\nmodules = ["empty_tasks"]\n')
+    project_file.write_text('[tool.genja.tasks]\nmodules = ["discovery_empty"]\n')
 
     result = _run_discovery(project_file)
 
@@ -68,3 +65,30 @@ def test_discovery_command_reports_failed_import_without_json(tmp_path):
     assert result.returncode != 0
     assert result.stdout == ""
     assert "missing_tasks" in result.stderr
+
+
+def test_discovery_command_discards_descriptors_after_import_exception(tmp_path):
+    _copy_fixture_module(tmp_path, "discovery_tasks")
+    _copy_fixture_module(tmp_path, "discovery_broken")
+    project_file = tmp_path / "pyproject.toml"
+    project_file.write_text(
+        '[tool.genja.tasks]\nmodules = ["discovery_tasks", "discovery_broken"]\n'
+    )
+
+    result = _run_discovery(project_file)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "discovery_broken" in result.stderr
+    assert "RuntimeError: import exploded" in result.stderr
+
+
+def test_discovery_command_reports_invalid_module_field_without_json(tmp_path):
+    project_file = tmp_path / "pyproject.toml"
+    project_file.write_text('[tool.genja.tasks]\nmodules = ["valid", 3]\n')
+
+    result = _run_discovery(project_file)
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "[tool.genja.tasks].modules[1]" in result.stderr
