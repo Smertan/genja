@@ -2,7 +2,8 @@
 
 Genja provides a first-party CLI crate, `genja-cli`, for listing, describing,
 and documenting registered task descriptors. Currently, CLI discovery supports
-**compiled Rust tasks only**. **Python task discovery is planned separately.**
+**compiled Rust tasks only**. A separate Python helper can export Python task
+descriptors as JSON, but the Rust CLI does not consume them yet.
 
 ## Terminal User Interface (TUI)
 
@@ -537,16 +538,16 @@ or execute the task. Task execution is outside the initial CLI discovery scope.
 
 ### Future Descriptor Sources
 
-Python CLI discovery is planned separately. Python task registration happens
-when the module defining a decorated task class is imported. Installing a
-Python package or having its files on disk does not populate that process's
-registry; the task-defining modules must be imported first.
+Python task registration happens when the module defining a decorated task
+class is imported. Installing a Python package or having its files on disk does
+not populate that process's registry. The Python helper imports modules listed
+under `[tool.genja.tasks].modules` and exports their registered descriptors as
+JSON. See [Task Registration](task-registration.md#python-import-boundary) for
+the configuration and command.
 
-A future Python descriptor source could import explicitly declared modules,
-possibly identified by provider manifests, before reading the Python registry.
-The current CLI does not import Python task modules. Python, provider-manifest,
-and MCP-backed descriptor sources are not implemented. See
-[Task Registration](task-registration.md) for the existing registration APIs.
+The current Rust CLI does not consume that JSON or import Python task modules.
+Python, provider-manifest, and MCP-backed sources for the Rust CLI remain future
+work.
 
 ## Empty Results And Errors
 

@@ -888,11 +888,11 @@ python -m genja._discovery_cli --pyproject path/to/pyproject.toml
 
 The helper adds the directory containing `pyproject.toml` to Python's import
 path, imports the listed modules, and writes a JSON descriptor list to stdout.
-Task authors do not need another registry call. Import-time Python stdout is
-redirected to stderr. Invalid configuration or a failed import exits with an
-error on stderr and no descriptor JSON. An empty module list, or modules with
-no registered tasks, produces `[]`. The helper does not scan directories or
-connect its output to the Rust CLI or TUI.
+Task authors do not need another registry call. Import-time stdout, including
+direct file-descriptor writes, is redirected to stderr. Invalid configuration
+or a failed import exits with an error on stderr and no descriptor JSON. An
+empty module list, or modules with no registered tasks, produces `[]`. The
+helper does not scan directories or connect its output to the Rust CLI or TUI.
 
 ## Python Design Constraints
 
