@@ -24,6 +24,8 @@ def _run_discovery(pyproject_path):
 def test_discovery_command_imports_declared_project_module(tmp_path):
     (tmp_path / "discovered_tasks.py").write_text(
         'print("import message")\n'
+        "import os\n"
+        'os.write(1, b"native import message\\n")\n'
         "from genja.task import TaskRegistration, TaskSuccessResult, task\n"
         '@task(name="discovered", registration=TaskRegistration('
         'id="acme.discovered", version="1.0.0"))\n'
@@ -38,6 +40,7 @@ def test_discovery_command_imports_declared_project_module(tmp_path):
 
     assert result.returncode == 0
     assert "import message" in result.stderr
+    assert "native import message" in result.stderr
     assert "import message" not in result.stdout
     descriptors = json.loads(result.stdout)
     assert len(descriptors) == 1
