@@ -45,6 +45,35 @@ def test_discovery_command_imports_declared_project_module(tmp_path):
     assert descriptors[0]["version"] == "1.0.0"
 
 
+def test_discovery_command_imports_multiple_declared_modules(tmp_path):
+    _copy_fixture_module(tmp_path, "discovery_tasks")
+    _copy_fixture_module(tmp_path, "discovery_other")
+    project_file = tmp_path / "pyproject.toml"
+    project_file.write_text(
+        '[tool.genja.tasks]\nmodules = ["discovery_tasks", "discovery_other"]\n'
+    )
+
+    result = _run_discovery(project_file)
+
+    assert result.returncode == 0
+    descriptors = json.loads(result.stdout)
+    assert len(descriptors) == 2
+    assert {descriptor["id"] for descriptor in descriptors} == {
+        "acme.discovered",
+        "acme.other",
+    }
+
+
+def test_discovery_command_accepts_empty_module_list(tmp_path):
+    project_file = tmp_path / "pyproject.toml"
+    project_file.write_text("[tool.genja.tasks]\nmodules = []\n")
+
+    result = _run_discovery(project_file)
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == []
+
+
 def test_discovery_command_ignores_tasks_without_registration(tmp_path):
     _copy_fixture_module(tmp_path, "discovery_empty")
     project_file = tmp_path / "pyproject.toml"
