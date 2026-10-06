@@ -5,6 +5,7 @@
 //! [`TaskImplementation`] adds source-assigned language metadata without
 //! changing the canonical descriptor or its serialized form.
 
+pub mod config;
 pub mod rust;
 
 use std::error::Error;
