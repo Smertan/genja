@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added a Python descriptor source in `genja-cli` that runs the configured interpreter and project discovery helper, parses descriptor JSON, and assigns Python language metadata. Refs: #154
 - Added `TaskImplementation` records and source-assigned `TaskLanguage` metadata to CLI discovery, while keeping existing descriptor sources compatible and marking compiled tasks as Rust. Refs: #154
 - Added explicit Python task module discovery through `[tool.genja.tasks].modules` and `python -m genja._discovery_cli --pyproject ...`, exporting registered task descriptors as JSON while keeping import output and errors off stdout. Refs: #153
 - Added syntax colouring for JSON metadata in the TUI Schema view using the optional `tui-syntax-highlight` adapter. Keys and values are distinguished while indentation, scrolling, and the terminal background remain intact; plain JSON is shown if highlighting fails. Refs: #130

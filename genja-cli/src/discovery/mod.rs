@@ -6,6 +6,7 @@
 //! changing the canonical descriptor or its serialized form.
 
 pub mod config;
+pub mod python;
 pub mod rust;
 
 use std::error::Error;
