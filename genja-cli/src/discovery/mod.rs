@@ -5,6 +5,7 @@
 //! [`TaskImplementation`] adds source-assigned language metadata without
 //! changing the canonical descriptor or its serialized form.
 
+pub mod combined;
 pub mod config;
 pub mod python;
 pub mod rust;
@@ -191,6 +192,24 @@ pub enum DiscoveryError {
         /// Available versions for the requested task ID.
         versions: Vec<String>,
     },
+    /// More than one language provides the requested task identity.
+    AmbiguousImplementation {
+        /// Requested task ID.
+        id: String,
+        /// Requested task version.
+        version: String,
+        /// Languages available for the task identity.
+        languages: Vec<TaskLanguage>,
+    },
+    /// A source returned the same language-qualified identity more than once.
+    DuplicateImplementation {
+        /// Duplicated task ID.
+        id: String,
+        /// Duplicated task version.
+        version: String,
+        /// Language of both implementations.
+        language: TaskLanguage,
+    },
     /// The descriptor source failed independently of caller input.
     SourceFailed {
         /// Human-readable source failure.
@@ -224,6 +243,29 @@ impl fmt::Display for DiscoveryError {
                     versions.join(", ")
                 )
             }
+            Self::AmbiguousImplementation {
+                id,
+                version,
+                languages,
+            } => {
+                let languages = languages
+                    .iter()
+                    .map(|language| format!("{language:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "task descriptor `{id}@{version}` has implementations in multiple languages: {languages}"
+                )
+            }
+            Self::DuplicateImplementation {
+                id,
+                version,
+                language,
+            } => write!(
+                f,
+                "duplicate {language:?} task implementation `{id}@{version}`"
+            ),
             Self::SourceFailed { message } => {
                 write!(f, "task descriptor source failed: {message}")
             }

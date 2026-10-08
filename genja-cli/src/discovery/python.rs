@@ -40,6 +40,11 @@ impl PythonTaskDescriptorSource {
         }
     }
 
+    /// Return the project file used when this source launches the helper.
+    pub fn pyproject_path(&self) -> &Path {
+        &self.pyproject
+    }
+
     fn discover(&self) -> DiscoveryResult<Vec<TaskDescriptor>> {
         let caller_directory = env::current_dir().map_err(|error| {
             DiscoveryError::source_failed(format!(

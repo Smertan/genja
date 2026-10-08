@@ -1,10 +1,11 @@
 # Python discovery process fixtures
 
 These scripts are fake Python executables used by the tests in
-[`src/discovery/python.rs`](../../src/discovery/python.rs). They test how the Rust
-`PythonTaskDescriptorSource` launches and reads the discovery helper. They do
-not import tasks or run Python, so the Rust tests do not require a Python
-installation or `genja-py`.
+[`src/discovery/python.rs`](../../src/discovery/python.rs) and
+[`src/discovery/combined.rs`](../../src/discovery/combined.rs). They test how
+the Rust sources launch and read the discovery helper. They do not import tasks
+or run Python, so the Rust tests do not require a Python installation or
+`genja-py`.
 
 The tests copy `fake_python_discovery.sh` on Unix (including macOS) or
 `fake_python_discovery.cmd` on Windows into a temporary project directory. The
