@@ -13,7 +13,10 @@ use super::{
 /// The Python helper is only started when the project file contains
 /// `[tool.genja.tasks]`. Both languages may provide the same descriptor ID and
 /// version; callers should use [`TaskDescriptorSource::list_implementations`]
-/// when they need to distinguish those implementations.
+/// when they need to distinguish those implementations. Results are ordered by
+/// ID, version, then language (`Rust` before `Python`). A duplicate identity
+/// within one language, or a configured Python source failure, fails the whole
+/// discovery operation.
 #[derive(Debug, Clone)]
 pub struct CombinedTaskDescriptorSource {
     compiled: CompiledTaskDescriptorSource,
