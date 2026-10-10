@@ -6,8 +6,9 @@ Ratatui application or run that screen in a full-screen terminal session.
 Run `genja tui` in a build with the `tui` feature to open the basic screen.
 Press `q` outside search to quit; Escape first leaves search, returns from
 inspection, or clears a query.
-The table shows task ID, version, name, execution mode, and constructible
-status. The selected row has a `>` marker and reversed terminal colours.
+The table shows task ID, version, name, implementation language, execution
+mode, and constructible status. The selected row has a `>` marker and reversed
+terminal colours.
 The search field filters tasks as you type and shows matching and
 total task counts. Press Enter on a selected task to inspect its descriptor
 details, and Tab to switch to its input schema metadata. Both views support
@@ -23,6 +24,13 @@ The **CONSTRUCTIBLE** column shows `yes` when the running binary has a registere
 factory to create that task from JSON input, and `no` when only its descriptor
 is available through discovery. It does not indicate whether the task has run
 or will succeed. The TUI does not construct or execute tasks.
+
+The **LANGUAGE** column identifies the discovery source as `🦀 Rust` or
+`🐍 Python`. On narrow screens, it shows only 🦀 or 🐍. Details shows the full
+label separately from **ID source** (`generated` or `explicit`). Custom
+descriptor sources that do not supply language metadata show `? Unknown`
+(or `?` on narrow screens). Rust and Python implementations may share an ID
+and version; they appear as separate rows in the same list.
 
 The `no` value means registry-based creation by task identity and JSON input
 is unavailable until a construction factory is registered. Direct creation
@@ -80,8 +88,8 @@ cargo run -p genja-cli --features tui -- tui --help
 
 Without the `tui` feature, the command is omitted from help and rejected by
 the parser. Piped or redirected input/output is rejected before terminal setup.
-Startup and runtime errors return a failure exit code; errors are reported
-after the runner's terminal cleanup.
+Discovery errors return before terminal setup. Runtime terminal errors return
+after the runner restores terminal modes.
 
 A project-local CLI binary that calls `genja_cli::run_main()` can also expose
 this command when built with `tui`. For `genja::cli::run_main()`, enable
@@ -305,9 +313,9 @@ Columns adapt to the browser area's width:
 
 | Width in terminal cells | Visible columns |
 | --- | --- |
-| 100 or more | ID, version, name, mode, constructible |
-| 64–99 | All five fields, with shorter headers |
-| 40–63 | ID, version, mode, constructible |
+| 100 or more | ID, version, name, language, mode, constructible |
+| 64–99 | All six fields, with shorter headers |
+| 40–63 | ID, version, language icon, mode, constructible |
 | Under 40 | ID only |
 
 Long cell values are clipped to fit. Widen the terminal to reveal more text and
@@ -321,10 +329,10 @@ When descriptors are loaded but none match the query, the browser shows
 In search mode, Ctrl+u clears it; in task mode, Escape clears it. Clearing restores
 the full list. This is distinct from an empty discovery snapshot or loading error.
 
-An empty result shows **No registered tasks available**, with a reminder that
-compiled Rust tasks must be linked into a project-local CLI/TUI binary. This
-is a successful discovery result; quitting returns a success exit code. The
-screen shows the minimum annotation for discovering an existing task
+An empty result shows **No registered tasks available**, with Python module
+configuration and Rust task linking guidance. This is a successful discovery
+result; quitting returns a success exit code. For Rust tasks, the screen shows
+the minimum annotation for discovering an existing task
 implementation and the line that links its crate into your CLI/TUI binary:
 
 ```rust
@@ -344,23 +352,16 @@ registration guidance, or run the
 [task browser example](examples.md#cli-and-tui-task-browser) from a repository
 checkout to inspect working sample tasks.
 
-A discovery failure shows a **Discovery error** screen with the source's error
-message. The screen suggests checking compiled Rust discovery with
-`my_project_cli task list`; replace `my_project_cli` with your project-local CLI
-binary's name. Press `q` in task mode to close the screen. The runner restores the
-terminal, then returns `TuiError::Discovery`; the CLI reports the error on stderr
-and exits with failure. A terminal startup, rendering, or cleanup failure takes
-precedence over the discovery error.
-
-Discovery still finishes before terminal setup, but a discovery failure no
-longer returns immediately from `run_tui`. Embedded callers retain the existing
-`TaskBrowser::load_from()` behaviour: it returns the error immediately and stores
-it in browser state so the host can choose whether to render it. A later
-successful load clears that error and shows the loaded tasks or empty state.
+The full-screen runner returns `TuiError::Discovery` before terminal setup when
+discovery fails. The CLI reports the error on stderr and exits unsuccessfully.
+Embedded callers can still render a **Discovery error** screen:
+`TaskBrowser::load_from()` returns the error and stores it in browser state so
+the host can choose whether to display it. A later successful load clears the
+error and shows the loaded tasks or empty state.
 
 `TaskBrowser::new()` creates an empty browser. Call `load_from(&source)` with
 any `TaskDescriptorSource`, including a trait object, to synchronously load an
-owned snapshot. Loading calls `list_tasks()` once, preserves source ordering,
+owned snapshot. Loading calls `list_implementations()` once, preserves source ordering,
 and retains no source reference. Success reapplies the query and selects the
 first matching descriptor, or none when there are no matches. Failure clears
 descriptors and selection, stores the
@@ -373,9 +374,11 @@ presentation-state updates. `select(None)` clears selection;
 filtered-out indices without changing selection. `descriptors()` always returns
 the full snapshot; `matching_indices()` and `filtered_descriptors()` expose matches.
 `selected_visible_index()` gives the selected task's filtered position.
+`languages()` and `selected_language()` expose source-assigned language metadata;
+`filtered_implementations()` pairs matching descriptors with their languages.
 
 `set_filter_text()` filters immediately using a case-insensitive substring of
-ID, name, version, description, or execution mode (`blocking` or `async`).
+ID, name, version, description, language, or execution mode (`blocking` or `async`).
 Surrounding whitespace is ignored; blank queries show all tasks. Matching uses
 Unicode lowercase conversion without fuzzy matching or accent normalization.
 Selection stays on the same task when it matches; otherwise the previous visible
@@ -422,7 +425,7 @@ terminal.draw(|frame| browser.render(frame, browser_area))?;
 browser.handle_action(BrowserAction::ReturnToTasks);
 ```
 
-Details displays identity (`ID@version`), ID source, version, name, description,
+Details displays identity (`ID@version`), ID source, language, version, name, description,
 execution mode, constructible status, and whether input schema metadata is
 available. It also shows recorded connection plugin, processors, and retry
 overrides. Missing descriptions and optional metadata have explicit labels.

@@ -1,17 +1,18 @@
 //! Optional Ratatui task browser and full-screen runner.
 //!
 //! Enable the `tui` feature on `genja-cli`, or `genja-tui` on `genja`, to
-//! compile this module. [`TaskBrowser`] provides state and synchronous descriptor
+//! compile this module. [`TaskBrowser`] provides state and synchronous implementation
 //! loading, context-aware search input, and a renderable filtered task table
-//! with result counts and empty/error states.
+//! with language labels, result counts, and empty/error states.
 //! Enter opens Details for the selected descriptor; Tab switches Details/Schema.
 //! [`TaskBrowser::handle_event_in_area`] supports context-aware navigation and
 //! bounded scrolling while embedded hosts retain event-loop ownership. Schema
 //! JSON uses optional syntax highlighting; missing metadata remains plain text.
 //! Ordinary text and backgrounds inherit terminal defaults; inspection accents
 //! use ANSI palette colours, and selection reverses terminal foreground/background.
-//! [`run_tui`] owns a full-screen terminal session. [`run_main`] selects project
-//! discovery for project-local binaries.
+//! [`run_tui`] loads implementations before taking terminal ownership and returns
+//! discovery failures immediately. [`run_main`] selects project discovery for
+//! project-local binaries.
 //!
 //! # Architecture
 //!
@@ -21,15 +22,15 @@
 //!
 //! - `app`: full-screen orchestration and runner errors.
 //! - `terminal`: Crossterm terminal setup and restoration.
-//! - `task_browser`: embeddable browser and descriptor loading boundary.
+//! - `task_browser`: embeddable browser and implementation loading boundary.
 //! - `detail`: descriptor metadata formatting without state or terminal ownership.
 //! - `inspection`: highlighted schema formatting and shared wrapped-content viewport bounds.
 //! - `state`: snapshot, selection, search, views, inspection scroll offsets, and errors.
 //! - `event`: browser actions and translation from Crossterm events.
 //! - `layout`: layout calculation and rendering within a caller-provided area.
-//! - `widgets`: descriptor row formatting and task table rendering.
+//! - `widgets`: implementation row formatting and task table rendering.
 //!
-//! Descriptor loading must use [`crate::discovery::TaskDescriptorSource`].
+//! Implementation loading must use [`crate::discovery::TaskDescriptorSource`].
 //! Rendering and state transitions must neither load descriptors nor shell out
 //! to CLI commands. The process helper and CLI launch command use the shared
 //! source selector; the browser and lower-level runner accept the shared source

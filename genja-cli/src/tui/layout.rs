@@ -51,7 +51,7 @@ pub(super) fn render_browser(state: &TaskBrowserState, frame: &mut Frame<'_>, ar
                 rows[2],
                 "Discovery error",
                 format!(
-                    "Unable to load task descriptors.\n\n{error}\n\nFor compiled Rust tasks, check discovery with your project's CLI:\nmy_project_cli task list\nReplace my_project_cli with your binary name."
+                    "Unable to load task implementations.\n\n{error}\n\nCheck discovery with your project's CLI:\nmy_project_cli task list\nReplace my_project_cli with your binary name."
                 ),
             );
         } else if state.descriptors().is_empty() {
@@ -228,7 +228,7 @@ fn controls(state: &TaskBrowserState, width: u16) -> &'static str {
         .unwrap_or("")
 }
 
-/// Provide registration and linking guidance for a genuinely empty snapshot.
+/// Provide Python configuration and Rust linking guidance for an empty snapshot.
 fn empty_message() -> Text<'static> {
     let heading = Style::default().add_modifier(Modifier::BOLD);
     let code = Style::default()
@@ -239,7 +239,14 @@ fn empty_message() -> Text<'static> {
         Line::from("No registered tasks available."),
         Line::default(),
         Line::styled(
-            "In your task crate, annotate an existing task implementation:",
+            "For Python tasks, declare modules in pyproject.toml:",
+            heading,
+        ),
+        code_line("[tool.genja.tasks]"),
+        code_line("modules = [\"my_project.tasks\"]"),
+        Line::default(),
+        Line::styled(
+            "For Rust tasks, annotate an implementation in your task crate:",
             heading,
         ),
         code_line("#[genja_task(name = \"my_task\")]"),

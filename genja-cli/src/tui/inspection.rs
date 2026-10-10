@@ -127,7 +127,7 @@ pub(super) fn inspection_viewport(
     let task = state.selected_descriptor()?;
     let (title, text) = match state.active_panel() {
         BrowserPanel::Tasks => return None,
-        BrowserPanel::Details => ("Details", detail_content(task)),
+        BrowserPanel::Details => ("Details", detail_content(task, state.selected_language())),
         BrowserPanel::Schema => ("Schema", schema_content(task)),
     };
     let body = inspection_rows(area)[1];

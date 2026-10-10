@@ -11,12 +11,13 @@ use ratatui::{
     text::{Line, Span, Text},
 };
 
-use crate::discovery::TaskDescriptor;
+use super::state::language_display;
+use crate::discovery::{TaskDescriptor, TaskLanguage};
 
-/// Format the selected descriptor's core and execution metadata for inspection.
+/// Format the selected descriptor, language, and execution metadata for inspection.
 /// Description lines retain their paragraph breaks; widgets handle wrapping.
 /// Schema contents and viewport scrolling are separate rendering concerns.
-pub(super) fn detail_content(task: &TaskDescriptor) -> Text<'_> {
+pub(super) fn detail_content(task: &TaskDescriptor, language: Option<TaskLanguage>) -> Text<'_> {
     let id_source = match task.id_source {
         TaskIdSource::Generated => "generated",
         TaskIdSource::Explicit => "explicit",
@@ -34,6 +35,7 @@ pub(super) fn detail_content(task: &TaskDescriptor) -> Text<'_> {
         field("Identity", format!("{}@{}", task.id, task.version)),
         field("Task ID", task.id.as_str()),
         field("ID source", id_source),
+        field("Language", language_display(language)),
         field("Version", task.version.as_str()),
         field("Name", task.name.as_str()),
         field("Execution mode", mode),
