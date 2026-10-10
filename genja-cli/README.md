@@ -17,8 +17,16 @@ Dedicated CLI wrapper packages can depend directly on `genja-cli` and call
 See the [CLI guide](../docs/cli.md) for dependency setup from a checkout before
 publication.
 
-Neither option installs an executable automatically. Build a project-specific
-binary that links your tasks, then distribute that executable to end users.
+Neither dependency option installs an executable automatically. For compiled
+Rust task discovery, build and distribute a project-specific binary that links
+your tasks.
+
+The `genja-cli` crate also builds a generic `genja` executable. Python-only
+projects can use that binary without a project-local Rust wrapper: install
+`genja-py` in the selected Python environment, declare modules in
+`[tool.genja.tasks]`, and run `genja task list` from the project directory.
+`genja-py` supplies the task API and discovery helper; it does not install the
+Rust executable. See [Installation](../docs/installation.md#python-task-discovery-from-the-cli).
 
 ## Discovery Sources
 
@@ -61,12 +69,15 @@ Projects using `genja` can enable `genja-tui`, which forwards to
 `genja-cli/tui` and also enables CLI support, exposing the same module at
 `genja::cli::tui`.
 
-`TaskBrowser` supports descriptor loading, action handling, and a task table
-with selection highlighting inside an existing Ratatui application. `run_tui(source, options)`
+`TaskBrowser` supports implementation loading, action handling, and a task table
+with selection highlighting and 🦀 Rust / 🐍 Python language labels inside an
+existing Ratatui application. `run_tui(source, options)`
 provides a full-screen runner for callers with a descriptor source. A
 project-local binary can call `genja_cli::tui::run_main()` to discover compiled
 Rust tasks linked into that binary and configured Python tasks. With `tui`
 enabled, `genja tui` launches the same basic screen. Press `q` or Escape to exit.
+Discovery completes before full-screen terminal setup; failures return without
+entering raw mode.
 No separate TUI installation is required. See the
 [Terminal UI guide](../docs/tui.md) for the binary pattern and dependency setup.
 

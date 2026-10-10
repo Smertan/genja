@@ -70,6 +70,46 @@ Install the Genja package for the language you are using.
     import genja as genja_lib
     ```
 
+## Python Task Discovery From The CLI
+
+`genja-py` supplies Python task registration and the discovery helper. The
+`genja` executable comes from the separate Rust `genja-cli` crate; installing
+`genja-py` alone does not install that executable. There is currently no
+`genja-py[cli]` extra that bundles it.
+
+Install `genja-py` in the Python environment that contains your task modules:
+
+```bash
+python -m pip install genja-py
+```
+
+Until `genja-cli` is published, install its binary from a Genja checkout:
+
+```bash
+cargo install --path genja-cli --features tui
+```
+
+Omit `--features tui` if you only need `task list`, `task describe`, and
+`task docs`. The `tui` feature enables `genja tui` in the installed binary.
+The CLI uses `python` from `PATH` by default; pass `--python PATH` to select
+the environment where `genja-py` and your task modules are installed.
+
+Declare Python task modules in your project's `pyproject.toml`:
+
+```toml
+[tool.genja.tasks]
+modules = ["my_project.tasks"]
+```
+
+From that project directory, `genja task list`, `genja task describe`, and
+`genja task docs` discover those modules. A binary built with `tui` also
+supports `genja tui`. A generic CLI binary is enough for Python-only projects.
+Mixed projects use a project-local binary
+that links their Rust task crate and calls `genja_cli::run_main()`; it also
+imports configured Python modules through the selected interpreter. See the
+[CLI guide](cli.md#project-local-cli-binary) and
+[mixed discovery example](examples.md#mixed-rust-and-python-discovery).
+
 ## Verify
 
 === ":fontawesome-brands-rust: Rust"

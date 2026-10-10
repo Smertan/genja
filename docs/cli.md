@@ -24,6 +24,14 @@ only discover Rust tasks linked into that executable. It can discover Python
 tasks declared in the current project's `pyproject.toml` when `genja-py` is
 installed in the selected Python environment.
 
+For a Python-only project, install the `genja` binary from `genja-cli` and
+install `genja-py` in the Python environment containing your task modules.
+Declare them under `[tool.genja.tasks]`, then run `genja task list` from the
+project directory. See [Installation](installation.md#python-task-discovery-from-the-cli)
+for the separate installation steps and
+[Mixed Rust And Python Discovery](examples.md#mixed-rust-and-python-discovery)
+for a runnable example.
+
 ```bash
 genja --help
 genja version
@@ -63,9 +71,10 @@ my_project_cli tui
 ```
 
 Run it in an interactive terminal and press `q` or Escape to exit. The screen
-shows a task table with the selected row highlighted. Search, details,
-and execution are not implemented yet. Builds without TUI support omit this
-command. See the [Terminal UI guide](tui.md) for setup and terminal behaviour.
+shows one searchable task table with Rust and Python language icons. Enter opens
+Details and Tab switches to Schema inspection. Task execution is not implemented.
+Builds without TUI support omit this command. See the
+[Terminal UI guide](tui.md) for setup and terminal behaviour.
 
 ### Try The Sample Tasks
 
@@ -553,15 +562,17 @@ another executable's Rust registry. If expected Rust tasks are missing, check
 that the project-specific binary links the task crate or modules.
 
 Commands consume the shared `TaskDescriptorSource` abstraction from
-`genja_cli::discovery`. It provides list and describe operations returning
-`TaskDescriptor` values or a common `DiscoveryError`. The compiled source is
-backed by the registry in `genja-core`; the combined source adds configured
-Python descriptors through the `genja-py` helper.
+`genja_cli::discovery`. It returns `TaskImplementation` records that pair each
+canonical `TaskDescriptor` with source-assigned language metadata, or a common
+`DiscoveryError`. The compiled source is backed by the registry in
+`genja-core`; the combined source adds configured Python descriptors through
+the `genja-py` helper. Existing custom sources that only return descriptors
+remain compatible and have unknown language.
 
-The command handlers obtain descriptors through this abstraction and pass them
-to separate output renderers. The compiled source sorts descriptors by ID and
-then version string for deterministic output. This boundary allows future
-descriptor sources to reuse the command and rendering layers.
+The command handlers pass implementations to separate output renderers. The
+combined source orders them deterministically by ID, version, and language.
+This boundary allows future descriptor sources to reuse the command and
+rendering layers.
 
 These commands inspect metadata only. A descriptor's `constructible` value
 reports its registration capability; listing or describing it does not construct

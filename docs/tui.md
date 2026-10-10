@@ -110,6 +110,36 @@ The design separates descriptor loading through the shared
 `TaskDescriptorSource` from browser state, events, rendering, and terminal
 ownership.
 
+### Example Screen
+
+The [mixed discovery example](examples.md#mixed-rust-and-python-discovery)
+shows Rust and Python implementations of the same task. Searching for
+`backup_config` gives a screen like this; column widths vary with the terminal:
+
+<div class="tui-example">
+  <div class="tui-example__title">Genja tasks (4)</div>
+  <div class="tui-example__search">Search: backup_config</div>
+  <div class="tui-example__scroll">
+    <table class="tui-example__table" aria-label="Example task implementations">
+      <thead>
+        <tr><th scope="col"></th><th scope="col">ID</th><th scope="col">VER</th><th scope="col">NAME</th><th scope="col">LANG</th><th scope="col">MODE</th><th scope="col">CONSTRUCTIBLE</th></tr>
+      </thead>
+      <tbody>
+        <tr class="tui-example__selected"><td>&gt;</td><td>acme.examples.backup_config</td><td>1.0.0</td><td>backup_config</td><td>🦀 Rust</td><td>blocking</td><td>yes</td></tr>
+        <tr><td></td><td>acme.examples.backup_config</td><td>1.0.0</td><td>backup_config</td><td>🐍 Python</td><td>blocking</td><td>yes</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="tui-example__status">2 tasks shown, 4 total</div>
+</div>
+
+The preview uses illustrative colours and row lines. The real TUI uses your
+terminal's palette and adapts column widths to the available space.
+
+Select the Python row and press Enter to see Details with `Language: 🐍 Python`
+alongside `ID source: explicit`. Press Tab to inspect that implementation's
+input schema, or Escape to return to the shared task list.
+
 ## Search And Navigation
 
 Press `/` to focus the search field. Type text to filter immediately; Enter

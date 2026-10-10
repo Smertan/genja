@@ -106,6 +106,48 @@ to the list while retaining selection and search. Follow the
 [descriptor inspection walkthrough](tui.md#try-descriptor-inspection-with-the-sample-tasks)
 for a complete example.
 
+### Mixed Rust And Python Discovery
+
+The Python examples include a [task module](../genja/examples/python/task_registration_tasks.py)
+and a [pyproject.toml](../genja/examples/python/pyproject.toml) that declares it:
+
+```toml
+[tool.genja.tasks]
+modules = ["task_registration_tasks"]
+```
+
+Install `genja-py` in the Python environment used for discovery and select that
+environment's interpreter with `--python` if it is not the `python` on `PATH`.
+From the repository root, the generic `genja` binary can list the Python tasks
+without linking Rust registrations:
+
+```bash
+genja --pyproject genja/examples/python/pyproject.toml task list
+```
+
+Run the Rust browser example against the same project file to see both
+languages in one list:
+
+```bash
+cargo run -p genja --features genja-cli --example task_browser -- \
+  --pyproject genja/examples/python/pyproject.toml task list
+```
+
+The Rust and Python examples both register
+`acme.examples.backup_config@1.0.0`. The list retains both implementations.
+Use `rust:acme.examples.backup_config@1.0.0` or
+`python:acme.examples.backup_config@1.0.0` with `task describe` to select one;
+an unqualified lookup is ambiguous. With `genja-tui` enabled, the same project
+file opens one searchable TUI list containing both languages:
+
+```bash
+cargo run -p genja --features genja-tui --example task_browser -- \
+  --pyproject genja/examples/python/pyproject.toml tui
+```
+
+See the [installation guide](installation.md#python-task-discovery-from-the-cli)
+for the separate CLI and Python package installation steps.
+
 ## Python Examples
 
 Install the Python package from the repository before running Python examples:

@@ -4,6 +4,7 @@ site_url = "https://docs.genja.co.uk/"
 copyright = "Copyright &copy; 2026 Genja by Smertan Networks Ltd"
 docs_dir = "docs"
 site_dir = "site"
+extra_css = ["assets/stylesheets/tui-example.css"]
 repo_url = "https://github.com/Smertan/genja"
 nav = [
   {"Home" = "index.md"},

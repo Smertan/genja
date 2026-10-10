@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added a Python-only and mixed Rust/Python CLI example using one `pyproject.toml`, with installation guidance for the separate `genja-cli` executable and `genja-py` package. Refs: #155
 - Added 🦀 Rust and 🐍 Python labels to the TUI task list and Details view, preserving separate implementations with the same ID and version in one searchable browser. Refs: #155
 - Added language labels to CLI task lists, descriptions, and catalogues, plus optional `rust:` and `python:` qualifiers for tasks sharing an ID and version. Refs: #155
 - Added automatic Python/Rust discovery source selection to `genja-cli` task commands and TUI entrypoints, with `--pyproject` and `--python` overrides for the project file and interpreter. Refs: #155
