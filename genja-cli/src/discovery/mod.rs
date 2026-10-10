@@ -1,8 +1,13 @@
-//! Shared task descriptor discovery boundary for terminal interfaces.
+//! Shared task discovery boundary for terminal interfaces.
 //!
 //! This module owns CLI/TUI-facing discovery concepts while reusing the
 //! canonical descriptor identity and metadata types from `genja-core`.
+//! [`TaskImplementation`] adds source-assigned language metadata without
+//! changing the canonical descriptor or its serialized form.
 
+pub mod combined;
+pub mod config;
+pub mod python;
 pub mod rust;
 
 use std::error::Error;
@@ -19,10 +24,51 @@ pub type DiscoveryResult<T> = Result<T, DiscoveryError>;
 pub mod source {
     pub use super::{
         DiscoveryError, DiscoveryResult, TaskDescriptorIdentity, TaskDescriptorSource,
+        TaskImplementation, TaskLanguage,
     };
 }
 
-/// Source of task descriptors for terminal interfaces.
+/// Language of a task implementation assigned by its discovery source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TaskLanguage {
+    /// Task registered in the running Rust binary.
+    Rust,
+    /// Task registered by an imported Python module.
+    Python,
+}
+
+/// A discovered task descriptor and metadata about its implementation.
+///
+/// The language is discovery metadata and is not part of the canonical
+/// [`TaskDescriptor`] or its serialized form. It is `None` when the source
+/// cannot identify the implementation language.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskImplementation {
+    descriptor: TaskDescriptor,
+    language: Option<TaskLanguage>,
+}
+
+impl TaskImplementation {
+    /// Create an implementation record with source-assigned language metadata.
+    pub fn new(descriptor: TaskDescriptor, language: Option<TaskLanguage>) -> Self {
+        Self {
+            descriptor,
+            language,
+        }
+    }
+
+    /// Return the canonical task descriptor.
+    pub fn descriptor(&self) -> &TaskDescriptor {
+        &self.descriptor
+    }
+
+    /// Return the implementation language, if the source knows it.
+    pub fn language(&self) -> Option<TaskLanguage> {
+        self.language
+    }
+}
+
+/// Source of task descriptors and implementation metadata for terminal interfaces.
 ///
 /// Implementations may read descriptors from compiled Rust registries, Python
 /// modules, provider manifests, MCP tools, or other future backends. This trait
@@ -31,6 +77,18 @@ pub mod source {
 pub trait TaskDescriptorSource {
     /// Return all known task descriptors.
     fn list_tasks(&self) -> DiscoveryResult<Vec<TaskDescriptor>>;
+
+    /// Return descriptors with source-assigned implementation metadata.
+    ///
+    /// Sources that only implement [`Self::list_tasks`] remain compatible. Their
+    /// implementations have unknown language until they override this method.
+    fn list_implementations(&self) -> DiscoveryResult<Vec<TaskImplementation>> {
+        Ok(self
+            .list_tasks()?
+            .into_iter()
+            .map(|descriptor| TaskImplementation::new(descriptor, None))
+            .collect())
+    }
 
     /// Describe a task by rendered `<task-id>@<task-version>` identity.
     fn describe_task(&self, identity: &str) -> DiscoveryResult<TaskDescriptor> {
@@ -134,6 +192,24 @@ pub enum DiscoveryError {
         /// Available versions for the requested task ID.
         versions: Vec<String>,
     },
+    /// More than one language provides the requested task identity.
+    AmbiguousImplementation {
+        /// Requested task ID.
+        id: String,
+        /// Requested task version.
+        version: String,
+        /// Languages available for the task identity.
+        languages: Vec<TaskLanguage>,
+    },
+    /// A source returned the same language-qualified identity more than once.
+    DuplicateImplementation {
+        /// Duplicated task ID.
+        id: String,
+        /// Duplicated task version.
+        version: String,
+        /// Language of both implementations.
+        language: TaskLanguage,
+    },
     /// The descriptor source failed independently of caller input.
     SourceFailed {
         /// Human-readable source failure.
@@ -167,6 +243,29 @@ impl fmt::Display for DiscoveryError {
                     versions.join(", ")
                 )
             }
+            Self::AmbiguousImplementation {
+                id,
+                version,
+                languages,
+            } => {
+                let languages = languages
+                    .iter()
+                    .map(|language| format!("{language:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "task descriptor `{id}@{version}` has implementations in multiple languages: {languages}"
+                )
+            }
+            Self::DuplicateImplementation {
+                id,
+                version,
+                language,
+            } => write!(
+                f,
+                "duplicate {language:?} task implementation `{id}@{version}`"
+            ),
             Self::SourceFailed { message } => {
                 write!(f, "task descriptor source failed: {message}")
             }
@@ -342,6 +441,22 @@ mod tests {
         };
 
         assert_eq!(source.list_tasks(), Ok(descriptors));
+    }
+
+    #[test]
+    fn list_implementations_defaults_to_unknown_language() {
+        let expected = descriptor("acme.deploy", "1.0.0");
+        let source = StaticTaskDescriptorSource {
+            descriptors: vec![expected.clone()],
+        };
+
+        let implementations = source
+            .list_implementations()
+            .expect("custom source should list implementations");
+
+        assert_eq!(implementations.len(), 1);
+        assert_eq!(implementations[0].descriptor(), &expected);
+        assert_eq!(implementations[0].language(), None);
     }
 
     #[test]

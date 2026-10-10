@@ -20,6 +20,26 @@ publication.
 Neither option installs an executable automatically. Build a project-specific
 binary that links your tasks, then distribute that executable to end users.
 
+## Discovery Sources
+
+Library callers need a direct `genja-cli` dependency or the `genja-cli` feature
+on `genja` to access these sources. They can use
+`CompiledTaskDescriptorSource` for tasks linked into the current binary,
+`PythonTaskDescriptorSource` for task modules declared in
+`[tool.genja.tasks]` in a project `pyproject.toml`, or
+`CombinedTaskDescriptorSource` for both. The Python source runs the selected
+interpreter's `genja._discovery_cli` helper from the project directory, so that
+environment must have `genja-py` installed. The combined source skips Python
+when the task section is absent and fails discovery if a configured helper
+fails.
+
+Call `TaskDescriptorSource::list_implementations()` to get descriptors with
+source-assigned Rust or Python language metadata. Rust and Python tasks may
+share an ID and version; the combined source rejects duplicates within one
+language. Language metadata stays outside the descriptor JSON. The built-in
+CLI commands and TUI still use compiled Rust discovery; their integration with
+the combined source is tracked in #155.
+
 ## Terminal User Interface (TUI)
 
 Genja's terminal user interface is being developed to browse task descriptors

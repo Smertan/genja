@@ -3,7 +3,8 @@
 use genja_core::task::{get_compiled_task_descriptor_by_identity, list_compiled_tasks};
 
 use super::{
-    DiscoveryError, DiscoveryResult, TaskDescriptor, TaskDescriptorSource, TaskRegistrationKey,
+    DiscoveryError, DiscoveryResult, TaskDescriptor, TaskDescriptorSource, TaskImplementation,
+    TaskLanguage, TaskRegistrationKey,
 };
 
 /// Task descriptor source backed by Rust tasks linked into the current process.
@@ -26,6 +27,14 @@ impl TaskDescriptorSource for CompiledTaskDescriptorSource {
                 .then_with(|| left.version.cmp(&right.version))
         });
         Ok(descriptors)
+    }
+
+    fn list_implementations(&self) -> DiscoveryResult<Vec<TaskImplementation>> {
+        Ok(self
+            .list_tasks()?
+            .into_iter()
+            .map(|descriptor| TaskImplementation::new(descriptor, Some(TaskLanguage::Rust)))
+            .collect())
     }
 
     fn describe_task_by_key(&self, key: &TaskRegistrationKey) -> DiscoveryResult<TaskDescriptor> {
@@ -130,6 +139,30 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(identities, vec![ALPHA_IDENTITY, BETA_IDENTITY]);
+    }
+
+    #[test]
+    fn list_implementations_assigns_rust_language() {
+        let source = CompiledTaskDescriptorSource::new();
+        let implementations = source
+            .list_implementations()
+            .expect("compiled implementations should list");
+
+        assert!(!implementations.is_empty());
+        assert!(
+            implementations
+                .iter()
+                .all(|implementation| implementation.language() == Some(TaskLanguage::Rust))
+        );
+        assert_eq!(
+            implementations
+                .iter()
+                .map(|implementation| implementation.descriptor().clone())
+                .collect::<Vec<_>>(),
+            source
+                .list_tasks()
+                .expect("compiled descriptors should list")
+        );
     }
 
     #[test]

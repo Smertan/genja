@@ -11,6 +11,9 @@ Changed packages:
 
 ### Added
 
+- Added combined Rust/Python task discovery that skips Python without task configuration, preserves matching IDs and versions across languages, and rejects duplicate identities within a language. Refs: #154
+- Added a Python descriptor source in `genja-cli` that runs the configured interpreter and project discovery helper, parses descriptor JSON, and assigns Python language metadata. Refs: #154
+- Added `TaskImplementation` records and source-assigned `TaskLanguage` metadata to CLI discovery, while keeping existing descriptor sources compatible and marking compiled tasks as Rust. Refs: #154
 - Added explicit Python task module discovery through `[tool.genja.tasks].modules` and `python -m genja._discovery_cli --pyproject ...`, exporting registered task descriptors as JSON while keeping import output and errors off stdout. Refs: #153
 - Added syntax colouring for JSON metadata in the TUI Schema view using the optional `tui-syntax-highlight` adapter. Keys and values are distinguished while indentation, scrolling, and the terminal background remain intact; plain JSON is shown if highlighting fails. Refs: #130
 - Added keyboard access to TUI descriptor inspection: Enter opens Details, Tab switches Details/Schema, and navigation keys scroll content. Escape returns to the filtered task list with selection retained. Full-screen and embedded browsers share area-aware event handling, and footer hints show inspection controls. Refs: #130
@@ -44,6 +47,7 @@ Changed packages:
 
 ### Changed
 
+- **Breaking:** Added `AmbiguousImplementation` and `DuplicateImplementation` variants to `genja-cli`'s public `DiscoveryError` enum. Update exhaustive matches to handle these cases or add a fallback arm. Refs: #154
 - Changed TUI inspection labels and JSON syntax accents to use terminal ANSI palette colours, while ordinary values and backgrounds inherit terminal defaults. Task selection now reverses terminal foreground/background, improving compatibility with light and dark terminal themes. Refs: #130
 - Expanded the Terminal UI guide with search controls, matching and selection rules, and a walkthrough using the existing sample tasks; linked the walkthrough from the CLI and examples guides. Refs: #129
 - The full-screen TUI now displays discovery failures until the user quits, then returns the loading error after terminal cleanup; embedded descriptor loading still returns errors immediately. Refs: #128
