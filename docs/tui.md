@@ -92,9 +92,11 @@ this command when built with `tui`. For `genja::cli::run_main()`, enable
 my_project_cli tui
 ```
 
-Discovery sees compiled Rust tasks linked into the running binary, including
-when launched through the CLI command. It does not inspect another project's
-registrations on disk or call another CLI command.
+Discovery sees compiled Rust tasks linked into the running binary. When
+`[tool.genja.tasks]` is present, it also imports configured Python modules
+through the selected interpreter. The CLI command accepts `--pyproject PATH`
+and `--python PATH`; the standalone TUI helper uses `pyproject.toml` in the
+current directory and `python` from `PATH`.
 
 The design separates descriptor loading through the shared
 `TaskDescriptorSource` from browser state, events, rendering, and terminal
@@ -253,8 +255,8 @@ fn main() -> std::process::ExitCode {
 
 Name the binary for your project, such as `my_project_tui`. Enabling the feature
 provides library code; it does not install a TUI executable automatically.
-`run_main()` chooses the compiled Rust descriptor source and returns an exit
-code. It does not parse CLI arguments. See the [CLI binary guide](cli.md#project-local-cli-binary)
+`run_main()` selects compiled or combined discovery and returns an exit code.
+It does not parse CLI arguments. See the [CLI binary guide](cli.md#project-local-cli-binary)
 for Cargo package and binary naming examples.
 
 ## Runner for a selected descriptor source
@@ -274,8 +276,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-This form lets callers choose a source instead of using the compiled Rust
-source selected by `run_main()`.
+This form lets callers choose a source instead of using the project source
+selected by `run_main()`.
 
 The runner loads descriptors before entering raw mode, then draws on startup,
 selection or search-state changes, and terminal resize. Press `q` in task mode

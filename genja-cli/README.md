@@ -37,8 +37,10 @@ Call `TaskDescriptorSource::list_implementations()` to get descriptors with
 source-assigned Rust or Python language metadata. Rust and Python tasks may
 share an ID and version; the combined source rejects duplicates within one
 language. Language metadata stays outside the descriptor JSON. The built-in
-CLI commands and TUI still use compiled Rust discovery; their integration with
-the combined source is tracked in #155.
+CLI commands and TUI select combined discovery when the task section is present.
+Use `--pyproject PATH` and `--python PATH` to select the project file and Python
+interpreter; they default to `pyproject.toml` in the current directory and
+`python` from `PATH`.
 
 ## Terminal User Interface (TUI)
 
@@ -54,9 +56,9 @@ Projects using `genja` can enable `genja-tui`, which forwards to
 `TaskBrowser` supports descriptor loading, action handling, and a task table
 with selection highlighting inside an existing Ratatui application. `run_tui(source, options)`
 provides a full-screen runner for callers with a descriptor source. A
-project-local binary can call `genja_cli::tui::run_main()` to use compiled Rust
-tasks linked into that binary. With `tui` enabled, `genja tui` launches the
-same basic screen. Press `q` or Escape to exit.
+project-local binary can call `genja_cli::tui::run_main()` to discover compiled
+Rust tasks linked into that binary and configured Python tasks. With `tui`
+enabled, `genja tui` launches the same basic screen. Press `q` or Escape to exit.
 No separate TUI installation is required. See the
 [Terminal UI guide](../docs/tui.md) for the binary pattern and dependency setup.
 

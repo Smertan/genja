@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added automatic Python/Rust discovery source selection to `genja-cli` task commands and TUI entrypoints, with `--pyproject` and `--python` overrides for the project file and interpreter. Refs: #155
 - Added combined Rust/Python task discovery that skips Python without task configuration, preserves matching IDs and versions across languages, and rejects duplicate identities within a language. Refs: #154
 - Added a Python descriptor source in `genja-cli` that runs the configured interpreter and project discovery helper, parses descriptor JSON, and assigns Python language metadata. Refs: #154
 - Added `TaskImplementation` records and source-assigned `TaskLanguage` metadata to CLI discovery, while keeping existing descriptor sources compatible and marking compiled tasks as Rust. Refs: #154

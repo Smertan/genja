@@ -10,8 +10,8 @@
 //! JSON uses optional syntax highlighting; missing metadata remains plain text.
 //! Ordinary text and backgrounds inherit terminal defaults; inspection accents
 //! use ANSI palette colours, and selection reverses terminal foreground/background.
-//! [`run_tui`] owns a full-screen terminal session. [`run_main`] selects compiled Rust tasks for
-//! project-local binaries.
+//! [`run_tui`] owns a full-screen terminal session. [`run_main`] selects project
+//! discovery for project-local binaries.
 //!
 //! # Architecture
 //!
@@ -31,9 +31,9 @@
 //!
 //! Descriptor loading must use [`crate::discovery::TaskDescriptorSource`].
 //! Rendering and state transitions must neither load descriptors nor shell out
-//! to CLI commands. The process helper and CLI launch command select
-//! [`crate::discovery::rust::CompiledTaskDescriptorSource`] by default; the
-//! browser and lower-level runner must accept the shared source abstraction.
+//! to CLI commands. The process helper and CLI launch command use the shared
+//! source selector; the browser and lower-level runner accept the shared source
+//! abstraction.
 //!
 //! Terminal ownership belongs to the full-screen runner. Embedded callers
 //! retain control of terminal setup, event polling, drawing, and shutdown.

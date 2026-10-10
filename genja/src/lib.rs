@@ -37,6 +37,8 @@
 //! `genja::cli`. This feature is disabled by default. A project-specific binary
 //! must link its task registrations and call `genja::cli::run_main()` to expose
 //! discovery commands. Enabling the feature does not install an executable.
+//! Configured Python task modules are discovered through `genja-py` in the
+//! selected Python environment when `[tool.genja.tasks]` is present.
 //!
 //! The optional `genja-tui` feature also enables CLI support and exposes the
 //! terminal task browser through `genja::cli::tui`. It is disabled by default. Browser
@@ -77,7 +79,9 @@ pub use ::async_trait::async_trait;
 /// The `genja-tui` feature also enables this export and the `cli::tui` browser.
 ///
 /// Link your task crate or declare your task modules in the binary before
-/// delegating to this entry point; discovery sees only linked registrations.
+/// delegating to this entry point; Rust discovery sees linked registrations.
+/// Python tasks declared in `[tool.genja.tasks]` are imported through the
+/// selected Python interpreter when discovery runs.
 ///
 /// ```no_run
 /// fn main() -> std::process::ExitCode {

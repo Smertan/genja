@@ -1,9 +1,8 @@
-# Command Line Interface (Rust)
+# Command Line Interface
 
 Genja provides a first-party CLI crate, `genja-cli`, for listing, describing,
-and documenting registered task descriptors. Currently, CLI discovery supports
-**compiled Rust tasks only**. A separate Python helper can export Python task
-descriptors as JSON, but the Rust CLI does not consume them yet.
+and documenting registered task descriptors. It discovers compiled Rust tasks
+and configured Python task modules from the selected project file.
 
 ## Terminal User Interface (TUI)
 
@@ -21,9 +20,9 @@ The `genja-cli` package builds a binary named `genja`. A generic installed
 compiled task registrations.
 
 Compiled Rust task discovery is process-local. A generic `genja` binary can
-only discover tasks linked into that `genja` executable. It cannot inspect task
-registrations from another Rust project just because that project is present on
-disk.
+only discover Rust tasks linked into that executable. It can discover Python
+tasks declared in the current project's `pyproject.toml` when `genja-py` is
+installed in the selected Python environment.
 
 ```bash
 genja --help
@@ -509,23 +508,22 @@ on Linux/macOS, `.\my_project_cli.exe` in PowerShell, or `my_project_cli.exe` in
 cmd.exe. Output-file encoding is controlled by your shell; ensure UTF-8 when
 passing files between tools or platforms.
 
-Rebuild the project binary after changing task registrations, then regenerate
-the files. Discovery reflects the tasks linked into that binary, not edits to
-source files that have not been compiled.
+Rebuild the project binary after changing Rust task registrations, then
+regenerate the files. Compiled discovery reflects tasks linked into that binary.
 
 ## Discovery Scope And Architecture
 
-The initial CLI discovery implementation supports compiled Rust task descriptors
-only. It reads registrations linked into the running executable; it does not
-scan the current directory, build another project, or load another executable's
-registry. If expected tasks are missing, check that you are running the
-project-specific binary and that it links the task crate or modules.
+The CLI reads Rust registrations linked into the running executable and Python
+registrations from modules declared in `[tool.genja.tasks]` in the selected
+`pyproject.toml`. It does not scan directories, build another project, or load
+another executable's Rust registry. If expected Rust tasks are missing, check
+that the project-specific binary links the task crate or modules.
 
 Commands consume the shared `TaskDescriptorSource` abstraction from
 `genja_cli::discovery`. It provides list and describe operations returning
-`TaskDescriptor` values or a common `DiscoveryError`.
-`discovery::rust::CompiledTaskDescriptorSource` is the current implementation,
-backed by the compiled registry in `genja-core`.
+`TaskDescriptor` values or a common `DiscoveryError`. The compiled source is
+backed by the registry in `genja-core`; the combined source adds configured
+Python descriptors through the `genja-py` helper.
 
 The command handlers obtain descriptors through this abstraction and pass them
 to separate output renderers. The compiled source sorts descriptors by ID and
@@ -536,7 +534,7 @@ These commands inspect metadata only. A descriptor's `constructible` value
 reports its registration capability; listing or describing it does not construct
 or execute the task. Task execution is outside the initial CLI discovery scope.
 
-### Future Descriptor Sources
+### Python Module Discovery
 
 Python task registration happens when the module defining a decorated task
 class is imported. Installing a Python package or having its files on disk does
@@ -545,9 +543,13 @@ under `[tool.genja.tasks].modules` and exports their registered descriptors as
 JSON. See [Task Registration](task-registration.md#python-import-boundary) for
 the configuration and command.
 
-The current Rust CLI does not consume that JSON or import Python task modules.
-Python, provider-manifest, and MCP-backed sources for the Rust CLI remain future
-work.
+The CLI selects combined discovery when `[tool.genja.tasks]` is present and
+compiled Rust discovery otherwise. Use `--pyproject PATH` to select another
+project file and `--python PATH` to select the helper interpreter. Both options
+also work after a task subcommand. The defaults are `pyproject.toml` in the
+current directory and `python` from `PATH`. A configured Python failure fails
+the whole command without printing partial Rust results. Provider manifests
+and MCP-backed discovery are future work.
 
 ## Empty Results And Errors
 

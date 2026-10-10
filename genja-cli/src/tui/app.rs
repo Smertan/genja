@@ -2,7 +2,7 @@
 //!
 //! The runner loads descriptors before taking terminal ownership, then draws
 //! the browser and dispatches events until the app receives a quit request.
-//! The process helper selects compiled Rust discovery for project-local binaries.
+//! The process helper selects project discovery for project-local binaries.
 
 use std::{error::Error, fmt, io, process::ExitCode};
 
@@ -10,7 +10,8 @@ use crossterm::event::{self, Event};
 use ratatui::layout::Rect;
 
 use super::{BrowserOutcome, TaskBrowser, terminal::TerminalSession};
-use crate::discovery::{DiscoveryError, TaskDescriptorSource, rust::CompiledTaskDescriptorSource};
+use crate::discovery::selection::select_task_descriptor_source;
+use crate::discovery::{DiscoveryError, TaskDescriptorSource};
 
 /// Options for the full-screen task browser runner.
 ///
@@ -116,8 +117,8 @@ impl FullScreenApp {
 /// visible range follows selection. Enter opens Details; Tab switches Details
 /// and Schema. Up/Down or `k`/`j`, PageUp/PageDown, and Home/End scroll inspection
 /// content using the last drawn area. Task execution is not implemented.
-/// [`run_main`] selects compiled Rust discovery for
-/// project-local binaries. The CLI's `genja tui` command uses the same runner.
+/// [`run_main`] selects project discovery for project-local binaries. The CLI's
+/// `genja tui` command uses the same runner.
 /// Applications that already own a terminal should embed [`TaskBrowser`].
 pub fn run_tui<S>(source: &S, _options: TuiOptions) -> Result<(), TuiError>
 where
@@ -161,12 +162,13 @@ where
     }
 }
 
-/// Run the full-screen task browser using compiled Rust tasks in this process.
+/// Run the full-screen task browser using project task discovery.
 ///
-/// Project-local binaries must link their task crate before calling this
-/// helper. A generic installed binary only sees registrations linked into that
-/// binary. The helper reports errors to stderr after terminal restoration and
-/// returns a process exit code. It does not parse CLI arguments.
+/// Project-local binaries must link their Rust task crate before calling this
+/// helper. Python tasks are discovered from `pyproject.toml` in the current
+/// directory using `python` from `PATH` when configured. The helper reports
+/// errors to stderr and returns a process exit code. It does not parse CLI
+/// arguments; use [`crate::run_main`] for `--pyproject` or `--python` overrides.
 ///
 /// ```no_run
 /// fn main() -> std::process::ExitCode {
@@ -174,8 +176,10 @@ where
 /// }
 /// ```
 pub fn run_main() -> ExitCode {
-    let source = CompiledTaskDescriptorSource::new();
-    match run_tui(&source, TuiOptions::default()) {
+    let result = select_task_descriptor_source("python", "pyproject.toml")
+        .map_err(TuiError::Discovery)
+        .and_then(|source| run_tui(source.as_ref(), TuiOptions::default()));
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");

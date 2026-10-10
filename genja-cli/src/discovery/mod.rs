@@ -9,6 +9,7 @@ pub mod combined;
 pub mod config;
 pub mod python;
 pub mod rust;
+pub mod selection;
 
 use std::error::Error;
 use std::fmt;
