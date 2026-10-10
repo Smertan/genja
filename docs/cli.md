@@ -108,12 +108,17 @@ my_project_cli task list --output markdown
 ```
 
 The default format is `table`. Table and Markdown lists are compact summaries
-containing task ID, version, name, ID source, execution mode, and
+containing task ID, version, name, ID source, implementation language, execution mode, and
 constructibility. They omit descriptions, connection plugins, processors,
 retry metadata, and input schemas.
 
-JSON and YAML lists include the complete serialized descriptor for every listed
-task. Use `task describe` to inspect one task or `task docs` to document all tasks.
+**Language** is assigned by discovery (`Rust` or `Python`) and is separate from
+**Source**, which says whether the descriptor ID was generated or explicit.
+Custom descriptor sources without language metadata show `Unknown`.
+
+JSON and YAML lists include one `{ descriptor, language }` record per task
+implementation. The nested descriptor contains all canonical fields. Use
+`task describe` to inspect one implementation or `task docs` to document all tasks.
 
 #### What Does Constructible Mean?
 
@@ -127,8 +132,8 @@ instance; it does not run the task.
   factory is registered through `registration(...)`. Application code may
   still create the task struct directly.
 
-JSON and YAML output express the same field as `constructible: true` or
-`constructible: false`. A `yes` value does not guarantee valid input or successful
+JSON and YAML output express the same field as `descriptor.constructible: true`
+or `descriptor.constructible: false`. A `yes` value does not guarantee valid input or successful
 execution. See [Constructible Descriptor Field](task-registration.md#constructible-descriptor-field)
 for how Rust task structs and registration determine this value.
 
@@ -153,14 +158,28 @@ Use the exact ID and version shown in the list. Explicit IDs, such as
 my_project_cli task describe auto:my_project::tasks::BackupTask@0.1.0
 ```
 
-The default table view displays ID, version, name, description, ID source,
+If Rust and Python provide the same ID and version, prefix the identity with
+`rust:` or `python:` to select one implementation:
+
+```bash
+my_project_cli task describe rust:acme.examples.backup_config@1.0.0
+my_project_cli task describe python:acme.examples.backup_config@1.0.0
+```
+
+An unqualified identity works when only one implementation matches. For a
+generated Rust ID, the language prefix comes before `auto:`, as in
+`rust:auto:my_project::tasks::BackupTask@0.1.0`. Explicit task IDs cannot
+contain `:`, and custom sources should avoid IDs beginning `rust:` or `python:`
+because those prefixes are reserved for CLI selection.
+
+The default table view displays ID, version, name, description, ID source, language,
 execution mode, connection plugin, processors, constructibility, retry metadata,
 and input schema availability. Missing optional metadata is shown as `-`.
 Retry metadata is shown as compact JSON when present.
 
 When an input schema is available, the table view includes pretty-printed JSON
 below the field summary. Markdown includes the same metadata and a fenced JSON
-schema block. JSON and YAML include the schema within the serialized descriptor.
+schema block. JSON and YAML include the schema within their nested descriptor.
 
 ### Output Formats
 
@@ -169,13 +188,16 @@ schema block. JSON and YAML include the schema within the serialized descriptor.
 | Format | `task list` | `task describe` |
 | --- | --- | --- |
 | `table` (default) | Compact task summary rows | Field/value summary with input schema below when available |
-| `json` | Array of complete descriptors | One complete descriptor object |
-| `yaml` | Sequence of complete descriptors | One complete descriptor mapping |
+| `json` | Array of implementation records | One implementation record |
+| `yaml` | Sequence of implementation records | One implementation record |
 | `markdown` | Compact task summary table | Task heading, metadata table, and input schema block when available |
 
-JSON and YAML use the existing `TaskDescriptor` serialization contract, including
-optional metadata and input schemas. Markdown output is raw Markdown text, not
-a rendered terminal view.
+JSON and YAML wrap the existing `TaskDescriptor` serialization contract as
+`{ descriptor, language }`. The descriptor retains optional metadata and input
+schemas without a language field. The outer `language` is `rust`, `python`, or
+`null` when a custom source cannot identify it. Read descriptor fields through
+the `descriptor` key, for example `descriptor.id`. Markdown output is raw
+Markdown text, not a rendered terminal view.
 
 ### Generate A Task Catalogue
 
@@ -188,7 +210,8 @@ my_project_cli task docs --output markdown
 it generates a document with a `Task Catalogue` heading, an index linking to the
 summary and individual tasks, a summary table, and detailed per-task sections.
 Each task section includes descriptor metadata and a fenced JSON input schema
-when available.
+when available. Index links include the language qualifier and point to distinct
+sections when Rust and Python share an ID and version.
 
 Unlike the compact `task list --output markdown` table, the catalogue summary
 also includes descriptions. Use this command for complete task documentation.
@@ -211,8 +234,8 @@ cargo run -p genja --features genja-cli --example task_discovery_cli -- task doc
 The examples below use `my_project_cli` as the executable name to match the
 rest of this guide. Replace the arguments after `--` in the Cargo command to
 reproduce each format. All displayed outputs are complete for this one-task
-fixture. JSON and YAML list commands wrap the same descriptor in an array or
-sequence.
+fixture. JSON and YAML list commands wrap the implementation record in an array
+or sequence.
 
 /// details | Compact task list (table)
     type: example
@@ -222,9 +245,9 @@ my_project_cli task list
 ```
 
 ```text
- ID                          | VERSION | NAME          | SOURCE   | MODE  | CONSTRUCTIBLE
-==========================================================================================
- acme.examples.backup_config | 1.0.0   | backup_config | explicit | async | yes
+ ID                          | VERSION | NAME          | SOURCE   | LANGUAGE | MODE  | CONSTRUCTIBLE
+=====================================================================================================
+ acme.examples.backup_config | 1.0.0   | backup_config | explicit | Rust     | async | yes
 ```
 ///
 
@@ -236,9 +259,9 @@ my_project_cli task list --output markdown
 ```
 
 ```markdown
-| ID                            | Version | Name            | Source     | Mode    | Constructible |
-|-------------------------------|---------|-----------------|------------|---------|---------------|
-| `acme.examples.backup_config` | `1.0.0` | `backup_config` | `explicit` | `async` | yes           |
+| ID                            | Version | Name            | Source     | Language | Mode    | Constructible |
+|-------------------------------|---------|-----------------|------------|----------|---------|---------------|
+| `acme.examples.backup_config` | `1.0.0` | `backup_config` | `explicit` | `Rust`   | `async` | yes           |
 ```
 ///
 
@@ -250,7 +273,7 @@ my_project_cli task describe acme.examples.backup_config@1.0.0
 ```
 
 ```text
-Task: acme.examples.backup_config@1.0.0
+Task: rust:acme.examples.backup_config@1.0.0
 
  Field             | Value
 ====================================================================
@@ -263,6 +286,8 @@ Task: acme.examples.backup_config@1.0.0
  Description       | Backs up selected paths from a network device
 -------------------+------------------------------------------------
  ID source         | explicit
+-------------------+------------------------------------------------
+ Language          | Rust
 -------------------+------------------------------------------------
  Execution mode    | async
 -------------------+------------------------------------------------
@@ -297,7 +322,7 @@ Input schema:
 ```
 ///
 
-/// details | Complete descriptor (JSON)
+/// details | Implementation record (JSON)
     type: example
 
 ```bash
@@ -306,42 +331,45 @@ my_project_cli task describe acme.examples.backup_config@1.0.0 --output json
 
 ```json
 {
-  "id": "acme.examples.backup_config",
-  "id_source": "explicit",
-  "name": "backup_config",
-  "version": "1.0.0",
-  "description": "Backs up selected paths from a network device",
-  "execution_mode": "async",
-  "connection_plugin_name": "ssh",
-  "processor_names": [],
-  "retry": {
-    "allow": true,
-    "max_attempts": 3,
-    "delay_ms": 250
-  },
-  "input_schema": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "properties": {
-      "backup_path": {
-        "type": "string"
-      },
-      "compress": {
-        "type": "boolean"
-      }
+  "descriptor": {
+    "id": "acme.examples.backup_config",
+    "id_source": "explicit",
+    "name": "backup_config",
+    "version": "1.0.0",
+    "description": "Backs up selected paths from a network device",
+    "execution_mode": "async",
+    "connection_plugin_name": "ssh",
+    "processor_names": [],
+    "retry": {
+      "allow": true,
+      "max_attempts": 3,
+      "delay_ms": 250
     },
-    "required": [
-      "backup_path",
-      "compress"
-    ],
-    "title": "BackupConfig",
-    "type": "object"
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "backup_path": {
+          "type": "string"
+        },
+        "compress": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "backup_path",
+        "compress"
+      ],
+      "title": "BackupConfig",
+      "type": "object"
+    },
+    "constructible": true
   },
-  "constructible": true
+  "language": "rust"
 }
 ```
 ///
 
-/// details | Complete descriptor (YAML)
+/// details | Implementation record (YAML)
     type: example
 
 ```bash
@@ -349,31 +377,33 @@ my_project_cli task describe acme.examples.backup_config@1.0.0 --output yaml
 ```
 
 ```yaml
-id: acme.examples.backup_config
-id_source: explicit
-name: backup_config
-version: 1.0.0
-description: Backs up selected paths from a network device
-execution_mode: async
-connection_plugin_name: ssh
-processor_names: []
-retry:
-  allow: true
-  max_attempts: 3
-  delay_ms: 250
-input_schema:
-  $schema: https://json-schema.org/draft/2020-12/schema
-  properties:
-    backup_path:
-      type: string
-    compress:
-      type: boolean
-  required:
-  - backup_path
-  - compress
-  title: BackupConfig
-  type: object
-constructible: true
+descriptor:
+  id: acme.examples.backup_config
+  id_source: explicit
+  name: backup_config
+  version: 1.0.0
+  description: Backs up selected paths from a network device
+  execution_mode: async
+  connection_plugin_name: ssh
+  processor_names: []
+  retry:
+    allow: true
+    max_attempts: 3
+    delay_ms: 250
+  input_schema:
+    $schema: https://json-schema.org/draft/2020-12/schema
+    properties:
+      backup_path:
+        type: string
+      compress:
+        type: boolean
+    required:
+    - backup_path
+    - compress
+    title: BackupConfig
+    type: object
+  constructible: true
+language: rust
 ```
 ///
 
@@ -391,19 +421,19 @@ my_project_cli task docs
 
 - [Summary](#summary)
 - [Tasks](#tasks)
-  - [`acme.examples.backup_config@1.0.0`](#task-acme-examples-backup-config-1-0-0)
+  - [`rust:acme.examples.backup_config@1.0.0`](#task-acme-examples-backup-config-1-0-0-rust-1)
 
 ## Summary
 
-| ID                            | Version | Name            | Source     | Mode    | Constructible | Description                                   |
-|-------------------------------|---------|-----------------|------------|---------|---------------|-----------------------------------------------|
-| `acme.examples.backup_config` | `1.0.0` | `backup_config` | `explicit` | `async` | yes           | Backs up selected paths from a network device |
+| ID                            | Version | Name            | Source     | Language | Mode    | Constructible | Description                                   |
+|-------------------------------|---------|-----------------|------------|----------|---------|---------------|-----------------------------------------------|
+| `acme.examples.backup_config` | `1.0.0` | `backup_config` | `explicit` | `Rust`   | `async` | yes           | Backs up selected paths from a network device |
 
 ## Tasks
 
-<a id="task-acme-examples-backup-config-1-0-0"></a>
+<a id="task-acme-examples-backup-config-1-0-0-rust-1"></a>
 
-### acme.examples.backup_config@1.0.0
+### rust:acme.examples.backup_config@1.0.0
 
 | Field             | Value                                            |
 |-------------------|--------------------------------------------------|
@@ -412,6 +442,7 @@ my_project_cli task docs
 | Name              | `backup_config`                                  |
 | Description       | Backs up selected paths from a network device    |
 | ID source         | `explicit`                                       |
+| Language          | `Rust`                                           |
 | Execution mode    | `async`                                          |
 | Connection plugin | `ssh`                                            |
 | Processors        | -                                                |
@@ -452,14 +483,16 @@ your project-specific executable is on `PATH`.
 
 ### JSON And YAML
 
-Export complete descriptor lists for automation or later processing:
+Export implementation records, each with a complete descriptor and its
+language, for automation or later processing:
 
 ```bash
 my_project_cli task list --output json > tasks.json
 my_project_cli task list --output yaml > tasks.yaml
 ```
 
-Export one descriptor, including any input schema, using its listed identity:
+Export one implementation record, including any input schema in its descriptor,
+using its listed identity:
 
 ```bash
 my_project_cli task describe acme.examples.backup_config@1.0.0 --output json > backup-config.json

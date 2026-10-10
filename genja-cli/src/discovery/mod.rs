@@ -25,7 +25,7 @@ pub type DiscoveryResult<T> = Result<T, DiscoveryError>;
 pub mod source {
     pub use super::{
         DiscoveryError, DiscoveryResult, TaskDescriptorIdentity, TaskDescriptorSource,
-        TaskImplementation, TaskLanguage,
+        TaskImplementation, TaskImplementationIdentity, TaskLanguage,
     };
 }
 
@@ -91,6 +91,17 @@ pub trait TaskDescriptorSource {
             .collect())
     }
 
+    /// Describe one implementation by `[rust:|python:]<id>@<version>`.
+    ///
+    /// An unqualified identity succeeds when it identifies one implementation.
+    /// The default uses [`Self::list_implementations`], so existing sources
+    /// only implementing [`Self::list_tasks`] remain compatible.
+    fn describe_implementation(&self, identity: &str) -> DiscoveryResult<TaskImplementation> {
+        let identity = parse_task_implementation_identity(identity)?;
+        let implementations = self.list_implementations()?;
+        find_task_implementation(&implementations, &identity)
+    }
+
     /// Describe a task by rendered `<task-id>@<task-version>` identity.
     fn describe_task(&self, identity: &str) -> DiscoveryResult<TaskDescriptor> {
         let identity = parse_task_descriptor_identity(identity)?;
@@ -130,6 +141,76 @@ impl TaskDescriptorIdentity {
     /// Return the descriptor version.
     pub fn version(&self) -> &str {
         &self.version
+    }
+}
+
+/// Parsed task identity with an optional implementation language.
+///
+/// Language qualifies CLI lookup and is not part of the descriptor ID or JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskImplementationIdentity {
+    descriptor: TaskDescriptorIdentity,
+    language: Option<TaskLanguage>,
+}
+
+impl TaskImplementationIdentity {
+    /// Return the descriptor ID.
+    pub fn id(&self) -> &str {
+        self.descriptor.id()
+    }
+
+    /// Return the descriptor version.
+    pub fn version(&self) -> &str {
+        self.descriptor.version()
+    }
+
+    /// Return the requested language, if qualified.
+    pub fn language(&self) -> Option<TaskLanguage> {
+        self.language
+    }
+}
+
+/// Find an implementation by descriptor identity and optional language.
+pub fn find_task_implementation(
+    implementations: &[TaskImplementation],
+    identity: &TaskImplementationIdentity,
+) -> DiscoveryResult<TaskImplementation> {
+    let matches = implementations
+        .iter()
+        .filter(|implementation| {
+            implementation.descriptor().id == identity.id()
+                && implementation.descriptor().version == identity.version()
+                && identity
+                    .language()
+                    .is_none_or(|language| implementation.language() == Some(language))
+        })
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [] => {
+            let id = match identity.language() {
+                Some(TaskLanguage::Rust) => format!("rust:{}", identity.id()),
+                Some(TaskLanguage::Python) => format!("python:{}", identity.id()),
+                None => identity.id().to_string(),
+            };
+            Err(DiscoveryError::NotFound {
+                id,
+                version: Some(identity.version().to_string()),
+            })
+        }
+        [implementation] => Ok((*implementation).clone()),
+        _ if identity.language().is_some() => Err(DiscoveryError::DuplicateImplementation {
+            id: identity.id().to_string(),
+            version: identity.version().to_string(),
+            language: identity
+                .language()
+                .expect("qualified identity has a language"),
+        }),
+        _ => Err(DiscoveryError::AmbiguousImplementation {
+            id: identity.id().to_string(),
+            version: identity.version().to_string(),
+            languages: matches.iter().filter_map(|item| item.language()).collect(),
+        }),
     }
 }
 
@@ -256,7 +337,7 @@ impl fmt::Display for DiscoveryError {
                     .join(", ");
                 write!(
                     f,
-                    "task descriptor `{id}@{version}` has implementations in multiple languages: {languages}"
+                    "task descriptor `{id}@{version}` has implementations in multiple languages: {languages}; use `rust:{id}@{version}` or `python:{id}@{version}`"
                 )
             }
             Self::DuplicateImplementation {
@@ -386,6 +467,36 @@ pub fn parse_task_descriptor_identity(identity: &str) -> DiscoveryResult<TaskDes
     })
 }
 
+/// Parse `[rust:|python:]<descriptor-id>@<semver-version>` for CLI lookup.
+///
+/// A language prefix is optional when an ID and version identify one task.
+/// The prefix does not change the canonical descriptor or its serialized form.
+/// The leading `rust:` and `python:` strings are reserved by this parser;
+/// custom descriptor sources should avoid IDs beginning with either string.
+pub fn parse_task_implementation_identity(
+    identity: &str,
+) -> DiscoveryResult<TaskImplementationIdentity> {
+    let (descriptor, language) = if let Some(descriptor) = identity.strip_prefix("rust:") {
+        (descriptor, Some(TaskLanguage::Rust))
+    } else if let Some(descriptor) = identity.strip_prefix("python:") {
+        (descriptor, Some(TaskLanguage::Python))
+    } else {
+        (identity, None)
+    };
+
+    let descriptor = parse_task_descriptor_identity(descriptor).map_err(|error| match error {
+        DiscoveryError::InvalidIdentity { reason, .. } => DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason,
+        },
+        error => error,
+    })?;
+    Ok(TaskImplementationIdentity {
+        descriptor,
+        language,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,6 +569,64 @@ mod tests {
         assert_eq!(implementations.len(), 1);
         assert_eq!(implementations[0].descriptor(), &expected);
         assert_eq!(implementations[0].language(), None);
+    }
+
+    #[test]
+    fn implementation_identity_parser_preserves_generated_ids_and_prefixes() {
+        let identity = parse_task_implementation_identity(
+            "rust:auto:use_genja::tasks::DeployChangesTask@0.1.0",
+        )
+        .expect("generated Rust identity should parse");
+        assert_eq!(identity.id(), "auto:use_genja::tasks::DeployChangesTask");
+        assert_eq!(identity.version(), "0.1.0");
+        assert_eq!(identity.language(), Some(TaskLanguage::Rust));
+
+        let unqualified = parse_task_implementation_identity("acme.deploy@1.0.0")
+            .expect("unqualified identity should parse");
+        assert_eq!(unqualified.language(), None);
+
+        assert!(matches!(
+            parse_task_implementation_identity("python:acme.deploy@latest"),
+            Err(DiscoveryError::InvalidIdentity { identity, .. })
+                if identity == "python:acme.deploy@latest"
+        ));
+    }
+
+    #[test]
+    fn language_qualifier_selects_one_shared_identity() {
+        let implementations = [
+            TaskImplementation::new(descriptor("acme.deploy", "1.0.0"), Some(TaskLanguage::Rust)),
+            TaskImplementation::new(
+                descriptor("acme.deploy", "1.0.0"),
+                Some(TaskLanguage::Python),
+            ),
+        ];
+
+        let unqualified = parse_task_implementation_identity("acme.deploy@1.0.0")
+            .expect("unqualified identity should parse");
+        assert!(matches!(
+            find_task_implementation(&implementations, &unqualified),
+            Err(DiscoveryError::AmbiguousImplementation { .. })
+        ));
+
+        for (prefix, language) in [
+            ("rust", TaskLanguage::Rust),
+            ("python", TaskLanguage::Python),
+        ] {
+            let identity =
+                parse_task_implementation_identity(&format!("{prefix}:acme.deploy@1.0.0"))
+                    .expect("qualified identity should parse");
+            let found = find_task_implementation(&implementations, &identity)
+                .expect("language qualifier should choose one implementation");
+            assert_eq!(found.language(), Some(language));
+        }
+
+        let missing = parse_task_implementation_identity("python:acme.missing@1.0.0")
+            .expect("qualified identity should parse");
+        assert!(matches!(
+            find_task_implementation(&implementations, &missing),
+            Err(DiscoveryError::NotFound { id, .. }) if id == "python:acme.missing"
+        ));
     }
 
     #[test]

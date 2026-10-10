@@ -42,6 +42,14 @@ Use `--pyproject PATH` and `--python PATH` to select the project file and Python
 interpreter; they default to `pyproject.toml` in the current directory and
 `python` from `PATH`.
 
+Human-readable task commands show **Language** separately from the descriptor's
+ID **Source** (`generated` or `explicit`). Use `rust:<id>@<version>` or
+`python:<id>@<version>` with `task describe` when both languages provide the
+same ID and version; an unqualified identity works when unique. Custom sources
+without language metadata display `Unknown`. CLI JSON and YAML output uses
+`{ descriptor, language }` records, with `language: null` when unknown; the
+nested descriptor retains its canonical shape.
+
 ## Terminal User Interface (TUI)
 
 Genja's terminal user interface is being developed to browse task descriptors
@@ -109,7 +117,7 @@ my_project_cli task describe auto:my_project::tasks::BackupTask@0.1.0
 my_project_cli task docs > task-catalog.md
 ```
 
-For file exports, use JSON or YAML for complete serialized descriptors,
+For file exports, use JSON or YAML for complete implementation records,
 `task list --output markdown` for a compact summary, and `task docs` for a
 complete Markdown catalogue. See [Exporting Task Descriptors](../docs/cli.md#exporting-task-descriptors)
 for redirection examples and documentation-platform considerations.

@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added language labels to CLI task lists, descriptions, and catalogues, plus optional `rust:` and `python:` qualifiers for tasks sharing an ID and version. Refs: #155
 - Added automatic Python/Rust discovery source selection to `genja-cli` task commands and TUI entrypoints, with `--pyproject` and `--python` overrides for the project file and interpreter. Refs: #155
 - Added combined Rust/Python task discovery that skips Python without task configuration, preserves matching IDs and versions across languages, and rejects duplicate identities within a language. Refs: #154
 - Added a Python descriptor source in `genja-cli` that runs the configured interpreter and project discovery helper, parses descriptor JSON, and assigns Python language metadata. Refs: #154
@@ -48,6 +49,7 @@ Changed packages:
 
 ### Changed
 
+- CLI `task list` and `task describe` JSON/YAML output wraps each canonical descriptor as `{ descriptor, language }` so same-ID Rust and Python implementations remain distinguishable; `language` is `rust`, `python`, or `null` when unknown. Refs: #155
 - **Breaking:** Added `AmbiguousImplementation` and `DuplicateImplementation` variants to `genja-cli`'s public `DiscoveryError` enum. Update exhaustive matches to handle these cases or add a fallback arm. Refs: #154
 - Changed TUI inspection labels and JSON syntax accents to use terminal ANSI palette colours, while ordinary values and backgrounds inherit terminal defaults. Task selection now reverses terminal foreground/background, improving compatibility with light and dark terminal themes. Refs: #130
 - Expanded the Terminal UI guide with search controls, matching and selection rules, and a walkthrough using the existing sample tasks; linked the walkthrough from the CLI and examples guides. Refs: #129

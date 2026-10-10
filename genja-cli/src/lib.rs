@@ -74,13 +74,13 @@ enum TaskSubcommand {
     ///
     /// Table and Markdown output are compact summary views. Use
     /// `genja task describe <identity>` for full descriptor metadata.
-    /// JSON and YAML output include full descriptor items for the listed tasks.
+    /// JSON and YAML output wrap each descriptor with its implementation language.
     List(TaskListArgs),
 }
 
 #[derive(Debug, Args)]
 struct TaskDescribeArgs {
-    /// Task identity in `<task-id>@<task-version>` form.
+    /// Task identity as `<id>@<version>` or `rust:`/`python:` plus that identity.
     identity: String,
     /// Output format to render.
     #[arg(long, value_enum, default_value = "table")]
