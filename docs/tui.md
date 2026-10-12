@@ -83,39 +83,47 @@ The TUI's `run_main()` helper is available for project-local binaries.
 
 ## Launch from the CLI
 
-### Python-Only Project
+=== ":fontawesome-brands-python: Python"
 
-Declare task modules in `[tool.genja.tasks]`, install `genja-py` in the Python
-environment containing them, and run a `genja` binary built with `tui` from the
-project directory:
+    Declare task modules in `[tool.genja.tasks]`, install `genja-py` in the
+    Python environment containing them, and run a `genja` binary built with
+    `tui` from the project directory:
 
-```bash
-genja tui
-```
+    ```bash
+    genja tui
+    ```
 
-The CLI uses `pyproject.toml` in the current directory and `python` from `PATH`
-by default. To override those defaults:
+    The CLI uses `pyproject.toml` in the current directory and `python` from
+    `PATH` by default. Use `--pyproject PATH` or `--python PATH` to select
+    another project file or interpreter. See
+    [Installation](installation.md#python-task-discovery-from-the-cli) for the
+    two installation steps.
 
-- `--pyproject` followed by a path selects another project file.
-- `--python` followed by a path selects another interpreter.
+=== ":fontawesome-brands-rust: Rust"
 
-See [Installation](installation.md#python-task-discovery-from-the-cli) for the
-two installation steps.
+    Link your Rust task crate into a [project-local CLI binary](cli.md#project-local-cli-binary-rust-and-mixed-projects)
+    built with `tui` (or `genja-tui` through the `genja` crate), then run:
 
-### Rust Or Mixed Project
+    ```bash
+    my_project_cli tui
+    ```
 
-A project-local CLI binary that calls `genja_cli::run_main()` exposes the TUI
-when built with `tui`; `genja::cli::run_main()` needs `genja-tui`. Link the Rust
-task crate as described in the [CLI binary guide](cli.md#project-local-cli-binary-rust-and-mixed-projects),
-then run:
+    Without `[tool.genja.tasks]`, discovery uses linked Rust tasks and does
+    not start Python.
 
-```bash
-my_project_cli tui
-```
+=== "Mixed Rust and Python"
 
-When `[tool.genja.tasks]` is present, the same binary also imports configured
-Python modules through the selected interpreter. It accepts `--pyproject PATH`
-and `--python PATH`. For Rust-only projects, no Python interpreter is started.
+    Use a [project-local CLI binary](cli.md#project-local-cli-binary-rust-and-mixed-projects)
+    that links your Rust tasks and has `tui` enabled. Declare Python task
+    modules in `[tool.genja.tasks]` and install `genja-py` in the selected
+    interpreter. Then run:
+
+    ```bash
+    my_project_cli tui
+    ```
+
+    The binary combines both languages in one task list. Use `--pyproject PATH`
+    or `--python PATH` to select another project file or interpreter.
 
 ### Repository Checkout Examples
 
@@ -238,78 +246,82 @@ Shift is supported for printable input. Key releases, repeats, and paste events
 are not handled. The input edits at the end of the query; it has no movable
 text cursor.
 
-### Try Descriptor Inspection (Rust Sample)
+### Try Descriptor Inspection
 
-This walkthrough uses the Rust-only `task_browser` example. From a local
-checkout, launch it in an interactive terminal:
+Select the language of the sample you want to inspect.
 
-```bash
-cargo run -p genja --features genja-tui --example task_browser -- tui
-```
+=== ":fontawesome-brands-python: Python"
 
-1. Select `backup_config` and press Enter. Details shows its identity, version,
-   description, blocking execution mode, and registered JSON factory status.
-2. Press Tab to inspect its input schema, including the `backup_path` field.
-   Use Down/Up, PageDown/PageUp, or Home/End to scroll as needed.
-3. Press Escape to return to the list, select `collect_facts`, and press Enter.
-   It has a generated ID, async execution mode, and no registered JSON factory.
-4. Press Tab. This task has no input schema metadata, so the view explains that
-   no schema is available. Press Escape to return or `q` to quit.
+    With `genja-py` installed in the selected Python environment and a `genja`
+    binary built with `tui`, run this from the repository root. The sample module
+    and `pyproject.toml` are in the Genja source checkout; they are not installed
+    with `genja-py` from PyPI:
 
-To try inspection after filtering, press `/`, type `backup`, then Enter to leave
-search and Enter again to open Details. Escape returns to the filtered list
-without clearing the query. The sample tasks are linked into this example
-binary; a generic CLI binary may have no tasks to inspect.
+    ```bash
+    genja --pyproject genja/examples/python/pyproject.toml tui
+    ```
 
-### Try Descriptor Inspection (Python Sample)
+    This uses the [configured Python task module](examples.md#mixed-rust-and-python-discovery)
+    without linking Rust tasks into the binary. In your own Python project, declare
+    your task modules in its `pyproject.toml` and run `genja tui` from that project
+    directory instead.
 
-With `genja-py` installed in the selected Python environment and a `genja`
-binary built with `tui`, run this from the repository root. The sample module
-and `pyproject.toml` are in the Genja source checkout; they are not installed
-with `genja-py` from PyPI:
+    To fetch the example directory without checking out the full repository, use a
+    sparse partial clone:
 
-```bash
-genja --pyproject genja/examples/python/pyproject.toml tui
-```
+    ```bash
+    git clone --depth 1 --filter=blob:none --sparse https://github.com/Smertan/genja.git genja-python-example
+    git -C genja-python-example sparse-checkout set genja/examples/python
+    cd genja-python-example/genja/examples/python
+    genja tui
+    ```
 
-This uses the [configured Python task module](examples.md#mixed-rust-and-python-discovery)
-without linking Rust tasks into the binary. In your own Python project, declare
-your task modules in its `pyproject.toml` and run `genja tui` from that project
-directory instead.
+    The final clone argument creates `genja-python-example` in your current
+    directory. Sparse checkout then places the example files under
+    `genja-python-example/genja/examples/python`; the `cd` command enters that
+    directory before launching the TUI.
 
-To fetch the example directory without checking out the full repository, use a
-sparse partial clone:
+    The clone command checks out `main`, this repository's default branch. If the
+    example has not yet been merged into `main`, add `--branch` followed by the
+    branch name to `git clone` so Git fetches the branch containing these files.
 
-```bash
-git clone --depth 1 --filter=blob:none --sparse https://github.com/Smertan/genja.git genja-python-example
-git -C genja-python-example sparse-checkout set genja/examples/python
-cd genja-python-example/genja/examples/python
-genja tui
-```
+    If you do not want a Git checkout, open the
+    [Genja repository](https://github.com/Smertan/genja) on GitHub and select a
+    branch containing this example. Navigate to `genja/examples/python` and use
+    **Raw → Download raw file** for `pyproject.toml` and
+    `task_registration_tasks.py`. Save both in the same new directory with their
+    original filenames, then run `genja tui` there. Only those two files are needed
+    for this TUI sample.
 
-The final clone argument creates `genja-python-example` in your current
-directory. Sparse checkout then places the example files under
-`genja-python-example/genja/examples/python`; the `cd` command enters that
-directory before launching the TUI.
+    1. Select `backup_config` and press Enter. Details shows `Language: 🐍 Python`,
+       its explicit ID, and its constructible status.
+    2. Press Tab to see its input schema, including `backup_path` and `compress`.
+    3. Press Escape, select `collect_facts`, and press Enter. Its Details view also
+       shows Python as the language. Press Tab to see the missing-schema message,
+       then `q` to quit.
 
-The clone command checks out `main`, this repository's default branch. If the
-example has not yet been merged into `main`, add `--branch` followed by the
-branch name to `git clone` so Git fetches the branch containing these files.
+=== ":fontawesome-brands-rust: Rust"
 
-If you do not want a Git checkout, open the
-[Genja repository](https://github.com/Smertan/genja) on GitHub and select a
-branch containing this example. Navigate to `genja/examples/python` and use
-**Raw → Download raw file** for `pyproject.toml` and
-`task_registration_tasks.py`. Save both in the same new directory with their
-original filenames, then run `genja tui` there. Only those two files are needed
-for this TUI sample.
+    This walkthrough uses the Rust-only `task_browser` example. From a local
+    checkout, launch it in an interactive terminal:
 
-1. Select `backup_config` and press Enter. Details shows `Language: 🐍 Python`,
-   its explicit ID, and its constructible status.
-2. Press Tab to see its input schema, including `backup_path` and `compress`.
-3. Press Escape, select `collect_facts`, and press Enter. Its Details view also
-   shows Python as the language. Press Tab to see the missing-schema message,
-   then `q` to quit.
+    ```bash
+    cargo run -p genja --features genja-tui --example task_browser -- tui
+    ```
+
+    1. Select `backup_config` and press Enter. Details shows its identity, version,
+       description, blocking execution mode, and registered JSON factory status.
+    2. Press Tab to inspect its input schema, including the `backup_path` field.
+       Use Down/Up, PageDown/PageUp, or Home/End to scroll as needed.
+    3. Press Escape to return to the list, select `collect_facts`, and press Enter.
+       It has a generated ID, async execution mode, and no registered JSON factory.
+    4. Press Tab. This task has no input schema metadata, so the view explains that
+       no schema is available. Press Escape to return or `q` to quit.
+
+    To try inspection after filtering, press `/`, type `backup`, then Enter to leave
+    search and Enter again to open Details. Escape returns to the filtered list
+    without clearing the query. The sample tasks are linked into this example
+    binary; a generic CLI binary may have no tasks to inspect.
 
 ### Matching And Selection
 
@@ -332,45 +344,49 @@ selection; when matches return without a selected task, the first is selected.
 Clearing a query restores all tasks and retains the currently selected task
 where possible. Navigation stops at either end without wrapping.
 
-### Try Search (Rust Sample)
+### Try Search
 
-This walkthrough uses the Rust-only `task_browser` example. **Use a local
-checkout of the Genja GitHub repository and run from its root.**
-Adding Genja as a dependency with `cargo add` does not make this example runnable
-from your own project. Launch the example in an interactive terminal:
+Select the language of the sample you want to search.
 
-```bash
-cargo run -p genja --features genja-tui --example task_browser -- tui
-```
+=== ":fontawesome-brands-python: Python"
 
-1. Press `/` and type `backup`. Only `backup_config` remains, with
-   `1 task shown, 2 total` on terminals tall enough to show the count.
-2. Press Enter. The query stays active, and navigation operates on the matching
-   task. Press Escape to clear it and restore both tasks.
-3. Press `/` and type `ASYNC`. The case-insensitive execution-mode match shows
-   only `collect_facts`.
-4. While still editing, press Ctrl+u and type `JSON input schema`. Only
-   `backup_config` matches, through its description.
-5. Press Ctrl+u and type `missing`. The browser shows
-   **No tasks match the current search**. Press Ctrl+u to restore both tasks.
-6. Press Enter, then `q`, to quit and return to your shell.
+    Launch the Python sample with the command in
+    [the Python tab of the inspection walkthrough](#try-descriptor-inspection):
 
-To try ID and version matching, search for `acme.examples.backup_config` or a
-version displayed in the table. Generated task versions follow the example
-crate's version, so a version query can match one or both tasks. Search only
-narrows descriptors; it does not construct or execute tasks.
+    1. Press `/` and type `backup`. The list shows only `backup_config` and reports
+       `1 task shown, 2 total` when the terminal has room for the count.
+    2. Press Ctrl+u and type `host facts`. The description match shows only
+       `collect_facts`, even though the table does not display descriptions.
+    3. Press Ctrl+u and type `missing` to see **No tasks match the current search**.
+       Press Ctrl+u to restore both Python tasks, then Enter and `q` to quit.
 
-### Try Search (Python Sample)
+=== ":fontawesome-brands-rust: Rust"
 
-Launch the Python sample with the command in
-[the inspection walkthrough](#try-descriptor-inspection-python-sample):
+    This walkthrough uses the Rust-only `task_browser` example. **Use a local
+    checkout of the Genja GitHub repository and run from its root.**
+    Adding Genja as a dependency with `cargo add` does not make this example runnable
+    from your own project. Launch the example in an interactive terminal:
 
-1. Press `/` and type `backup`. The list shows only `backup_config` and reports
-   `1 task shown, 2 total` when the terminal has room for the count.
-2. Press Ctrl+u and type `host facts`. The description match shows only
-   `collect_facts`, even though the table does not display descriptions.
-3. Press Ctrl+u and type `missing` to see **No tasks match the current search**.
-   Press Ctrl+u to restore both Python tasks, then Enter and `q` to quit.
+    ```bash
+    cargo run -p genja --features genja-tui --example task_browser -- tui
+    ```
+
+    1. Press `/` and type `backup`. Only `backup_config` remains, with
+       `1 task shown, 2 total` on terminals tall enough to show the count.
+    2. Press Enter. The query stays active, and navigation operates on the matching
+       task. Press Escape to clear it and restore both tasks.
+    3. Press `/` and type `ASYNC`. The case-insensitive execution-mode match shows
+       only `collect_facts`.
+    4. While still editing, press Ctrl+u and type `JSON input schema`. Only
+       `backup_config` matches, through its description.
+    5. Press Ctrl+u and type `missing`. The browser shows
+       **No tasks match the current search**. Press Ctrl+u to restore both tasks.
+    6. Press Enter, then `q`, to quit and return to your shell.
+
+    To try ID and version matching, search for `acme.examples.backup_config` or a
+    version displayed in the table. Generated task versions follow the example
+    crate's version, so a version query can match one or both tasks. Search only
+    narrows descriptors; it does not construct or execute tasks.
 
 ## Project-Local TUI Binary (Rust And Mixed Projects)
 

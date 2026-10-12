@@ -94,7 +94,7 @@ to show only `backup_config`; press Enter to return to navigation with the query
 retained. Escape then clears it. While editing, Ctrl+u clears the query without
 leaving search. Press `q` in navigation mode to exit.
 
-Follow the [search walkthrough](tui.md#try-search-rust-sample) to try
+Follow the [Rust tab of the search walkthrough](tui.md#try-search) to try
 case-insensitive matching, execution-mode and description searches, and no-match
 recovery. See the [Terminal UI guide](tui.md) for feature setup and the
 project-local binary pattern.
@@ -103,7 +103,7 @@ Press Enter on a selected task to open Details, then Tab to inspect its schema.
 `backup_config` includes JSON schema metadata; `collect_facts` shows the missing
 schema message. Scroll with Up/Down, PageUp/PageDown, or Home/End; Escape returns
 to the list while retaining selection and search. Follow the
-[descriptor inspection walkthrough](tui.md#try-descriptor-inspection-rust-sample)
+[Rust tab of the descriptor inspection walkthrough](tui.md#try-descriptor-inspection)
 for a complete example.
 
 ### Mixed Rust And Python Discovery
@@ -147,7 +147,7 @@ cargo run -p genja --features genja-tui --example task_browser -- \
 
 See the [installation guide](installation.md#python-task-discovery-from-the-cli)
 for the separate CLI and Python package installation steps. The
-[Python TUI walkthrough](tui.md#try-descriptor-inspection-python-sample)
+[Python tab of the TUI walkthrough](tui.md#try-descriptor-inspection)
 shows inspection and search with the same configured task module.
 
 ## Python Examples
