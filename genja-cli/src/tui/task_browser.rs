@@ -1,6 +1,6 @@
-//! Embeddable browser and synchronous descriptor loading boundary.
+//! Embeddable browser and synchronous implementation loading boundary.
 //!
-//! Loading owns a descriptor snapshot and retains no source reference. State
+//! Loading owns a descriptor and language snapshot and retains no source reference. State
 //! access never performs discovery. Action handling stays separate from terminal
 //! event polling; the browser never owns terminal setup or shutdown.
 
@@ -12,7 +12,7 @@ use crate::discovery::{DiscoveryResult, TaskDescriptorSource};
 use crossterm::event::Event;
 use ratatui::{Frame, layout::Rect};
 
-/// Terminal-independent task browser with an owned descriptor snapshot.
+/// Terminal-independent task browser with an owned implementation snapshot.
 ///
 /// Supply any shared descriptor source, including a trait object. The browser
 /// does not select a registry backend or construct or execute tasks.
@@ -295,7 +295,7 @@ impl TaskBrowser {
 
     /// Load one owned snapshot synchronously using the shared discovery source.
     ///
-    /// Calls `list_tasks()` once and preserves its ordering. Success replaces
+    /// Calls `list_implementations()` once and preserves its ordering. Success replaces
     /// the snapshot, reapplies the query, selects its first match, and clears
     /// any prior error. Failure clears the snapshot and selection, records the
     /// discovery error for presentation, and returns the same error to the host.
@@ -310,9 +310,9 @@ impl TaskBrowser {
     where
         S: TaskDescriptorSource + ?Sized,
     {
-        match source.list_tasks() {
-            Ok(descriptors) => {
-                self.state.replace_descriptors(descriptors);
+        match source.list_implementations() {
+            Ok(implementations) => {
+                self.state.replace_implementations(implementations);
                 Ok(())
             }
             Err(error) => {

@@ -2,8 +2,8 @@
 
 use crate::discovery::{DiscoveryError, TaskDescriptorSource};
 use crate::output::{
-    OutputError, OutputFormat, TaskDocsOutputFormat, render_task_descriptor, render_task_docs,
-    render_task_list,
+    OutputError, OutputFormat, TaskDocsOutputFormat, render_task_implementation,
+    render_task_implementation_docs, render_task_implementation_list,
 };
 use std::error::Error;
 use std::fmt;
@@ -125,16 +125,16 @@ impl From<OutputError> for TaskDocsError {
     }
 }
 
-/// List task descriptors from the provided source and render them.
+/// List task implementations from the provided source and render them.
 pub fn list_tasks<S>(source: &S, output: OutputFormat) -> Result<String, TaskListError>
 where
     S: TaskDescriptorSource + ?Sized,
 {
-    let descriptors = source.list_tasks()?;
-    render_task_list(&descriptors, output).map_err(TaskListError::from)
+    let implementations = source.list_implementations()?;
+    render_task_implementation_list(&implementations, output).map_err(TaskListError::from)
 }
 
-/// Describe one task descriptor from the provided source.
+/// Describe one task implementation from the provided source.
 pub fn describe_task<S>(
     source: &S,
     identity: &str,
@@ -143,24 +143,24 @@ pub fn describe_task<S>(
 where
     S: TaskDescriptorSource + ?Sized,
 {
-    let descriptor = source
-        .describe_task(identity)
+    let implementation = source
+        .describe_implementation(identity)
         .map_err(TaskDescribeError::from)?;
-    render_task_descriptor(&descriptor, output).map_err(TaskDescribeError::from)
+    render_task_implementation(&implementation, output).map_err(TaskDescribeError::from)
 }
 
-/// Generate task descriptor documentation from the provided source.
+/// Generate task implementation documentation from the provided source.
 pub fn docs_tasks<S>(source: &S, output: TaskDocsOutputFormat) -> Result<String, TaskDocsError>
 where
     S: TaskDescriptorSource + ?Sized,
 {
-    let descriptors = source.list_tasks()?;
-    render_task_docs(&descriptors, output).map_err(TaskDocsError::from)
+    let implementations = source.list_implementations()?;
+    render_task_implementation_docs(&implementations, output).map_err(TaskDocsError::from)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::discovery::{DiscoveryError, TaskDescriptor};
+    use crate::discovery::{DiscoveryError, TaskDescriptor, TaskImplementation, TaskLanguage};
 
     use super::*;
     use genja_core::task::{TaskDescriptorMetadata, TaskExecutionMode};
@@ -173,6 +173,26 @@ mod tests {
     impl TaskDescriptorSource for StaticTaskDescriptorSource {
         fn list_tasks(&self) -> Result<Vec<TaskDescriptor>, DiscoveryError> {
             self.result.clone()
+        }
+    }
+
+    struct SharedIdentitySource;
+
+    impl TaskDescriptorSource for SharedIdentitySource {
+        fn list_tasks(&self) -> Result<Vec<TaskDescriptor>, DiscoveryError> {
+            Ok(self
+                .list_implementations()?
+                .into_iter()
+                .map(|implementation| implementation.descriptor().clone())
+                .collect())
+        }
+
+        fn list_implementations(&self) -> Result<Vec<TaskImplementation>, DiscoveryError> {
+            let descriptor = descriptor("acme.tests.shared", "1.0.0");
+            Ok(vec![
+                TaskImplementation::new(descriptor.clone(), Some(TaskLanguage::Rust)),
+                TaskImplementation::new(descriptor, Some(TaskLanguage::Python)),
+            ])
         }
     }
 
@@ -200,10 +220,11 @@ mod tests {
             result: Ok(descriptors.clone()),
         };
         let output = list_tasks(&source, OutputFormat::Json).expect("descriptors should list");
-        let rendered: Vec<TaskDescriptor> =
+        let rendered: serde_json::Value =
             serde_json::from_str(&output).expect("JSON output should parse");
 
-        assert_eq!(rendered, descriptors);
+        assert_eq!(rendered[0]["descriptor"]["id"], descriptors[0].id);
+        assert!(rendered[0]["language"].is_null());
     }
 
     #[test]
@@ -258,10 +279,11 @@ mod tests {
 
         let output = describe_task(&source, "acme.tests.cli.describe@1.0.0", OutputFormat::Json)
             .expect("descriptor should be described");
-        let rendered: TaskDescriptor =
+        let rendered: serde_json::Value =
             serde_json::from_str(&output).expect("JSON output should parse");
 
-        assert_eq!(rendered, descriptors[0]);
+        assert_eq!(rendered["descriptor"]["id"], descriptors[0].id);
+        assert!(rendered["language"].is_null());
     }
 
     #[test]
@@ -282,6 +304,43 @@ mod tests {
         assert!(output.contains("Value"));
         assert!(output.contains("ID source"));
         assert!(output.contains("explicit"));
+        assert!(output.contains("Unknown"));
+    }
+
+    #[test]
+    fn describe_task_requires_language_when_both_implementations_share_an_identity() {
+        let source = SharedIdentitySource;
+
+        assert!(matches!(
+            describe_task(&source, "acme.tests.shared@1.0.0", OutputFormat::Table),
+            Err(TaskDescribeError::Discovery(
+                DiscoveryError::AmbiguousImplementation { .. }
+            ))
+        ));
+
+        for (prefix, label) in [("rust", "Rust"), ("python", "Python")] {
+            let output = describe_task(
+                &source,
+                &format!("{prefix}:acme.tests.shared@1.0.0"),
+                OutputFormat::Table,
+            )
+            .expect("qualified implementation should render");
+            assert!(output.contains(&format!("Task: {prefix}:acme.tests.shared@1.0.0")));
+            assert!(output.contains(label));
+        }
+
+        let json = list_tasks(&source, OutputFormat::Json).expect("JSON list should render");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("JSON should parse");
+        assert_eq!(parsed.as_array().map(Vec::len), Some(2));
+        assert_eq!(parsed[0]["language"], "rust");
+        assert_eq!(parsed[1]["language"], "python");
+        assert_eq!(parsed[0]["descriptor"]["id"], "acme.tests.shared");
+
+        let yaml = list_tasks(&source, OutputFormat::Yaml).expect("YAML list should render");
+        let parsed: yaml_serde::Value = yaml_serde::from_str(&yaml).expect("YAML should parse");
+        assert_eq!(parsed[0]["descriptor"]["id"], "acme.tests.shared");
+        assert_eq!(parsed[0]["language"], "rust");
+        assert_eq!(parsed[1]["language"], "python");
     }
 
     #[test]
@@ -295,9 +354,10 @@ mod tests {
         let rendered: yaml_serde::Value =
             yaml_serde::from_str(&output).expect("YAML output should parse");
 
-        assert_eq!(rendered["id"], "acme.tests.cli.describe");
-        assert_eq!(rendered["version"], "1.0.0");
-        assert_eq!(rendered["id_source"], "explicit");
+        assert_eq!(rendered["descriptor"]["id"], "acme.tests.cli.describe");
+        assert_eq!(rendered["descriptor"]["version"], "1.0.0");
+        assert_eq!(rendered["descriptor"]["id_source"], "explicit");
+        assert!(rendered["language"].is_null());
     }
 
     #[test]

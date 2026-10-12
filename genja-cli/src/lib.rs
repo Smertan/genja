@@ -3,6 +3,9 @@
 //! The optional `tui` feature exposes an embeddable browser and a full-screen
 //! runner in `genja_cli::tui`, including a project-local `tui::run_main()` helper.
 //! It also enables the `genja tui` command, which launches the same basic screen.
+//! Task commands and the TUI select configured Python discovery when the
+//! project file contains `[tool.genja.tasks]` and otherwise use compiled Rust
+//! discovery.
 
 pub mod commands;
 pub mod discovery;
@@ -11,13 +14,15 @@ pub mod output;
 pub mod tui;
 
 use crate::commands::task::{TaskDescribeError, TaskDocsError, TaskListError};
-use crate::discovery::rust::CompiledTaskDescriptorSource;
+use crate::discovery::DiscoveryError;
+use crate::discovery::selection::select_task_descriptor_source;
 use crate::output::{OutputFormat, TaskDocsOutputFormat};
 use clap::{Args, Parser, Subcommand};
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Debug, Parser)]
@@ -27,6 +32,17 @@ use std::process::ExitCode;
     about = "First-party command-line interface for Genja automation workflows"
 )]
 struct Cli {
+    /// Project configuration file used for Python task discovery.
+    #[arg(
+        long,
+        global = true,
+        default_value = "pyproject.toml",
+        value_name = "PATH"
+    )]
+    pyproject: PathBuf,
+    /// Python interpreter used for configured task discovery.
+    #[arg(long, global = true, default_value = "python", value_name = "PATH")]
+    python: PathBuf,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -58,13 +74,13 @@ enum TaskSubcommand {
     ///
     /// Table and Markdown output are compact summary views. Use
     /// `genja task describe <identity>` for full descriptor metadata.
-    /// JSON and YAML output include full descriptor items for the listed tasks.
+    /// JSON and YAML output wrap each descriptor with its implementation language.
     List(TaskListArgs),
 }
 
 #[derive(Debug, Args)]
 struct TaskDescribeArgs {
-    /// Task identity in `<task-id>@<task-version>` form.
+    /// Task identity as `<id>@<version>` or `rust:`/`python:` plus that identity.
     identity: String,
     /// Output format to render.
     #[arg(long, value_enum, default_value = "table")]
@@ -87,6 +103,7 @@ struct TaskDocsArgs {
 
 #[derive(Debug)]
 enum CliError {
+    Discovery(DiscoveryError),
     Describe(TaskDescribeError),
     Docs(TaskDocsError),
     List(TaskListError),
@@ -97,6 +114,7 @@ enum CliError {
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Discovery(error) => write!(f, "{error}"),
             Self::Describe(error) => write!(f, "{error}"),
             Self::Docs(error) => write!(f, "{error}"),
             Self::List(error) => write!(f, "{error}"),
@@ -109,6 +127,7 @@ impl fmt::Display for CliError {
 impl Error for CliError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Discovery(error) => Some(error),
             Self::Describe(error) => Some(error),
             Self::Docs(error) => Some(error),
             Self::List(error) => Some(error),
@@ -119,32 +138,40 @@ impl Error for CliError {
 }
 
 fn execute(cli: Cli) -> Result<(), CliError> {
-    match cli.command {
-        Some(Command::Task(task)) => match task.command {
-            TaskSubcommand::Describe(args) => {
-                let source = CompiledTaskDescriptorSource::new();
-                let output = commands::task::describe_task(&source, &args.identity, args.output)
-                    .map_err(CliError::Describe)?;
-                println!("{output}");
+    let Cli {
+        pyproject,
+        python,
+        command,
+    } = cli;
+    match command {
+        Some(Command::Task(task)) => {
+            let source =
+                select_task_descriptor_source(&python, &pyproject).map_err(CliError::Discovery)?;
+            match task.command {
+                TaskSubcommand::Describe(args) => {
+                    let output =
+                        commands::task::describe_task(source.as_ref(), &args.identity, args.output)
+                            .map_err(CliError::Describe)?;
+                    println!("{output}");
+                }
+                TaskSubcommand::Docs(args) => {
+                    let output = commands::task::docs_tasks(source.as_ref(), args.output)
+                        .map_err(CliError::Docs)?;
+                    println!("{output}");
+                }
+                TaskSubcommand::List(args) => {
+                    let output = commands::task::list_tasks(source.as_ref(), args.output)
+                        .map_err(CliError::List)?;
+                    println!("{output}");
+                }
             }
-            TaskSubcommand::Docs(args) => {
-                let source = CompiledTaskDescriptorSource::new();
-                let output =
-                    commands::task::docs_tasks(&source, args.output).map_err(CliError::Docs)?;
-                println!("{output}");
-            }
-            TaskSubcommand::List(args) => {
-                let source = CompiledTaskDescriptorSource::new();
-                let output =
-                    commands::task::list_tasks(&source, args.output).map_err(CliError::List)?;
-                println!("{output}");
-            }
-        },
+        }
         Some(Command::Version) => commands::version::print_version(),
         #[cfg(feature = "tui")]
         Some(Command::Tui) => {
-            let source = CompiledTaskDescriptorSource::new();
-            tui::run_tui(&source, tui::TuiOptions::default()).map_err(CliError::Tui)?;
+            let source =
+                select_task_descriptor_source(&python, &pyproject).map_err(CliError::Discovery)?;
+            tui::run_tui(source.as_ref(), tui::TuiOptions::default()).map_err(CliError::Tui)?;
         }
         None => {}
     }
@@ -165,7 +192,8 @@ fn execute(cli: Cli) -> Result<(), CliError> {
 ///
 /// Project-local binaries can use this helper to expose Genja CLI commands
 /// while linking their own compiled Rust task registrations into the running
-/// process.
+/// process. Configured Python tasks are imported through the selected
+/// interpreter when a task command or the TUI requests discovery.
 pub fn run_main() -> ExitCode {
     run(env::args_os())
 }

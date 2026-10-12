@@ -17,8 +17,16 @@ Dedicated CLI wrapper packages can depend directly on `genja-cli` and call
 See the [CLI guide](../docs/cli.md) for dependency setup from a checkout before
 publication.
 
-Neither option installs an executable automatically. Build a project-specific
-binary that links your tasks, then distribute that executable to end users.
+Neither dependency option installs an executable automatically. For compiled
+Rust task discovery, build and distribute a project-specific binary that links
+your tasks.
+
+The `genja-cli` crate also builds a generic `genja` executable. Python-only
+projects can use that binary without a project-local Rust wrapper: install
+`genja-py` in the selected Python environment, declare modules in
+`[tool.genja.tasks]`, and run `genja task list` from the project directory.
+`genja-py` supplies the task API and discovery helper; it does not install the
+Rust executable. See [Installation](../docs/installation.md#python-task-discovery-from-the-cli).
 
 ## Discovery Sources
 
@@ -37,8 +45,18 @@ Call `TaskDescriptorSource::list_implementations()` to get descriptors with
 source-assigned Rust or Python language metadata. Rust and Python tasks may
 share an ID and version; the combined source rejects duplicates within one
 language. Language metadata stays outside the descriptor JSON. The built-in
-CLI commands and TUI still use compiled Rust discovery; their integration with
-the combined source is tracked in #155.
+CLI commands and TUI select combined discovery when the task section is present.
+Use `--pyproject PATH` and `--python PATH` to select the project file and Python
+interpreter; they default to `pyproject.toml` in the current directory and
+`python` from `PATH`.
+
+Human-readable task commands show **Language** separately from the descriptor's
+ID **Source** (`generated` or `explicit`). Use `rust:<id>@<version>` or
+`python:<id>@<version>` with `task describe` when both languages provide the
+same ID and version; an unqualified identity works when unique. Custom sources
+without language metadata display `Unknown`. CLI JSON and YAML output uses
+`{ descriptor, language }` records, with `language: null` when unknown; the
+nested descriptor retains its canonical shape.
 
 ## Terminal User Interface (TUI)
 
@@ -51,12 +69,15 @@ Projects using `genja` can enable `genja-tui`, which forwards to
 `genja-cli/tui` and also enables CLI support, exposing the same module at
 `genja::cli::tui`.
 
-`TaskBrowser` supports descriptor loading, action handling, and a task table
-with selection highlighting inside an existing Ratatui application. `run_tui(source, options)`
+`TaskBrowser` supports implementation loading, action handling, and a task table
+with selection highlighting and 🦀 Rust / 🐍 Python language labels inside an
+existing Ratatui application. `run_tui(source, options)`
 provides a full-screen runner for callers with a descriptor source. A
-project-local binary can call `genja_cli::tui::run_main()` to use compiled Rust
-tasks linked into that binary. With `tui` enabled, `genja tui` launches the
-same basic screen. Press `q` or Escape to exit.
+project-local binary can call `genja_cli::tui::run_main()` to discover compiled
+Rust tasks linked into that binary and configured Python tasks. With `tui`
+enabled, `genja tui` launches the same basic screen. Press `q` or Escape to exit.
+Discovery completes before full-screen terminal setup; failures return without
+entering raw mode.
 No separate TUI installation is required. See the
 [Terminal UI guide](../docs/tui.md) for the binary pattern and dependency setup.
 
@@ -107,9 +128,9 @@ my_project_cli task describe auto:my_project::tasks::BackupTask@0.1.0
 my_project_cli task docs > task-catalog.md
 ```
 
-For file exports, use JSON or YAML for complete serialized descriptors,
+For file exports, use JSON or YAML for complete implementation records,
 `task list --output markdown` for a compact summary, and `task docs` for a
-complete Markdown catalogue. See [Exporting Task Descriptors](../docs/cli.md#exporting-task-descriptors)
+complete Markdown catalogue. See [Exporting Task Descriptors](../docs/cli.md#exporting-task-descriptors-all-projects)
 for redirection examples and documentation-platform considerations.
 
 During development, run the same binary through Cargo:

@@ -3,17 +3,20 @@
 use clap::ValueEnum;
 use comfy_table::{Table, presets};
 use genja_core::task::{RetryConfig, TaskDescriptor, TaskExecutionMode, TaskIdSource};
+use serde::Serialize;
 use std::error::Error;
 use std::fmt;
+
+use crate::discovery::{TaskImplementation, TaskLanguage};
 
 /// Supported output formats for task discovery commands.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum OutputFormat {
     /// Render a compact human-readable table.
     Table,
-    /// Render the serialized task descriptor list as JSON.
+    /// Render implementation records as JSON in CLI task commands.
     Json,
-    /// Render the serialized task descriptor list as YAML.
+    /// Render implementation records as YAML in CLI task commands.
     Yaml,
     /// Render Markdown output.
     Markdown,
@@ -72,10 +75,10 @@ pub fn render_task_descriptor(
     format: OutputFormat,
 ) -> Result<String, OutputError> {
     match format {
-        OutputFormat::Table => render_task_descriptor_table(descriptor),
+        OutputFormat::Table => render_task_descriptor_table(descriptor, None),
         OutputFormat::Json => serde_json::to_string_pretty(descriptor).map_err(OutputError::Json),
         OutputFormat::Yaml => yaml_serde::to_string(descriptor).map_err(OutputError::Yaml),
-        OutputFormat::Markdown => render_task_descriptor_markdown(descriptor),
+        OutputFormat::Markdown => render_task_descriptor_markdown(descriptor, None),
     }
 }
 
@@ -87,6 +90,201 @@ pub fn render_task_docs(
     match format {
         TaskDocsOutputFormat::Markdown => render_task_docs_markdown(descriptors),
     }
+}
+
+/// Render discovered implementations with language metadata in every format.
+///
+/// JSON and YAML wrap each canonical descriptor alongside its language.
+pub fn render_task_implementation_list(
+    implementations: &[TaskImplementation],
+    format: OutputFormat,
+) -> Result<String, OutputError> {
+    match format {
+        OutputFormat::Table => Ok(render_implementation_table(implementations)),
+        OutputFormat::Markdown => Ok(render_implementation_markdown(implementations)),
+        OutputFormat::Json => {
+            let records = implementations
+                .iter()
+                .map(ImplementationOutput::from)
+                .collect::<Vec<_>>();
+            serde_json::to_string_pretty(&records).map_err(OutputError::Json)
+        }
+        OutputFormat::Yaml => {
+            let records = implementations
+                .iter()
+                .map(ImplementationOutput::from)
+                .collect::<Vec<_>>();
+            yaml_serde::to_string(&records).map_err(OutputError::Yaml)
+        }
+    }
+}
+
+/// Render one implementation with language metadata in every format.
+///
+/// JSON and YAML wrap the canonical descriptor alongside its language.
+pub fn render_task_implementation(
+    implementation: &TaskImplementation,
+    format: OutputFormat,
+) -> Result<String, OutputError> {
+    let descriptor = implementation.descriptor();
+    match format {
+        OutputFormat::Table => {
+            render_task_descriptor_table(descriptor, Some(implementation.language()))
+        }
+        OutputFormat::Markdown => {
+            render_task_descriptor_markdown(descriptor, Some(implementation.language()))
+        }
+        OutputFormat::Json => {
+            serde_json::to_string_pretty(&ImplementationOutput::from(implementation))
+                .map_err(OutputError::Json)
+        }
+        OutputFormat::Yaml => yaml_serde::to_string(&ImplementationOutput::from(implementation))
+            .map_err(OutputError::Yaml),
+    }
+}
+
+#[derive(Serialize)]
+struct ImplementationOutput<'a> {
+    descriptor: &'a TaskDescriptor,
+    language: Option<&'static str>,
+}
+
+impl<'a> From<&'a TaskImplementation> for ImplementationOutput<'a> {
+    fn from(implementation: &'a TaskImplementation) -> Self {
+        let language = match implementation.language() {
+            Some(TaskLanguage::Rust) => Some("rust"),
+            Some(TaskLanguage::Python) => Some("python"),
+            None => None,
+        };
+        Self {
+            descriptor: implementation.descriptor(),
+            language,
+        }
+    }
+}
+
+/// Render a Markdown catalogue of implementations with distinct language links.
+pub fn render_task_implementation_docs(
+    implementations: &[TaskImplementation],
+    format: TaskDocsOutputFormat,
+) -> Result<String, OutputError> {
+    match format {
+        TaskDocsOutputFormat::Markdown => render_implementation_docs_markdown(implementations),
+    }
+}
+
+fn render_implementation_table(implementations: &[TaskImplementation]) -> String {
+    if implementations.is_empty() {
+        return "No registered tasks found.".to_string();
+    }
+
+    let mut table = Table::new();
+    table.load_preset(presets::ASCII_NO_BORDERS).set_header([
+        "ID",
+        "VERSION",
+        "NAME",
+        "SOURCE",
+        "LANGUAGE",
+        "MODE",
+        "CONSTRUCTIBLE",
+    ]);
+    for implementation in implementations {
+        let descriptor = implementation.descriptor();
+        table.add_row([
+            descriptor.id.as_str(),
+            descriptor.version.as_str(),
+            descriptor.name.as_str(),
+            id_source_label(descriptor.id_source),
+            language_label(implementation.language()),
+            execution_mode_label(descriptor.execution_mode),
+            constructible_label(descriptor.constructible),
+        ]);
+    }
+    table.trim_fmt()
+}
+
+fn render_implementation_markdown(implementations: &[TaskImplementation]) -> String {
+    let mut table = Table::new();
+    table.load_preset(presets::ASCII_MARKDOWN).set_header([
+        "ID",
+        "Version",
+        "Name",
+        "Source",
+        "Language",
+        "Mode",
+        "Constructible",
+    ]);
+    for implementation in implementations {
+        let descriptor = implementation.descriptor();
+        table.add_row([
+            markdown_code(&descriptor.id),
+            markdown_code(&descriptor.version),
+            markdown_code(&descriptor.name),
+            markdown_code(id_source_label(descriptor.id_source)),
+            markdown_code(language_label(implementation.language())),
+            markdown_code(execution_mode_label(descriptor.execution_mode)),
+            constructible_label(descriptor.constructible).to_string(),
+        ]);
+    }
+    table.trim_fmt()
+}
+
+fn render_implementation_docs_markdown(
+    implementations: &[TaskImplementation],
+) -> Result<String, OutputError> {
+    if implementations.is_empty() {
+        return Ok("# Task Catalogue\n\nNo registered tasks found.".to_string());
+    }
+
+    let mut summary = Table::new();
+    summary.load_preset(presets::ASCII_MARKDOWN).set_header([
+        "ID",
+        "Version",
+        "Name",
+        "Source",
+        "Language",
+        "Mode",
+        "Constructible",
+        "Description",
+    ]);
+    let mut links = Vec::with_capacity(implementations.len());
+    let mut sections = Vec::with_capacity(implementations.len());
+
+    for (index, implementation) in implementations.iter().enumerate() {
+        let descriptor = implementation.descriptor();
+        let identity = implementation_identity(descriptor, implementation.language());
+        let anchor = format!(
+            "{}-{}-{}",
+            task_docs_anchor_id(descriptor),
+            language_label(implementation.language()).to_ascii_lowercase(),
+            index + 1
+        );
+        links.push(format!("  - [{}](#{anchor})", markdown_code(&identity)));
+        summary.add_row([
+            markdown_code(&descriptor.id),
+            markdown_code(&descriptor.version),
+            markdown_code(&descriptor.name),
+            markdown_code(id_source_label(descriptor.id_source)),
+            markdown_code(language_label(implementation.language())),
+            markdown_code(execution_mode_label(descriptor.execution_mode)),
+            constructible_label(descriptor.constructible).to_string(),
+            markdown_text(optional_label(descriptor.description.as_deref())),
+        ]);
+        let section = render_task_descriptor_markdown_section(
+            descriptor,
+            Some(implementation.language()),
+            "###",
+            "####",
+        )?;
+        sections.push(format!("<a id=\"{anchor}\"></a>\n\n{section}"));
+    }
+
+    Ok(format!(
+        "# Task Catalogue\n\n## Index\n\n- [Summary](#summary)\n- [Tasks](#tasks)\n{}\n\n## Summary\n\n{}\n\n## Tasks\n\n{}",
+        links.join("\n"),
+        summary.trim_fmt(),
+        sections.join("\n\n")
+    ))
 }
 
 fn render_task_docs_markdown(descriptors: &[TaskDescriptor]) -> Result<String, OutputError> {
@@ -109,7 +307,7 @@ fn render_task_docs_markdown(descriptors: &[TaskDescriptor]) -> Result<String, O
             task_docs_anchor_id(descriptor)
         ));
         output.push_str(&render_task_descriptor_markdown_section(
-            descriptor, "###", "####",
+            descriptor, None, "###", "####",
         )?);
     }
 
@@ -228,7 +426,10 @@ fn render_task_markdown(descriptors: &[TaskDescriptor]) -> String {
     table.trim_fmt()
 }
 
-fn render_task_descriptor_table(descriptor: &TaskDescriptor) -> Result<String, OutputError> {
+fn render_task_descriptor_table(
+    descriptor: &TaskDescriptor,
+    language: Option<Option<TaskLanguage>>,
+) -> Result<String, OutputError> {
     let mut table = Table::new();
     table
         .load_preset(presets::ASCII_NO_BORDERS)
@@ -245,6 +446,9 @@ fn render_task_descriptor_table(descriptor: &TaskDescriptor) -> Result<String, O
         "ID source".to_string(),
         id_source_label(descriptor.id_source).to_string(),
     ]);
+    if let Some(language) = language {
+        table.add_row(["Language".to_string(), language_label(language).to_string()]);
+    }
     table.add_row([
         "Execution mode".to_string(),
         execution_mode_label(descriptor.execution_mode).to_string(),
@@ -269,7 +473,10 @@ fn render_task_descriptor_table(descriptor: &TaskDescriptor) -> Result<String, O
 
     let mut output = format!(
         "Task: {}\n\n{}",
-        descriptor_identity(descriptor),
+        language.map_or_else(
+            || descriptor_identity(descriptor),
+            |language| implementation_identity(descriptor, language)
+        ),
         table.trim_fmt()
     );
 
@@ -281,12 +488,16 @@ fn render_task_descriptor_table(descriptor: &TaskDescriptor) -> Result<String, O
     Ok(output)
 }
 
-fn render_task_descriptor_markdown(descriptor: &TaskDescriptor) -> Result<String, OutputError> {
-    render_task_descriptor_markdown_section(descriptor, "#", "##")
+fn render_task_descriptor_markdown(
+    descriptor: &TaskDescriptor,
+    language: Option<Option<TaskLanguage>>,
+) -> Result<String, OutputError> {
+    render_task_descriptor_markdown_section(descriptor, language, "#", "##")
 }
 
 fn render_task_descriptor_markdown_section(
     descriptor: &TaskDescriptor,
+    language: Option<Option<TaskLanguage>>,
     descriptor_heading: &str,
     input_schema_heading: &str,
 ) -> Result<String, OutputError> {
@@ -306,6 +517,12 @@ fn render_task_descriptor_markdown_section(
         "ID source".to_string(),
         markdown_code(id_source_label(descriptor.id_source)),
     ]);
+    if let Some(language) = language {
+        table.add_row([
+            "Language".to_string(),
+            markdown_code(language_label(language)),
+        ]);
+    }
     table.add_row([
         "Execution mode".to_string(),
         markdown_code(execution_mode_label(descriptor.execution_mode)),
@@ -334,7 +551,10 @@ fn render_task_descriptor_markdown_section(
     let mut output = format!(
         "{} {}\n\n{}",
         descriptor_heading,
-        descriptor_identity(descriptor),
+        language.map_or_else(
+            || descriptor_identity(descriptor),
+            |language| implementation_identity(descriptor, language)
+        ),
         table.trim_fmt()
     );
 
@@ -351,6 +571,22 @@ fn render_task_descriptor_markdown_section(
 
 fn descriptor_identity(descriptor: &TaskDescriptor) -> String {
     format!("{}@{}", descriptor.id, descriptor.version)
+}
+
+fn implementation_identity(descriptor: &TaskDescriptor, language: Option<TaskLanguage>) -> String {
+    match language {
+        Some(TaskLanguage::Rust) => format!("rust:{}", descriptor_identity(descriptor)),
+        Some(TaskLanguage::Python) => format!("python:{}", descriptor_identity(descriptor)),
+        None => descriptor_identity(descriptor),
+    }
+}
+
+fn language_label(language: Option<TaskLanguage>) -> &'static str {
+    match language {
+        Some(TaskLanguage::Rust) => "Rust",
+        Some(TaskLanguage::Python) => "Python",
+        None => "Unknown",
+    }
 }
 
 fn id_source_label(source: TaskIdSource) -> &'static str {
@@ -876,5 +1112,67 @@ mod tests {
         assert!(output.contains("## Input Schema"));
         assert!(output.contains("```json"));
         assert!(output.contains("\"backup_path\""));
+    }
+
+    #[test]
+    fn implementation_views_show_language_beside_id_source() {
+        let rust = TaskImplementation::new(schema_descriptor(), Some(TaskLanguage::Rust));
+        let unknown = TaskImplementation::new(schema_descriptor(), None);
+
+        let list =
+            render_task_implementation_list(&[rust.clone(), unknown.clone()], OutputFormat::Table)
+                .expect("table should render");
+        assert!(list.contains("SOURCE"));
+        assert!(list.contains("LANGUAGE"));
+        assert!(list.contains("Rust"));
+        assert!(list.contains("Unknown"));
+
+        let detail = render_task_implementation(&rust, OutputFormat::Markdown)
+            .expect("Markdown should render");
+        assert!(detail.starts_with("# rust:acme.examples.backup_config@1.0.0"));
+        assert!(detail.contains("| Language"));
+        assert!(detail.contains("| `Rust`"));
+        assert!(detail.contains("| ID source"));
+    }
+
+    #[test]
+    fn implementation_json_and_yaml_include_origin_outside_descriptor() {
+        let implementation =
+            TaskImplementation::new(schema_descriptor(), Some(TaskLanguage::Python));
+
+        let json = render_task_implementation_list(&[implementation.clone()], OutputFormat::Json)
+            .expect("JSON should render");
+        let value: Value = serde_json::from_str(&json).expect("JSON should parse");
+        assert_eq!(value[0]["descriptor"]["id"], "acme.examples.backup_config");
+        assert_eq!(value[0]["language"], "python");
+        assert!(value[0]["descriptor"].get("language").is_none());
+        let nested: TaskDescriptor = serde_json::from_value(value[0]["descriptor"].clone())
+            .expect("nested descriptor should use the canonical shape");
+        assert_eq!(nested, *implementation.descriptor());
+
+        let yaml = render_task_implementation(&implementation, OutputFormat::Yaml)
+            .expect("YAML should render");
+        let value: yaml_serde::Value = yaml_serde::from_str(&yaml).expect("YAML should parse");
+        assert_eq!(value["descriptor"]["id"], "acme.examples.backup_config");
+        assert_eq!(value["language"], "python");
+        assert!(value["descriptor"].get("language").is_none());
+    }
+
+    #[test]
+    fn implementation_docs_link_shared_identities_to_distinct_sections() {
+        let descriptor = schema_descriptor();
+        let implementations = [
+            TaskImplementation::new(descriptor.clone(), Some(TaskLanguage::Rust)),
+            TaskImplementation::new(descriptor, Some(TaskLanguage::Python)),
+        ];
+        let docs =
+            render_task_implementation_docs(&implementations, TaskDocsOutputFormat::Markdown)
+                .expect("catalogue should render");
+
+        assert!(docs.contains("`rust:acme.examples.backup_config@1.0.0`"));
+        assert!(docs.contains("`python:acme.examples.backup_config@1.0.0`"));
+        assert!(docs.contains("task-acme-examples-backup-config-1-0-0-rust-1"));
+        assert!(docs.contains("task-acme-examples-backup-config-1-0-0-python-2"));
+        assert_eq!(docs.matches("<a id=").count(), 2);
     }
 }

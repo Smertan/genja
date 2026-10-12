@@ -1,11 +1,11 @@
 //! Terminal-independent browser state and selection invariants.
 //!
-//! Descriptor snapshots are replaced only by loading. Callers can update
+//! Implementation snapshots are replaced only by loading. Callers can update
 //! selection, live filter text, panel focus, and inspection scroll positions
 //! without terminal access. Inspection reads the selected snapshot descriptor.
 //! Quit state belongs to the host app rather than the embedded browser.
 
-use crate::discovery::{DiscoveryError, TaskDescriptor};
+use crate::discovery::{DiscoveryError, TaskDescriptor, TaskImplementation, TaskLanguage};
 use genja_core::task::TaskExecutionMode;
 
 /// Browser view selection, independent of terminal ownership.
@@ -23,15 +23,17 @@ pub enum BrowserPanel {
     Schema,
 }
 
-/// Owned task snapshot and terminal-independent browser presentation state.
+/// Owned task and language snapshot with terminal-independent presentation state.
 ///
-/// Private fields ensure selection is absent or points to a matching descriptor
-/// in the full snapshot. Filtering preserves discovery order and never reloads
-/// descriptors. Inspection requires a selected task; full-screen quit belongs
+/// Private fields keep descriptors and source-assigned languages aligned and
+/// ensure selection is absent or points to a matching implementation.
+/// Filtering preserves discovery order and never reloads descriptors.
+/// Inspection requires a selected task; full-screen quit belongs
 /// to the host. Detail and schema scroll positions belong to that selection.
 #[derive(Debug, Default)]
 pub struct TaskBrowserState {
     descriptors: Vec<TaskDescriptor>,
+    languages: Vec<Option<TaskLanguage>>,
     matching_indices: Vec<usize>,
     selected_index: Option<usize>,
     filter_text: String,
@@ -46,6 +48,12 @@ impl TaskBrowserState {
     /// Return the loaded snapshot in the order supplied by discovery.
     pub fn descriptors(&self) -> &[TaskDescriptor] {
         &self.descriptors
+    }
+
+    /// Return source-assigned languages in the same order as [`Self::descriptors`].
+    /// `None` means the source did not identify the implementation language.
+    pub fn languages(&self) -> &[Option<TaskLanguage>] {
+        &self.languages
     }
 
     /// Return the selected full-snapshot index, not its filtered position.
@@ -65,6 +73,15 @@ impl TaskBrowserState {
             .map(|&index| &self.descriptors[index])
     }
 
+    /// Iterate over matching descriptors and their languages in discovery order.
+    pub fn filtered_implementations(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&TaskDescriptor, Option<TaskLanguage>)> {
+        self.matching_indices
+            .iter()
+            .map(|&index| (&self.descriptors[index], self.languages[index]))
+    }
+
     /// Return the selected task's position within the filtered list.
     pub fn selected_visible_index(&self) -> Option<usize> {
         self.selected_index.and_then(|selected| {
@@ -78,6 +95,11 @@ impl TaskBrowserState {
     pub fn selected_descriptor(&self) -> Option<&TaskDescriptor> {
         self.selected_index
             .and_then(|index| self.descriptors.get(index))
+    }
+
+    /// Return the selected implementation language, if known.
+    pub fn selected_language(&self) -> Option<TaskLanguage> {
+        self.selected_index.and_then(|index| self.languages[index])
     }
 
     /// Set selection, returning whether the update was accepted.
@@ -114,7 +136,7 @@ impl TaskBrowserState {
     }
 
     /// Filter immediately using a case-insensitive substring of ID, name,
-    /// version, description, or execution mode (`blocking` or `async`).
+    /// version, description, language, or execution mode (`blocking` or `async`).
     ///
     /// Surrounding whitespace is ignored; blank queries match every task.
     /// Matching uses Unicode lowercase conversion, without fuzzy matching or
@@ -189,10 +211,17 @@ impl TaskBrowserState {
 
     /// Replace the discovery snapshot, reapply the query, and select its first
     /// match. A successful load also clears any previous discovery error.
-    pub(super) fn replace_descriptors(&mut self, descriptors: Vec<TaskDescriptor>) {
+    pub(super) fn replace_implementations(&mut self, implementations: Vec<TaskImplementation>) {
         self.reset_inspection_scroll();
         self.selected_index = None;
-        self.descriptors = descriptors;
+        self.languages = implementations
+            .iter()
+            .map(TaskImplementation::language)
+            .collect();
+        self.descriptors = implementations
+            .into_iter()
+            .map(|implementation| implementation.descriptor().clone())
+            .collect();
         self.rebuild_matches(0);
         self.error = None;
     }
@@ -201,6 +230,7 @@ impl TaskBrowserState {
     /// Preserve the query, reset inspection offsets, and return to Tasks.
     pub(super) fn record_load_error(&mut self, error: DiscoveryError) {
         self.descriptors.clear();
+        self.languages.clear();
         self.matching_indices.clear();
         self.selected_index = None;
         self.reset_inspection_scroll();
@@ -221,7 +251,9 @@ impl TaskBrowserState {
             .descriptors
             .iter()
             .enumerate()
-            .filter_map(|(index, task)| matches_query(task, &query).then_some(index))
+            .filter_map(|(index, task)| {
+                matches_query(task, self.languages[index], &query).then_some(index)
+            })
             .collect();
         if !self
             .selected_index
@@ -256,9 +288,9 @@ impl TaskBrowserState {
 ///
 /// The caller supplies a trimmed, lowercased query. An empty query matches
 /// immediately. Otherwise, lowercase each field and use substring matching
-/// across ID, name, version, optional description, and execution mode.
+/// across ID, name, version, optional description, language, and execution mode.
 /// Stop at the first matching field; a missing description is an empty string.
-fn matches_query(task: &TaskDescriptor, query: &str) -> bool {
+fn matches_query(task: &TaskDescriptor, language: Option<TaskLanguage>, query: &str) -> bool {
     let mode = match task.execution_mode {
         TaskExecutionMode::Blocking => "blocking",
         TaskExecutionMode::Async => "async",
@@ -269,8 +301,36 @@ fn matches_query(task: &TaskDescriptor, query: &str) -> bool {
             task.name.as_str(),
             task.version.as_str(),
             task.description.as_deref().unwrap_or(""),
+            language_label(language),
             mode,
         ]
         .iter()
         .any(|field| field.to_lowercase().contains(query))
+}
+
+/// Human-readable label for source-assigned implementation language.
+pub(super) fn language_label(language: Option<TaskLanguage>) -> &'static str {
+    match language {
+        Some(TaskLanguage::Rust) => "Rust",
+        Some(TaskLanguage::Python) => "Python",
+        None => "Unknown",
+    }
+}
+
+/// Label with a recognizable icon for task lists and Details.
+pub(super) fn language_display(language: Option<TaskLanguage>) -> &'static str {
+    match language {
+        Some(TaskLanguage::Rust) => "🦀 Rust",
+        Some(TaskLanguage::Python) => "🐍 Python",
+        None => "? Unknown",
+    }
+}
+
+/// Compact icon for task lists with limited horizontal space.
+pub(super) fn language_icon(language: Option<TaskLanguage>) -> &'static str {
+    match language {
+        Some(TaskLanguage::Rust) => "🦀",
+        Some(TaskLanguage::Python) => "🐍",
+        None => "?",
+    }
 }

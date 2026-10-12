@@ -8,51 +8,65 @@ use ratatui::{
     widgets::{Block, Borders, Row, Table, TableState},
 };
 
-use super::TaskBrowserState;
+use super::{
+    TaskBrowserState,
+    state::{language_display, language_icon},
+};
 
 struct ColumnLayout {
     headers: &'static [&'static str],
     widths: Vec<Constraint>,
-    // Indices into the selection marker followed by the five descriptor fields.
+    // Indices into the selection marker followed by descriptor and language fields.
     fields: &'static [usize],
 }
 
 fn columns(width: u16) -> ColumnLayout {
     match width {
         100.. => ColumnLayout {
-            headers: &["", "ID", "VERSION", "NAME", "MODE", "CONSTRUCTIBLE"],
+            headers: &[
+                "",
+                "ID",
+                "VERSION",
+                "NAME",
+                "LANGUAGE",
+                "MODE",
+                "CONSTRUCTIBLE",
+            ],
             widths: vec![
                 Constraint::Length(2),
                 Constraint::Fill(3),
                 Constraint::Length(9),
                 Constraint::Fill(2),
+                Constraint::Length(10),
                 Constraint::Length(8),
                 Constraint::Length(13),
             ],
-            fields: &[0, 1, 2, 3, 4, 5],
+            fields: &[0, 1, 2, 3, 4, 5, 6],
         },
         64..100 => ColumnLayout {
-            headers: &["", "ID", "VER", "NAME", "MODE", "CONSTR."],
+            headers: &["", "ID", "VER", "NAME", "LANG", "MODE", "CONSTR."],
             widths: vec![
                 Constraint::Length(2),
                 Constraint::Fill(3),
                 Constraint::Length(7),
                 Constraint::Fill(2),
+                Constraint::Length(10),
                 Constraint::Length(8),
                 Constraint::Length(7),
             ],
-            fields: &[0, 1, 2, 3, 4, 5],
+            fields: &[0, 1, 2, 3, 4, 5, 6],
         },
         40..64 => ColumnLayout {
-            headers: &["", "ID", "VER", "MODE", "CONSTR."],
+            headers: &["", "ID", "VER", "LANG", "MODE", "CONSTR."],
             widths: vec![
                 Constraint::Length(2),
                 Constraint::Fill(1),
                 Constraint::Length(7),
+                Constraint::Length(4),
                 Constraint::Length(8),
                 Constraint::Length(7),
             ],
-            fields: &[0, 1, 2, 4, 5],
+            fields: &[0, 1, 2, 4, 5, 6],
         },
         _ => ColumnLayout {
             headers: &["", "ID"],
@@ -68,9 +82,9 @@ pub(super) fn render_tasks(state: &TaskBrowserState, frame: &mut Frame<'_>, area
     let columns = columns(area.width);
     let selected_index = state.selected_visible_index();
     let rows = state
-        .filtered_descriptors()
+        .filtered_implementations()
         .enumerate()
-        .map(|(index, task)| {
+        .map(|(index, (task, language))| {
             let selected = selected_index == Some(index);
             let mode = match task.execution_mode {
                 TaskExecutionMode::Blocking => "blocking",
@@ -81,6 +95,11 @@ pub(super) fn render_tasks(state: &TaskBrowserState, frame: &mut Frame<'_>, area
                 task.id.as_str(),
                 task.version.as_str(),
                 task.name.as_str(),
+                if area.width < 64 {
+                    language_icon(language)
+                } else {
+                    language_display(language)
+                },
                 mode,
                 if task.constructible { "yes" } else { "no" },
             ];
