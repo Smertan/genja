@@ -107,7 +107,7 @@ supports `genja tui`. A generic CLI binary is enough for Python-only projects.
 Mixed projects use a project-local binary
 that links their Rust task crate and calls `genja_cli::run_main()`; it also
 imports configured Python modules through the selected interpreter. See the
-[CLI guide](cli.md#project-local-cli-binary) and
+[CLI guide](cli.md#project-local-cli-binary-rust-and-mixed-projects) and
 [mixed discovery example](examples.md#mixed-rust-and-python-discovery).
 
 ## Verify

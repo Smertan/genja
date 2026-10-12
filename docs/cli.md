@@ -4,16 +4,28 @@ Genja provides a first-party CLI crate, `genja-cli`, for listing, describing,
 and documenting registered task descriptors. It discovers compiled Rust tasks
 and configured Python task modules from the selected project file.
 
+## Choose Your Project Setup
+
+| Project | Binary to run | Tasks discovered |
+| --- | --- | --- |
+| Python only | Installed `genja` binary | Modules declared in `[tool.genja.tasks]` |
+| Rust only | Project-local CLI binary | Rust tasks linked into that binary |
+| Mixed Rust and Python | Project-local CLI binary | Linked Rust tasks and configured Python modules |
+
+The task commands, output formats, identity rules, and errors below apply to all
+three setups. Python discovery needs `genja-py` in the selected interpreter;
+the `genja` executable comes from `genja-cli`. See
+[Installation](installation.md#python-task-discovery-from-the-cli) for setup.
+
 ## Terminal User Interface (TUI)
 
-Genja is developing an interactive task browser for the terminal. The current
-TUI feature lets Rust applications embed a basic browser screen or run it in a
-full-screen terminal session. Builds with the `tui` feature expose
-`genja tui` to open that screen. Press `q` or Escape to exit. Builds without
-the feature omit the command. See
+Genja is developing an interactive task browser for the terminal. A binary
+built with the `tui` feature can browse configured Python tasks and linked Rust
+tasks in one screen. Rust applications can also embed the browser. Press `q` or
+Escape to exit. Builds without the feature omit the command. See
 the [Terminal UI guide](tui.md) for setup, usage, and current capabilities.
 
-## Generic CLI
+## Python-Only Projects: Generic CLI
 
 The `genja-cli` package builds a binary named `genja`. A generic installed
 `genja` binary is useful for CLI behavior that does not depend on project-local
@@ -33,17 +45,23 @@ for the separate installation steps and
 for a runnable example.
 
 ```bash
-genja --help
-genja version
+genja task list
+genja task describe acme.examples.backup_config@1.0.0
+genja task docs
 ```
 
-`version` prints the Genja CLI version.
+The identity above comes from the
+[Python example](examples.md#mixed-rust-and-python-discovery); use an identity
+from your own `task list` output. `genja --help` lists commands, and
+`genja version` prints the Genja CLI version.
 
-## Command Reference
+## Command Reference (All Projects)
 
-The examples below use `my_project_cli` as an example project-specific executable
-that links your task registrations. Replace it with your own binary name. See
-[Project-Local CLI Binary](#project-local-cli-binary) for setup instructions.
+The command examples below use `my_project_cli` as a project-specific executable
+for Rust or mixed projects. In a Python-only project, use `genja` in its place.
+The commands and flags are the same. See
+[Project-Local CLI Binary](#project-local-cli-binary-rust-and-mixed-projects)
+for Rust and mixed setup instructions.
 The example task identities are illustrative; use the ID and version returned
 by your binary's `task list` command.
 
@@ -62,8 +80,9 @@ my_project_cli task docs --help
 
 ### Terminal Task Browser
 
-With the `tui` feature on `genja-cli`, or `genja-tui` on `genja`, a
-project-local CLI binary can launch the basic terminal browser:
+With the `tui` feature on `genja-cli`, or `genja-tui` on `genja`, the generic
+`genja` binary or a project-local binary can launch the terminal browser.
+This example uses a project-local binary:
 
 ```bash
 my_project_cli tui --help
@@ -76,7 +95,7 @@ Details and Tab switches to Schema inspection. Task execution is not implemented
 Builds without TUI support omit this command. See the
 [Terminal UI guide](tui.md) for setup and terminal behaviour.
 
-### Try The Sample Tasks
+### Try The Sample Tasks (Rust Checkout)
 
 **These commands require a local checkout of the Genja GitHub repository.**
 Run them from that checkout's root, where its workspace `Cargo.toml` lives.
@@ -102,7 +121,7 @@ The sample implementations do not perform backups or connect to hosts.
 Registrations belong only to the example executable. The TUI currently loads
 both descriptors and displays them in a navigable, searchable table. Press `/`
 to search and Enter to return to navigation. See the
-[TUI search walkthrough](tui.md#try-search-with-the-sample-tasks) for matching and
+[TUI search walkthrough](tui.md#try-search-rust-sample) for matching and
 clearing examples, or [CLI And TUI Task Browser](examples.md#cli-and-tui-task-browser)
 for the sample binary's CLI commands.
 
@@ -131,15 +150,14 @@ implementation. The nested descriptor contains all canonical fields. Use
 
 #### What Does Constructible Mean?
 
-`CONSTRUCTIBLE` reports whether the running binary has a registered factory
-that can create the task from JSON input. A factory turns input into a task
-instance; it does not run the task.
+`CONSTRUCTIBLE` reports whether the task registration includes a factory that
+can create the task from JSON input in its source language. A factory turns
+input into a task instance; it does not run the task.
 
 - `yes` means a construction factory is registered.
 - `no` means the task can be discovered and inspected, but has no registered
-  factory. Creation by task identity and JSON input is unavailable until a
-  factory is registered through `registration(...)`. Application code may
-  still create the task struct directly.
+  factory. Creation by task identity and JSON input is unavailable until the
+  author registers one. Application code may still create the task directly.
 
 JSON and YAML output express the same field as `descriptor.constructible: true`
 or `descriptor.constructible: false`. A `yes` value does not guarantee valid input or successful
@@ -225,7 +243,7 @@ sections when Rust and Python share an ID and version.
 Unlike the compact `task list --output markdown` table, the catalogue summary
 also includes descriptions. Use this command for complete task documentation.
 
-## Output Examples
+## Output Examples (Rust Checkout)
 
 These examples were generated from the registered task in
 `genja/examples/task_discovery_cli.rs`. It is a documentation fixture, not a
@@ -484,7 +502,7 @@ my_project_cli task docs
 ///
 
 
-## Exporting Task Descriptors
+## Exporting Task Descriptors (All Projects)
 
 Commands write results to stdout. Use your shell's `>` redirection to save them
 to a file; Genja does not provide an output-file option. These examples assume
@@ -550,10 +568,11 @@ on Linux/macOS, `.\my_project_cli.exe` in PowerShell, or `my_project_cli.exe` in
 cmd.exe. Output-file encoding is controlled by your shell; ensure UTF-8 when
 passing files between tools or platforms.
 
-Rebuild the project binary after changing Rust task registrations, then
-regenerate the files. Compiled discovery reflects tasks linked into that binary.
+For compiled Rust tasks, rebuild the project binary after changing task
+registrations, then regenerate the files. Python task modules are imported on
+each discovery command.
 
-## Discovery Scope And Architecture
+## Discovery Scope And Architecture (All Projects)
 
 The CLI reads Rust registrations linked into the running executable and Python
 registrations from modules declared in `[tool.genja.tasks]` in the selected
@@ -595,7 +614,7 @@ current directory and `python` from `PATH`. A configured Python failure fails
 the whole command without printing partial Rust results. Provider manifests
 and MCP-backed discovery are future work.
 
-## Empty Results And Errors
+## Empty Results And Errors (All Projects)
 
 ### Empty Registries
 
@@ -661,9 +680,9 @@ registration conflict. Command handlers complete discovery and rendering before
 printing results, so these discovery and serialization failures do not emit a
 partial descriptor document on stdout.
 
-## Project-Local CLI Binary
+## Project-Local CLI Binary (Rust And Mixed Projects)
 
-For Rust projects with compiled task registrations, build a project-specific
+For Rust or mixed projects with compiled task registrations, build a project-specific
 binary that links your task crate and delegates command handling to
 `genja-cli`.
 
@@ -765,13 +784,14 @@ intentionally links the crate that contains `#[genja_task]` registrations.
 If your tasks live in the binary crate, declare the task modules there. If they
 live in the same package's library target, reference that library from the binary.
 
-Both dependency options expose the same CLI library and discover only tasks
-linked into the running executable. Adding a dependency or enabling the feature
-does not create a binary entry point or install the generic `genja` command.
+Both dependency options expose the same CLI library. Rust discovery sees tasks
+linked into the running executable; configured Python modules are imported at
+runtime. Adding a dependency or enabling the feature does not create a binary
+entry point or install the generic `genja` command.
 End users receive your project-built executable; they do not need to install
 `genja-cli` separately.
 
-## Running Project-Local Discovery
+## Running Project-Local Discovery (Rust And Mixed Projects)
 
 Run task discovery commands through the project-specific binary:
 
@@ -781,11 +801,11 @@ my_project_cli task describe auto:my_project::tasks::BackupTask@0.1.0
 my_project_cli task docs > task-catalog.md
 ```
 
-Those commands inspect the task registrations linked into `my_project_cli`.
-Running the generic `genja` binary instead would inspect the registrations
-linked into that generic binary.
+Those commands inspect the Rust registrations linked into `my_project_cli` and,
+when `[tool.genja.tasks]` is configured, the declared Python modules. Running
+the generic `genja` binary instead would not see your project-linked Rust tasks.
 
-## Development Workflow
+## Development Workflow (Rust And Mixed Projects)
 
 During development, you can run the project-local binary through Cargo:
 
@@ -805,11 +825,14 @@ well:
 cargo run -p my-project-cli --bin my_project_cli -- task list
 ```
 
-## Runtime Deployment
+## Runtime Deployment (Rust And Mixed Projects)
 
 For runtime deployments, build a project-local CLI binary during release or CI,
 then deploy that executable to the target machine. The target machine does not
 need Cargo if you deploy a prebuilt binary.
+For mixed projects, also deploy the Python task modules and provide a selected
+Python environment with `genja-py` installed; the binary imports those modules
+when discovery runs.
 
 Build the binary:
 
@@ -866,7 +889,7 @@ cargo install --path . --bin my_project_cli
 This is a development or build-machine convenience. Production servers do not
 need Cargo when you deploy the compiled executable.
 
-## Lower-Level Entrypoint
+## Lower-Level Entrypoint (Rust API)
 
 `genja::cli::run_main()` (with the feature) and `genja_cli::run_main()` (with a
 direct dependency) are the same recommended helper for binary `main` functions.

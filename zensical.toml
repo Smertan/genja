@@ -13,8 +13,8 @@ nav = [
   {"Concepts" = "concepts.md"},
   {"Settings" = "settings.md"},
   {"API Surface" = "api-surface.md"},
-  {"Command Line Interface (Rust)" = "cli.md"},
-  {"Terminal UI (Rust)" = "tui.md"},
+  {"Command Line Interface" = "cli.md"},
+  {"Terminal UI" = "tui.md"},
   {"Inventory" = "inventory.md"},
   {"Tasks" = [
     "tasks.md",
