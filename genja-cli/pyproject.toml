@@ -1,0 +1,20 @@
+[build-system]
+requires = ["maturin>=1,<2"]
+build-backend = "maturin"
+
+[project]
+name = "genja-cli"
+dynamic = ["version"]
+description = "First-party command-line interface for Genja automation workflows"
+readme = "PYPI-README.md"
+license = "MPL-2.0"
+requires-python = ">=3.10"
+
+[project.urls]
+Homepage = "https://docs.genja.co.uk"
+Repository = "https://github.com/Smertan/genja"
+Issues = "https://github.com/Smertan/genja/issues"
+
+[tool.maturin]
+bindings = "bin"
+features = ["tui"]
