@@ -1,13 +1,15 @@
 # Terminal User Interface (TUI)
 
 Genja is developing a terminal user interface for browsing task descriptors.
-Today, Rust applications can embed a basic browser screen in an existing
-Ratatui application or run that screen in a full-screen terminal session.
-Run `genja tui` in a build with the `tui` feature to open the basic screen.
+It displays configured Python tasks and Rust tasks linked into the running
+binary in one list. Run a binary built with the `tui` feature to open the
+full-screen browser. Rust applications can also embed the browser in an
+existing Ratatui application.
 Press `q` outside search to quit; Escape first leaves search, returns from
 inspection, or clears a query.
-The table shows task ID, version, name, execution mode, and constructible
-status. The selected row has a `>` marker and reversed terminal colours.
+The table shows task ID, version, name, implementation language, execution
+mode, and constructible status. The selected row has a `>` marker and reversed
+terminal colours.
 The search field filters tasks as you type and shows matching and
 total task counts. Press Enter on a selected task to inspect its descriptor
 details, and Tab to switch to its input schema metadata. Both views support
@@ -19,16 +21,41 @@ Selected rows reverse those colours, while search and metadata labels use
 terminal-defined ANSI accents. It does not detect light or dark mode; the
 terminal's own palette controls how those accents appear.
 
-The **CONSTRUCTIBLE** column shows `yes` when the running binary has a registered
-factory to create that task from JSON input, and `no` when only its descriptor
-is available through discovery. It does not indicate whether the task has run
-or will succeed. The TUI does not construct or execute tasks.
+The **CONSTRUCTIBLE** column shows `yes` when the task registration includes a
+factory to create the task from JSON input in its source language, and `no`
+when only its descriptor is available through discovery. It does not indicate
+whether the task has run or will succeed. The TUI does not construct or execute
+tasks.
+
+The **LANGUAGE** column identifies the discovery source as `🦀 Rust` or
+`🐍 Python`. On narrow screens, it shows only 🦀 or 🐍. Details shows the full
+label separately from **ID source** (`generated` or `explicit`). Custom
+descriptor sources that do not supply language metadata show `? Unknown`
+(or `?` on narrow screens). Rust and Python implementations may share an ID
+and version; they appear as separate rows in the same list.
 
 The `no` value means registry-based creation by task identity and JSON input
 is unavailable until a construction factory is registered. Direct creation
-of the Rust task struct remains possible. See
+of a Rust task struct remains possible in Rust application code. See
 [Constructible Descriptor Field](task-registration.md#constructible-descriptor-field)
 for the registration rules and example structs.
+
+## Choose Your Project Setup
+
+| Project | Command | Discovery |
+| --- | --- | --- |
+| Python only | `genja tui` | Modules declared in `[tool.genja.tasks]` |
+| Rust only | `my_project_cli tui` | Rust tasks linked into the project-local binary |
+| Mixed Rust and Python | `my_project_cli tui` | Linked Rust tasks and configured Python modules |
+
+The list, search, Details, Schema, and keyboard controls below work the same
+way for every setup. A Python-only project needs the `genja` binary from
+`genja-cli` and `genja-py` in the selected interpreter. Rust and mixed projects
+need a project-local binary to discover their compiled Rust tasks. See
+[Installation](installation.md#python-task-discovery-from-the-cli) and the
+[CLI binary guide](cli.md#project-local-cli-binary-rust-and-mixed-projects).
+
+## Rust Dependency Setup
 
 The browser is an optional part of `genja-cli`, enabled with its `tui` feature.
 Projects using the main `genja` crate can enable `genja-tui`, which also enables
@@ -56,6 +83,50 @@ The TUI's `run_main()` helper is available for project-local binaries.
 
 ## Launch from the CLI
 
+=== ":fontawesome-brands-python: Python"
+
+    Declare task modules in `[tool.genja.tasks]`, install `genja-py` in the
+    Python environment containing them, and run a `genja` binary built with
+    `tui` from the project directory:
+
+    ```bash
+    genja tui
+    ```
+
+    The CLI uses `pyproject.toml` in the current directory and `python` from
+    `PATH` by default. Use `--pyproject PATH` or `--python PATH` to select
+    another project file or interpreter. See
+    [Installation](installation.md#python-task-discovery-from-the-cli) for the
+    two installation steps.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    Link your Rust task crate into a [project-local CLI binary](cli.md#project-local-cli-binary-rust-and-mixed-projects)
+    built with `tui` (or `genja-tui` through the `genja` crate), then run:
+
+    ```bash
+    my_project_cli tui
+    ```
+
+    Without `[tool.genja.tasks]`, discovery uses linked Rust tasks and does
+    not start Python.
+
+=== "Mixed Rust and Python"
+
+    Use a [project-local CLI binary](cli.md#project-local-cli-binary-rust-and-mixed-projects)
+    that links your Rust tasks and has `tui` enabled. Declare Python task
+    modules in `[tool.genja.tasks]` and install `genja-py` in the selected
+    interpreter. Then run:
+
+    ```bash
+    my_project_cli tui
+    ```
+
+    The binary combines both languages in one task list. Use `--pyproject PATH`
+    or `--python PATH` to select another project file or interpreter.
+
+### Repository Checkout Examples
+
 From a checkout, launch the screen in an interactive terminal:
 
 ```bash
@@ -80,27 +151,47 @@ cargo run -p genja-cli --features tui -- tui --help
 
 Without the `tui` feature, the command is omitted from help and rejected by
 the parser. Piped or redirected input/output is rejected before terminal setup.
-Startup and runtime errors return a failure exit code; errors are reported
-after the runner's terminal cleanup.
+Discovery errors return before terminal setup. Runtime terminal errors return
+after the runner restores terminal modes.
 
-A project-local CLI binary that calls `genja_cli::run_main()` can also expose
-this command when built with `tui`. For `genja::cli::run_main()`, enable
-`genja-tui`. Link the project task crate as described in the
-[CLI binary guide](cli.md#project-local-cli-binary), then run:
-
-```bash
-my_project_cli tui
-```
-
-Discovery sees compiled Rust tasks linked into the running binary, including
-when launched through the CLI command. It does not inspect another project's
-registrations on disk or call another CLI command.
+The standalone TUI helper uses `pyproject.toml` in the current directory and
+`python` from `PATH`; it does not parse the CLI override flags.
 
 The design separates descriptor loading through the shared
 `TaskDescriptorSource` from browser state, events, rendering, and terminal
 ownership.
 
-## Search And Navigation
+### Example Screen (Mixed Project)
+
+The [mixed discovery example](examples.md#mixed-rust-and-python-discovery)
+shows Rust and Python implementations of the same task. Searching for
+`backup_config` gives a screen like this; column widths vary with the terminal:
+
+<div class="tui-example">
+  <div class="tui-example__title">Genja tasks (4)</div>
+  <div class="tui-example__search">Search: backup_config</div>
+  <div class="tui-example__scroll">
+    <table class="tui-example__table" aria-label="Example task implementations">
+      <thead>
+        <tr><th scope="col"></th><th scope="col">ID</th><th scope="col">VER</th><th scope="col">NAME</th><th scope="col">LANG</th><th scope="col">MODE</th><th scope="col">CONSTRUCTIBLE</th></tr>
+      </thead>
+      <tbody>
+        <tr class="tui-example__selected"><td>&gt;</td><td>acme.examples.backup_config</td><td>1.0.0</td><td>backup_config</td><td>🦀 Rust</td><td>blocking</td><td>yes</td></tr>
+        <tr><td></td><td>acme.examples.backup_config</td><td>1.0.0</td><td>backup_config</td><td>🐍 Python</td><td>blocking</td><td>yes</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="tui-example__status">2 tasks shown, 4 total</div>
+</div>
+
+The preview uses illustrative colours and row lines. The real TUI uses your
+terminal's palette and adapts column widths to the available space.
+
+Select the Python row and press Enter to see Details with `Language: 🐍 Python`
+alongside `ID source: explicit`. Press Tab to inspect that implementation's
+input schema, or Escape to return to the shared task list.
+
+## Search And Navigation (All Projects)
 
 Press `/` to focus the search field. Type text to filter immediately; Enter
 returns to task navigation while keeping the query. The search field shows
@@ -155,27 +246,82 @@ Shift is supported for printable input. Key releases, repeats, and paste events
 are not handled. The input edits at the end of the query; it has no movable
 text cursor.
 
-### Try Descriptor Inspection With The Sample Tasks
+### Try Descriptor Inspection
 
-From a local checkout, launch the example in an interactive terminal:
+Select the language of the sample you want to inspect.
 
-```bash
-cargo run -p genja --features genja-tui --example task_browser -- tui
-```
+=== ":fontawesome-brands-python: Python"
 
-1. Select `backup_config` and press Enter. Details shows its identity, version,
-   description, blocking execution mode, and registered JSON factory status.
-2. Press Tab to inspect its input schema, including the `backup_path` field.
-   Use Down/Up, PageDown/PageUp, or Home/End to scroll as needed.
-3. Press Escape to return to the list, select `collect_facts`, and press Enter.
-   It has a generated ID, async execution mode, and no registered JSON factory.
-4. Press Tab. This task has no input schema metadata, so the view explains that
-   no schema is available. Press Escape to return or `q` to quit.
+    With `genja-py` installed in the selected Python environment and a `genja`
+    binary built with `tui`, run this from the repository root. The sample module
+    and `pyproject.toml` are in the Genja source checkout; they are not installed
+    with `genja-py` from PyPI:
 
-To try inspection after filtering, press `/`, type `backup`, then Enter to leave
-search and Enter again to open Details. Escape returns to the filtered list
-without clearing the query. The sample tasks are linked into this example
-binary; a generic CLI binary may have no tasks to inspect.
+    ```bash
+    genja --pyproject genja/examples/python/pyproject.toml tui
+    ```
+
+    This uses the [configured Python task module](examples.md#mixed-rust-and-python-discovery)
+    without linking Rust tasks into the binary. In your own Python project, declare
+    your task modules in its `pyproject.toml` and run `genja tui` from that project
+    directory instead.
+
+    To fetch the example directory without checking out the full repository, use a
+    sparse partial clone:
+
+    ```bash
+    git clone --depth 1 --filter=blob:none --sparse https://github.com/Smertan/genja.git genja-python-example
+    git -C genja-python-example sparse-checkout set genja/examples/python
+    cd genja-python-example/genja/examples/python
+    genja tui
+    ```
+
+    The final clone argument creates `genja-python-example` in your current
+    directory. Sparse checkout then places the example files under
+    `genja-python-example/genja/examples/python`; the `cd` command enters that
+    directory before launching the TUI.
+
+    The clone command checks out `main`, this repository's default branch. If the
+    example has not yet been merged into `main`, add `--branch` followed by the
+    branch name to `git clone` so Git fetches the branch containing these files.
+
+    If you do not want a Git checkout, open the
+    [Genja repository](https://github.com/Smertan/genja) on GitHub and select a
+    branch containing this example. Navigate to `genja/examples/python` and use
+    **Raw → Download raw file** for `pyproject.toml` and
+    `task_registration_tasks.py`. Save both in the same new directory with their
+    original filenames, then run `genja tui` there. Only those two files are needed
+    for this TUI sample.
+
+    1. Select `backup_config` and press Enter. Details shows `Language: 🐍 Python`,
+       its explicit ID, and its constructible status.
+    2. Press Tab to see its input schema, including `backup_path` and `compress`.
+    3. Press Escape, select `collect_facts`, and press Enter. Its Details view also
+       shows Python as the language. Press Tab to see the missing-schema message,
+       then `q` to quit.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    This walkthrough uses the Rust-only `task_browser` example. From a local
+    checkout, launch it in an interactive terminal:
+
+    ```bash
+    cargo run -p genja --features genja-tui --example task_browser -- tui
+    ```
+
+    1. Select `backup_config` and press Enter. Details shows its identity, version,
+       description, blocking execution mode, and registered JSON factory status.
+    2. Press Tab to inspect its input schema, including the `backup_path` field.
+       Use Down/Up, PageDown/PageUp, or Home/End to scroll as needed.
+    3. Press Escape to return to the list, select `collect_facts`, and press Enter.
+       It has a generated ID, async execution mode, and no registered JSON factory.
+    4. Press Tab. This task has no input schema metadata, so the view explains that
+       no schema is available. Press Escape to return or `q` to quit.
+
+    To try inspection after filtering, press `/`, type `backup`, then Enter to leave
+    search and Enter again to open Details. Escape returns to the filtered list
+    without clearing the query. The sample tasks are linked into this example
+    binary; a generic CLI binary may have no tasks to inspect.
 
 ### Matching And Selection
 
@@ -198,34 +344,51 @@ selection; when matches return without a selected task, the first is selected.
 Clearing a query restores all tasks and retains the currently selected task
 where possible. Navigation stops at either end without wrapping.
 
-### Try Search With The Sample Tasks
+### Try Search
 
-**Use a local checkout of the Genja GitHub repository and run from its root.**
-Adding Genja as a dependency with `cargo add` does not make this example runnable
-from your own project. Launch the example in an interactive terminal:
+Select the language of the sample you want to search.
 
-```bash
-cargo run -p genja --features genja-tui --example task_browser -- tui
-```
+=== ":fontawesome-brands-python: Python"
 
-1. Press `/` and type `backup`. Only `backup_config` remains, with
-   `1 task shown, 2 total` on terminals tall enough to show the count.
-2. Press Enter. The query stays active, and navigation operates on the matching
-   task. Press Escape to clear it and restore both tasks.
-3. Press `/` and type `ASYNC`. The case-insensitive execution-mode match shows
-   only `collect_facts`.
-4. While still editing, press Ctrl+u and type `JSON input schema`. Only
-   `backup_config` matches, through its description.
-5. Press Ctrl+u and type `missing`. The browser shows
-   **No tasks match the current search**. Press Ctrl+u to restore both tasks.
-6. Press Enter, then `q`, to quit and return to your shell.
+    Launch the Python sample with the command in
+    [the Python tab of the inspection walkthrough](#try-descriptor-inspection):
 
-To try ID and version matching, search for `acme.examples.backup_config` or a
-version displayed in the table. Generated task versions follow the example
-crate's version, so a version query can match one or both tasks. Search only
-narrows descriptors; it does not construct or execute tasks.
+    1. Press `/` and type `backup`. The list shows only `backup_config` and reports
+       `1 task shown, 2 total` when the terminal has room for the count.
+    2. Press Ctrl+u and type `host facts`. The description match shows only
+       `collect_facts`, even though the table does not display descriptions.
+    3. Press Ctrl+u and type `missing` to see **No tasks match the current search**.
+       Press Ctrl+u to restore both Python tasks, then Enter and `q` to quit.
 
-## Project-local TUI binary
+=== ":fontawesome-brands-rust: Rust"
+
+    This walkthrough uses the Rust-only `task_browser` example. **Use a local
+    checkout of the Genja GitHub repository and run from its root.**
+    Adding Genja as a dependency with `cargo add` does not make this example runnable
+    from your own project. Launch the example in an interactive terminal:
+
+    ```bash
+    cargo run -p genja --features genja-tui --example task_browser -- tui
+    ```
+
+    1. Press `/` and type `backup`. Only `backup_config` remains, with
+       `1 task shown, 2 total` on terminals tall enough to show the count.
+    2. Press Enter. The query stays active, and navigation operates on the matching
+       task. Press Escape to clear it and restore both tasks.
+    3. Press `/` and type `ASYNC`. The case-insensitive execution-mode match shows
+       only `collect_facts`.
+    4. While still editing, press Ctrl+u and type `JSON input schema`. Only
+       `backup_config` matches, through its description.
+    5. Press Ctrl+u and type `missing`. The browser shows
+       **No tasks match the current search**. Press Ctrl+u to restore both tasks.
+    6. Press Enter, then `q`, to quit and return to your shell.
+
+    To try ID and version matching, search for `acme.examples.backup_config` or a
+    version displayed in the table. Generated task versions follow the example
+    crate's version, so a version query can match one or both tasks. Search only
+    narrows descriptors; it does not construct or execute tasks.
+
+## Project-Local TUI Binary (Rust And Mixed Projects)
 
 Compiled Rust task discovery is process-local. A generic installed binary only
 sees tasks linked into that binary. Link your task crate in a project-specific
@@ -253,11 +416,11 @@ fn main() -> std::process::ExitCode {
 
 Name the binary for your project, such as `my_project_tui`. Enabling the feature
 provides library code; it does not install a TUI executable automatically.
-`run_main()` chooses the compiled Rust descriptor source and returns an exit
-code. It does not parse CLI arguments. See the [CLI binary guide](cli.md#project-local-cli-binary)
+`run_main()` selects compiled or combined discovery and returns an exit code.
+It does not parse CLI arguments. See the [CLI binary guide](cli.md#project-local-cli-binary-rust-and-mixed-projects)
 for Cargo package and binary naming examples.
 
-## Runner for a selected descriptor source
+## Runner For A Selected Descriptor Source (Rust API)
 
 To run the basic screen in a terminal, pass any `TaskDescriptorSource` to
 `run_tui`. For compiled Rust tasks, the binary must link its task crate:
@@ -274,8 +437,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-This form lets callers choose a source instead of using the compiled Rust
-source selected by `run_main()`.
+This form lets callers choose a source instead of using the project source
+selected by `run_main()`.
 
 The runner loads descriptors before entering raw mode, then draws on startup,
 selection or search-state changes, and terminal resize. Press `q` in task mode
@@ -303,26 +466,26 @@ Columns adapt to the browser area's width:
 
 | Width in terminal cells | Visible columns |
 | --- | --- |
-| 100 or more | ID, version, name, mode, constructible |
-| 64–99 | All five fields, with shorter headers |
-| 40–63 | ID, version, mode, constructible |
+| 100 or more | ID, version, name, language, mode, constructible |
+| 64–99 | All six fields, with shorter headers |
+| 40–63 | ID, version, language icon, mode, constructible |
 | Under 40 | ID only |
 
 Long cell values are clipped to fit. Widen the terminal to reveal more text and
 columns. The `CONSTR.` header means constructible. Quit guidance is shortened
 on narrow screens, and rendering safely handles areas too small for task rows.
 
-### Empty Results And Loading Errors
+### Empty Results And Loading Errors (All Projects)
 
 When descriptors are loaded but none match the query, the browser shows
 **No tasks match the current search**, with guidance to clear or edit the query.
 In search mode, Ctrl+u clears it; in task mode, Escape clears it. Clearing restores
 the full list. This is distinct from an empty discovery snapshot or loading error.
 
-An empty result shows **No registered tasks available**, with a reminder that
-compiled Rust tasks must be linked into a project-local CLI/TUI binary. This
-is a successful discovery result; quitting returns a success exit code. The
-screen shows the minimum annotation for discovering an existing task
+An empty result shows **No registered tasks available**, with Python module
+configuration and Rust task linking guidance. This is a successful discovery
+result; quitting returns a success exit code. For Rust tasks, the screen shows
+the minimum annotation for discovering an existing task
 implementation and the line that links its crate into your CLI/TUI binary:
 
 ```rust
@@ -342,23 +505,16 @@ registration guidance, or run the
 [task browser example](examples.md#cli-and-tui-task-browser) from a repository
 checkout to inspect working sample tasks.
 
-A discovery failure shows a **Discovery error** screen with the source's error
-message. The screen suggests checking compiled Rust discovery with
-`my_project_cli task list`; replace `my_project_cli` with your project-local CLI
-binary's name. Press `q` in task mode to close the screen. The runner restores the
-terminal, then returns `TuiError::Discovery`; the CLI reports the error on stderr
-and exits with failure. A terminal startup, rendering, or cleanup failure takes
-precedence over the discovery error.
-
-Discovery still finishes before terminal setup, but a discovery failure no
-longer returns immediately from `run_tui`. Embedded callers retain the existing
-`TaskBrowser::load_from()` behaviour: it returns the error immediately and stores
-it in browser state so the host can choose whether to render it. A later
-successful load clears that error and shows the loaded tasks or empty state.
+The full-screen runner returns `TuiError::Discovery` before terminal setup when
+discovery fails. The CLI reports the error on stderr and exits unsuccessfully.
+Embedded callers can still render a **Discovery error** screen:
+`TaskBrowser::load_from()` returns the error and stores it in browser state so
+the host can choose whether to display it. A later successful load clears the
+error and shows the loaded tasks or empty state.
 
 `TaskBrowser::new()` creates an empty browser. Call `load_from(&source)` with
 any `TaskDescriptorSource`, including a trait object, to synchronously load an
-owned snapshot. Loading calls `list_tasks()` once, preserves source ordering,
+owned snapshot. Loading calls `list_implementations()` once, preserves source ordering,
 and retains no source reference. Success reapplies the query and selects the
 first matching descriptor, or none when there are no matches. Failure clears
 descriptors and selection, stores the
@@ -371,9 +527,11 @@ presentation-state updates. `select(None)` clears selection;
 filtered-out indices without changing selection. `descriptors()` always returns
 the full snapshot; `matching_indices()` and `filtered_descriptors()` expose matches.
 `selected_visible_index()` gives the selected task's filtered position.
+`languages()` and `selected_language()` expose source-assigned language metadata;
+`filtered_implementations()` pairs matching descriptors with their languages.
 
 `set_filter_text()` filters immediately using a case-insensitive substring of
-ID, name, version, description, or execution mode (`blocking` or `async`).
+ID, name, version, description, language, or execution mode (`blocking` or `async`).
 Surrounding whitespace is ignored; blank queries show all tasks. Matching uses
 Unicode lowercase conversion without fuzzy matching or accent normalization.
 Selection stays on the same task when it matches; otherwise the previous visible
@@ -420,7 +578,7 @@ terminal.draw(|frame| browser.render(frame, browser_area))?;
 browser.handle_action(BrowserAction::ReturnToTasks);
 ```
 
-Details displays identity (`ID@version`), ID source, version, name, description,
+Details displays identity (`ID@version`), ID source, language, version, name, description,
 execution mode, constructible status, and whether input schema metadata is
 available. It also shows recorded connection plugin, processors, and retry
 overrides. Missing descriptions and optional metadata have explicit labels.

@@ -773,6 +773,7 @@ dependencies = [
  "crossterm",
  "genja-core",
  "ratatui",
+ "serde",
  "serde_json",
  "syntect",
  "tempfile",

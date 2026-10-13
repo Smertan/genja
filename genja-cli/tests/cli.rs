@@ -1,7 +1,78 @@
-use std::process::Command;
+use std::{fs, process::Command};
 
 fn genja_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_genja"))
+}
+
+#[test]
+fn rust_only_project_accepts_overrides_without_starting_python() {
+    let directory = tempfile::tempdir().expect("temporary directory should exist");
+    let pyproject = directory.path().join("pyproject.toml");
+    fs::write(&pyproject, "[project]\nname = 'rust-only'\n")
+        .expect("project file should be written");
+
+    let output = genja_command()
+        .args(["task", "list", "--output", "json", "--pyproject"])
+        .arg(&pyproject)
+        .arg("--python")
+        .arg(directory.path().join("missing-python"))
+        .output()
+        .expect("CLI should run");
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"[]\n");
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[test]
+fn configured_python_failure_has_no_partial_cli_output() {
+    let directory = tempfile::tempdir().expect("temporary directory should exist");
+    let pyproject = directory.path().join("pyproject.toml");
+    fs::write(&pyproject, "[tool.genja.tasks]\nmodules = []\n")
+        .expect("project file should be written");
+
+    for args in [
+        &["task", "list", "--output", "json"][..],
+        &["task", "docs"][..],
+        &["task", "describe", "acme.missing@1.0.0"][..],
+    ] {
+        let output = genja_command()
+            .arg("--pyproject")
+            .arg(&pyproject)
+            .arg("--python")
+            .arg(directory.path().join("missing-python"))
+            .args(args)
+            .output()
+            .expect("CLI should run");
+
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 error");
+        assert!(stderr.contains("missing-python"), "{args:?}: {stderr}");
+    }
+}
+
+#[test]
+fn default_pyproject_is_read_from_the_current_directory() {
+    let directory = tempfile::tempdir().expect("temporary directory should exist");
+    fs::write(
+        directory.path().join("pyproject.toml"),
+        "[tool.genja.tasks]\nmodules = []\n",
+    )
+    .expect("project file should be written");
+
+    let output = genja_command()
+        .current_dir(directory.path())
+        .arg("task")
+        .arg("list")
+        .arg("--python")
+        .arg(directory.path().join("missing-python"))
+        .output()
+        .expect("CLI should run");
+
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing-python"));
 }
 
 #[test]
@@ -386,7 +457,7 @@ fn task_list_help_prints_output_formats() {
     assert!(stdout.contains("compact summary views"));
     assert!(stdout.contains("genja task describe <identity>"));
     assert!(stdout.contains("JSON and YAML output"));
-    assert!(stdout.contains("full descriptor items"));
+    assert!(stdout.contains("wrap each descriptor with its implementation language"));
     assert!(stdout.contains("--output"));
     assert!(stdout.contains("table"));
     assert!(stdout.contains("json"));
@@ -496,7 +567,7 @@ fn task_list_outputs_empty_markdown_table() {
 
     let stdout = String::from_utf8(output.stdout).expect("Markdown output should be UTF-8");
 
-    assert!(stdout.contains("| ID | Version | Name | Source | Mode | Constructible |"));
+    assert!(stdout.contains("| ID | Version | Name | Source | Language | Mode | Constructible |"));
     assert!(stdout.contains("|----|"));
 }
 

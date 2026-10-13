@@ -44,7 +44,10 @@ fn cli_reexport_lists_the_project_registered_task() {
     let descriptor =
         get_compiled_task_descriptor_by_identity(IDENTITY).expect("task should be registered");
 
-    assert_eq!(actual, serde_json::json!([descriptor]));
+    assert_eq!(
+        actual,
+        serde_json::json!([{"descriptor": descriptor, "language": "rust"}])
+    );
 }
 
 #[test]
@@ -52,16 +55,20 @@ fn cli_reexport_describes_the_same_task_as_core() {
     let source = CompiledTaskDescriptorSource::new();
     let output =
         describe_task(&source, IDENTITY, OutputFormat::Json).expect("description should succeed");
-    let actual: serde_json::Value = serde_json::from_str(&output).expect("valid JSON descriptor");
+    let actual: serde_json::Value =
+        serde_json::from_str(&output).expect("valid JSON implementation");
     let descriptor =
         get_compiled_task_descriptor_by_identity(IDENTITY).expect("task should be registered");
 
-    assert_eq!(actual, serde_json::json!(descriptor));
-    assert_eq!(actual["id"], "acme.tests.feature.local_task");
-    assert_eq!(actual["version"], "1.0.0");
     assert_eq!(
-        actual["description"],
+        actual,
+        serde_json::json!({"descriptor": descriptor, "language": "rust"})
+    );
+    assert_eq!(actual["descriptor"]["id"], "acme.tests.feature.local_task");
+    assert_eq!(actual["descriptor"]["version"], "1.0.0");
+    assert_eq!(
+        actual["descriptor"]["description"],
         "Task linked by the consuming project"
     );
-    assert_eq!(actual["constructible"], true);
+    assert_eq!(actual["descriptor"]["constructible"], true);
 }

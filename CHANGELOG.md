@@ -12,6 +12,10 @@ Changed packages:
 ### Added
 
 - Added Python wheel packaging for the existing `genja` CLI binary with TUI support, installing the command into the Python environment's scripts directory. Refs: #156
+- Added a Python-only and mixed Rust/Python CLI example using one `pyproject.toml`, with installation guidance for the separate `genja-cli` executable and `genja-py` package. Refs: #155
+- Added 🦀 Rust and 🐍 Python labels to the TUI task list and Details view, preserving separate implementations with the same ID and version in one searchable browser. Refs: #155
+- Added language labels to CLI task lists, descriptions, and catalogues, plus optional `rust:` and `python:` qualifiers for tasks sharing an ID and version. Refs: #155
+- Added automatic Python/Rust discovery source selection to `genja-cli` task commands and TUI entrypoints, with `--pyproject` and `--python` overrides for the project file and interpreter. Refs: #155
 - Added combined Rust/Python task discovery that skips Python without task configuration, preserves matching IDs and versions across languages, and rejects duplicate identities within a language. Refs: #154
 - Added a Python descriptor source in `genja-cli` that runs the configured interpreter and project discovery helper, parses descriptor JSON, and assigns Python language metadata. Refs: #154
 - Added `TaskImplementation` records and source-assigned `TaskLanguage` metadata to CLI discovery, while keeping existing descriptor sources compatible and marking compiled tasks as Rust. Refs: #154
@@ -48,10 +52,11 @@ Changed packages:
 
 ### Changed
 
+- CLI `task list` and `task describe` JSON/YAML output wraps each canonical descriptor as `{ descriptor, language }` so same-ID Rust and Python implementations remain distinguishable; `language` is `rust`, `python`, or `null` when unknown. Refs: #155
 - **Breaking:** Added `AmbiguousImplementation` and `DuplicateImplementation` variants to `genja-cli`'s public `DiscoveryError` enum. Update exhaustive matches to handle these cases or add a fallback arm. Refs: #154
 - Changed TUI inspection labels and JSON syntax accents to use terminal ANSI palette colours, while ordinary values and backgrounds inherit terminal defaults. Task selection now reverses terminal foreground/background, improving compatibility with light and dark terminal themes. Refs: #130
 - Expanded the Terminal UI guide with search controls, matching and selection rules, and a walkthrough using the existing sample tasks; linked the walkthrough from the CLI and examples guides. Refs: #129
-- The full-screen TUI now displays discovery failures until the user quits, then returns the loading error after terminal cleanup; embedded descriptor loading still returns errors immediately. Refs: #128
+- Full-screen TUI discovery failures now return before terminal setup; embedded browsers can still display a stored discovery error. Refs: #155
 - Clarified the constructible descriptor field in the task registration, CLI, and TUI guides, including how example task structs determine its value. Refs: #128
 - Moved the terminal user interface guide to its own page with a top-level documentation navigation entry. Refs: #126
 - Expanded the CLI guide with command examples, reproducible output samples, task identities, output formats and file exports, catalogue usage, discovery architecture and scope, and empty-result and error behaviour. Refs: #125

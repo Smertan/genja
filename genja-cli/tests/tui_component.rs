@@ -1,7 +1,10 @@
 #![cfg(feature = "tui")]
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use genja_cli::discovery::{DiscoveryError, DiscoveryResult, TaskDescriptor, TaskDescriptorSource};
+use genja_cli::discovery::{
+    DiscoveryError, DiscoveryResult, TaskDescriptor, TaskDescriptorSource, TaskImplementation,
+    TaskLanguage,
+};
 use genja_cli::tui::{BrowserAction, BrowserOutcome, TaskBrowser, action_from_event};
 use genja_core::task::{TaskDescriptorMetadata, TaskExecutionMode};
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
@@ -49,6 +52,67 @@ fn assert_selected_visible(terminal: &Terminal<TestBackend>, id: &str) {
         .collect();
     assert_eq!(selected.len(), 1, "{selected:?}");
     assert!(selected[0].contains(id), "{selected:?}");
+}
+
+#[test]
+fn shared_identity_implementations_keep_language_through_search_and_inspection() {
+    struct MixedSource;
+
+    impl TaskDescriptorSource for MixedSource {
+        fn list_tasks(&self) -> DiscoveryResult<Vec<TaskDescriptor>> {
+            panic!("the browser must request implementation metadata")
+        }
+
+        fn list_implementations(&self) -> DiscoveryResult<Vec<TaskImplementation>> {
+            let rust = descriptor("shared.task");
+            let mut python = descriptor("shared.task");
+            python.input_schema = Some(serde_json::json!({"type": "object"}));
+            Ok(vec![
+                TaskImplementation::new(rust, Some(TaskLanguage::Rust)),
+                TaskImplementation::new(python, Some(TaskLanguage::Python)),
+            ])
+        }
+    }
+
+    let mut browser = TaskBrowser::new();
+    browser.load_from(&MixedSource).unwrap();
+    assert_eq!(browser.state().descriptors().len(), 2);
+    assert_eq!(
+        browser.state().languages(),
+        [Some(TaskLanguage::Rust), Some(TaskLanguage::Python)]
+    );
+    let mut terminal = Terminal::new(TestBackend::new(120, 9)).unwrap();
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!(row(&terminal, 3).contains("LANGUAGE"));
+    assert!(row(&terminal, 4).contains("🦀  Rust"));
+    assert!(row(&terminal, 5).contains("🐍  Python"));
+    terminal.backend_mut().resize(50, 9);
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!(row(&terminal, 4).contains("🦀"));
+    assert!(row(&terminal, 5).contains("🐍"));
+
+    browser.state_mut().set_filter_text("python");
+    assert_eq!(browser.state().matching_indices(), [1]);
+    assert_eq!(
+        browser.state().selected_language(),
+        Some(TaskLanguage::Python)
+    );
+    browser.handle_action(BrowserAction::OpenDetails);
+    terminal.backend_mut().resize(120, 20);
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!((0..20).any(|y| row(&terminal, y).contains("Language: 🐍  Python")));
+
+    browser.handle_action(BrowserAction::OpenSchema);
+    terminal
+        .draw(|frame| browser.render(frame, frame.area()))
+        .unwrap();
+    assert!((0..20).any(|y| row(&terminal, y).contains("\"type\"")));
 }
 
 #[test]
@@ -438,7 +502,7 @@ fn empty_snapshot_and_discovery_error_take_precedence_over_no_matches() {
     terminal
         .draw(|frame| browser.render(frame, frame.area()))
         .unwrap();
-    assert!((0..16).any(|y| row(&terminal, y).contains("Unable to load task descriptors.")));
+    assert!((0..16).any(|y| row(&terminal, y).contains("Unable to load task implementations.")));
     assert!(!(0..16).any(|y| row(&terminal, y).contains("No tasks match")));
     assert!(row(&terminal, 14).trim().is_empty());
 }
@@ -615,10 +679,12 @@ fn narrow_tables_prioritize_identity_and_keep_quit_guidance() {
         let header = row(&terminal, 3);
         assert!(header.contains("ID"));
         assert_eq!(header.contains("NAME"), width >= 64);
+        assert_eq!(header.contains("LANG"), width >= 40);
         assert_eq!(header.contains("MODE"), width >= 40);
         if width >= 40 {
             assert!(row(&terminal, 4).contains("1.0.0"));
             assert!(row(&terminal, 4).contains("blocking"));
+            assert!(row(&terminal, 4).contains(if width >= 64 { "? Unknown" } else { "?" }));
             assert!(row(&terminal, 4).contains("yes"));
         }
         assert!(row(&terminal, 7).contains("quit"));
@@ -649,27 +715,29 @@ fn unicode_rows_render_safely_in_tiny_areas() {
 fn empty_and_error_screens_are_distinct_and_keep_quit_guidance() {
     let mut browser = TaskBrowser::new();
     browser.load_from(&Source(Ok(Vec::new()))).unwrap();
-    let mut terminal = Terminal::new(TestBackend::new(80, 14)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
     terminal
         .draw(|frame| browser.render(frame, frame.area()))
         .unwrap();
     assert!(row(&terminal, 0).contains("Genja tasks (0)"));
     assert!(row(&terminal, 3).contains("No registered tasks available."));
-    let empty_text = (0..14)
+    let empty_text = (0..20)
         .map(|y| row(&terminal, y))
         .collect::<Vec<_>>()
         .join("\n");
+    assert!(empty_text.contains("For Python tasks, declare modules"));
+    assert!(empty_text.contains("modules = [\"my_project.tasks\"]"));
     assert!(empty_text.contains("link your task crate"));
     assert!(empty_text.contains("#[genja_task(name = \"my_task\")]"));
     assert!(empty_text.contains("impl MyTask"));
     assert!(empty_text.contains("use my_project_tasks as _;"));
-    assert!(row(&terminal, 6).starts_with("│  #[genja_task"));
+    assert!(row(&terminal, 10).starts_with("│  #[genja_task"));
     assert_eq!(
-        terminal.backend().buffer()[(3, 6)].fg,
+        terminal.backend().buffer()[(3, 10)].fg,
         ratatui::style::Color::Cyan
     );
     assert_eq!(
-        terminal.backend().buffer()[(3, 6)].bg,
+        terminal.backend().buffer()[(3, 10)].bg,
         ratatui::style::Color::Reset
     );
     assert!(
@@ -677,7 +745,7 @@ fn empty_and_error_screens_are_distinct_and_keep_quit_guidance() {
             .modifier
             .contains(ratatui::style::Modifier::BOLD)
     );
-    assert!(row(&terminal, 13).contains("q / Esc: quit"));
+    assert!(row(&terminal, 19).contains("q / Esc: quit"));
     assert_eq!(browser.state().selected_index(), None);
 
     let error = DiscoveryError::source_failed("registry unavailable");
@@ -685,17 +753,17 @@ fn empty_and_error_screens_are_distinct_and_keep_quit_guidance() {
     terminal
         .draw(|frame| browser.render(frame, frame.area()))
         .unwrap();
-    let error_text = (0..14)
+    let error_text = (0..20)
         .map(|y| row(&terminal, y))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(error_text.contains("Discovery error"));
-    assert!(error_text.contains("Unable to load task descriptors."));
+    assert!(error_text.contains("Unable to load task implementations."));
     assert!(error_text.contains("registry unavailable"));
     assert!(error_text.contains("my_project_cli task list"));
     assert!(error_text.contains("Replace my_project_cli with your binary name."));
     assert!(!error_text.contains("No registered tasks available."));
-    assert!(row(&terminal, 13).contains("q / Esc: quit"));
+    assert!(row(&terminal, 19).contains("q / Esc: quit"));
     assert_eq!(browser.state().selected_index(), None);
 
     browser
@@ -707,7 +775,7 @@ fn empty_and_error_screens_are_distinct_and_keep_quit_guidance() {
     assert_selected_visible(&terminal, "recovered");
     assert!(browser.state().error().is_none());
     assert_eq!(browser.state().selected_index(), Some(0));
-    assert!(!(0..14).any(|y| row(&terminal, y).contains("Discovery error")));
+    assert!(!(0..20).any(|y| row(&terminal, y).contains("Discovery error")));
 }
 
 #[test]

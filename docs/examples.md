@@ -60,7 +60,7 @@ Use the Rust examples when you want to see the public `genja` crate, the
 
 Run the commands below inside the repository checkout described above.
 If you are using Genja as a dependency in your own project, follow the
-[project-local CLI binary pattern](cli.md#project-local-cli-binary) instead.
+[project-local CLI binary pattern](cli.md#project-local-cli-binary-rust-and-mixed-projects) instead.
 
 The `task_browser` example links two sample registrations into its own
 executable and delegates command handling to `genja::cli::run_main()`.
@@ -94,7 +94,7 @@ to show only `backup_config`; press Enter to return to navigation with the query
 retained. Escape then clears it. While editing, Ctrl+u clears the query without
 leaving search. Press `q` in navigation mode to exit.
 
-Follow the [search walkthrough](tui.md#try-search-with-the-sample-tasks) to try
+Follow the [Rust tab of the search walkthrough](tui.md#try-search) to try
 case-insensitive matching, execution-mode and description searches, and no-match
 recovery. See the [Terminal UI guide](tui.md) for feature setup and the
 project-local binary pattern.
@@ -103,8 +103,52 @@ Press Enter on a selected task to open Details, then Tab to inspect its schema.
 `backup_config` includes JSON schema metadata; `collect_facts` shows the missing
 schema message. Scroll with Up/Down, PageUp/PageDown, or Home/End; Escape returns
 to the list while retaining selection and search. Follow the
-[descriptor inspection walkthrough](tui.md#try-descriptor-inspection-with-the-sample-tasks)
+[Rust tab of the descriptor inspection walkthrough](tui.md#try-descriptor-inspection)
 for a complete example.
+
+### Mixed Rust And Python Discovery
+
+The Python examples include a [task module](../genja/examples/python/task_registration_tasks.py)
+and a [pyproject.toml](../genja/examples/python/pyproject.toml) that declares it:
+
+```toml
+[tool.genja.tasks]
+modules = ["task_registration_tasks"]
+```
+
+Install `genja-py` in the Python environment used for discovery and select that
+environment's interpreter with `--python` if it is not the `python` on `PATH`.
+From the repository root, the generic `genja` binary can list the Python tasks
+without linking Rust registrations:
+
+```bash
+genja --pyproject genja/examples/python/pyproject.toml task list
+```
+
+Run the Rust browser example against the same project file to see both
+languages in one list:
+
+```bash
+cargo run -p genja --features genja-cli --example task_browser -- \
+  --pyproject genja/examples/python/pyproject.toml task list
+```
+
+The Rust and Python examples both register
+`acme.examples.backup_config@1.0.0`. The list retains both implementations.
+Use `rust:acme.examples.backup_config@1.0.0` or
+`python:acme.examples.backup_config@1.0.0` with `task describe` to select one;
+an unqualified lookup is ambiguous. With `genja-tui` enabled, the same project
+file opens one searchable TUI list containing both languages:
+
+```bash
+cargo run -p genja --features genja-tui --example task_browser -- \
+  --pyproject genja/examples/python/pyproject.toml tui
+```
+
+See the [installation guide](installation.md#python-task-discovery-from-the-cli)
+for the separate CLI and Python package installation steps. The
+[Python tab of the TUI walkthrough](tui.md#try-descriptor-inspection)
+shows inspection and search with the same configured task module.
 
 ## Python Examples
 
