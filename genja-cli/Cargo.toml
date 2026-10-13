@@ -22,6 +22,7 @@ path = "src/main.rs"
 [features]
 default = []
 tui = ["dep:ratatui", "dep:crossterm", "dep:syntect", "dep:tui-syntax-highlight"]
+python-wheel = []
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

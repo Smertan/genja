@@ -91,8 +91,10 @@ cargo install --path genja-cli --features tui
 
 Omit `--features tui` if you only need `task list`, `task describe`, and
 `task docs`. The `tui` feature enables `genja tui` in the installed binary.
-The CLI uses `python` from `PATH` by default; pass `--python PATH` to select
-the environment where `genja-py` and your task modules are installed.
+Cargo-built CLI binaries use `python` from `PATH` by default. A CLI installed
+from a Python wheel uses the interpreter beside its executable. Pass
+`--python PATH` to select another environment containing `genja-py` and your
+task modules.
 
 Declare Python task modules in your project's `pyproject.toml`:
 

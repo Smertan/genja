@@ -8,6 +8,10 @@ For Python task projects, install `genja-py` in the same environment to provide
 the task API and discovery helper. The `genja-py[cli]` extra installs both
 packages once released.
 
+For configured Python tasks, the command uses that environment's Python
+interpreter beside the installed executable. Use `--python PATH` to select
+another interpreter.
+
 The `genja-cli` PyPI distribution, the Rust crate of the same name, and the
 installed `genja` command are distinct. Source builds and Rust library usage
 are documented in the [repository](https://github.com/Smertan/genja).

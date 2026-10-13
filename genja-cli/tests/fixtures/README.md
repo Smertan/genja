@@ -2,7 +2,8 @@
 
 These scripts are fake Python executables used by the tests in
 [`src/discovery/python.rs`](../../src/discovery/python.rs) and
-[`src/discovery/combined.rs`](../../src/discovery/combined.rs). They test how
+[`src/discovery/combined.rs`](../../src/discovery/combined.rs), and by the
+wheel interpreter test in [`tests/cli.rs`](../cli.rs). They test how
 the Rust sources launch and read the discovery helper. They do not import tasks
 or run Python, so the Rust tests do not require a Python installation or
 `genja-py`.
@@ -25,3 +26,8 @@ choose the script's response:
 
 The real Python helper's module imports and JSON export are tested separately
 in [`test_discovery_cli.py`](../../../genja-core-python/python/tests/test_discovery_cli.py).
+
+`wrong_python.sh` is a Unix-only `PATH` decoy. The wheel interpreter test puts
+it ahead of the system Python while invoking a copied `genja` binary directly.
+Its distinctive error shows if the CLI picks `PATH` instead of its companion
+interpreter.

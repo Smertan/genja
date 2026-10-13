@@ -93,9 +93,10 @@ The TUI's `run_main()` helper is available for project-local binaries.
     genja tui
     ```
 
-    The CLI uses `pyproject.toml` in the current directory and `python` from
-    `PATH` by default. Use `--pyproject PATH` or `--python PATH` to select
-    another project file or interpreter. See
+    The CLI uses `pyproject.toml` in the current directory. A wheel-installed
+    `genja` uses the interpreter beside its executable; a Cargo-built binary
+    uses `python` from `PATH`. Use `--pyproject PATH` or `--python PATH` to
+    select another project file or interpreter. See
     [Installation](installation.md#python-task-discovery-from-the-cli) for the
     two installation steps.
 

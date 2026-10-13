@@ -38,9 +38,10 @@ apply to all three.
     identity from your own `task list` output. `genja --help` lists commands,
     and `genja version` prints the CLI version.
 
-    The CLI reads `pyproject.toml` in the current directory and uses `python`
-    from `PATH` by default. Pass a path to `--pyproject` to select another
-    project file, or to `--python` to select another interpreter. See
+    The CLI reads `pyproject.toml` in the current directory. A `genja` binary
+    installed from a Python wheel uses the interpreter beside it; a Cargo-built
+    binary uses `python` from `PATH`. Pass a path to `--pyproject` to select
+    another project file, or to `--python` to select another interpreter. See
     [Task Registration](task-registration.md#python-import-boundary) for the
     import boundary.
 

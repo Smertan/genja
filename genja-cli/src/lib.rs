@@ -5,7 +5,8 @@
 //! It also enables the `genja tui` command, which launches the same basic screen.
 //! Task commands and the TUI select configured Python discovery when the
 //! project file contains `[tool.genja.tasks]` and otherwise use compiled Rust
-//! discovery.
+//! discovery. Wheel builds use the Python interpreter beside the installed
+//! executable by default; other builds resolve `python` from `PATH`.
 
 pub mod commands;
 pub mod discovery;
@@ -15,13 +16,16 @@ pub mod tui;
 
 use crate::commands::task::{TaskDescribeError, TaskDocsError, TaskListError};
 use crate::discovery::DiscoveryError;
-use crate::discovery::selection::select_task_descriptor_source;
+use crate::discovery::TaskDescriptorSource;
+use crate::discovery::selection::select_task_descriptor_source_with_python;
 use crate::output::{OutputFormat, TaskDocsOutputFormat};
 use clap::{Args, Parser, Subcommand};
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
+#[cfg(feature = "python-wheel")]
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -41,8 +45,8 @@ struct Cli {
     )]
     pyproject: PathBuf,
     /// Python interpreter used for configured task discovery.
-    #[arg(long, global = true, default_value = "python", value_name = "PATH")]
-    python: PathBuf,
+    #[arg(long, global = true, value_name = "PATH")]
+    python: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -145,8 +149,7 @@ fn execute(cli: Cli) -> Result<(), CliError> {
     } = cli;
     match command {
         Some(Command::Task(task)) => {
-            let source =
-                select_task_descriptor_source(&python, &pyproject).map_err(CliError::Discovery)?;
+            let source = select_cli_source(python, pyproject).map_err(CliError::Discovery)?;
             match task.command {
                 TaskSubcommand::Describe(args) => {
                     let output =
@@ -169,14 +172,58 @@ fn execute(cli: Cli) -> Result<(), CliError> {
         Some(Command::Version) => commands::version::print_version(),
         #[cfg(feature = "tui")]
         Some(Command::Tui) => {
-            let source =
-                select_task_descriptor_source(&python, &pyproject).map_err(CliError::Discovery)?;
+            let source = select_cli_source(python, pyproject).map_err(CliError::Discovery)?;
             tui::run_tui(source.as_ref(), tui::TuiOptions::default()).map_err(CliError::Tui)?;
         }
         None => {}
     }
 
     Ok(())
+}
+
+fn select_cli_source(
+    python: Option<PathBuf>,
+    pyproject: PathBuf,
+) -> Result<Box<dyn TaskDescriptorSource>, DiscoveryError> {
+    select_task_descriptor_source_with_python(pyproject, || match python {
+        Some(path) => Ok(path),
+        None => default_python_interpreter(),
+    })
+}
+
+#[cfg(not(feature = "python-wheel"))]
+fn default_python_interpreter() -> Result<PathBuf, DiscoveryError> {
+    Ok(PathBuf::from("python"))
+}
+
+#[cfg(feature = "python-wheel")]
+fn default_python_interpreter() -> Result<PathBuf, DiscoveryError> {
+    let executable = env::current_exe().map_err(|error| {
+        DiscoveryError::source_failed(format!(
+            "cannot locate the installed Genja CLI to select its Python interpreter: {error}; use --python PATH"
+        ))
+    })?;
+    let python = companion_python_interpreter(&executable);
+    if python.is_file() {
+        Ok(python)
+    } else {
+        Err(DiscoveryError::source_failed(format!(
+            "cannot find the Python interpreter for the installed Genja CLI at `{}`; use --python PATH",
+            python.display()
+        )))
+    }
+}
+
+#[cfg(feature = "python-wheel")]
+fn companion_python_interpreter(executable: &Path) -> PathBuf {
+    let directory = executable
+        .parent()
+        .expect("a process executable path has a parent directory");
+    directory.join(if cfg!(windows) {
+        "python.exe"
+    } else {
+        "python"
+    })
 }
 
 /// Runs the Genja CLI using the current process arguments.
@@ -193,7 +240,9 @@ fn execute(cli: Cli) -> Result<(), CliError> {
 /// Project-local binaries can use this helper to expose Genja CLI commands
 /// while linking their own compiled Rust task registrations into the running
 /// process. Configured Python tasks are imported through the selected
-/// interpreter when a task command or the TUI requests discovery.
+/// interpreter when a task command or the TUI requests discovery. With the
+/// `python-wheel` feature, an omitted `--python` selects the interpreter beside
+/// the installed executable; other builds use `python` from `PATH`.
 pub fn run_main() -> ExitCode {
     run(env::args_os())
 }
@@ -234,6 +283,38 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn python_override_is_distinct_from_default() {
+        let default = Cli::try_parse_from(["genja", "task", "list"])
+            .expect("default CLI arguments should parse");
+        assert!(default.python.is_none());
+
+        let explicit = Cli::try_parse_from(["genja", "task", "list", "--python", "custom-python"])
+            .expect("Python override should parse");
+        assert_eq!(explicit.python, Some(PathBuf::from("custom-python")));
+    }
+
+    #[cfg(feature = "python-wheel")]
+    #[test]
+    fn wheel_companion_path_is_next_to_executable() {
+        #[cfg(windows)]
+        {
+            let executable = Path::new(r"C:\venv\Scripts\genja.exe");
+            assert_eq!(
+                companion_python_interpreter(executable),
+                PathBuf::from(r"C:\venv\Scripts\python.exe")
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            let executable = Path::new("/venv/bin/genja");
+            assert_eq!(
+                companion_python_interpreter(executable),
+                PathBuf::from("/venv/bin/python")
+            );
+        }
+    }
 
     #[test]
     fn run_main_has_binary_entrypoint_shape() {

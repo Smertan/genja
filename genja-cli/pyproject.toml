@@ -17,4 +17,4 @@ Issues = "https://github.com/Smertan/genja/issues"
 
 [tool.maturin]
 bindings = "bin"
-features = ["tui"]
+features = ["tui", "python-wheel"]

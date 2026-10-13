@@ -48,7 +48,9 @@ language. Language metadata stays outside the descriptor JSON. The built-in
 CLI commands and TUI select combined discovery when the task section is present.
 Use `--pyproject PATH` and `--python PATH` to select the project file and Python
 interpreter; they default to `pyproject.toml` in the current directory and
-`python` from `PATH`.
+`python` from `PATH` for Cargo-built binaries. A wheel-installed `genja` uses
+the Python interpreter beside its executable by default. Pass `--python PATH`
+if that interpreter is unavailable or you need another environment.
 
 Human-readable task commands show **Language** separately from the descriptor's
 ID **Source** (`generated` or `explicit`). Use `rust:<id>@<version>` or

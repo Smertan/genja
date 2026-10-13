@@ -18,11 +18,19 @@ pub fn select_task_descriptor_source(
     python: impl Into<PathBuf>,
     pyproject: impl Into<PathBuf>,
 ) -> DiscoveryResult<Box<dyn TaskDescriptorSource>> {
+    select_task_descriptor_source_with_python(pyproject, || Ok(python.into()))
+}
+
+/// Resolve the interpreter only when the project configures Python tasks.
+pub(crate) fn select_task_descriptor_source_with_python(
+    pyproject: impl Into<PathBuf>,
+    python: impl FnOnce() -> DiscoveryResult<PathBuf>,
+) -> DiscoveryResult<Box<dyn TaskDescriptorSource>> {
     let pyproject = pyproject.into();
     let compiled = CompiledTaskDescriptorSource::new();
 
     if has_python_task_configuration(&pyproject)? {
-        let python = PythonTaskDescriptorSource::new(python, pyproject);
+        let python = PythonTaskDescriptorSource::new(python()?, pyproject);
         Ok(Box::new(CombinedTaskDescriptorSource::new(
             compiled, python,
         )))
@@ -50,6 +58,19 @@ mod tests {
         source
             .list_implementations()
             .expect("Rust-only discovery should not launch Python");
+    }
+
+    #[test]
+    fn rust_only_project_does_not_resolve_python() {
+        let directory = tempfile::tempdir().expect("temporary directory should exist");
+        let pyproject = directory.path().join("pyproject.toml");
+        fs::write(&pyproject, "[project]\nname = 'rust-only'\n")
+            .expect("project file should be written");
+
+        select_task_descriptor_source_with_python(&pyproject, || {
+            panic!("Rust-only discovery must not resolve a Python interpreter")
+        })
+        .expect("Rust-only source should be selected");
     }
 
     #[test]
