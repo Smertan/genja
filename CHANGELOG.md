@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added an optional `genja-py[cli]` dependency on the matching `genja-cli` release line; the base Python package remains library-only. Refs: #156
 - Added Python wheel packaging for the existing `genja` CLI binary with TUI support, installing the command into the Python environment's scripts directory. Refs: #156
 - Added a Python-only and mixed Rust/Python CLI example using one `pyproject.toml`, with installation guidance for the separate `genja-cli` executable and `genja-py` package. Refs: #155
 - Added 🦀 Rust and 🐍 Python labels to the TUI task list and Details view, preserving separate implementations with the same ID and version in one searchable browser. Refs: #155

@@ -18,6 +18,12 @@ For end users, install the package with `pip`:
 pip install genja-py
 ```
 
+The base installation provides the Python library without a `genja` command.
+After the CLI wheels are released, install the optional command and terminal UI
+with `pip install "genja-py[cli]"` on a supported platform. The extra selects a
+compatible `genja-cli` wheel; the current published release does not include
+this extra yet.
+
 The package currently exposes the `genja` Python module:
 
 ```python

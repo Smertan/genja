@@ -1,9 +1,8 @@
 # Python CLI wheel contract (#156)
 
 This records the package and release decisions for the optional `genja-py[cli]`
-installation. It is a development contract; the extra and wheels do not exist
-yet. Issue #155 must be present on this branch before implementing or testing
-Python discovery from the installed CLI.
+installation. It is a development contract: the extra and local wheel builds
+exist, but no CLI wheel has been published. Issue #155 is present on this branch.
 
 Remove this temporary file before merging #156, after its enduring rules have
 moved into release automation and user-facing documentation. Publishing the
@@ -59,6 +58,8 @@ release line: for example, a 0.5 release would require
 This accepts compatible patch releases but does not silently cross a minor
 release line. Raise the lower bound if a later patch introduces a required
 helper protocol change.
+Update the extra's version range when the release branch bumps package
+versions, and verify it still matches the CLI wheel built from that branch.
 
 Build and validate both packages from the same release commit. Publish the
 CLI wheels before publishing the `genja-py` release that names them in its
