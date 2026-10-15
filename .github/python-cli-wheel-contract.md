@@ -34,20 +34,27 @@ existing `genja` binary in the wheel's scripts directory. Because
 
 ## Initial wheel support
 
-Match the wheel-only coverage of [published `genja-py` 0.4.0](https://pypi.org/project/genja-py/0.4.0/#files):
+Start with the wheel-only coverage of [published `genja-py` 0.4.0](https://pypi.org/project/genja-py/0.4.0/#files)
+and add Intel macOS wheels for both packages in this release:
 
-| Operating system | Architecture | Existing `genja-py` wheel tag |
+| Operating system | Architecture | Target wheel tag |
 | --- | --- | --- |
 | Linux | x86_64 | `manylinux_2_17_x86_64` |
 | macOS | arm64 | `macosx_11_0_arm64` |
+| macOS | x86_64 | `macosx_10_12_x86_64` |
 | Windows | x86_64 | `win_amd64` |
 
-The Python package publishes CPython 3.10 through 3.14 wheels for each row.
+The Intel build pins the macOS deployment target to 10.12. CI checks the wheel
+tags and installs on a macOS 15 Intel runner; running on macOS 10.12 itself
+still needs a separate compatibility check before claiming runtime support
+there.
+
+The Python package builds CPython 3.10 through 3.14 wheels for each row.
 The CLI binary has no Python extension ABI, so aim for one compatible CLI
 wheel per platform/architecture rather than one per Python version; inspect
 the produced tags and test installation with every supported Python version.
-Do not claim wheel-only support for Intel macOS, Linux arm64, Windows arm64, or
-PyPy until matching `genja-py` wheels and installation tests exist.
+Do not claim wheel-only support for Linux arm64, Windows arm64, or PyPy until
+matching `genja-py` wheels and installation tests exist.
 
 ## Version and release rule
 

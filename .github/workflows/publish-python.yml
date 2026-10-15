@@ -141,6 +141,21 @@ jobs:
           - os: macos-latest
             python-version: "3.14"
             maturin-args: --release --out dist --interpreter python --compatibility pypi
+          - os: macos-15-intel
+            python-version: "3.10"
+            maturin-args: --release --out dist --interpreter python --compatibility pypi
+          - os: macos-15-intel
+            python-version: "3.11"
+            maturin-args: --release --out dist --interpreter python --compatibility pypi
+          - os: macos-15-intel
+            python-version: "3.12"
+            maturin-args: --release --out dist --interpreter python --compatibility pypi
+          - os: macos-15-intel
+            python-version: "3.13"
+            maturin-args: --release --out dist --interpreter python --compatibility pypi
+          - os: macos-15-intel
+            python-version: "3.14"
+            maturin-args: --release --out dist --interpreter python --compatibility pypi
           - os: windows-latest
             python-version: "3.10"
             maturin-args: --release --out dist --interpreter python --compatibility pypi
@@ -172,6 +187,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.88.0
+
+      - name: Set Intel macOS deployment target
+        if: matrix.os == 'macos-15-intel'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=10.12" >> "$GITHUB_ENV"
 
       - name: Build wheel
         uses: PyO3/maturin-action@v1
@@ -227,6 +246,14 @@ jobs:
           subprocess.run([sys.executable, "-m", "pytest", "-v", tests], check=True)
           PY
 
+      - name: Inspect Intel Python wheel
+        if: matrix.os == 'macos-15-intel'
+        run: >-
+          python scripts/check-python-wheels.py inspect-intel-python
+          --wheel-dir genja-core-python/dist
+          --version ${{ needs.validate.outputs.release-version }}
+          --python-version ${{ matrix.python-version }}
+
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
@@ -247,6 +274,9 @@ jobs:
           - os: macos-latest
             platform: macos
             manylinux: auto
+          - os: macos-15-intel
+            platform: macos-intel
+            manylinux: auto
           - os: windows-latest
             platform: windows
             manylinux: auto
@@ -266,6 +296,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.88.0
+
+      - name: Set Intel macOS deployment target
+        if: matrix.os == 'macos-15-intel'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=10.12" >> "$GITHUB_ENV"
 
       - name: Build CLI wheel
         uses: PyO3/maturin-action@v1
@@ -299,7 +333,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:

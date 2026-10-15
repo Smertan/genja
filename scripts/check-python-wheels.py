@@ -38,6 +38,7 @@ def inspect_cli(directory: Path, version: str, platform: str, glibc: str) -> Non
     tag = {
         "linux": f"manylinux_{glibc}_x86_64",
         "macos": "macosx_11_0_arm64",
+        "macos-intel": "macosx_10_12_x86_64",
         "windows": "win_amd64",
     }[platform]
     if tag not in fields[4].split("."):
@@ -56,6 +57,22 @@ def inspect_cli(directory: Path, version: str, platform: str, glibc: str) -> Non
             or archive.getinfo(executable).file_size == 0
         ):
             raise ValueError(f"{wheel.name} lacks the {executable} executable")
+    print(f"validated {wheel.name}")
+
+
+def inspect_intel_python(directory: Path, version: str, python_version: str) -> None:
+    wheel = one_wheel(directory)
+    fields = wheel.stem.split("-", 4)
+    python_tag = "cp" + python_version.replace(".", "")
+    if (
+        len(fields) != 5
+        or fields[:4] != ["genja_py", version, python_tag, python_tag]
+        or "macosx_10_12_x86_64" not in fields[4].split(".")
+    ):
+        raise ValueError(f"unexpected Intel Python wheel tags: {wheel.name}")
+    info = metadata(wheel)
+    if info["Name"] != "genja-py" or info["Version"] != version:
+        raise ValueError(f"incorrect Python wheel metadata in {wheel.name}")
     print(f"validated {wheel.name}")
 
 
@@ -142,9 +159,15 @@ def main() -> None:
     inspect.add_argument("--wheel-dir", type=Path, required=True)
     inspect.add_argument("--version", required=True)
     inspect.add_argument(
-        "--platform", choices=["linux", "macos", "windows"], required=True
+        "--platform",
+        choices=["linux", "macos", "macos-intel", "windows"],
+        required=True,
     )
     inspect.add_argument("--minimum-glibc", default="2_17")
+    inspect_python = commands.add_parser("inspect-intel-python")
+    inspect_python.add_argument("--wheel-dir", type=Path, required=True)
+    inspect_python.add_argument("--version", required=True)
+    inspect_python.add_argument("--python-version", required=True)
     install = commands.add_parser("install")
     install.add_argument("--python-wheels", type=Path, required=True)
     install.add_argument("--cli-wheels", type=Path, required=True)
@@ -153,6 +176,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "inspect-cli":
         inspect_cli(args.wheel_dir, args.version, args.platform, args.minimum_glibc)
+    elif args.command == "inspect-intel-python":
+        inspect_intel_python(args.wheel_dir, args.version, args.python_version)
     else:
         install_check(args.python_wheels, args.cli_wheels, args.version, args.project)
 

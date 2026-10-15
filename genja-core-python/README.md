@@ -23,6 +23,9 @@ After the CLI wheels are released, install the optional command and terminal UI
 with `pip install "genja-py[cli]"` on a supported platform. The extra selects a
 compatible `genja-cli` wheel; the current published release does not include
 this extra yet.
+The planned wheel release covers CPython 3.10–3.14 on Linux x86_64, macOS
+Apple Silicon and Intel, and Windows x64. Intel macOS needs its own wheels for
+both `genja-py` and `genja-cli`.
 
 The package currently exposes the `genja` Python module:
 
