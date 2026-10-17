@@ -18,22 +18,22 @@ package layout, version expectations, and how to read docs against releases.
 
 See [API Surface](api-surface.md) for which package to depend on.
 
-## Current Versioning
+## v0.5.0 Release Versions
 
-The current development branch uses:
+The v0.5.0 Rust release aligns these crates:
 
 ```text
-genja = 0.4.0
-genja-core = 0.4.0
-genja-core-derive = 0.4.0
-genja-plugin-manager = 0.4.0
-genja-cli = 0.4.0
+genja = 0.5.0
+genja-core = 0.5.0
+genja-core-derive = 0.5.0
+genja-plugin-manager = 0.5.0
+genja-cli = 0.5.0
 ```
 
-The Python distribution is also currently versioned as:
+The matching Python distribution is:
 
 ```text
-genja-py = 0.4.0
+genja-py = 0.5.0
 ```
 
 Until a more formal compatibility policy is published, treat matching minor
@@ -47,7 +47,7 @@ Rust applications should usually depend on `genja`:
 
 ```toml
 [dependencies]
-genja = "0.4.0"
+genja = "0.5.0"
 ```
 
 The `genja` crate depends on and re-exports core pieces from the workspace, so
@@ -59,12 +59,12 @@ standalone plugin crates:
 
 ```toml
 [dependencies]
-genja-plugin-manager = "0.4.0"
-genja-core = "0.4.0"
+genja-plugin-manager = "0.5.0"
+genja-core = "0.5.0"
 ```
 
 When depending on multiple Genja crates directly, keep their versions aligned.
-Mixing `genja 0.4.x` with a different `genja-core` or `genja-plugin-manager`
+Mixing `genja 0.5.x` with a different `genja-core` or `genja-plugin-manager`
 line is not a supported configuration.
 
 ## Python Compatibility
@@ -110,7 +110,7 @@ state. For release-specific behavior, use the docs or source for the matching
 release tag, such as:
 
 ```bash
-git checkout rs-v0.3.0
+git checkout rs-v0.5.0
 ```
 
 When running repository examples for a specific release, check out the matching

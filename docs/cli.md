@@ -913,6 +913,11 @@ language-qualified lookup when both implementations share an ID and version.
     different operating system. For PDM, run `pdm info --python` from
     `genja-core-python` to find the path.
 
+    The Rust `CollectFacts` task in `genja/examples/task_browser.rs` has no
+    explicit registration. Its generated task version comes from the `version`
+    field in `genja/Cargo.toml`. The output below shows `0.5.0` for the
+    v0.5.0 release.
+
     /// details | Combined task list (table)
         type: example
 
@@ -931,7 +936,7 @@ language-qualified lookup when both implementations share an ID and version.
     ---------------------------------+---------+---------------+-----------+----------+----------+---------------
      acme.examples.collect_facts     | 1.0.0   | collect_facts | explicit  | Python   | blocking | yes
     ---------------------------------+---------+---------------+-----------+----------+----------+---------------
-     auto:task_browser::CollectFacts | 0.4.0   | collect_facts | generated | Rust     | async    | no
+     auto:task_browser::CollectFacts | 0.5.0   | collect_facts | generated | Rust     | async    | no
     ```
     ///
 
@@ -950,7 +955,7 @@ language-qualified lookup when both implementations share an ID and version.
     | `acme.examples.backup_config`     | `1.0.0` | `backup_config` | `explicit`  | `Rust`   | `blocking` | yes           |
     | `acme.examples.backup_config`     | `1.0.0` | `backup_config` | `explicit`  | `Python` | `blocking` | yes           |
     | `acme.examples.collect_facts`     | `1.0.0` | `collect_facts` | `explicit`  | `Python` | `blocking` | yes           |
-    | `auto:task_browser::CollectFacts` | `0.4.0` | `collect_facts` | `generated` | `Rust`   | `async`    | no            |
+    | `auto:task_browser::CollectFacts` | `0.5.0` | `collect_facts` | `generated` | `Rust`   | `async`    | no            |
     ```
     ///
 
