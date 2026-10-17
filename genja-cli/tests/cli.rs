@@ -4,6 +4,103 @@ fn genja_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_genja"))
 }
 
+#[cfg(all(feature = "python-wheel", unix))]
+#[test]
+fn wheel_selects_companion_python_and_honors_override() {
+    use std::env;
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("temporary directory should exist");
+    let scripts = directory.path().join("venv/bin");
+    let unrelated = directory.path().join("unrelated");
+    let project = directory.path().join("project");
+    fs::create_dir_all(&scripts).expect("scripts directory should exist");
+    fs::create_dir_all(&unrelated).expect("unrelated directory should exist");
+    fs::create_dir_all(&project).expect("project directory should exist");
+
+    let genja = scripts.join("genja");
+    fs::copy(env!("CARGO_BIN_EXE_genja"), &genja).expect("CLI binary should be copied");
+    let companion = scripts.join("python");
+    fs::copy("tests/fixtures/fake_python_discovery.sh", &companion)
+        .expect("companion fixture should be copied");
+    let decoy = unrelated.join("python");
+    fs::copy("tests/fixtures/wrong_python.sh", &decoy).expect("PATH decoy should be copied");
+    for script in [&companion, &decoy] {
+        let mut permissions = fs::metadata(script)
+            .expect("script should exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(script, permissions).expect("script should be executable");
+    }
+
+    fs::write(
+        project.join("pyproject.toml"),
+        "[tool.genja.tasks]\nmodules = []\n",
+    )
+    .expect("project configuration should be written");
+    fs::write(project.join("helper_stdout.txt"), "[]").expect("helper response should be written");
+    let path = env::join_paths(
+        std::iter::once(unrelated.clone()).chain(env::split_paths(&env::var_os("PATH").unwrap())),
+    )
+    .expect("test PATH should be valid");
+
+    let output = Command::new(&genja)
+        .current_dir(&project)
+        .env("PATH", &path)
+        .args(["task", "list", "--output", "json"])
+        .output()
+        .expect("wheel CLI should run directly");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"[]\n");
+    assert!(output.stderr.is_empty(), "{output:?}");
+
+    let overridden = Command::new(&genja)
+        .current_dir(&project)
+        .env("PATH", &path)
+        .arg("--python")
+        .arg(&decoy)
+        .args(["task", "list", "--output", "json"])
+        .output()
+        .expect("wheel CLI with override should run");
+    assert_eq!(overridden.status.code(), Some(1), "{overridden:?}");
+    assert!(overridden.stdout.is_empty(), "{overridden:?}");
+    assert!(
+        String::from_utf8_lossy(&overridden.stderr).contains("wrong interpreter selected"),
+        "{overridden:?}"
+    );
+
+    let without_companion = directory.path().join("without-companion");
+    fs::create_dir(&without_companion).expect("second scripts directory should exist");
+    let genja_without_companion = without_companion.join("genja");
+    fs::copy(&genja, &genja_without_companion).expect("CLI binary should be copied");
+    let missing = Command::new(&genja_without_companion)
+        .current_dir(&project)
+        .env("PATH", &path)
+        .args(["task", "list", "--output", "json"])
+        .output()
+        .expect("wheel CLI without companion should run");
+    assert_eq!(missing.status.code(), Some(1), "{missing:?}");
+    assert!(missing.stdout.is_empty(), "{missing:?}");
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("use --python PATH"),
+        "{missing:?}"
+    );
+
+    fs::write(
+        project.join("pyproject.toml"),
+        "[project]\nname = 'rust-only'\n",
+    )
+    .expect("Rust-only project configuration should be written");
+    let rust_only = Command::new(&genja_without_companion)
+        .current_dir(&project)
+        .env("PATH", &path)
+        .args(["task", "list", "--output", "json"])
+        .output()
+        .expect("Rust-only wheel CLI should run");
+    assert!(rust_only.status.success(), "{rust_only:?}");
+    assert_eq!(rust_only.stdout, b"[]\n");
+}
+
 #[test]
 fn rust_only_project_accepts_overrides_without_starting_python() {
     let directory = tempfile::tempdir().expect("temporary directory should exist");

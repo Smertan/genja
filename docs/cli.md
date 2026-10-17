@@ -12,9 +12,16 @@ apply to all three.
 
 === ":fontawesome-brands-python: Python"
 
-    Install the `genja` executable from `genja-cli` and `genja-py` in the
-    Python environment containing your task modules. They are separate
-    installations; see [Installation](installation.md#python-task-discovery-from-the-cli).
+    Starting with v0.5.0, install both `genja-py` and the prebuilt `genja`
+    command in the Python environment containing your task modules:
+
+    ```bash
+    python -m pip install "genja-py[cli]>=0.5.0,<0.6.0"
+    ```
+
+    Python discovery requires v0.5.0 or later of both packages. See
+    [Installation](installation.md#python-task-discovery-from-the-cli) for
+    supported wheel platforms.
 
     Declare the modules containing your `@task` classes in `pyproject.toml`:
 
@@ -38,9 +45,10 @@ apply to all three.
     identity from your own `task list` output. `genja --help` lists commands,
     and `genja version` prints the CLI version.
 
-    The CLI reads `pyproject.toml` in the current directory and uses `python`
-    from `PATH` by default. Pass a path to `--pyproject` to select another
-    project file, or to `--python` to select another interpreter. See
+    The CLI reads `pyproject.toml` in the current directory. A `genja` binary
+    installed from a Python wheel uses the interpreter beside it; a Cargo-built
+    binary uses `python` from `PATH`. Pass a path to `--pyproject` to select
+    another project file, or to `--python` to select another interpreter. See
     [Task Registration](task-registration.md#python-import-boundary) for the
     import boundary.
 
@@ -385,10 +393,10 @@ language-qualified lookup when both implementations share an ID and version.
 === ":fontawesome-brands-python: Python"
 
     These examples use the [configured Python task module](examples.md#mixed-rust-and-python-discovery)
-    in `genja/examples/python`. Install `genja-py` in the selected Python
-    environment and the `genja` binary from `genja-cli`, then run from the
-    repository root. If that environment's interpreter is not `python` on `PATH`,
-    pass its path with `--python`.
+    in `genja/examples/python`. Install `genja-py[cli]` in the selected Python
+    environment, then run from the repository root. If you use a Cargo-built
+    binary and that environment's interpreter is not `python` on `PATH`, pass
+    its path with `--python`.
 
     /// details | Task list (table)
         type: example
@@ -905,6 +913,11 @@ language-qualified lookup when both implementations share an ID and version.
     different operating system. For PDM, run `pdm info --python` from
     `genja-core-python` to find the path.
 
+    The Rust `CollectFacts` task in `genja/examples/task_browser.rs` has no
+    explicit registration. Its generated task version comes from the `version`
+    field in `genja/Cargo.toml`. The output below shows `0.5.0` for the
+    v0.5.0 release.
+
     /// details | Combined task list (table)
         type: example
 
@@ -923,7 +936,7 @@ language-qualified lookup when both implementations share an ID and version.
     ---------------------------------+---------+---------------+-----------+----------+----------+---------------
      acme.examples.collect_facts     | 1.0.0   | collect_facts | explicit  | Python   | blocking | yes
     ---------------------------------+---------+---------------+-----------+----------+----------+---------------
-     auto:task_browser::CollectFacts | 0.4.0   | collect_facts | generated | Rust     | async    | no
+     auto:task_browser::CollectFacts | 0.5.0   | collect_facts | generated | Rust     | async    | no
     ```
     ///
 
@@ -942,7 +955,7 @@ language-qualified lookup when both implementations share an ID and version.
     | `acme.examples.backup_config`     | `1.0.0` | `backup_config` | `explicit`  | `Rust`   | `blocking` | yes           |
     | `acme.examples.backup_config`     | `1.0.0` | `backup_config` | `explicit`  | `Python` | `blocking` | yes           |
     | `acme.examples.collect_facts`     | `1.0.0` | `collect_facts` | `explicit`  | `Python` | `blocking` | yes           |
-    | `auto:task_browser::CollectFacts` | `0.4.0` | `collect_facts` | `generated` | `Rust`   | `async`    | no            |
+    | `auto:task_browser::CollectFacts` | `0.5.0` | `collect_facts` | `generated` | `Rust`   | `async`    | no            |
     ```
     ///
 
@@ -1243,15 +1256,14 @@ named `my_project_cli`.
 For projects already using `genja`, enable the optional `genja-cli` feature.
 This feature is disabled by default and exposes the CLI library as `genja::cli`.
 
-The feature is currently unreleased and planned for v0.5.0. Once a release
-containing it is published, add it with:
+The feature is available from v0.5.0. Add it with:
 
 ```bash
-cargo add genja --features genja-cli
+cargo add genja@0.5.0 --features genja-cli
 ```
 
-To use the current checkout before publication, use a path dependency instead
-(replace the path with the location of the `genja` crate in your checkout):
+For development from a checkout, use a path dependency instead (replace the
+path with the location of the `genja` crate in your checkout):
 
 ```toml
 [dependencies]
@@ -1271,13 +1283,13 @@ fn main() -> std::process::ExitCode {
 ### Direct CLI Dependency
 
 A dedicated CLI wrapper package can depend directly on `genja-cli` without
-depending on the full `genja` runtime. Once `genja-cli` is published:
+depending on the full `genja` runtime. From v0.5.0, add it with:
 
 ```bash
-cargo add genja-cli
+cargo add genja-cli@0.5.0
 ```
 
-Before publication, use a path dependency on the checkout's `genja-cli` crate:
+For development from a checkout, use a path dependency:
 
 ```toml
 [dependencies]

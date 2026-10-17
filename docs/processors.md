@@ -23,6 +23,8 @@ return `GenjaError::PluginNotFound`.
 
 Processor hooks are sync-only in both languages. They mirror the Rust
 `TaskProcessor` trait, so implement them with normal `fn` or `def` methods.
+Tasks using those processors may still have an async `start_async` method, as
+the Rust task examples below show.
 
 ## Select Processors On A Task
 
@@ -53,12 +55,13 @@ registered before the runtime executes the task.
 === ":fontawesome-brands-python: Python"
 
     ```python
-    from genja.task import task
+    from genja.task import TaskSuccessResult, task
 
 
     @task(name="backup_config", processors=["audit"])
     class BackupConfig:
-        ...
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary=f"backed up {host.hostname}")
     ```
 
 ## Rust Processor Plugins
@@ -74,8 +77,8 @@ use genja::genja_core::task::{
     HostTaskResult, TaskProcessor, TaskProcessorContext,
 };
 use genja::genja_task;
-use genja_plugin_manager::PluginManager;
-use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
+use genja::genja_plugin_manager::PluginManager;
+use genja::genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
 
 #[derive(Clone)]
 struct AuditProcessor;

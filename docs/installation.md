@@ -12,7 +12,7 @@ Install the Genja package for the language you are using.
 
     ```toml
     [dependencies]
-    genja = "0.3.0"
+    genja = "0.5.0"
     ```
 
     The `genja` crate pulls in the Rust crates required for the public Genja
@@ -25,14 +25,13 @@ Install the Genja package for the language you are using.
     | --- | --- | --- |
     | `genja-cli` | No | CLI entry points, task discovery, and rendering through `genja::cli`. |
 
-    The `genja-cli` feature is currently unreleased and planned for v0.5.0.
-    Once a release containing it is published, enable it with:
+    The `genja-cli` feature is available from v0.5.0. Enable it with:
 
     ```bash
     cargo add genja@0.5.0 --features genja-cli
     ```
 
-    Or, once v0.5.0 is published, configure the dependency in `Cargo.toml`:
+    Or configure the dependency in `Cargo.toml`:
 
     ```toml
     [dependencies]
@@ -54,14 +53,26 @@ Install the Genja package for the language you are using.
     your tasks and calls `genja::cli::run_main()`.
 
     See the [CLI guide](cli.md#through-the-genja-feature) for setup from a
-    checkout before publication, binary wiring, the direct `genja-cli`
+    checkout, binary wiring, the direct `genja-cli`
     dependency option, and deployment instructions.
 
 === ":fontawesome-brands-python: Python"
 
+    Install the Python library alone:
+
     ```bash
-    pip install genja-py
+    python -m pip install genja-py
     ```
+
+    Starting with v0.5.0, install the optional CLI and TUI in the same
+    environment:
+
+    ```bash
+    python -m pip install "genja-py[cli]>=0.5.0,<0.6.0"
+    ```
+
+    The extra depends on a compatible prebuilt `genja-cli` v0.5.x wheel. The
+    base `genja-py` installation remains library-only.
 
     The Python distribution is named `genja-py`, but the import name is
     `genja`:
@@ -73,39 +84,70 @@ Install the Genja package for the language you are using.
 ## Python Task Discovery From The CLI
 
 `genja-py` supplies Python task registration and the discovery helper. The
-`genja` executable comes from the separate Rust `genja-cli` crate; installing
-`genja-py` alone does not install that executable. There is currently no
-`genja-py[cli]` extra that bundles it.
+`genja` executable comes from a separate `genja-cli` Python distribution that
+packages the existing Rust binary with TUI support. The Rust crate and PyPI
+distribution share a name, while the installed command is named `genja`.
 
-Install `genja-py` in the Python environment that contains your task modules:
-
-```bash
-python -m pip install genja-py
-```
-
-Until `genja-cli` is published, install its binary from a Genja checkout:
+For a Python-only project on v0.5.0 or later, activate the environment
+containing your task modules, then install both packages with one command:
 
 ```bash
-cargo install --path genja-cli --features tui
+python -m pip install "genja-py[cli]>=0.5.0,<0.6.0"
 ```
 
-Omit `--features tui` if you only need `task list`, `task describe`, and
-`task docs`. The `tui` feature enables `genja tui` in the installed binary.
-The CLI uses `python` from `PATH` by default; pass `--python PATH` to select
-the environment where `genja-py` and your task modules are installed.
+The v0.5.0 wheel release covers CPython 3.10–3.14 on Linux x86_64,
+macOS Apple Silicon and Intel, and Windows x64. On another platform, the CLI
+extra has no compatible binary wheel and installation fails rather than
+building the CLI from source. Base `genja-py` may still offer a source build,
+which requires a Rust toolchain. The Intel macOS wheels target macOS 10.12;
+CI installs them on macOS 15, so runtime compatibility with older releases
+still needs verification.
 
-Declare Python task modules in your project's `pyproject.toml`:
+Cargo-built CLI binaries use `python` from `PATH` by default. A CLI installed
+from a Python wheel uses the interpreter beside its executable. Pass
+`--python PATH` to select another environment containing `genja-py` and your
+task modules.
+
+For a first project, save this configuration as `pyproject.toml`:
 
 ```toml
 [tool.genja.tasks]
-modules = ["my_project.tasks"]
+modules = ["tasks"]
 ```
 
-From that project directory, `genja task list`, `genja task describe`, and
-`genja task docs` discover those modules. A binary built with `tui` also
-supports `genja tui`. A generic CLI binary is enough for Python-only projects.
-Mixed projects use a project-local binary
-that links their Rust task crate and calls `genja_cli::run_main()`; it also
+In the same directory, save this registered task as `tasks.py`:
+
+```python
+from genja.task import TaskRegistration, TaskSuccessResult, task
+
+
+@task(
+    name="hello",
+    registration=TaskRegistration(
+        id="example.hello",
+        version="1.0.0",
+        description="Greets a host",
+    ),
+)
+class Hello:
+    def start(self, task, host, context):
+        return TaskSuccessResult(summary=f"Hello, {host.hostname}")
+```
+
+From that directory, Genja imports `tasks.py` because the module is declared
+in `pyproject.toml`; the decorator registers the task during import:
+
+```bash
+genja --help
+genja task list
+genja task describe example.hello@1.0.0
+genja tui
+```
+
+`genja tui` needs an interactive terminal. The wheel-installed binary includes
+TUI support. A generic CLI binary is enough for Python-only projects. Mixed
+projects use a project-local binary that links their Rust task crate and calls
+`genja_cli::run_main()`; it also
 imports configured Python modules through the selected interpreter. See the
 [CLI guide](cli.md#project-local-cli-binary-rust-and-mixed-projects) and
 [mixed discovery example](examples.md#mixed-rust-and-python-discovery).

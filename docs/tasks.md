@@ -1137,12 +1137,13 @@ centralized result decoration. Tasks opt into them by plugin name:
 === ":fontawesome-brands-python: Python"
 
     ```python
-    from genja.task import task
+    from genja.task import TaskSuccessResult, task
 
 
     @task(name="backup_config", processors=["audit"])
     class BackupConfig:
-        ...
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary=f"backed up {host.hostname}")
     ```
 
 ## Sub-Tasks

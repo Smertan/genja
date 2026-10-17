@@ -49,8 +49,8 @@ for the registration rules and example structs.
 | Mixed Rust and Python | `my_project_cli tui` | Linked Rust tasks and configured Python modules |
 
 The list, search, Details, Schema, and keyboard controls below work the same
-way for every setup. A Python-only project needs the `genja` binary from
-`genja-cli` and `genja-py` in the selected interpreter. Rust and mixed projects
+way for every setup. Starting with v0.5.0, a Python-only project can install
+the `genja` binary with the `genja-py[cli]` extra. Rust and mixed projects
 need a project-local binary to discover their compiled Rust tasks. See
 [Installation](installation.md#python-task-discovery-from-the-cli) and the
 [CLI binary guide](cli.md#project-local-cli-binary-rust-and-mixed-projects).
@@ -62,15 +62,29 @@ Projects using the main `genja` crate can enable `genja-tui`, which also enables
 `genja-cli` and forwards to `genja-cli/tui`. Both TUI features are disabled by
 default; they do not require a separate package installation.
 
-These features are currently unreleased. Choose one dependency setup from a
-checkout, adjusting the path for your project:
+From v0.5.0, choose one dependency setup:
+
+```toml
+[dependencies]
+genja = { version = "0.5.0", features = ["genja-tui"] }
+```
+
+Or depend directly on the CLI crate:
+
+```toml
+[dependencies]
+genja-cli = { version = "0.5.0", features = ["tui"] }
+```
+
+For development from a checkout, use paths instead, adjusting them for your
+project:
 
 ```toml
 [dependencies]
 genja = { path = "../genja/genja", features = ["genja-tui"] }
 ```
 
-Or depend directly on the CLI crate:
+Or use a path to the CLI crate:
 
 ```toml
 [dependencies]
@@ -85,19 +99,26 @@ The TUI's `run_main()` helper is available for project-local binaries.
 
 === ":fontawesome-brands-python: Python"
 
-    Declare task modules in `[tool.genja.tasks]`, install `genja-py` in the
-    Python environment containing them, and run a `genja` binary built with
-    `tui` from the project directory:
+    Declare task modules in `[tool.genja.tasks]`, then install both packages
+    in the Python environment containing them:
+
+    ```bash
+    python -m pip install "genja-py[cli]>=0.5.0,<0.6.0"
+    ```
+
+    The installed `genja` binary includes TUI support. From the project
+    directory, run:
 
     ```bash
     genja tui
     ```
 
-    The CLI uses `pyproject.toml` in the current directory and `python` from
-    `PATH` by default. Use `--pyproject PATH` or `--python PATH` to select
-    another project file or interpreter. See
+    The CLI uses `pyproject.toml` in the current directory. A wheel-installed
+    `genja` uses the interpreter beside its executable; a Cargo-built binary
+    uses `python` from `PATH`. Use `--pyproject PATH` or `--python PATH` to
+    select another project file or interpreter. See
     [Installation](installation.md#python-task-discovery-from-the-cli) for the
-    two installation steps.
+    supported platforms.
 
 === ":fontawesome-brands-rust: Rust"
 
@@ -252,8 +273,8 @@ Select the language of the sample you want to inspect.
 
 === ":fontawesome-brands-python: Python"
 
-    With `genja-py` installed in the selected Python environment and a `genja`
-    binary built with `tui`, run this from the repository root. The sample module
+    With `genja-py[cli]` installed in the selected Python environment, run this
+    from the repository root. The sample module
     and `pyproject.toml` are in the Genja source checkout; they are not installed
     with `genja-py` from PyPI:
 

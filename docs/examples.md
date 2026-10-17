@@ -116,17 +116,17 @@ and a [pyproject.toml](../genja/examples/python/pyproject.toml) that declares it
 modules = ["task_registration_tasks"]
 ```
 
-Install `genja-py` in the Python environment used for discovery and select that
-environment's interpreter with `--python` if it is not the `python` on `PATH`.
-From the repository root, the generic `genja` binary can list the Python tasks
-without linking Rust registrations:
+Install `genja-py[cli]` in the Python environment used for discovery. From the
+repository root, the installed `genja` binary can list the Python tasks without
+linking Rust registrations:
 
 ```bash
 genja --pyproject genja/examples/python/pyproject.toml task list
 ```
 
 Run the Rust browser example against the same project file to see both
-languages in one list:
+languages in one list. If that environment's interpreter is not `python` on
+`PATH`, pass its path with `--python`:
 
 ```bash
 cargo run -p genja --features genja-cli --example task_browser -- \
@@ -146,7 +146,7 @@ cargo run -p genja --features genja-tui --example task_browser -- \
 ```
 
 See the [installation guide](installation.md#python-task-discovery-from-the-cli)
-for the separate CLI and Python package installation steps. The
+for the v0.5.0 Python CLI installation. The
 [Python tab of the TUI walkthrough](tui.md#try-descriptor-inspection)
 shows inspection and search with the same configured task module.
 

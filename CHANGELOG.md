@@ -11,6 +11,9 @@ Changed packages:
 
 ### Added
 
+- Added an optional `genja-py[cli]` dependency on the matching `genja-cli` release line; the base Python package remains library-only. Refs: #156
+- Added Python wheel packaging for the existing `genja` CLI binary with TUI support, installing the command into the Python environment's scripts directory. Refs: #156
+- Added Intel macOS wheels to the planned Python library and optional CLI release, with wheel-only installation checks across supported Python versions. Refs: #156
 - Added a Python-only and mixed Rust/Python CLI example using one `pyproject.toml`, with installation guidance for the separate `genja-cli` executable and `genja-py` package. Refs: #155
 - Added 🦀 Rust and 🐍 Python labels to the TUI task list and Details view, preserving separate implementations with the same ID and version in one searchable browser. Refs: #155
 - Added language labels to CLI task lists, descriptions, and catalogues, plus optional `rust:` and `python:` qualifiers for tasks sharing an ID and version. Refs: #155
@@ -51,6 +54,7 @@ Changed packages:
 
 ### Changed
 
+- Changed the wheel-installed CLI to use the Python interpreter beside its executable for configured task discovery, while preserving explicit `--python` overrides and the Cargo-built default. Refs: #156
 - CLI `task list` and `task describe` JSON/YAML output wraps each canonical descriptor as `{ descriptor, language }` so same-ID Rust and Python implementations remain distinguishable; `language` is `rust`, `python`, or `null` when unknown. Refs: #155
 - **Breaking:** Added `AmbiguousImplementation` and `DuplicateImplementation` variants to `genja-cli`'s public `DiscoveryError` enum. Update exhaustive matches to handle these cases or add a fallback arm. Refs: #154
 - Changed TUI inspection labels and JSON syntax accents to use terminal ANSI palette colours, while ordinary values and backgrounds inherit terminal defaults. Task selection now reverses terminal foreground/background, improving compatibility with light and dark terminal themes. Refs: #130

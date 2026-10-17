@@ -21,8 +21,8 @@ python /path/to/genja/genja/examples/python/task_registration.py
 ```
 
 The adjacent `pyproject.toml` declares `task_registration_tasks` for CLI
-discovery. With `genja-py` installed in the selected Python environment and
-the separate `genja-cli` binary installed, run from this directory:
+discovery. Install `genja-py[cli]` v0.5.x in the selected Python environment,
+then run from this directory:
 
 ```bash
 genja task list
@@ -30,6 +30,6 @@ genja task describe python:acme.examples.backup_config@1.0.0
 genja tui
 ```
 
-The `tui` command requires a CLI binary built with its optional `tui` feature.
+The wheel-installed `genja` command includes the `tui` feature.
 The Rust `task_browser` example can use this same project file to show a mixed
 Rust/Python list. See [Mixed Rust And Python Discovery](../../../docs/examples.md#mixed-rust-and-python-discovery).
