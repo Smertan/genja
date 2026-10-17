@@ -49,8 +49,8 @@ for the registration rules and example structs.
 | Mixed Rust and Python | `my_project_cli tui` | Linked Rust tasks and configured Python modules |
 
 The list, search, Details, Schema, and keyboard controls below work the same
-way for every setup. A Python-only project needs the `genja` binary from
-`genja-cli` and `genja-py` in the selected interpreter. Rust and mixed projects
+way for every setup. Starting with v0.5.0, a Python-only project can install
+the `genja` binary with the `genja-py[cli]` extra. Rust and mixed projects
 need a project-local binary to discover their compiled Rust tasks. See
 [Installation](installation.md#python-task-discovery-from-the-cli) and the
 [CLI binary guide](cli.md#project-local-cli-binary-rust-and-mixed-projects).
@@ -85,9 +85,15 @@ The TUI's `run_main()` helper is available for project-local binaries.
 
 === ":fontawesome-brands-python: Python"
 
-    Declare task modules in `[tool.genja.tasks]`, install `genja-py` in the
-    Python environment containing them, and run a `genja` binary built with
-    `tui` from the project directory:
+    Declare task modules in `[tool.genja.tasks]`, then install both packages
+    in the Python environment containing them:
+
+    ```bash
+    python -m pip install "genja-py[cli]>=0.5.0,<0.6.0"
+    ```
+
+    The installed `genja` binary includes TUI support. From the project
+    directory, run:
 
     ```bash
     genja tui
@@ -98,7 +104,7 @@ The TUI's `run_main()` helper is available for project-local binaries.
     uses `python` from `PATH`. Use `--pyproject PATH` or `--python PATH` to
     select another project file or interpreter. See
     [Installation](installation.md#python-task-discovery-from-the-cli) for the
-    two installation steps.
+    supported platforms.
 
 === ":fontawesome-brands-rust: Rust"
 

@@ -12,9 +12,16 @@ apply to all three.
 
 === ":fontawesome-brands-python: Python"
 
-    Install the `genja` executable from `genja-cli` and `genja-py` in the
-    Python environment containing your task modules. They are separate
-    installations; see [Installation](installation.md#python-task-discovery-from-the-cli).
+    Starting with v0.5.0, install both `genja-py` and the prebuilt `genja`
+    command in the Python environment containing your task modules:
+
+    ```bash
+    python -m pip install "genja-py[cli]>=0.5.0,<0.6.0"
+    ```
+
+    Python discovery requires v0.5.0 or later of both packages. See
+    [Installation](installation.md#python-task-discovery-from-the-cli) for
+    supported wheel platforms.
 
     Declare the modules containing your `@task` classes in `pyproject.toml`:
 

@@ -11,32 +11,35 @@ package layout, version expectations, and how to read docs against releases.
 | `genja-core` | Rust crate | Core inventory, settings, task, result, state, and error types. |
 | `genja-core-derive` | Rust crate | Procedural macros such as `#[genja_task]`. |
 | `genja-plugin-manager` | Rust crate | Plugin traits, registration, dynamic loading, and build helpers. |
+| `genja-cli` | Rust crate | CLI library and binary for Rust applications. |
 | `genja-py` | Python distribution | Python bindings that expose the `genja` import package. |
+| `genja-cli` | Python distribution | Prebuilt `genja` executable with TUI support, installed by `genja-py[cli]` from v0.5.0. |
 | `genja-core-python` | Rust crate | Internal PyO3 extension crate that builds the Python package. |
 
 See [API Surface](api-surface.md) for which package to depend on.
 
 ## Current Versioning
 
-The Rust runtime crates in this release currently use:
+The current development branch uses:
 
 ```text
-genja = 0.3.0
-genja-core = 0.3.0
-genja-core-derive = 0.3.0
-genja-plugin-manager = 0.3.0
+genja = 0.4.0
+genja-core = 0.4.0
+genja-core-derive = 0.4.0
+genja-plugin-manager = 0.4.0
+genja-cli = 0.4.0
 ```
 
 The Python distribution is also currently versioned as:
 
 ```text
-genja-py = 0.3.0
+genja-py = 0.4.0
 ```
 
 Until a more formal compatibility policy is published, treat matching minor
 versions of `genja`, `genja-core`, `genja-plugin-manager`, and `genja-py` as
-the supported combination. For example, use `genja-py 0.1.x` with the Rust
-runtime crates from the `0.1.x` line.
+the supported combination. The v0.5.0 release will align the Rust crates,
+Python package, and CLI wheel on the 0.5.x line.
 
 ## Rust Compatibility
 
@@ -44,7 +47,7 @@ Rust applications should usually depend on `genja`:
 
 ```toml
 [dependencies]
-genja = "0.3.0"
+genja = "0.4.0"
 ```
 
 The `genja` crate depends on and re-exports core pieces from the workspace, so
@@ -56,12 +59,12 @@ standalone plugin crates:
 
 ```toml
 [dependencies]
-genja-plugin-manager = "0.3.0"
-genja-core = "0.3.0"
+genja-plugin-manager = "0.4.0"
+genja-core = "0.4.0"
 ```
 
 When depending on multiple Genja crates directly, keep their versions aligned.
-Mixing `genja 0.1.x` with a different `genja-core` or `genja-plugin-manager`
+Mixing `genja 0.4.x` with a different `genja-core` or `genja-plugin-manager`
 line is not a supported configuration.
 
 ## Python Compatibility
@@ -81,6 +84,24 @@ import genja
 The Python package is built from the Rust runtime in this repository. Keep the
 Python package version aligned with the Rust crate version line when combining
 Python and Rust artifacts in the same project.
+
+Python task discovery through an installed `genja` command requires
+`genja-py` v0.5.0 or later. The `cli` extra installs a matching prebuilt
+`genja-cli` wheel:
+
+```bash
+python -m pip install "genja-py[cli]>=0.5.0,<0.6.0"
+```
+
+The v0.5.x extra requires `genja-cli>=0.5.0,<0.6.0`; the base `genja-py`
+installation remains library-only. Supported wheel targets are CPython
+3.10–3.14 on Linux x86_64, macOS arm64 or x86_64, and Windows x64. No CLI
+source distribution is published, so unsupported platforms cannot build it as
+a pip fallback.
+
+During release preparation, bump the `genja-py` package, the
+`genja-core-python` and `genja-cli` crates, and the extra's version range
+together. The CLI wheel version must match the `genja-py` release.
 
 ## Docs And Releases
 

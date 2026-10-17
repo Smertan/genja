@@ -892,7 +892,8 @@ Task authors do not need another registry call. Import-time stdout, including
 direct file-descriptor writes, is redirected to stderr. Invalid configuration
 or a failed import exits with an error on stderr and no descriptor JSON. An
 empty module list, or modules with no registered tasks, produces `[]`. The
-helper does not scan directories or connect its output to the Rust CLI or TUI.
+helper does not scan directories. The CLI and TUI invoke it when Python task
+modules are configured in the selected `pyproject.toml`.
 
 ## Python Design Constraints
 

@@ -146,7 +146,7 @@ cargo run -p genja --features genja-tui --example task_browser -- \
 ```
 
 See the [installation guide](installation.md#python-task-discovery-from-the-cli)
-for the separate CLI and Python package installation steps. The
+for the v0.5.0 Python CLI installation. The
 [Python tab of the TUI walkthrough](tui.md#try-descriptor-inspection)
 shows inspection and search with the same configured task module.
 

@@ -369,9 +369,21 @@ Package verification against crates.io requires internal dependency versions to
 be published first; the release workflow publishes and waits for each dependency
 before packaging the next crate.
 
-Python package releases use matching `py-vX.Y.Z` tags, validate
-`genja-core-python/pyproject.toml`, build wheels plus a source distribution,
-install and test each built wheel, and publish to PyPI with trusted publishing.
+Python package releases use matching `py-vX.Y.Z` tags. The release workflow
+checks the `genja-py` package version against the `genja-core-python` and
+`genja-cli` crate versions, and checks that the `cli` extra requires the
+matching minor release line. For v0.5.0, that requirement is
+`genja-cli>=0.5.0,<0.6.0`. Bump these versions together on the release branch.
+Update the examples in [Versions And Compatibility](version-compatibility.md)
+with the released version at the same time.
+The workflow builds platform wheels for both packages, tests base and optional
+wheel-only installs, and publishes the CLI wheels before the dependent
+`genja-py` wheels and source distribution. Configure PyPI trusted publishing
+for both distributions before tagging the release. The CLI package has no
+source distribution; unsupported platforms cannot build it through pip.
+Confirm that the `genja-cli` PyPI project name can be claimed before release;
+if unavailable, rename the wheel distribution and the `genja-py` extra's
+dependency consistently.
 
 ## Release Flow
 
