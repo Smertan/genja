@@ -266,8 +266,8 @@ Python inventory plugins extend `InventoryPluginBase` and implement
     ```rust
     use genja::genja_core::inventory::{Host, Hosts, Inventory};
     use genja::genja_core::{InventoryLoadError, Settings};
-    use genja_plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
-    use genja_plugin_manager::PluginManager;
+    use genja::genja_plugin_manager::plugin_types::{Plugin, PluginInventory, Plugins};
+    use genja::genja_plugin_manager::PluginManager;
 
     #[derive(Debug)]
     struct StaticInventoryPlugin;
@@ -348,8 +348,8 @@ plugin. Use the synchronous constructors for sync-only inventory plugins such as
     use genja::genja_core::inventory::{BaseBuilderHost, Host, Hosts, Inventory};
     use genja::genja_core::{InventoryLoadError, Settings};
     use genja::genja_core::settings::InventoryConfig;
-    use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
-    use genja_plugin_manager::PluginManager;
+    use genja::genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
+    use genja::genja_plugin_manager::PluginManager;
 
     #[derive(Debug)]
     struct ApiInventoryPlugin;

@@ -32,11 +32,10 @@ directly.
 ## Optional CLI Support
 
 The optional `genja-cli` feature exposes the CLI library through `genja::cli`.
-It is disabled by default and is currently unreleased, planned for v0.5.0.
-Once published, enable it with:
+It is disabled by default and available from v0.5.0. Enable it with:
 
 ```bash
-cargo add genja --features genja-cli
+cargo add genja@0.5.0 --features genja-cli
 ```
 
 Provide a project-specific binary entry point that links your task crate:
@@ -122,8 +121,8 @@ use genja::genja_core::inventory::{
     Hosts,
     Inventory,
 };
-use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
-use genja_plugin_manager::PluginManager;
+use genja::genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
+use genja::genja_plugin_manager::PluginManager;
 
 #[derive(Debug)]
 struct ApiInventoryPlugin;

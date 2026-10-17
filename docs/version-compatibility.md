@@ -38,8 +38,8 @@ genja-py = 0.5.0
 
 Until a more formal compatibility policy is published, treat matching minor
 versions of `genja`, `genja-core`, `genja-plugin-manager`, and `genja-py` as
-the supported combination. The v0.5.0 release will align the Rust crates,
-Python package, and CLI wheel on the 0.5.x line.
+the supported combination. The v0.5.0 Rust crates, Python package, and CLI
+wheel share the 0.5.x release line.
 
 ## Rust Compatibility
 

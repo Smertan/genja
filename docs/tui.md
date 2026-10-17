@@ -62,15 +62,29 @@ Projects using the main `genja` crate can enable `genja-tui`, which also enables
 `genja-cli` and forwards to `genja-cli/tui`. Both TUI features are disabled by
 default; they do not require a separate package installation.
 
-These features are currently unreleased. Choose one dependency setup from a
-checkout, adjusting the path for your project:
+From v0.5.0, choose one dependency setup:
+
+```toml
+[dependencies]
+genja = { version = "0.5.0", features = ["genja-tui"] }
+```
+
+Or depend directly on the CLI crate:
+
+```toml
+[dependencies]
+genja-cli = { version = "0.5.0", features = ["tui"] }
+```
+
+For development from a checkout, use paths instead, adjusting them for your
+project:
 
 ```toml
 [dependencies]
 genja = { path = "../genja/genja", features = ["genja-tui"] }
 ```
 
-Or depend directly on the CLI crate:
+Or use a path to the CLI crate:
 
 ```toml
 [dependencies]
@@ -259,8 +273,8 @@ Select the language of the sample you want to inspect.
 
 === ":fontawesome-brands-python: Python"
 
-    With `genja-py` installed in the selected Python environment and a `genja`
-    binary built with `tui`, run this from the repository root. The sample module
+    With `genja-py[cli]` installed in the selected Python environment, run this
+    from the repository root. The sample module
     and `pyproject.toml` are in the Genja source checkout; they are not installed
     with `genja-py` from PyPI:
 

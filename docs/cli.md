@@ -393,10 +393,10 @@ language-qualified lookup when both implementations share an ID and version.
 === ":fontawesome-brands-python: Python"
 
     These examples use the [configured Python task module](examples.md#mixed-rust-and-python-discovery)
-    in `genja/examples/python`. Install `genja-py` in the selected Python
-    environment and the `genja` binary from `genja-cli`, then run from the
-    repository root. If that environment's interpreter is not `python` on `PATH`,
-    pass its path with `--python`.
+    in `genja/examples/python`. Install `genja-py[cli]` in the selected Python
+    environment, then run from the repository root. If you use a Cargo-built
+    binary and that environment's interpreter is not `python` on `PATH`, pass
+    its path with `--python`.
 
     /// details | Task list (table)
         type: example
@@ -1256,15 +1256,14 @@ named `my_project_cli`.
 For projects already using `genja`, enable the optional `genja-cli` feature.
 This feature is disabled by default and exposes the CLI library as `genja::cli`.
 
-The feature is currently unreleased and planned for v0.5.0. Once a release
-containing it is published, add it with:
+The feature is available from v0.5.0. Add it with:
 
 ```bash
-cargo add genja --features genja-cli
+cargo add genja@0.5.0 --features genja-cli
 ```
 
-To use the current checkout before publication, use a path dependency instead
-(replace the path with the location of the `genja` crate in your checkout):
+For development from a checkout, use a path dependency instead (replace the
+path with the location of the `genja` crate in your checkout):
 
 ```toml
 [dependencies]
@@ -1284,13 +1283,13 @@ fn main() -> std::process::ExitCode {
 ### Direct CLI Dependency
 
 A dedicated CLI wrapper package can depend directly on `genja-cli` without
-depending on the full `genja` runtime. Once `genja-cli` is published:
+depending on the full `genja` runtime. From v0.5.0, add it with:
 
 ```bash
-cargo add genja-cli
+cargo add genja-cli@0.5.0
 ```
 
-Before publication, use a path dependency on the checkout's `genja-cli` crate:
+For development from a checkout, use a path dependency:
 
 ```toml
 [dependencies]

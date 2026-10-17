@@ -5,17 +5,16 @@ First-party command-line interface for Genja automation workflows.
 ## Dependency Options
 
 Projects already using `genja` can enable its optional `genja-cli` feature and
-call `genja::cli::run_main()`. This feature is disabled by default and is
-currently unreleased, planned for v0.5.0. Once published:
+call `genja::cli::run_main()`. This feature is disabled by default and
+available from v0.5.0:
 
 ```bash
-cargo add genja --features genja-cli
+cargo add genja@0.5.0 --features genja-cli
 ```
 
 Dedicated CLI wrapper packages can depend directly on `genja-cli` and call
 `genja_cli::run_main()`, as shown below. Both paths expose the same library.
-See the [CLI guide](../docs/cli.md) for dependency setup from a checkout before
-publication.
+See the [CLI guide](../docs/cli.md) for dependency setup from a checkout.
 
 Neither dependency option installs an executable automatically. For compiled
 Rust task discovery, build and distribute a project-specific binary that links
@@ -25,8 +24,9 @@ The `genja-cli` crate also builds a generic `genja` executable. Python-only
 projects can use that binary without a project-local Rust wrapper: install
 `genja-py` in the selected Python environment, declare modules in
 `[tool.genja.tasks]`, and run `genja task list` from the project directory.
-`genja-py` supplies the task API and discovery helper; it does not install the
-Rust executable. See [Installation](../docs/installation.md#python-task-discovery-from-the-cli).
+`genja-py` supplies the task API and discovery helper. Its base installation
+does not install the executable; the `genja-py[cli]` extra does from v0.5.0.
+See [Installation](../docs/installation.md#python-task-discovery-from-the-cli).
 
 ## Discovery Sources
 

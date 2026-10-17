@@ -32,12 +32,13 @@ Tasks choose a connection plugin by name.
 === ":fontawesome-brands-python: Python"
 
     ```python
-    from genja.task import task
+    from genja.task import TaskSuccessResult, task
 
 
     @task(name="backup_config", connection_plugin_name="ssh")
     class BackupConfig:
-        ...
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary=f"backed up {host.hostname}")
     ```
 
 The named plugin must already be registered, and the host inventory must
@@ -108,8 +109,8 @@ Optional defaulted methods:
 ```rust
 use genja::async_trait;
 use genja::genja_core::inventory::{ConnectionKey, ResolvedConnectionParams};
-use genja_plugin_manager::plugin_types::{Plugin, PluginConnection, Plugins};
-use genja_plugin_manager::PluginManager;
+use genja::genja_plugin_manager::plugin_types::{Plugin, PluginConnection, Plugins};
+use genja::genja_plugin_manager::PluginManager;
 
 // Factory: Creates connection instances
 #[derive(Debug)]

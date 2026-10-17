@@ -1,6 +1,6 @@
 # API Surface
 
-Genja is split into several Rust crates and one Python package. Most users
+Genja is split into several Rust crates and Python distributions. Most users
 should depend on the highest-level package for their language and only reach for
 lower-level crates when building extensions.
 
@@ -46,6 +46,7 @@ lower-level crates when building extensions.
 | Package | Import name | Use it for |
 | --- | --- | --- |
 | `genja-py` | `genja` | Python runtime construction, Python task authoring, Python plugins, settings access, inventory access, and result inspection. |
+| `genja-cli` | — | Optional prebuilt `genja` CLI and TUI executable, installed by `genja-py[cli]` from v0.5.0. |
 
 Use the public Python submodules for task and plugin authoring:
 
@@ -78,7 +79,7 @@ The `genja` crate currently re-exports:
 | Re-export | Use it for |
 | --- | --- |
 | `genja::genja_core` | Core inventory, settings, task, result, state, and error types. |
-| `genja::cli` | CLI entry points, discovery, and rendering; requires the optional `genja-cli` feature (unreleased, planned for v0.5.0). |
+| `genja::cli` | CLI entry points, discovery, and rendering; requires the optional `genja-cli` feature, available from v0.5.0. |
 | `genja::genja_plugin_manager` | Plugin manager, plugin traits, dynamic loading, and build support helpers. |
 | `genja::genja_task` | The task authoring macro from `genja-core-derive`. |
 | `genja::GenjaError` | The shared Genja runtime error type. |

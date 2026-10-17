@@ -54,8 +54,8 @@ Rust transforms implement `Transform` and are exposed through a
 normalize_inventory` selects the `normalize_inventory` plugin below.
 
 ```rust
-use genja_plugin_manager::plugin_types::{Plugin, PluginTransformFunction, Plugins};
-use genja_plugin_manager::PluginManager;
+use genja::genja_plugin_manager::plugin_types::{Plugin, PluginTransformFunction, Plugins};
+use genja::genja_plugin_manager::PluginManager;
 use genja::genja_core::inventory::{
     BaseBuilderHost, Defaults, Host, Transform, TransformFunctionOptions, TransformFunction,
 };

@@ -21,10 +21,18 @@ cargo add genja
 pip install genja-py
 ```
 
+The filtering example below also uses `serde_json`. Async examples use Tokio;
+add those dependencies when using the corresponding snippets:
+
+```bash
+cargo add serde_json
+cargo add tokio --features macros,rt-multi-thread
+```
+
 Use a JSON or YAML config file and load it with `Settings::from_file`:
 
 ```rust
-use genja_core::Settings;
+use genja::genja_core::Settings;
 
 let settings = Settings::from_file("config.yaml")?;
 ```
@@ -34,7 +42,7 @@ Build a `Genja` instance from settings and load inventory from
 
 ```rust
 use genja::Genja;
-use genja_core::Settings;
+use genja::genja_core::Settings;
 
 let genja = Genja::from_settings(Settings::from_file("config.yaml")?)?;
 ```
@@ -44,8 +52,8 @@ only for runtime options:
 
 ```rust
 use genja::Genja;
-use genja_core::Settings;
-use genja_core::inventory::{BaseBuilderHost, Host, Hosts, Inventory};
+use genja::genja_core::Settings;
+use genja::genja_core::inventory::{BaseBuilderHost, Host, Hosts, Inventory};
 
 let mut hosts = Hosts::new();
 hosts.add_host("router1", Host::builder().hostname("10.0.0.1").build());
@@ -76,8 +84,8 @@ use genja::Genja;
 use genja::async_trait;
 use genja::genja_core::inventory::{BaseBuilderHost, Host, Hosts, Inventory};
 use genja::genja_core::{InventoryLoadError, Settings};
-use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
-use genja_plugin_manager::PluginManager;
+use genja::genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
+use genja::genja_plugin_manager::PluginManager;
 
 #[derive(Debug)]
 struct ApiInventoryPlugin;
@@ -130,7 +138,7 @@ Dot paths can be used to target a specific path.
 
 ```rust
 use genja::Genja;
-use genja_core::inventory::{BaseBuilderHost, Data, Host, Hosts, Inventory};
+use genja::genja_core::inventory::{BaseBuilderHost, Data, Host, Hosts, Inventory};
 use serde_json::json;
 
 let mut hosts = Hosts::new();
@@ -187,8 +195,8 @@ The recommended pattern for a single task is:
 
 ```rust
 use genja::{Genja, genja_task};
-use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
-use genja_core::task::{HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess};
+use genja::genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
+use genja::genja_core::task::{HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess};
 
 struct CheckConfigTask;
 
@@ -269,8 +277,8 @@ Tasks opt into processors by name:
 
 ```rust
 use genja::genja_task;
-use genja_core::inventory::Host;
-use genja_core::task::{HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess};
+use genja::genja_core::inventory::Host;
+use genja::genja_core::task::{HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess};
 
 struct DeployTask;
 
@@ -289,8 +297,8 @@ impl DeployTask {
 A processor plugin returns a `TaskProcessor` implementation:
 
 ```rust
-use genja_core::task::{TaskProcessor, TaskProcessorContext, TaskResults};
-use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
+use genja::genja_core::task::{TaskProcessor, TaskProcessorContext, TaskResults};
+use genja::genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -315,7 +323,7 @@ impl TaskProcessor for AuditProcessor {
         &self,
         context: &TaskProcessorContext,
         results: &mut TaskResults,
-    ) -> Result<(), genja_core::GenjaError> {
+    ) -> Result<(), genja::GenjaError> {
         let _ = (context, results);
         Ok(())
     }
@@ -349,8 +357,8 @@ execute after the parent task and their results are stored under
 use std::sync::Arc;
 
 use genja::{Genja, genja_task};
-use genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
-use genja_core::task::{HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess};
+use genja::genja_core::inventory::{BaseBuilderHost, Host, Inventory, Hosts};
+use genja::genja_core::task::{HostTaskResult, Task, TaskError, TaskRuntimeContext, TaskSuccess};
 
 struct ValidateTask;
 

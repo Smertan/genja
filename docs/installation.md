@@ -25,14 +25,13 @@ Install the Genja package for the language you are using.
     | --- | --- | --- |
     | `genja-cli` | No | CLI entry points, task discovery, and rendering through `genja::cli`. |
 
-    The `genja-cli` feature is currently unreleased and planned for v0.5.0.
-    Once a release containing it is published, enable it with:
+    The `genja-cli` feature is available from v0.5.0. Enable it with:
 
     ```bash
     cargo add genja@0.5.0 --features genja-cli
     ```
 
-    Or, once v0.5.0 is published, configure the dependency in `Cargo.toml`:
+    Or configure the dependency in `Cargo.toml`:
 
     ```toml
     [dependencies]
@@ -54,7 +53,7 @@ Install the Genja package for the language you are using.
     your tasks and calls `genja::cli::run_main()`.
 
     See the [CLI guide](cli.md#through-the-genja-feature) for setup from a
-    checkout before publication, binary wiring, the direct `genja-cli`
+    checkout, binary wiring, the direct `genja-cli`
     dependency option, and deployment instructions.
 
 === ":fontawesome-brands-python: Python"
