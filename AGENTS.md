@@ -102,6 +102,11 @@ Repository-specific instructions for AI coding agents working in this workspace.
 - For breaking commits, include a `BREAKING CHANGE:` footer in the commit body when appropriate.
 - Breaking API, serialization, or result-shape changes must also be documented in `CHANGELOG.md`.
 
+## GitHub Issues
+
+- When asked to draft a GitHub issue, read the matching template in `.github/ISSUE_TEMPLATE/` and follow its structure. Replace placeholders and omit sections that do not apply.
+- If no template fits, draft a concise issue with the context and acceptance criteria needed for the work.
+
 ## Documentation
 
 ### User-Facing Changes
