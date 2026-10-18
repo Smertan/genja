@@ -385,6 +385,15 @@ Confirm that the `genja-cli` PyPI project name can be claimed before release;
 if unavailable, rename the wheel distribution and the `genja-py` extra's
 dependency consistently.
 
+## Issue Templates
+
+Choose a release, feature, or bug template from the
+[new-issue chooser](https://github.com/Smertan/genja/issues/new/choose).
+For a release, replace every `X.Y.Z` placeholder, remove steps that do not
+apply, and use the checkboxes to track preparation, validation, publication,
+and post-release verification. Issue templates become available in the chooser
+after they are merged into `main`.
+
 ## Release Flow
 
 Use `develop` as the integration branch and `main` as the release branch. Release
