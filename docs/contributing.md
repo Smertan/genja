@@ -410,7 +410,8 @@ The CLI feature became available in v0.5.0.
 ```
 
 The `allow-next` comment exempts only the next recognized occurrence of the
-specified Genja package version, including one inside a following code block.
+specified Genja package version within three lines, including one inside a
+following code block.
 It must include a reason. Repeat it for each intentional older occurrence;
 do not exclude a whole file. The checker will reject unused or mismatched
 comments so moved text cannot silently leave stale exceptions behind.
