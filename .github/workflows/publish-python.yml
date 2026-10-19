@@ -103,6 +103,12 @@ jobs:
               output.write(f"version={version}\n")
           PY
 
+      - name: Check release documentation versions
+        if: github.event_name != 'pull_request'
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: python scripts/check-doc-versions.py --tag "${RELEASE_TAG}"
+
   build-wheels:
     name: Build wheel (${{ matrix.os }}, Python ${{ matrix.python-version }})
     needs: validate
