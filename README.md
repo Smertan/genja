@@ -12,6 +12,20 @@ For a complete walkthrough, see the repository
 [quickstart guide](docs/quickstart.md). The full documentation starts at
 [docs/index.md](docs/index.md).
 
+## CLI and Terminal UI
+
+Starting with v0.5.0, Python projects can install the prebuilt `genja` command
+and TUI alongside the library:
+
+```bash
+python -m pip install "genja-py[cli]>=0.5.0,<0.6.0"
+```
+
+Declare task modules in `pyproject.toml`, then use `genja task list` or
+`genja tui`. Rust and mixed projects use a project-local binary that links
+their Rust tasks. See [Installation](docs/installation.md), the
+[CLI guide](docs/cli.md), and the [TUI guide](docs/tui.md).
+
 ## Quick Start
 
 Install Genja for the language you are using:

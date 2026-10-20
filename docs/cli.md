@@ -97,10 +97,11 @@ apply to all three.
 
 ## Terminal User Interface (TUI)
 
-Genja is developing an interactive task browser for the terminal. A binary
+Genja provides an interactive task browser for the terminal. A binary
 built with the `tui` feature can browse configured Python tasks and linked Rust
-tasks in one screen. Rust applications can also embed the browser. Press `q` or
-Escape to exit. Builds without the feature omit the command. See
+tasks in one screen. Rust applications can also embed the browser. Press `q`
+outside search to quit; Escape first returns from inspection or clears search.
+Builds without the feature omit the command. See
 the [Terminal UI guide](tui.md) for setup, usage, and current capabilities.
 
 ## Command Reference (All Projects)

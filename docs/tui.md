@@ -1,6 +1,6 @@
 # Terminal User Interface (TUI)
 
-Genja is developing a terminal user interface for browsing task descriptors.
+Genja provides a terminal user interface for browsing task descriptors.
 It displays configured Python tasks and Rust tasks linked into the running
 binary in one list. Run a binary built with the `tui` feature to open the
 full-screen browser. Rust applications can also embed the browser in an
@@ -92,7 +92,7 @@ genja-cli = { path = "../genja/genja-cli", features = ["tui"] }
 ```
 
 The `genja::cli::tui` or `genja_cli::tui` module provides browser state,
-descriptor loading, event handling, a basic screen, and a full-screen runner.
+descriptor loading, event handling, task inspection views, and a full-screen runner.
 The TUI's `run_main()` helper is available for project-local binaries.
 
 ## Launch from the CLI
@@ -443,7 +443,7 @@ for Cargo package and binary naming examples.
 
 ## Runner For A Selected Descriptor Source (Rust API)
 
-To run the basic screen in a terminal, pass any `TaskDescriptorSource` to
+To run the browser in a terminal, pass any `TaskDescriptorSource` to
 `run_tui`. For compiled Rust tasks, the binary must link its task crate:
 
 ```rust

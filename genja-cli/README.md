@@ -62,9 +62,9 @@ nested descriptor retains its canonical shape.
 
 ## Terminal User Interface (TUI)
 
-Genja's terminal user interface is being developed to browse task descriptors
-in a terminal. The opt-in `tui` feature currently exposes a basic browser
-screen that applications can embed or run full-screen through `genja_cli::tui`.
+Genja's terminal user interface browses task descriptors from Rust and Python
+in one list. The opt-in `tui` feature exposes a browser that applications can
+embed or run full-screen through `genja_cli::tui`.
 
 The feature enables Ratatui and Crossterm support and is disabled by default.
 Projects using `genja` can enable `genja-tui`, which forwards to
@@ -77,7 +77,9 @@ existing Ratatui application. `run_tui(source, options)`
 provides a full-screen runner for callers with a descriptor source. A
 project-local binary can call `genja_cli::tui::run_main()` to discover compiled
 Rust tasks linked into that binary and configured Python tasks. With `tui`
-enabled, `genja tui` launches the same basic screen. Press `q` or Escape to exit.
+enabled, `genja tui` launches the same browser with search, Details, and Schema
+views. Press `q` outside search to quit; Escape first returns from inspection
+or clears search.
 Discovery completes before full-screen terminal setup; failures return without
 entering raw mode.
 No separate TUI installation is required. See the

@@ -4,7 +4,9 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
-Changed packages:
+## 0.5.0 - 2026-10-21
+
+Released packages:
 
 - Rust crates: `genja`, `genja-cli`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`
 - Python package: `genja-py`, `genja-core-python`
@@ -13,7 +15,7 @@ Changed packages:
 
 - Added an optional `genja-py[cli]` dependency on the matching `genja-cli` release line; the base Python package remains library-only. Refs: #156
 - Added Python wheel packaging for the existing `genja` CLI binary with TUI support, installing the command into the Python environment's scripts directory. Refs: #156
-- Added Intel macOS wheels to the planned Python library and optional CLI release, with wheel-only installation checks across supported Python versions. Refs: #156
+- Added Intel macOS wheels for the Python library and optional CLI, with wheel-only installation checks across supported Python versions. Refs: #156
 - Added a Python-only and mixed Rust/Python CLI example using one `pyproject.toml`, with installation guidance for the separate `genja-cli` executable and `genja-py` package. Refs: #155
 - Added 🦀 Rust and 🐍 Python labels to the TUI task list and Details view, preserving separate implementations with the same ID and version in one searchable browser. Refs: #155
 - Added language labels to CLI task lists, descriptions, and catalogues, plus optional `rust:` and `python:` qualifiers for tasks sharing an ID and version. Refs: #155
@@ -35,7 +37,7 @@ Changed packages:
 - Added a TUI task table displaying descriptor IDs, versions, names, execution modes, and constructible status, with a visible selection marker and highlight. Refs: #128
 - Added a `task_browser` Rust example with two linked sample tasks for exploring CLI descriptor listing, inspection, and the optional terminal user interface. Refs: #128
 - Added `j`/`k` and Home/End task selection controls to the optional terminal user interface, with bounded navigation for empty and loaded task lists. Refs: #128
-- Added `genja tui` behind the optional `tui` feature to launch the basic terminal task browser using compiled Rust task discovery. Press `q` or Escape to exit; full task browsing is not implemented yet. Refs: #127
+- Added `genja tui` behind the optional `tui` feature to browse discovered task descriptors in a full-screen terminal interface. Refs: #127
 - Added `genja_cli::tui::run_main()` for project-local TUI binaries, with `genja::cli::tui::run_main()` available through the `genja-tui` feature. Refs: #126
 - Added a full-screen TUI runner that loads task descriptors before taking terminal control, redraws on selection and resize, and restores the terminal after exit or errors. Refs: #126
 - Added an embeddable TUI browser shell with host-owned Ratatui rendering, Crossterm event translation, selection actions, and quit requests. Refs: #126
