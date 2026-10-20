@@ -54,6 +54,7 @@ Changed packages:
 
 ### Changed
 
+- Release branch documentation checks now accept the issue-numbered `release/ISSUE-vX.Y.Z` naming convention and SemVer pre-release suffixes. Refs: #163
 - Changed the wheel-installed CLI to use the Python interpreter beside its executable for configured task discovery, while preserving explicit `--python` overrides and the Cargo-built default. Refs: #156
 - CLI `task list` and `task describe` JSON/YAML output wraps each canonical descriptor as `{ descriptor, language }` so same-ID Rust and Python implementations remain distinguishable; `language` is `rust`, `python`, or `null` when unknown. Refs: #155
 - **Breaking:** Added `AmbiguousImplementation` and `DuplicateImplementation` variants to `genja-cli`'s public `DiscoveryError` enum. Update exhaustive matches to handle these cases or add a fallback arm. Refs: #154

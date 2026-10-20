@@ -20,9 +20,15 @@ PACKAGE_READMES = (
     "genja-core-python/README.md",
 )
 VERSION = r"[0-9]+\.[0-9]+\.[0-9]+"
+SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+SEMVER_CORE = rf"{SEMVER_NUMBER}\.{SEMVER_NUMBER}\.{SEMVER_NUMBER}"
 VERSION_LINE = r"[0-9]+\.[0-9]+\.x"
 PACKAGE = r"genja(?:-(?:core(?:-derive|-python)?|plugin-manager|cli|py))?"
 TAG = re.compile(rf"^(?:rs|py)-v(?P<version>{VERSION})$")
+BRANCH = re.compile(
+    rf"^release/[0-9]+-v(?P<version>{SEMVER_CORE})"
+    r"(?:-(?P<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+)
 EXCEPTION = re.compile(
     rf"^\s*<!-- genja-version-check: allow-next (?P<version>{VERSION}|{VERSION_LINE}) "
     r'reason="(?P<reason>[^"\n]+)" -->\s*$'
@@ -186,6 +192,9 @@ def main() -> int:
     choice = parser.add_mutually_exclusive_group(required=True)
     choice.add_argument("--version", help="Intended release version, X.Y.Z")
     choice.add_argument("--tag", help="Release tag, rs-vX.Y.Z or py-vX.Y.Z")
+    choice.add_argument(
+        "--branch", help="Release branch, release/ISSUE-vX.Y.Z[-PRERELEASE]"
+    )
     parser.add_argument(
         "--root",
         type=Path,
@@ -198,6 +207,14 @@ def main() -> int:
         match = TAG.fullmatch(args.tag)
         if match is None:
             parser.error("--tag must be rs-vX.Y.Z or py-vX.Y.Z")
+        version = match.group("version")
+    elif args.branch is not None:
+        match = BRANCH.fullmatch(args.branch)
+        if match is None or any(
+            len(identifier) > 1 and identifier.startswith("0") and identifier.isdigit()
+            for identifier in (match.group("prerelease") or "").split(".")
+        ):
+            parser.error("--branch must be release/ISSUE-vX.Y.Z[-PRERELEASE]")
         version = match.group("version")
     else:
         version = args.version

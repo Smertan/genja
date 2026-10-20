@@ -89,6 +89,7 @@ Repository-specific instructions for AI coding agents working in this workspace.
 
 ## Release Versioning
 
+- Name release branches `release/ISSUE-vX.Y.Z`, using the release issue number and intended version. A SemVer pre-release suffix such as `-alpha.1` is allowed; the documentation version check in CI derives the base `X.Y.Z` from either form.
 - Rust releases use a unified release train for publishable Rust crates.
 - When preparing `rs-vX.Y.Z`, bump all publishable Rust crates to `X.Y.Z` and keep their internal path dependency version requirements aligned:
   - `genja`

@@ -168,3 +168,45 @@ def test_release_tags_and_generated_release_example(tmp_path: Path) -> None:
     assert "docs/guide.md:3:" not in next_release.stderr
     assert invalid.returncode != 0
     assert "--tag must be rs-vX.Y.Z or py-vX.Y.Z" in invalid.stderr
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "release/163-v0.5.0",
+        "release/163-v0.5.0-alpha",
+        "release/163-v0.5.0-alpha.1",
+        "release/163-v0.5.0-rc.2",
+    ],
+)
+def test_issue_numbered_release_branch_selects_version(
+    tmp_path: Path, branch: str
+) -> None:
+    write(tmp_path, "docs/guide.md", 'genja = "0.5.0"\n')
+
+    result = run_checker(tmp_path, "--branch", branch)
+
+    assert result.returncode == 0, result.stderr
+    assert "documentation package versions valid for 0.5.0" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "release/0.5.0",
+        "release/v0.5.0",
+        "release/163-0.5.0",
+        "release/163-v0.5",
+        "release/163-v0.5.0-",
+        "release/163-v0.5.0-alpha.01",
+        "release/163-v00.5.0-alpha",
+        "release/163-v0.5.0+build.1",
+    ],
+)
+def test_other_release_branch_formats_fail(tmp_path: Path, branch: str) -> None:
+    write(tmp_path, "docs/guide.md", 'genja = "0.5.0"\n')
+
+    result = run_checker(tmp_path, "--branch", branch)
+
+    assert result.returncode != 0
+    assert "--branch must be release/ISSUE-vX.Y.Z[-PRERELEASE]" in result.stderr

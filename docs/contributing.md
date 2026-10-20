@@ -400,8 +400,10 @@ python scripts/check-doc-versions.py --version X.Y.Z
 
 Use `--tag rs-vX.Y.Z` or `--tag py-vX.Y.Z` to validate a tag. The checker
 reports the file, line, found version, and expected version for each stale
-reference. CI runs it for `release/X.Y.Z` branches and before either publish
-workflow proceeds. To test the checker itself, run `pdm run test-doc-versions`
+reference. CI runs it for `release/ISSUE-vX.Y.Z` branches, including SemVer
+pre-release suffixes such as `release/163-v0.5.0-alpha.1`, and before either
+publish workflow proceeds. A pre-release branch checks documentation against
+its base `X.Y.Z` version. To test the checker itself, run `pdm run test-doc-versions`
 from `genja-core-python`.
 
 Installation commands, Cargo dependencies, compatibility tables, release
@@ -441,12 +443,15 @@ after they are merged into `main`.
 ## Release Flow
 
 Use `develop` as the integration branch and `main` as the release branch. Release
-preparation should happen on a release branch cut from `develop`:
+preparation should happen on a branch named `release/ISSUE-vX.Y.Z`, where
+`ISSUE` is the release issue number, cut from `develop`. A SemVer pre-release
+suffix such as `-alpha.1` or `-rc.1` may follow `X.Y.Z` during preparation;
+the Rust and Python publication workflows currently require stable release tags:
 
 ```text
 feature/* -> PR -> develop
-develop -> release/x.y.z
-release/x.y.z -> PR -> main
+develop -> release/ISSUE-vX.Y.Z
+release/ISSUE-vX.Y.Z -> PR -> main
 main -> fast-forward develop
 ```
 

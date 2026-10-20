@@ -36,9 +36,7 @@ jobs:
         if: startsWith(github.head_ref, 'release/') || startsWith(github.ref_name, 'release/')
         env:
           RELEASE_BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: |
-          release_version="${RELEASE_BRANCH#release/}"
-          python scripts/check-doc-versions.py --version "${release_version}"
+        run: python scripts/check-doc-versions.py --branch "${RELEASE_BRANCH}"
 
       - name: Check formatting
         run: cargo fmt --all -- --check

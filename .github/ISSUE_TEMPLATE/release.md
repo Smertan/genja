@@ -15,7 +15,7 @@ Replace `X.Y.Z` and remove steps that do not apply to this release.
 ## Preparation
 
 - [ ] Confirm required feature and release-blocking issues are complete.
-- [ ] Create `release/X.Y.Z` from `develop`.
+- [ ] Create `release/ISSUE-vX.Y.Z` from `develop`, using this release issue's number (append a SemVer pre-release suffix if needed).
 - [ ] Align versions and internal dependency requirements for every publishable Rust crate in this release.
 - [ ] Align the Python package, binding crate, and optional CLI dependency versions if publishing Python packages.
 - [ ] Finalize the top-level changelog, guides, package READMEs, and release notes.
@@ -36,7 +36,7 @@ Replace `X.Y.Z` and remove steps that do not apply to this release.
 
 ## Publication
 
-- [ ] Merge `release/X.Y.Z` into `main`.
+- [ ] Merge `release/ISSUE-vX.Y.Z` into `main`.
 - [ ] Confirm required CI checks passed for the exact `main` commit being tagged.
 - [ ] Create `rs-vX.Y.Z` on that commit and verify the crates.io publication if releasing Rust crates.
 - [ ] Create `py-vX.Y.Z` on that commit and verify the PyPI publication if releasing Python packages.
