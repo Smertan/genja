@@ -50,6 +50,7 @@ distribution = false
 
 [tool.pdm.scripts]
 test = { shell = "maturin develop && pytest -v python/tests" }
+test-doc-versions = { cmd = "pytest -v ../scripts/tests" }
 test-rust = { cmd = "python scripts/test_rust.py" }
 test-rust-debug = { cmd = "python scripts/test_rust.py --nocapture" }
 typecheck = { shell = "maturin develop && ty check python/tests/typecheck" }
