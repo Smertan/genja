@@ -24,6 +24,7 @@ Replace `X.Y.Z` and remove steps that do not apply to this release.
 ## Validation
 
 - [ ] Run `python scripts/validate-release.py --tag rs-vX.Y.Z` if publishing Rust crates.
+- [ ] Run `python scripts/check-doc-versions.py --version X.Y.Z` after updating guides and package READMEs.
 - [ ] Run `cargo fmt --all --check`.
 - [ ] Run `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
 - [ ] Run `cargo test --workspace --exclude genja-core-python --all-features`.

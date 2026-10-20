@@ -391,6 +391,19 @@ The documentation package-version check is scoped to Markdown guides under
 `docs/`, the repository `README.md`, and the package-root READMEs for
 `genja`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`,
 `genja-cli`, and `genja-core-python`.
+
+After updating the release examples, run the checker from the repository root:
+
+```bash
+python scripts/check-doc-versions.py --version X.Y.Z
+```
+
+Use `--tag rs-vX.Y.Z` or `--tag py-vX.Y.Z` to validate a tag. The checker
+reports the file, line, found version, and expected version for each stale
+reference. CI runs it for `release/X.Y.Z` branches and before either publish
+workflow proceeds. To test the checker itself, run `pdm run test-doc-versions`
+from `genja-core-python`.
+
 Installation commands, Cargo dependencies, compatibility tables, release
 examples, and prose describing the current Genja release must
 use the intended release version. A compatible minor-version range, such as a
@@ -413,7 +426,7 @@ The `allow-next` comment exempts only the next recognized occurrence of the
 specified Genja package version within three lines, including one inside a
 following code block.
 It must include a reason. Repeat it for each intentional older occurrence;
-do not exclude a whole file. The checker will reject unused or mismatched
+do not exclude a whole file. The checker rejects unused or mismatched
 comments so moved text cannot silently leave stale exceptions behind.
 
 ## Issue Templates
