@@ -6,7 +6,7 @@ All notable changes to this workspace should be documented in this file.
 
 Changed packages:
 
-- Rust crates: `genja`, `genja-cli`, `genja-core`
+- Rust crates: `genja`, `genja-cli`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`
 - Python package: `genja-py`, `genja-core-python`
 
 ### Added
