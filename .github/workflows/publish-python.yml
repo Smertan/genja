@@ -1,6 +1,17 @@
 name: Publish Python Package
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/publish-python.yml"
+      - "genja-cli/**"
+      - "genja-core-python/**"
+      - "genja-core/**"
+      - "genja-core-derive/**"
+      - "genja-plugin-manager/**"
+      - "genja/**"
+      - "Cargo.lock"
+      - "scripts/check-python-wheels.py"
   push:
     tags:
       - "py-v*.*.*"
@@ -16,7 +27,7 @@ permissions:
 
 jobs:
   validate:
-    name: Validate PyPI release
+    name: Validate Python package metadata
     runs-on: ubuntu-latest
     outputs:
       release-version: ${{ steps.release.outputs.version }}
@@ -33,41 +44,70 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Validate release
+      - name: Validate package versions and release tag
         id: release
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
 
-          if ! printf '%s' "${RELEASE_TAG}" | grep -Eq '^py-v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Release tag must match py-vX.Y.Z: ${RELEASE_TAG}" >&2
-            exit 1
+          if [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
+            if ! printf '%s' "${RELEASE_TAG}" | grep -Eq '^py-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "Release tag must match py-vX.Y.Z: ${RELEASE_TAG}" >&2
+              exit 1
+            fi
+
+            git fetch origin main --tags
+            tag_commit="$(git rev-list -n 1 "${RELEASE_TAG}")"
+            if ! git merge-base --is-ancestor "${tag_commit}" origin/main; then
+              echo "${RELEASE_TAG} must point to a commit reachable from origin/main" >&2
+              exit 1
+            fi
           fi
 
-          git fetch origin main --tags
-          tag_commit="$(git rev-list -n 1 "${RELEASE_TAG}")"
-          if ! git merge-base --is-ancestor "${tag_commit}" origin/main; then
-            echo "${RELEASE_TAG} must point to a commit reachable from origin/main" >&2
-            exit 1
-          fi
-
-          version="${RELEASE_TAG#py-v}"
-          python - "${version}" <<'PY'
-          import sys
+          python - <<'PY'
+          import os
+          import re
           import tomllib
+          from pathlib import Path
 
-          expected = sys.argv[1]
-          with open("genja-core-python/pyproject.toml", "rb") as pyproject:
-              actual = tomllib.load(pyproject)["project"]["version"]
+          def project(path):
+              with Path(path).open("rb") as file:
+                  return tomllib.load(file)
 
-          if actual != expected:
-              raise SystemExit(
-                  f"pyproject.toml version {actual} does not match release tag version {expected}"
-              )
+          python_project = project("genja-core-python/pyproject.toml")["project"]
+          cli_project = project("genja-cli/pyproject.toml")["project"]
+          cli_crate = project("genja-cli/Cargo.toml")["package"]
+          binding_crate = project("genja-core-python/Cargo.toml")["package"]
+          version = python_project["version"]
+          tag = os.environ["RELEASE_TAG"] if os.environ["GITHUB_EVENT_NAME"] != "pull_request" else ""
+          if tag and tag != f"py-v{version}":
+              raise SystemExit(f"pyproject.toml version {version} does not match release tag {tag}")
+          for label, actual in [("genja-cli", cli_crate["version"]),
+                                ("genja-core-python", binding_crate["version"])]:
+              if actual != version:
+                  raise SystemExit(f"{label} version {actual} does not match genja-py {version}")
+
+          match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
+          if match is None:
+              raise SystemExit(f"unsupported package version: {version}")
+          major, minor = map(int, match.group(1, 2))
+          expected_extra = f"{cli_project['name']}>={major}.{minor}.0,<{major}.{minor + 1}.0"
+          actual_extra = python_project.get("optional-dependencies", {}).get("cli")
+          if actual_extra != [expected_extra]:
+              raise SystemExit(f"genja-py[cli] must require {expected_extra}; found {actual_extra}")
+          if cli_project["name"] not in {"genja-cli", "genja-py-cli"}:
+              raise SystemExit(f"unexpected CLI wheel distribution name: {cli_project['name']}")
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"version={version}\n")
           PY
 
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - name: Check release documentation versions
+        if: github.event_name != 'pull_request'
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: python scripts/check-doc-versions.py --tag "${RELEASE_TAG}"
 
   build-wheels:
     name: Build wheel (${{ matrix.os }}, Python ${{ matrix.python-version }})
@@ -107,6 +147,21 @@ jobs:
           - os: macos-latest
             python-version: "3.14"
             maturin-args: --release --out dist --interpreter python --compatibility pypi
+          - os: macos-15-intel
+            python-version: "3.10"
+            maturin-args: --release --out dist --interpreter python --compatibility pypi
+          - os: macos-15-intel
+            python-version: "3.11"
+            maturin-args: --release --out dist --interpreter python --compatibility pypi
+          - os: macos-15-intel
+            python-version: "3.12"
+            maturin-args: --release --out dist --interpreter python --compatibility pypi
+          - os: macos-15-intel
+            python-version: "3.13"
+            maturin-args: --release --out dist --interpreter python --compatibility pypi
+          - os: macos-15-intel
+            python-version: "3.14"
+            maturin-args: --release --out dist --interpreter python --compatibility pypi
           - os: windows-latest
             python-version: "3.10"
             maturin-args: --release --out dist --interpreter python --compatibility pypi
@@ -138,6 +193,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.88.0
+
+      - name: Set Intel macOS deployment target
+        if: matrix.os == 'macos-15-intel'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=10.12" >> "$GITHUB_ENV"
 
       - name: Build wheel
         uses: PyO3/maturin-action@v1
@@ -193,11 +252,126 @@ jobs:
           subprocess.run([sys.executable, "-m", "pytest", "-v", tests], check=True)
           PY
 
+      - name: Inspect Intel Python wheel
+        if: matrix.os == 'macos-15-intel'
+        run: >-
+          python scripts/check-python-wheels.py inspect-intel-python
+          --wheel-dir genja-core-python/dist
+          --version ${{ needs.validate.outputs.release-version }}
+          --python-version ${{ matrix.python-version }}
+
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
           name: python-wheel-${{ matrix.os }}-${{ matrix.python-version }}
           path: genja-core-python/dist/*
+
+  build-cli-wheels:
+    name: Build CLI wheel (${{ matrix.os }})
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            manylinux: "2014"
+          - os: macos-latest
+            platform: macos
+            manylinux: auto
+          - os: macos-15-intel
+            platform: macos-intel
+            manylinux: auto
+          - os: windows-latest
+            platform: windows
+            manylinux: auto
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - name: Set Intel macOS deployment target
+        if: matrix.os == 'macos-15-intel'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=10.12" >> "$GITHUB_ENV"
+
+      - name: Build CLI wheel
+        uses: PyO3/maturin-action@v1
+        env:
+          OPENSSL_NO_VENDOR: 1
+        with:
+          command: build
+          args: --release --locked --out dist --compatibility pypi
+          working-directory: genja-cli
+          manylinux: ${{ matrix.manylinux }}
+          before-script-linux: |
+            yum install -y openssl-devel pkgconfig
+
+      - name: Inspect CLI wheel
+        run: >-
+          python scripts/check-python-wheels.py inspect-cli
+          --wheel-dir genja-cli/dist
+          --version ${{ needs.validate.outputs.release-version }}
+          --platform ${{ matrix.platform }}
+
+      - name: Upload CLI wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-wheel-${{ matrix.os }}
+          path: genja-cli/dist/*.whl
+
+  test-wheel-installs:
+    name: Install wheels (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    needs: [validate, build-wheels, build-cli-wheels]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download Python wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: python-wheel-${{ matrix.os }}-${{ matrix.python-version }}
+          path: dist/python
+
+      - name: Download CLI wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-wheel-${{ matrix.os }}
+          path: dist/cli
+
+      - name: Test base and optional installations
+        run: >-
+          python scripts/check-python-wheels.py install
+          --python-wheels dist/python
+          --cli-wheels dist/cli
+          --version ${{ needs.validate.outputs.release-version }}
+          --project genja/examples/python
 
   build-sdist:
     name: Build source distribution
@@ -233,12 +407,38 @@ jobs:
           name: python-sdist
           path: genja-core-python/dist/*
 
+  publish-cli:
+    name: Publish CLI wheels to PyPI
+    if: github.event_name != 'pull_request'
+    needs: [validate, build-cli-wheels, test-wheel-installs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment:
+      name: pypi
+
+    steps:
+      - name: Download CLI wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cli-wheel-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish CLI wheels
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
   publish:
-    name: Publish to PyPI
+    name: Publish genja-py to PyPI
+    if: github.event_name != 'pull_request'
     needs:
       - validate
       - build-wheels
       - build-sdist
+      - publish-cli
     runs-on: ubuntu-latest
     permissions:
       contents: read

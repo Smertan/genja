@@ -1,0 +1,785 @@
+//! Shared task discovery boundary for terminal interfaces.
+//!
+//! This module owns CLI/TUI-facing discovery concepts while reusing the
+//! canonical descriptor identity and metadata types from `genja-core`.
+//! [`TaskImplementation`] adds source-assigned language metadata without
+//! changing the canonical descriptor or its serialized form.
+
+pub mod combined;
+pub mod config;
+pub mod python;
+pub mod rust;
+pub mod selection;
+
+use std::error::Error;
+use std::fmt;
+
+pub use genja_core::task::{TaskDescriptor, TaskRegistrationKey};
+use genja_core::task::{TaskRegistrationError, validate_task_version};
+
+/// Result type for task descriptor discovery operations.
+pub type DiscoveryResult<T> = Result<T, DiscoveryError>;
+
+/// Re-exports for source implementations and consumers that prefer an explicit
+/// source namespace.
+pub mod source {
+    pub use super::{
+        DiscoveryError, DiscoveryResult, TaskDescriptorIdentity, TaskDescriptorSource,
+        TaskImplementation, TaskImplementationIdentity, TaskLanguage,
+    };
+}
+
+/// Language of a task implementation assigned by its discovery source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TaskLanguage {
+    /// Task registered in the running Rust binary.
+    Rust,
+    /// Task registered by an imported Python module.
+    Python,
+}
+
+/// A discovered task descriptor and metadata about its implementation.
+///
+/// The language is discovery metadata and is not part of the canonical
+/// [`TaskDescriptor`] or its serialized form. It is `None` when the source
+/// cannot identify the implementation language.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskImplementation {
+    descriptor: TaskDescriptor,
+    language: Option<TaskLanguage>,
+}
+
+impl TaskImplementation {
+    /// Create an implementation record with source-assigned language metadata.
+    pub fn new(descriptor: TaskDescriptor, language: Option<TaskLanguage>) -> Self {
+        Self {
+            descriptor,
+            language,
+        }
+    }
+
+    /// Return the canonical task descriptor.
+    pub fn descriptor(&self) -> &TaskDescriptor {
+        &self.descriptor
+    }
+
+    /// Return the implementation language, if the source knows it.
+    pub fn language(&self) -> Option<TaskLanguage> {
+        self.language
+    }
+}
+
+/// Source of task descriptors and implementation metadata for terminal interfaces.
+///
+/// Implementations may read descriptors from compiled Rust registries, Python
+/// modules, provider manifests, MCP tools, or other future backends. This trait
+/// is intentionally limited to descriptor discovery and does not cover task
+/// construction or execution.
+pub trait TaskDescriptorSource {
+    /// Return all known task descriptors.
+    fn list_tasks(&self) -> DiscoveryResult<Vec<TaskDescriptor>>;
+
+    /// Return descriptors with source-assigned implementation metadata.
+    ///
+    /// Sources that only implement [`Self::list_tasks`] remain compatible. Their
+    /// implementations have unknown language until they override this method.
+    fn list_implementations(&self) -> DiscoveryResult<Vec<TaskImplementation>> {
+        Ok(self
+            .list_tasks()?
+            .into_iter()
+            .map(|descriptor| TaskImplementation::new(descriptor, None))
+            .collect())
+    }
+
+    /// Describe one implementation by `[rust:|python:]<id>@<version>`.
+    ///
+    /// An unqualified identity succeeds when it identifies one implementation.
+    /// The default uses [`Self::list_implementations`], so existing sources
+    /// only implementing [`Self::list_tasks`] remain compatible.
+    fn describe_implementation(&self, identity: &str) -> DiscoveryResult<TaskImplementation> {
+        let identity = parse_task_implementation_identity(identity)?;
+        let implementations = self.list_implementations()?;
+        find_task_implementation(&implementations, &identity)
+    }
+
+    /// Describe a task by rendered `<task-id>@<task-version>` identity.
+    fn describe_task(&self, identity: &str) -> DiscoveryResult<TaskDescriptor> {
+        let identity = parse_task_descriptor_identity(identity)?;
+        let descriptors = self.list_tasks()?;
+        find_task_descriptor_by_identity(descriptors.iter(), &identity)
+    }
+
+    /// Describe a task by a parsed registration key.
+    ///
+    /// Implementations may override this method when their backend supports a
+    /// direct descriptor lookup. The default implementation lists descriptors
+    /// and applies the shared exact identity matching rules.
+    fn describe_task_by_key(&self, key: &TaskRegistrationKey) -> DiscoveryResult<TaskDescriptor> {
+        let descriptors = self.list_tasks()?;
+        find_task_descriptor(descriptors.iter(), key)
+    }
+}
+
+/// Parsed descriptor identity used for discovery lookup.
+///
+/// Unlike [`TaskRegistrationKey`], this type only validates the rendered
+/// identity shape and semantic version. It deliberately allows generated
+/// descriptor IDs such as `auto:crate::module::Task`, so CLI users can describe
+/// any identity previously emitted by `genja task list`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskDescriptorIdentity {
+    id: String,
+    version: String,
+}
+
+impl TaskDescriptorIdentity {
+    /// Return the descriptor ID.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Return the descriptor version.
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+}
+
+/// Parsed task identity with an optional implementation language.
+///
+/// Language qualifies CLI lookup and is not part of the descriptor ID or JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskImplementationIdentity {
+    descriptor: TaskDescriptorIdentity,
+    language: Option<TaskLanguage>,
+}
+
+impl TaskImplementationIdentity {
+    /// Return the descriptor ID.
+    pub fn id(&self) -> &str {
+        self.descriptor.id()
+    }
+
+    /// Return the descriptor version.
+    pub fn version(&self) -> &str {
+        self.descriptor.version()
+    }
+
+    /// Return the requested language, if qualified.
+    pub fn language(&self) -> Option<TaskLanguage> {
+        self.language
+    }
+}
+
+/// Find an implementation by descriptor identity and optional language.
+pub fn find_task_implementation(
+    implementations: &[TaskImplementation],
+    identity: &TaskImplementationIdentity,
+) -> DiscoveryResult<TaskImplementation> {
+    let matches = implementations
+        .iter()
+        .filter(|implementation| {
+            implementation.descriptor().id == identity.id()
+                && implementation.descriptor().version == identity.version()
+                && identity
+                    .language()
+                    .is_none_or(|language| implementation.language() == Some(language))
+        })
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [] => {
+            let id = match identity.language() {
+                Some(TaskLanguage::Rust) => format!("rust:{}", identity.id()),
+                Some(TaskLanguage::Python) => format!("python:{}", identity.id()),
+                None => identity.id().to_string(),
+            };
+            Err(DiscoveryError::NotFound {
+                id,
+                version: Some(identity.version().to_string()),
+            })
+        }
+        [implementation] => Ok((*implementation).clone()),
+        _ if identity.language().is_some() => Err(DiscoveryError::DuplicateImplementation {
+            id: identity.id().to_string(),
+            version: identity.version().to_string(),
+            language: identity
+                .language()
+                .expect("qualified identity has a language"),
+        }),
+        _ => Err(DiscoveryError::AmbiguousImplementation {
+            id: identity.id().to_string(),
+            version: identity.version().to_string(),
+            languages: matches.iter().filter_map(|item| item.language()).collect(),
+        }),
+    }
+}
+
+/// Find a descriptor by exact parsed task registration key.
+pub fn find_task_descriptor<'a, I>(
+    descriptors: I,
+    key: &TaskRegistrationKey,
+) -> DiscoveryResult<TaskDescriptor>
+where
+    I: IntoIterator<Item = &'a TaskDescriptor>,
+{
+    descriptors
+        .into_iter()
+        .find(|descriptor| descriptor.id == key.id() && descriptor.version == key.version())
+        .cloned()
+        .ok_or_else(|| DiscoveryError::NotFound {
+            id: key.id().to_string(),
+            version: Some(key.version().to_string()),
+        })
+}
+
+/// Find a descriptor by exact parsed descriptor identity.
+pub fn find_task_descriptor_by_identity<'a, I>(
+    descriptors: I,
+    identity: &TaskDescriptorIdentity,
+) -> DiscoveryResult<TaskDescriptor>
+where
+    I: IntoIterator<Item = &'a TaskDescriptor>,
+{
+    descriptors
+        .into_iter()
+        .find(|descriptor| descriptor.id == identity.id && descriptor.version == identity.version)
+        .cloned()
+        .ok_or_else(|| DiscoveryError::NotFound {
+            id: identity.id.clone(),
+            version: Some(identity.version.clone()),
+        })
+}
+
+/// Errors returned by task descriptor discovery sources.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiscoveryError {
+    /// A rendered `<task-id>@<task-version>` identity could not be parsed.
+    InvalidIdentity {
+        /// Invalid identity value.
+        identity: String,
+        /// Human-readable parsing or validation failure.
+        reason: String,
+    },
+    /// No descriptor matched the requested task identity.
+    NotFound {
+        /// Requested task ID.
+        id: String,
+        /// Requested task version, when specified.
+        version: Option<String>,
+    },
+    /// A lookup by ID omitted the version and multiple versions were available.
+    AmbiguousVersion {
+        /// Requested task ID.
+        id: String,
+        /// Available versions for the requested task ID.
+        versions: Vec<String>,
+    },
+    /// More than one language provides the requested task identity.
+    AmbiguousImplementation {
+        /// Requested task ID.
+        id: String,
+        /// Requested task version.
+        version: String,
+        /// Languages available for the task identity.
+        languages: Vec<TaskLanguage>,
+    },
+    /// A source returned the same language-qualified identity more than once.
+    DuplicateImplementation {
+        /// Duplicated task ID.
+        id: String,
+        /// Duplicated task version.
+        version: String,
+        /// Language of both implementations.
+        language: TaskLanguage,
+    },
+    /// The descriptor source failed independently of caller input.
+    SourceFailed {
+        /// Human-readable source failure.
+        message: String,
+    },
+}
+
+impl DiscoveryError {
+    /// Create a source failure from a displayable backend error.
+    pub fn source_failed(error: impl fmt::Display) -> Self {
+        Self::SourceFailed {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for DiscoveryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidIdentity { identity, reason } => {
+                write!(f, "invalid task identity `{identity}`: {reason}")
+            }
+            Self::NotFound { id, version } => match version {
+                Some(version) => write!(f, "task descriptor `{id}@{version}` was not found"),
+                None => write!(f, "task descriptor `{id}` was not found"),
+            },
+            Self::AmbiguousVersion { id, versions } => {
+                write!(
+                    f,
+                    "task descriptor `{id}` has multiple versions: {}",
+                    versions.join(", ")
+                )
+            }
+            Self::AmbiguousImplementation {
+                id,
+                version,
+                languages,
+            } => {
+                let languages = languages
+                    .iter()
+                    .map(|language| format!("{language:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "task descriptor `{id}@{version}` has implementations in multiple languages: {languages}; use `rust:{id}@{version}` or `python:{id}@{version}`"
+                )
+            }
+            Self::DuplicateImplementation {
+                id,
+                version,
+                language,
+            } => write!(
+                f,
+                "duplicate {language:?} task implementation `{id}@{version}`"
+            ),
+            Self::SourceFailed { message } => {
+                write!(f, "task descriptor source failed: {message}")
+            }
+        }
+    }
+}
+
+impl Error for DiscoveryError {}
+
+impl From<TaskRegistrationError> for DiscoveryError {
+    fn from(error: TaskRegistrationError) -> Self {
+        match error {
+            TaskRegistrationError::InvalidIdentity { identity, reason } => {
+                Self::InvalidIdentity { identity, reason }
+            }
+            TaskRegistrationError::InvalidId { id, reason } => Self::InvalidIdentity {
+                identity: id,
+                reason,
+            },
+            TaskRegistrationError::InvalidVersion { version, reason } => Self::InvalidIdentity {
+                identity: version,
+                reason,
+            },
+            TaskRegistrationError::NotFound { id, version } => Self::NotFound { id, version },
+            TaskRegistrationError::AmbiguousVersion { id, versions } => {
+                Self::AmbiguousVersion { id, versions }
+            }
+            // Discovery is descriptor-only. Construction, input, and factory
+            // failures should not normally occur here, so preserve them as
+            // backend/source failures.
+            error => Self::source_failed(error),
+        }
+    }
+}
+
+/// Parse a rendered `<task-id>@<task-version>` task identity.
+///
+/// This delegates validation to [`TaskRegistrationKey`], so task IDs must
+/// follow the explicit registration rules and versions must be semantic
+/// versions. When either part is invalid, the returned discovery error keeps
+/// the original rendered identity so terminal interfaces can report the exact
+/// user-provided value.
+pub fn parse_task_identity(identity: &str) -> DiscoveryResult<TaskRegistrationKey> {
+    TaskRegistrationKey::parse(identity).map_err(|error| match error {
+        TaskRegistrationError::InvalidIdentity { identity, reason } => {
+            DiscoveryError::InvalidIdentity { identity, reason }
+        }
+        TaskRegistrationError::InvalidId { reason, .. }
+        | TaskRegistrationError::InvalidVersion { reason, .. } => DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason,
+        },
+        error => DiscoveryError::source_failed(error),
+    })
+}
+
+/// Parse a rendered descriptor identity in `<descriptor-id>@<semver-version>` form.
+///
+/// This parser is intentionally less strict than [`parse_task_identity`]. It is
+/// intended for descriptor lookup and accepts generated IDs emitted by compiled
+/// discovery, while still requiring a non-empty ID and semantic version.
+pub fn parse_task_descriptor_identity(identity: &str) -> DiscoveryResult<TaskDescriptorIdentity> {
+    if identity.is_empty() {
+        return Err(DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason: "identity must not be empty".to_string(),
+        });
+    }
+
+    if identity.matches('@').count() != 1 {
+        return Err(DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason: "identity must contain exactly one `@` separator".to_string(),
+        });
+    }
+
+    let (id, version) =
+        identity
+            .split_once('@')
+            .ok_or_else(|| DiscoveryError::InvalidIdentity {
+                identity: identity.to_string(),
+                reason: "identity must contain exactly one `@` separator".to_string(),
+            })?;
+
+    if id.is_empty() {
+        return Err(DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason: "identity must include a task id before `@`".to_string(),
+        });
+    }
+
+    if id.trim() != id {
+        return Err(DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason: "task id must not have leading or trailing whitespace".to_string(),
+        });
+    }
+
+    if version.is_empty() {
+        return Err(DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason: "identity must include a task version after `@`".to_string(),
+        });
+    }
+
+    validate_task_version(version).map_err(|error| match error {
+        TaskRegistrationError::InvalidVersion { reason, .. } => DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason,
+        },
+        error => DiscoveryError::source_failed(error),
+    })?;
+
+    Ok(TaskDescriptorIdentity {
+        id: id.to_string(),
+        version: version.to_string(),
+    })
+}
+
+/// Parse `[rust:|python:]<descriptor-id>@<semver-version>` for CLI lookup.
+///
+/// A language prefix is optional when an ID and version identify one task.
+/// The prefix does not change the canonical descriptor or its serialized form.
+/// The leading `rust:` and `python:` strings are reserved by this parser;
+/// custom descriptor sources should avoid IDs beginning with either string.
+pub fn parse_task_implementation_identity(
+    identity: &str,
+) -> DiscoveryResult<TaskImplementationIdentity> {
+    let (descriptor, language) = if let Some(descriptor) = identity.strip_prefix("rust:") {
+        (descriptor, Some(TaskLanguage::Rust))
+    } else if let Some(descriptor) = identity.strip_prefix("python:") {
+        (descriptor, Some(TaskLanguage::Python))
+    } else {
+        (identity, None)
+    };
+
+    let descriptor = parse_task_descriptor_identity(descriptor).map_err(|error| match error {
+        DiscoveryError::InvalidIdentity { reason, .. } => DiscoveryError::InvalidIdentity {
+            identity: identity.to_string(),
+            reason,
+        },
+        error => error,
+    })?;
+    Ok(TaskImplementationIdentity {
+        descriptor,
+        language,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use genja_core::task::{TaskDescriptorMetadata, TaskExecutionMode};
+
+    #[derive(Debug)]
+    struct StaticTaskDescriptorSource {
+        descriptors: Vec<TaskDescriptor>,
+    }
+
+    impl TaskDescriptorSource for StaticTaskDescriptorSource {
+        fn list_tasks(&self) -> DiscoveryResult<Vec<TaskDescriptor>> {
+            Ok(self.descriptors.clone())
+        }
+    }
+
+    fn descriptor(id: &str, version: &str) -> TaskDescriptor {
+        TaskDescriptor::explicit(
+            id,
+            version,
+            TaskDescriptorMetadata {
+                name: id.replace('.', "_"),
+                description: None,
+                execution_mode: TaskExecutionMode::Async,
+                connection_plugin_name: None,
+                processor_names: Vec::new(),
+                retry: None,
+            },
+            None,
+            false,
+        )
+    }
+
+    fn generated_descriptor(id: &str, version: &str) -> TaskDescriptor {
+        TaskDescriptor::generated(
+            id,
+            version,
+            TaskDescriptorMetadata {
+                name: id.replace([':', '.'], "_"),
+                description: None,
+                execution_mode: TaskExecutionMode::Async,
+                connection_plugin_name: None,
+                processor_names: Vec::new(),
+                retry: None,
+            },
+        )
+    }
+
+    #[test]
+    fn list_tasks_returns_descriptors_from_source() {
+        let descriptors = vec![descriptor("acme.deploy", "1.0.0")];
+        let source = StaticTaskDescriptorSource {
+            descriptors: descriptors.clone(),
+        };
+
+        assert_eq!(source.list_tasks(), Ok(descriptors));
+    }
+
+    #[test]
+    fn list_implementations_defaults_to_unknown_language() {
+        let expected = descriptor("acme.deploy", "1.0.0");
+        let source = StaticTaskDescriptorSource {
+            descriptors: vec![expected.clone()],
+        };
+
+        let implementations = source
+            .list_implementations()
+            .expect("custom source should list implementations");
+
+        assert_eq!(implementations.len(), 1);
+        assert_eq!(implementations[0].descriptor(), &expected);
+        assert_eq!(implementations[0].language(), None);
+    }
+
+    #[test]
+    fn implementation_identity_parser_preserves_generated_ids_and_prefixes() {
+        let identity = parse_task_implementation_identity(
+            "rust:auto:use_genja::tasks::DeployChangesTask@0.1.0",
+        )
+        .expect("generated Rust identity should parse");
+        assert_eq!(identity.id(), "auto:use_genja::tasks::DeployChangesTask");
+        assert_eq!(identity.version(), "0.1.0");
+        assert_eq!(identity.language(), Some(TaskLanguage::Rust));
+
+        let unqualified = parse_task_implementation_identity("acme.deploy@1.0.0")
+            .expect("unqualified identity should parse");
+        assert_eq!(unqualified.language(), None);
+
+        assert!(matches!(
+            parse_task_implementation_identity("python:acme.deploy@latest"),
+            Err(DiscoveryError::InvalidIdentity { identity, .. })
+                if identity == "python:acme.deploy@latest"
+        ));
+    }
+
+    #[test]
+    fn language_qualifier_selects_one_shared_identity() {
+        let implementations = [
+            TaskImplementation::new(descriptor("acme.deploy", "1.0.0"), Some(TaskLanguage::Rust)),
+            TaskImplementation::new(
+                descriptor("acme.deploy", "1.0.0"),
+                Some(TaskLanguage::Python),
+            ),
+        ];
+
+        let unqualified = parse_task_implementation_identity("acme.deploy@1.0.0")
+            .expect("unqualified identity should parse");
+        assert!(matches!(
+            find_task_implementation(&implementations, &unqualified),
+            Err(DiscoveryError::AmbiguousImplementation { .. })
+        ));
+
+        for (prefix, language) in [
+            ("rust", TaskLanguage::Rust),
+            ("python", TaskLanguage::Python),
+        ] {
+            let identity =
+                parse_task_implementation_identity(&format!("{prefix}:acme.deploy@1.0.0"))
+                    .expect("qualified identity should parse");
+            let found = find_task_implementation(&implementations, &identity)
+                .expect("language qualifier should choose one implementation");
+            assert_eq!(found.language(), Some(language));
+        }
+
+        let missing = parse_task_implementation_identity("python:acme.missing@1.0.0")
+            .expect("qualified identity should parse");
+        assert!(matches!(
+            find_task_implementation(&implementations, &missing),
+            Err(DiscoveryError::NotFound { id, .. }) if id == "python:acme.missing"
+        ));
+    }
+
+    #[test]
+    fn describe_task_uses_default_identity_lookup() {
+        let expected = descriptor("acme.deploy", "1.0.0");
+        let source = StaticTaskDescriptorSource {
+            descriptors: vec![
+                descriptor("acme.deploy", "0.9.0"),
+                expected.clone(),
+                descriptor("acme.rollback", "1.0.0"),
+            ],
+        };
+
+        assert_eq!(source.describe_task("acme.deploy@1.0.0"), Ok(expected));
+    }
+
+    #[test]
+    fn describe_task_uses_default_lookup_for_generated_descriptor_ids() {
+        let expected = generated_descriptor("auto:use_genja::tasks::DeployChangesTask", "0.1.0");
+        let source = StaticTaskDescriptorSource {
+            descriptors: vec![expected.clone()],
+        };
+
+        assert_eq!(
+            source.describe_task("auto:use_genja::tasks::DeployChangesTask@0.1.0"),
+            Ok(expected)
+        );
+    }
+
+    #[test]
+    fn describe_task_rejects_invalid_identity_before_listing() {
+        let source = StaticTaskDescriptorSource {
+            descriptors: vec![descriptor("acme.deploy", "1.0.0")],
+        };
+
+        assert!(matches!(
+            source.describe_task("acme.deploy"),
+            Err(DiscoveryError::InvalidIdentity { identity, reason })
+                if identity == "acme.deploy"
+                    && reason == "identity must contain exactly one `@` separator"
+        ));
+    }
+
+    #[test]
+    fn find_task_descriptor_returns_not_found_for_missing_key() {
+        let descriptors = vec![descriptor("acme.deploy", "1.0.0")];
+        let key = TaskRegistrationKey::parse("acme.deploy@2.0.0").expect("key should parse");
+
+        assert_eq!(
+            find_task_descriptor(descriptors.iter(), &key),
+            Err(DiscoveryError::NotFound {
+                id: "acme.deploy".to_string(),
+                version: Some("2.0.0".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn find_task_descriptor_by_identity_accepts_generated_descriptor_ids() {
+        let descriptors = vec![generated_descriptor(
+            "auto:use_genja::tasks::DeployChangesTask",
+            "0.1.0",
+        )];
+        let identity =
+            parse_task_descriptor_identity("auto:use_genja::tasks::DeployChangesTask@0.1.0")
+                .expect("generated descriptor identity should parse");
+
+        assert_eq!(
+            find_task_descriptor_by_identity(descriptors.iter(), &identity),
+            Ok(descriptors[0].clone())
+        );
+    }
+
+    #[test]
+    fn parse_task_identity_preserves_original_identity_for_invalid_id() {
+        // TaskRegistrationKey validates the task ID before the version. This
+        // should surface an ID validation reason while preserving the complete
+        // identity string that the caller supplied.
+        assert!(matches!(
+            parse_task_identity("Acme.deploy@1.0.0"),
+            Err(DiscoveryError::InvalidIdentity { identity, reason })
+                if identity == "Acme.deploy@1.0.0"
+                    && reason == "id segments must start with an ASCII lowercase letter or digit"
+        ));
+    }
+
+    #[test]
+    fn parse_task_descriptor_identity_accepts_generated_descriptor_ids() {
+        let identity =
+            parse_task_descriptor_identity("auto:use_genja::tasks::DeployChangesTask@0.1.0")
+                .expect("generated descriptor identity should parse");
+
+        assert_eq!(identity.id(), "auto:use_genja::tasks::DeployChangesTask");
+        assert_eq!(identity.version(), "0.1.0");
+    }
+
+    #[test]
+    fn parse_task_descriptor_identity_rejects_invalid_versions() {
+        assert!(matches!(
+            parse_task_descriptor_identity("auto:use_genja::tasks::DeployChangesTask@latest"),
+            Err(DiscoveryError::InvalidIdentity { identity, reason })
+                if identity == "auto:use_genja::tasks::DeployChangesTask@latest"
+                    && reason.contains("unexpected character")
+        ));
+    }
+
+    #[test]
+    fn parse_task_identity_preserves_original_identity_for_invalid_version() {
+        // Once the task ID is valid, invalid semver should map to the same
+        // discovery variant with the original rendered identity.
+        assert!(matches!(
+            parse_task_identity("acme.deploy@latest"),
+            Err(DiscoveryError::InvalidIdentity { identity, reason })
+                if identity == "acme.deploy@latest"
+                    && reason.contains("unexpected character")
+        ));
+    }
+
+    #[test]
+    fn task_registration_lookup_errors_map_to_discovery_errors() {
+        assert_eq!(
+            DiscoveryError::from(TaskRegistrationError::NotFound {
+                id: "acme.deploy".to_string(),
+                version: Some("1.0.0".to_string()),
+            }),
+            DiscoveryError::NotFound {
+                id: "acme.deploy".to_string(),
+                version: Some("1.0.0".to_string()),
+            }
+        );
+
+        assert_eq!(
+            DiscoveryError::from(TaskRegistrationError::AmbiguousVersion {
+                id: "acme.deploy".to_string(),
+                versions: vec!["1.0.0".to_string(), "2.0.0".to_string()],
+            }),
+            DiscoveryError::AmbiguousVersion {
+                id: "acme.deploy".to_string(),
+                versions: vec!["1.0.0".to_string(), "2.0.0".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn construction_registration_errors_map_to_source_failures() {
+        assert_eq!(
+            DiscoveryError::from(TaskRegistrationError::NotConstructible {
+                id: "acme.deploy".to_string(),
+                version: "1.0.0".to_string(),
+            }),
+            DiscoveryError::SourceFailed {
+                message: "registered task `acme.deploy@1.0.0` is not constructible".to_string(),
+            }
+        );
+    }
+}

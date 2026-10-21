@@ -7,6 +7,7 @@ on:
       - main
       - develop
       - feature/**
+      - release/**
       - "*-genja-*"
   workflow_dispatch:
 
@@ -31,14 +32,23 @@ jobs:
       - name: Validate release metadata
         run: python scripts/validate-release.py
 
+      - name: Check release documentation versions
+        if: startsWith(github.head_ref, 'release/') || startsWith(github.ref_name, 'release/')
+        env:
+          RELEASE_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: python scripts/check-doc-versions.py --branch "${RELEASE_BRANCH}"
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Check Genja without optional features
+        run: cargo check -p genja --no-default-features
+
+      - name: Clippy with all features
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test workspace
-        run: cargo test --workspace --exclude genja-core-python
+        run: cargo test --workspace --exclude genja-core-python --all-features
 
   python:
     name: Python bindings (${{ matrix.python-version }})
@@ -83,6 +93,11 @@ jobs:
       - name: Install Python dependencies
         working-directory: genja-core-python
         run: pdm install -d --frozen-lockfile
+
+      - name: Test documentation version checker
+        if: matrix.python-version == '3.10'
+        working-directory: genja-core-python
+        run: pdm run test-doc-versions
 
       - name: Lint Python
         working-directory: genja-core-python

@@ -18,6 +18,24 @@ For end users, install the package with `pip`:
 pip install genja-py
 ```
 
+The base installation provides the Python library without a `genja` command.
+Starting with v0.5.0, install the optional command and terminal UI on a
+supported platform with:
+
+```bash
+python -m pip install "genja-py[cli]>=0.5.0,<0.6.0"
+```
+
+The extra selects a compatible `genja-cli` v0.5.x wheel. The v0.5.0 wheel
+release covers CPython 3.10–3.14 on Linux x86_64, macOS Apple Silicon and
+Intel, and Windows x64. Intel macOS has wheels for both packages.
+
+To discover Python tasks, declare their modules in the project's
+`[tool.genja.tasks]` configuration, then run `genja task list` or `genja tui`.
+See the [installation guide](https://docs.genja.co.uk/installation/#python-task-discovery-from-the-cli)
+for a first project and the [CLI guide](https://docs.genja.co.uk/cli/)
+for task inspection.
+
 The package currently exposes the `genja` Python module:
 
 ```python

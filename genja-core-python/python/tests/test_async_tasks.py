@@ -7,6 +7,7 @@ from genja.task import (
     Host,
     IdempotencyCheckResult,
     IdempotencyMode,
+    TaskFailureKind,
     TaskFailureResult,
     TaskSuccessResult,
     task,
@@ -41,7 +42,7 @@ class AsyncFailingTask:
         await asyncio.sleep(0.01)
         return TaskFailureResult(
             message=f"async task failed on {host.hostname}",
-            kind="external",
+            kind=TaskFailureKind.EXTERNAL,
         )
 
 

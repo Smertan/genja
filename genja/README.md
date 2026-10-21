@@ -22,12 +22,51 @@ automation workflows.
 
 ```toml
 [dependencies]
-genja = "0.3.0"
+genja = "0.5.0"
 ```
 
 The `genja` crate re-exports the common task authoring pieces so most users do
 not need to depend on `genja-core`, `genja-core-derive`, or `async-trait`
 directly.
+
+## Optional CLI Support
+
+The optional `genja-cli` feature exposes the CLI library through `genja::cli`.
+It is disabled by default and available from v0.5.0. Enable it with:
+
+```bash
+cargo add genja@0.5.0 --features genja-cli
+```
+
+Provide a project-specific binary entry point that links your task crate:
+
+```rust
+use my_project_tasks as _;
+
+fn main() -> std::process::ExitCode {
+    genja::cli::run_main()
+}
+```
+
+Replace `my_project_tasks` with your own task crate and add it as a dependency.
+If your tasks live in the binary crate, declare their modules there instead.
+Use a project-specific executable name, such as `my_project_cli`, then run
+`my_project_cli task list` to discover its linked tasks.
+
+Enabling the feature makes library code available; it does not install the
+generic `genja` executable. End users only need your project-built executable.
+A direct `genja-cli` dependency remains supported for dedicated CLI wrappers.
+See the [CLI guide](../docs/cli.md) for both setups, checkout-based dependencies,
+and deployment instructions.
+
+The optional `genja-tui` feature enables a basic terminal task browser screen
+through `genja::cli::tui`. It includes CLI support and is disabled by default.
+Browser state, descriptor loading, event handling, and task table rendering are
+available, along with a full-screen runner. Project-local TUI binaries can call
+`genja::cli::tui::run_main()` after linking their task crate. Project-local CLI
+binaries using `genja::cli::run_main()` also expose the `tui` command when this
+feature is enabled. Press `q` or Escape to exit. See the
+[Terminal UI guide](../docs/tui.md) for the binary pattern and dependency setup.
 
 ## Quick Start
 
@@ -82,8 +121,8 @@ use genja::genja_core::inventory::{
     Hosts,
     Inventory,
 };
-use genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
-use genja_plugin_manager::PluginManager;
+use genja::genja_plugin_manager::plugin_types::{AsyncPluginInventory, Plugin};
+use genja::genja_plugin_manager::PluginManager;
 
 #[derive(Debug)]
 struct ApiInventoryPlugin;
@@ -270,7 +309,7 @@ application; clone the repository to run them.
 Run a crate example from a repository checkout:
 
 The command below uses the repository default branch. For release-specific
-examples, check out the matching version tag, such as `rs-v0.3.0`.
+examples, check out the matching version tag, such as `rs-v0.5.0`.
 
 ```bash
 git clone https://github.com/Smertan/genja.git

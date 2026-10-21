@@ -2825,6 +2825,11 @@ mod tests {
 
     fn init_python() {
         crate::init_embedded_python();
+        set_windows_selector_event_loop_policy();
+        crate::init_embedded_python_with_modules(&[], &["genja.processor", "genja.connection"]);
+    }
+
+    fn set_windows_selector_event_loop_policy() {
         Python::attach(|py| {
             let asyncio = PyModule::import(py, "asyncio").expect("asyncio module should import");
             let platform = py
@@ -2844,49 +2849,37 @@ mod tests {
                     .call_method1("set_event_loop_policy", (policy,))
                     .expect("Windows selector event loop policy should be set");
             }
+        });
+    }
 
-            let sys = PyModule::import(py, "sys").expect("sys module should import");
-            let modules = sys.getattr("modules").expect("sys.modules should exist");
-            let genja = PyModule::from_code(
-                py,
-                pyo3::ffi::c_str!("__path__ = []\n"),
-                pyo3::ffi::c_str!("genja/__init__.py"),
-                pyo3::ffi::c_str!("genja"),
-            )
-            .expect("genja stub should build");
-            let processor = PyModule::from_code(
-                py,
-                pyo3::ffi::c_str!(
-                    "class TaskProcessorContext:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
-                ),
-                pyo3::ffi::c_str!("genja/processor.py"),
-                pyo3::ffi::c_str!("genja.processor"),
-            )
-            .expect("processor stub should build");
-            genja
-                .add("processor", &processor)
-                .expect("processor module should attach to package");
-            modules
-                .set_item("genja", &genja)
-                .expect("genja stub should register");
-            modules
-                .set_item("genja.processor", &processor)
-                .expect("processor stub should register");
-            let connection = PyModule::from_code(
-                py,
-                pyo3::ffi::c_str!(
-                    "class ConnectionKey:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass ResolvedConnectionParams:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n    def to_dict(self):\n        return dict(self.__dict__)\n"
-                ),
-                pyo3::ffi::c_str!("genja/connection.py"),
-                pyo3::ffi::c_str!("genja.connection"),
-            )
-            .expect("connection stub should build");
-            genja
-                .add("connection", &connection)
-                .expect("connection module should attach to package");
-            modules
-                .set_item("genja.connection", &connection)
-                .expect("connection stub should register");
+    #[test]
+    fn init_python_imports_real_processor_and_connection_modules() {
+        init_python();
+        Python::attach(|py| {
+            let processor_module = PyModule::import(py, "genja.processor")
+                .expect("real genja.processor should import");
+            let connection_module = PyModule::import(py, "genja.connection")
+                .expect("real genja.connection should import");
+
+            for name in ["ProcessorPluginBase", "TaskProcessorContext"] {
+                assert!(
+                    processor_module.hasattr(name).expect("hasattr should work"),
+                    "{name} should be exported from the real genja.processor module"
+                );
+            }
+            for name in [
+                "ConnectionBase",
+                "ConnectionKey",
+                "ConnectionPluginBase",
+                "ResolvedConnectionParams",
+            ] {
+                assert!(
+                    connection_module
+                        .hasattr(name)
+                        .expect("hasattr should work"),
+                    "{name} should be exported from the real genja.connection module"
+                );
+            }
         });
     }
 

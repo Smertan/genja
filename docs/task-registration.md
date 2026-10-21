@@ -72,6 +72,53 @@ has JSON-compatible input:
     )
     ```
 
+## Constructible Descriptor Field
+
+In the Rust `TaskDescriptor` struct, `constructible: bool` reports whether the
+current process has a registered factory that can create a task instance from
+JSON-compatible input. A factory is the code that turns that input into a
+task value; constructing the value does not execute it.
+
+| Descriptor value | CLI/TUI table value | Meaning |
+| --- | --- | --- |
+| `true` | `yes` | A construction factory is registered for this task. |
+| `false` | `no` | The descriptor can be discovered and inspected, but no construction factory is registered. |
+
+For Rust tasks, `#[genja_task(..., registration(...))]` registers a factory
+and sets the generated descriptor's `constructible` field to `true`.
+By default the factory deserializes JSON into the task struct using Serde. A no-input
+struct can implement `Default` and use `factory = "default"`; a task can also
+use a custom factory. See [Default JSON Construction](#default-json-construction)
+for the supported construction strategies.
+
+A Rust task annotated without `registration(...)` gets a generated local ID
+and `constructible: false`. It can still be created directly in application
+code and run through the runtime; this field only describes registry-based
+construction from JSON input.
+
+This distinction matters when a caller knows only a task ID and input, rather
+than the Rust struct type. With `constructible: false`, registry-based creation
+by identity cannot create the task and returns a `NotConstructible` error.
+Future declarative CLI invocation using task identity and input would also
+require a registered factory; discoverability alone is not enough.
+
+To support that path, add `registration(...)` to the task's `#[genja_task]`
+attribute and provide the construction strategy it requires: Serde
+deserialization, `Default` with `factory = "default"` for no-input tasks, or
+a custom factory. For example, the no-input `CollectFacts` struct could derive
+`Default` and add an explicit registration with `factory = "default"` to make
+its descriptor report `constructible: true`. CLI task execution is not
+implemented yet; this describes the capability the registry already provides.
+
+In the [task browser example](examples.md#cli-and-tui-task-browser),
+`BackupConfig` has explicit registration and a Serde factory, so it shows
+`yes`. `CollectFacts` omits `registration(...)`, so it shows `no`.
+
+`true` does not guarantee that every input will be accepted or that execution
+will succeed. Input schemas describe expected input separately, and are not
+required for a task to be constructible. CLI discovery commands and the current
+TUI display this metadata without constructing or executing tasks.
+
 ## Discovery And Stable IDs
 
 Rust tasks annotated with `#[genja_task(...)]` are submitted to the compiled
@@ -447,6 +494,12 @@ Lookup by ID without a version succeeds only when exactly one version exists.
 If multiple versions are registered for the same ID, Genja returns an ambiguous
 version error so callers do not accidentally run the wrong contract.
 
+For CLI workflows, remember that the compiled Rust task registry is
+process-local. A generic installed `genja` binary can only discover tasks linked
+into that binary. To list or document tasks from your own Rust project, build a
+project-specific binary that links your task crate and delegates to
+`genja_cli::run_main()`. See [Command Line Interface](cli.md).
+
 ## Rust Construction APIs
 
 The compiled registry exposes two construction paths. Use the direct registry
@@ -818,9 +871,29 @@ descriptors = list_registered_tasks()
 Genja does not scan Python files looking for decorators. A task module that
 exists on disk but has not been imported has not executed its class definition,
 so its decorator has not run and its descriptor is not in the registry yet.
-Provider manifests, entry points, or task-directory discovery can import known
-task modules automatically in future features; this API only lists Python tasks
-that are already imported in the current process.
+
+For a project that declares its task modules explicitly, add them to
+`pyproject.toml`:
+
+```toml
+[tool.genja.tasks]
+modules = ["acme.tasks.network", "acme.tasks.backups"]
+```
+
+Export their registered descriptors with:
+
+```bash
+python -m genja._discovery_cli --pyproject path/to/pyproject.toml
+```
+
+The helper adds the directory containing `pyproject.toml` to Python's import
+path, imports the listed modules, and writes a JSON descriptor list to stdout.
+Task authors do not need another registry call. Import-time stdout, including
+direct file-descriptor writes, is redirected to stderr. Invalid configuration
+or a failed import exits with an error on stderr and no descriptor JSON. An
+empty module list, or modules with no registered tasks, produces `[]`. The
+helper does not scan directories. The CLI and TUI invoke it when Python task
+modules are configured in the selected `pyproject.toml`.
 
 ## Python Design Constraints
 

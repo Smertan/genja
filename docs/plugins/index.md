@@ -18,7 +18,7 @@ implements.
     ```rust
     use std::sync::Arc;
     use genja::genja_core::task::TaskProcessor;
-    use genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
+    use genja::genja_plugin_manager::plugin_types::{Plugin, PluginProcessor, Plugins};
 
     #[derive(Clone)]
     struct AuditPlugin;
@@ -97,9 +97,9 @@ Register plugins before building the runtime.
 
     ```rust
     use genja::Genja;
-    use genja_core::inventory::{Hosts, Inventory};
-    use genja_plugin_manager::plugin_types::Plugins;
-    use genja_plugin_manager::PluginManager;
+    use genja::genja_core::inventory::{Hosts, Inventory};
+    use genja::genja_plugin_manager::plugin_types::Plugins;
+    use genja::genja_plugin_manager::PluginManager;
 
     let inventory = Inventory::builder().hosts(Hosts::new()).build();
     let mut plugins = PluginManager::new();
@@ -228,7 +228,7 @@ connection type to resolve.
 === ":fontawesome-brands-python: Python"
 
     ```python
-    from genja.task import task
+    from genja.task import TaskSuccessResult, task
 
 
     @task(
@@ -237,7 +237,8 @@ connection type to resolve.
         processors=["audit"],
     )
     class BackupConfig:
-        ...
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary=f"backed up {host.hostname}")
     ```
 
 Inventory transforms are selected from the inventory section:
@@ -257,7 +258,7 @@ Rust-authored plugins are loaded from compiled shared libraries.
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
-    use genja_plugin_manager::PluginManager;
+    use genja::genja_plugin_manager::PluginManager;
 
     let plugins = PluginManager::new()
         .load_plugins_from_directory("./plugins")?;

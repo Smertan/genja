@@ -1,0 +1,155 @@
+# Genja CLI
+
+First-party command-line interface for Genja automation workflows.
+
+## Dependency Options
+
+Projects already using `genja` can enable its optional `genja-cli` feature and
+call `genja::cli::run_main()`. This feature is disabled by default and
+available from v0.5.0:
+
+```bash
+cargo add genja@0.5.0 --features genja-cli
+```
+
+Dedicated CLI wrapper packages can depend directly on `genja-cli` and call
+`genja_cli::run_main()`, as shown below. Both paths expose the same library.
+See the [CLI guide](../docs/cli.md) for dependency setup from a checkout.
+
+Neither dependency option installs an executable automatically. For compiled
+Rust task discovery, build and distribute a project-specific binary that links
+your tasks.
+
+The `genja-cli` crate also builds a generic `genja` executable. Python-only
+projects can use that binary without a project-local Rust wrapper: install
+`genja-py` in the selected Python environment, declare modules in
+`[tool.genja.tasks]`, and run `genja task list` from the project directory.
+`genja-py` supplies the task API and discovery helper. Its base installation
+does not install the executable; the `genja-py[cli]` extra does from v0.5.0.
+See [Installation](../docs/installation.md#python-task-discovery-from-the-cli).
+
+## Discovery Sources
+
+Library callers need a direct `genja-cli` dependency or the `genja-cli` feature
+on `genja` to access these sources. They can use
+`CompiledTaskDescriptorSource` for tasks linked into the current binary,
+`PythonTaskDescriptorSource` for task modules declared in
+`[tool.genja.tasks]` in a project `pyproject.toml`, or
+`CombinedTaskDescriptorSource` for both. The Python source runs the selected
+interpreter's `genja._discovery_cli` helper from the project directory, so that
+environment must have `genja-py` installed. The combined source skips Python
+when the task section is absent and fails discovery if a configured helper
+fails.
+
+Call `TaskDescriptorSource::list_implementations()` to get descriptors with
+source-assigned Rust or Python language metadata. Rust and Python tasks may
+share an ID and version; the combined source rejects duplicates within one
+language. Language metadata stays outside the descriptor JSON. The built-in
+CLI commands and TUI select combined discovery when the task section is present.
+Use `--pyproject PATH` and `--python PATH` to select the project file and Python
+interpreter; they default to `pyproject.toml` in the current directory and
+`python` from `PATH` for Cargo-built binaries. A wheel-installed `genja` uses
+the Python interpreter beside its executable by default. Pass `--python PATH`
+if that interpreter is unavailable or you need another environment.
+
+Human-readable task commands show **Language** separately from the descriptor's
+ID **Source** (`generated` or `explicit`). Use `rust:<id>@<version>` or
+`python:<id>@<version>` with `task describe` when both languages provide the
+same ID and version; an unqualified identity works when unique. Custom sources
+without language metadata display `Unknown`. CLI JSON and YAML output uses
+`{ descriptor, language }` records, with `language: null` when unknown; the
+nested descriptor retains its canonical shape.
+
+## Terminal User Interface (TUI)
+
+Genja's terminal user interface browses task descriptors from Rust and Python
+in one list. The opt-in `tui` feature exposes a browser that applications can
+embed or run full-screen through `genja_cli::tui`.
+
+The feature enables Ratatui and Crossterm support and is disabled by default.
+Projects using `genja` can enable `genja-tui`, which forwards to
+`genja-cli/tui` and also enables CLI support, exposing the same module at
+`genja::cli::tui`.
+
+`TaskBrowser` supports implementation loading, action handling, and a task table
+with selection highlighting and 🦀 Rust / 🐍 Python language labels inside an
+existing Ratatui application. `run_tui(source, options)`
+provides a full-screen runner for callers with a descriptor source. A
+project-local binary can call `genja_cli::tui::run_main()` to discover compiled
+Rust tasks linked into that binary and configured Python tasks. With `tui`
+enabled, `genja tui` launches the same browser with search, Details, and Schema
+views. Press `q` outside search to quit; Escape first returns from inspection
+or clears search.
+Discovery completes before full-screen terminal setup; failures return without
+entering raw mode.
+No separate TUI installation is required. See the
+[Terminal UI guide](../docs/tui.md) for the binary pattern and dependency setup.
+
+## Project-Local Task Discovery
+
+Compiled Rust task discovery is process-local. A generic installed `genja`
+binary can only discover tasks linked into that binary.
+
+Rust projects that define their own `#[genja_task]` registrations should build
+a project-specific binary that links the task crate and delegates to
+`genja-cli`:
+
+```rust
+use my_project_tasks as _;
+
+fn main() -> std::process::ExitCode {
+    genja_cli::run_main()
+}
+```
+
+Use a project-specific binary name such as `my_project_cli`, `acme_genja`, or
+`network_tasks_cli` so it does not shadow a globally installed `genja` binary.
+Cargo uses `[package].name` as the executable name for a default `src/main.rs`
+binary:
+
+```toml
+[package]
+name = "my_project_cli"
+```
+
+You can keep a different package name and override the executable name with an
+explicit binary target:
+
+```toml
+[package]
+name = "my-project"
+
+[[bin]]
+name = "my_project_cli"
+path = "src/bin/my_project_cli.rs"
+```
+
+Then run discovery through that project binary:
+
+```bash
+my_project_cli task list
+my_project_cli task describe auto:my_project::tasks::BackupTask@0.1.0
+my_project_cli task docs > task-catalog.md
+```
+
+For file exports, use JSON or YAML for complete implementation records,
+`task list --output markdown` for a compact summary, and `task docs` for a
+complete Markdown catalogue. See [Exporting Task Descriptors](../docs/cli.md#exporting-task-descriptors-all-projects)
+for redirection examples and documentation-platform considerations.
+
+During development, run the same binary through Cargo:
+
+```bash
+cargo run --bin my_project_cli -- task list
+cargo run --bin my_project_cli -- task docs
+```
+
+Use `-p <package>` as well when the binary belongs to another workspace
+package.
+
+For deployment, build the project-local binary during release or CI and copy
+the resulting executable to the target machine. The target machine does not
+need Cargo when you deploy a prebuilt binary.
+
+For tests or embedded callers that provide their own arguments, use
+`genja_cli::run(args)` instead of `genja_cli::run_main()`.

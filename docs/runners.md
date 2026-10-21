@@ -241,8 +241,8 @@ authored in and register under the `RunnerPlugin` group.
     use genja::genja_core::task::{
         TaskConnectionResolver, TaskDefinition, TaskResults, TaskRunOptions,
     };
-    use genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
-    use genja_plugin_manager::PluginManager;
+    use genja::genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
+    use genja::genja_plugin_manager::PluginManager;
 
     #[derive(Debug)]
     struct FirstHostOnlyRunner;

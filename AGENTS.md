@@ -2,6 +2,12 @@
 
 Repository-specific instructions for AI coding agents working in this workspace.
 
+## Editing Workflow
+
+- Make small, focused edits with `apply_patch` when practical so changes are easy to review as they happen.
+- Explain each logical edit briefly before applying it, and share progress after each stage of a larger task.
+- Avoid bulk scripts that rewrite multiple files at once. Use them only when a focused patch would be impractical, and explain why first.
+
 ## Changelog Policy
 
 ### Scope
@@ -41,14 +47,16 @@ Repository-specific instructions for AI coding agents working in this workspace.
 
 - When running the workspace Rust test suite, exclude `genja-core-python` because it requires the Python-backed test environment.
 - Use:
-  - `cargo test --workspace --exclude genja-core-python`
+  - `cargo test --workspace --exclude genja-core-python --all-features`
+- Use `--all-features` to include optional feature-gated integration tests.
+- Also run `cargo check -p genja --no-default-features` to verify the base crate builds without optional features.
 
 ### Lint And Type Checks
 
 - Run Rust formatting and clippy checks from the workspace root.
 - Use:
   - `cargo fmt --all --check`
-  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - Full workspace clippy may include `genja-core-python`; it does not need the `genja-core-python` test exclusion.
 - For Python linting and type checks, run from the `genja-core-python` directory.
 - Use:
@@ -81,14 +89,19 @@ Repository-specific instructions for AI coding agents working in this workspace.
 
 ## Release Versioning
 
+- Name release branches `release/ISSUE-vX.Y.Z`, using the release issue number and intended version. A SemVer pre-release suffix such as `-alpha.1` is allowed; the documentation version check in CI derives the base `X.Y.Z` from either form.
 - Rust releases use a unified release train for publishable Rust crates.
 - When preparing `rs-vX.Y.Z`, bump all publishable Rust crates to `X.Y.Z` and keep their internal path dependency version requirements aligned:
   - `genja`
   - `genja-core`
   - `genja-core-derive`
   - `genja-plugin-manager`
+  - `genja-cli`
 - Do not leave an unchanged publishable Rust crate on the previous version during a Rust release.
+- Publish in dependency order: `genja-core-derive`, `genja-core`, `genja-plugin-manager`, `genja-cli`, then `genja`.
 - Python package releases use the matching `py-vX.Y.Z` tag and bump `genja-py` / `genja-core-python` to `X.Y.Z`.
+- During release preparation, run `python scripts/check-doc-versions.py --version X.Y.Z` from the workspace root after updating guides and package READMEs. Use `--tag rs-vX.Y.Z` or `--tag py-vX.Y.Z` when checking the tagged release.
+- Keep intentional historical package versions with a nearby `genja-version-check: allow-next` comment and a reason, as documented in `docs/contributing.md`.
 
 ## Commit Conventions
 

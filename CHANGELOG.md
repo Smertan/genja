@@ -4,6 +4,72 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+## 0.5.0 - 2026-10-21
+
+Released packages:
+
+- Rust crates: `genja`, `genja-cli`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`
+- Python package: `genja-py`, `genja-core-python`
+
+### Added
+
+- Added an optional `genja-py[cli]` dependency on the matching `genja-cli` release line; the base Python package remains library-only. Refs: #156
+- Added Python wheel packaging for the existing `genja` CLI binary with TUI support, installing the command into the Python environment's scripts directory. Refs: #156
+- Added Intel macOS wheels for the Python library and optional CLI, with wheel-only installation checks across supported Python versions. Refs: #156
+- Added a Python-only and mixed Rust/Python CLI example using one `pyproject.toml`, with installation guidance for the separate `genja-cli` executable and `genja-py` package. Refs: #155
+- Added 🦀 Rust and 🐍 Python labels to the TUI task list and Details view, preserving separate implementations with the same ID and version in one searchable browser. Refs: #155
+- Added language labels to CLI task lists, descriptions, and catalogues, plus optional `rust:` and `python:` qualifiers for tasks sharing an ID and version. Refs: #155
+- Added automatic Python/Rust discovery source selection to `genja-cli` task commands and TUI entrypoints, with `--pyproject` and `--python` overrides for the project file and interpreter. Refs: #155
+- Added combined Rust/Python task discovery that skips Python without task configuration, preserves matching IDs and versions across languages, and rejects duplicate identities within a language. Refs: #154
+- Added a Python descriptor source in `genja-cli` that runs the configured interpreter and project discovery helper, parses descriptor JSON, and assigns Python language metadata. Refs: #154
+- Added `TaskImplementation` records and source-assigned `TaskLanguage` metadata to CLI discovery, while keeping existing descriptor sources compatible and marking compiled tasks as Rust. Refs: #154
+- Added explicit Python task module discovery through `[tool.genja.tasks].modules` and `python -m genja._discovery_cli --pyproject ...`, exporting registered task descriptors as JSON while keeping import output and errors off stdout. Refs: #153
+- Added syntax colouring for JSON metadata in the TUI Schema view using the optional `tui-syntax-highlight` adapter. Keys and values are distinguished while indentation, scrolling, and the terminal background remain intact; plain JSON is shown if highlighting fails. Refs: #130
+- Added keyboard access to TUI descriptor inspection: Enter opens Details, Tab switches Details/Schema, and navigation keys scroll content. Escape returns to the filtered task list with selection retained. Full-screen and embedded browsers share area-aware event handling, and footer hints show inspection controls. Refs: #130
+- Added formatted TUI schema inspection with a clear missing-metadata state, plus bounded line/page scrolling for Details and Schema through viewport-aware library actions. Wrapped content and resize use shared Ratatui measurements, and a line-range indicator shows progress when space permits. Refs: #130
+- Added an embeddable TUI descriptor Details renderer with identity, description, execution metadata, constructibility, schema availability, and clear missing-value labels. Text wraps to the host area, and retry fields show recorded overrides rather than resolved runner policy. Refs: #130
+- Added reusable TUI Details/Schema view state and direct inspection actions for the selected descriptor, preserving filtered selection and separate scroll positions between views. Selection changes and descriptor reloads reset inspection offsets; missing selection returns to Tasks. Refs: #130
+- Added a visible TUI search field with focus styling and scrolling for long input, filtered task-table rendering, matching/total counts, and a distinct no-match message with clearing guidance. Controls adapt to search mode and terminal width; short areas prioritize search and tasks. Refs: #129
+- Added TUI search input handling with `/` to focus, live character filtering, Unicode-safe Backspace, Ctrl+u to clear, and Enter/Escape to leave search. Escape clears retained queries before quitting in task mode; `q`, `j`, and `k` enter text during search. Refs: #129
+- Added programmatic TUI descriptor filtering by ID, name, version, description, and execution mode, with case-insensitive matching, stable selection where possible, and navigation through matching tasks. Refs: #129
+- Added distinct TUI empty-result and descriptor-loading error screens with task-linking guidance, example next steps, and visible quit controls. Refs: #128
+- Added selection-following scrolling and responsive TUI task table columns, preserving selection on resize and compact quit guidance on narrow screens. Refs: #128
+- Added a TUI task table displaying descriptor IDs, versions, names, execution modes, and constructible status, with a visible selection marker and highlight. Refs: #128
+- Added a `task_browser` Rust example with two linked sample tasks for exploring CLI descriptor listing, inspection, and the optional terminal user interface. Refs: #128
+- Added `j`/`k` and Home/End task selection controls to the optional terminal user interface, with bounded navigation for empty and loaded task lists. Refs: #128
+- Added `genja tui` behind the optional `tui` feature to browse discovered task descriptors in a full-screen terminal interface. Refs: #127
+- Added `genja_cli::tui::run_main()` for project-local TUI binaries, with `genja::cli::tui::run_main()` available through the `genja-tui` feature. Refs: #126
+- Added a full-screen TUI runner that loads task descriptors before taking terminal control, redraws on selection and resize, and restores the terminal after exit or errors. Refs: #126
+- Added an embeddable TUI browser shell with host-owned Ratatui rendering, Crossterm event translation, selection actions, and quit requests. Refs: #126
+- Added terminal-independent TUI browser state and synchronous loading through the shared task descriptor discovery abstraction, with validated selection and retained discovery errors. Refs: #126
+
+- Added optional terminal user interface support in `genja-cli` behind the `tui` feature, with Ratatui/Crossterm dependencies and a forwarding `genja-tui` feature on `genja`. Refs: #126
+
+- Added an optional `genja-cli` feature to `genja`, exposing CLI helpers through `genja::cli` for project-specific binaries, with documentation for feature-based and direct CLI dependencies. Refs: #144
+- Added the `genja-cli` workspace crate with the first-party `genja` binary, top-level help, and version command. Refs: #120
+- Added a reusable CLI discovery abstraction for listing and describing task descriptors. Refs: #121
+- Added a compiled Rust task descriptor source for CLI discovery plumbing. Refs: #122
+- Added `genja task list` with table, JSON, YAML, and Markdown output for compiled Rust task descriptors available to the CLI binary. Refs: #123
+- Added `genja task describe <identity>` with table, JSON, YAML, and Markdown output for one compiled Rust task descriptor. Refs: #124
+- Added `genja task docs` for generating a Markdown task catalogue from registered task descriptors. Refs: #140
+- Added `genja_cli::run_main()` and documented the project-local binary pattern for compiled Rust task discovery. Refs: #138
+
+### Changed
+
+- Release branch documentation checks now accept the issue-numbered `release/ISSUE-vX.Y.Z` naming convention and SemVer pre-release suffixes. Refs: #163
+- Changed the wheel-installed CLI to use the Python interpreter beside its executable for configured task discovery, while preserving explicit `--python` overrides and the Cargo-built default. Refs: #156
+- CLI `task list` and `task describe` JSON/YAML output wraps each canonical descriptor as `{ descriptor, language }` so same-ID Rust and Python implementations remain distinguishable; `language` is `rust`, `python`, or `null` when unknown. Refs: #155
+- **Breaking:** Added `AmbiguousImplementation` and `DuplicateImplementation` variants to `genja-cli`'s public `DiscoveryError` enum. Update exhaustive matches to handle these cases or add a fallback arm. Refs: #154
+- Changed TUI inspection labels and JSON syntax accents to use terminal ANSI palette colours, while ordinary values and backgrounds inherit terminal defaults. Task selection now reverses terminal foreground/background, improving compatibility with light and dark terminal themes. Refs: #130
+- Expanded the Terminal UI guide with search controls, matching and selection rules, and a walkthrough using the existing sample tasks; linked the walkthrough from the CLI and examples guides. Refs: #129
+- Full-screen TUI discovery failures now return before terminal setup; embedded browsers can still display a stored discovery error. Refs: #155
+- Clarified the constructible descriptor field in the task registration, CLI, and TUI guides, including how example task structs determine its value. Refs: #128
+- Moved the terminal user interface guide to its own page with a top-level documentation navigation entry. Refs: #126
+- Expanded the CLI guide with command examples, reproducible output samples, task identities, output formats and file exports, catalogue usage, discovery architecture and scope, and empty-result and error behaviour. Refs: #125
+- Included `genja-cli` in the unified Rust release train, with aligned version checks and publishing before its dependent `genja` crate. Refs: #144
+- **Breaking:** Changed Python task failure and message level enums to use Rust-backed bindings and reject raw string values in task result models. Use `TaskFailureKind.EXTERNAL` and `TaskMessageLevel.INFO` instead of raw strings such as `"external"` or `"info"`. Refs: #101
+- **Breaking:** Changed Python `TaskMessage` to use a Rust-backed binding while preserving constructor fields, imports, and `to_dict()` output. Use `to_dict()` instead of Pydantic APIs such as `model_dump()`, and pass `TaskMessageLevel` values instead of raw strings for `level`. Refs: #102
+
 ## 0.4.0 - 2026-08-31
 
 Released packages:

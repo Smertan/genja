@@ -258,6 +258,7 @@ from genja.task import (
     Host,
     RetryConfig,
     TaskFailureResult,
+    TaskFailureKind,
     TaskInfo,
     TaskRuntimeContext,
     task,
@@ -282,7 +283,7 @@ class RetryableBackup:
     ) -> TaskFailureResult:
         return TaskFailureResult(
             message=f"temporary rate limit on {host.hostname}",
-            kind="external",
+            kind=TaskFailureKind.EXTERNAL,
             retryable=True,
         )
 ```
@@ -515,6 +516,10 @@ Tasks return one result per host.
     )
     ```
 
+    Python task result models require task enum instances such as
+    `TaskFailureKind.CONNECTION`; raw string values such as `"connection"` are
+    not accepted.
+
 Success results can include result payloads, change status, diffs, summaries,
 warnings, messages, and metadata. Warning-bearing successes may be represented
 as `PassedWithWarnings` when the desired state is satisfied but important
@@ -524,6 +529,9 @@ message, failure kind, retryability, details, warnings, and messages. Skip
 results include a machine-readable reason and human-readable message. Per-host
 timing and retry data are reported on `HostTaskResult.execution_metadata`, not
 inside success or failure payloads.
+
+Python task result helpers validate task-authored payloads, provide defaults,
+and expose `to_dict()` for the JSON-compatible form consumed by the runtime.
 
 For Rust consumers, a good pattern is:
 
@@ -550,7 +558,8 @@ failure classification.
 
 ## Failure Kinds
 
-Use failure kinds to make task failures easier to classify:
+Use failure kinds to make task failures easier to classify. Their serialized
+values are:
 
 - `connection`
 - `authentication`
@@ -1128,12 +1137,13 @@ centralized result decoration. Tasks opt into them by plugin name:
 === ":fontawesome-brands-python: Python"
 
     ```python
-    from genja.task import task
+    from genja.task import TaskSuccessResult, task
 
 
     @task(name="backup_config", processors=["audit"])
     class BackupConfig:
-        ...
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary=f"backed up {host.hostname}")
     ```
 
 ## Sub-Tasks

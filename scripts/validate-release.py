@@ -15,6 +15,7 @@ PUBLISH_ORDER = [
     "genja-core-derive",
     "genja-core",
     "genja-plugin-manager",
+    "genja-cli",
     "genja",
 ]
 

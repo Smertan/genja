@@ -1,4 +1,6 @@
+import copy
 from datetime import datetime, timezone
+import importlib
 
 import genja
 from pydantic import ValidationError
@@ -11,6 +13,62 @@ from genja.task import (
     TaskSkipResult,
     TaskSuccessResult,
 )
+
+genja_task = importlib.import_module("genja.task")
+
+
+def test_task_result_enums_are_rust_backed_exports():
+    assert genja.TaskFailureKind is genja_task.TaskFailureKind
+    assert genja.TaskMessage is genja_task.TaskMessage
+    assert genja.TaskMessageLevel is genja_task.TaskMessageLevel
+    assert genja.TaskFailureKind.CONNECTION == TaskFailureKind.CONNECTION
+    assert genja.TaskMessageLevel.WARNING == TaskMessageLevel.WARNING
+
+    assert TaskFailureKind.CONNECTION.value == "connection"
+    assert TaskMessageLevel.WARNING.value == "warning"
+    assert str(TaskFailureKind.CONNECTION) == "connection"
+    assert str(TaskMessageLevel.WARNING) == "warning"
+    assert repr(TaskFailureKind.CONNECTION) == "TaskFailureKind.CONNECTION"
+    assert repr(TaskMessageLevel.WARNING) == "TaskMessageLevel.WARNING"
+
+    assert copy.copy(TaskFailureKind.EXTERNAL) == TaskFailureKind.EXTERNAL
+    assert copy.deepcopy(TaskFailureKind.EXTERNAL) == TaskFailureKind.EXTERNAL
+    assert copy.copy(TaskMessageLevel.INFO) == TaskMessageLevel.INFO
+    assert copy.deepcopy(TaskMessageLevel.INFO) == TaskMessageLevel.INFO
+
+
+def test_task_message_exposes_properties_and_serializes_stable_values():
+    timestamp = datetime(2026, 4, 29, 12, 0, tzinfo=timezone.utc)
+    message = TaskMessage(
+        level=TaskMessageLevel.INFO,
+        text="backup complete",
+        code="BACKUP_DONE",
+        timestamp=timestamp,
+    )
+
+    assert message.level == TaskMessageLevel.INFO
+    assert message.text == "backup complete"
+    assert message.code == "BACKUP_DONE"
+    assert message.timestamp == timestamp
+    assert message["text"] == "backup complete"
+    with pytest.raises(KeyError, match="missing"):
+        message["missing"]
+
+    assert message.to_dict() == {
+        "level": "info",
+        "text": "backup complete",
+        "code": "BACKUP_DONE",
+        "timestamp": "2026-04-29T12:00:00Z",
+    }
+
+
+def test_task_message_serializes_absent_optional_fields():
+    assert TaskMessage(level=TaskMessageLevel.DEBUG, text="dry run").to_dict() == {
+        "level": "debug",
+        "text": "dry run",
+        "code": None,
+        "timestamp": None,
+    }
 
 
 def test_host_task_result_from_python_success_result_round_trips():
@@ -83,13 +141,23 @@ def test_task_failure_result_rejects_non_json_serializable_details():
 
 
 def test_task_message_rejects_invalid_message_level():
-    with pytest.raises(ValidationError):
+    with pytest.raises(TypeError, match="TaskMessageLevel"):
         TaskMessage(level="verbose", text="unexpected level")
+
+
+def test_task_message_rejects_raw_message_level_value():
+    with pytest.raises(TypeError, match="TaskMessageLevel"):
+        TaskMessage(level="info", text="unexpected level")
 
 
 def test_task_failure_result_rejects_invalid_failure_kind():
     with pytest.raises(ValidationError):
         TaskFailureResult(message="boom", kind="network")
+
+
+def test_task_failure_result_rejects_raw_failure_kind_value():
+    with pytest.raises(ValidationError):
+        TaskFailureResult(message="boom", kind="external")
 
 
 def test_task_success_result_rejects_invalid_status_literal():

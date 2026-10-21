@@ -15,6 +15,7 @@ from genja.task import (
     SessionVerificationConfig,
     TaskDescriptor,
     TaskFactory,
+    TaskFailureKind,
     TaskFailureResult,
     TaskRuntimeContext,
     TaskMessageLevel,
@@ -521,7 +522,7 @@ def test_python_backed_task_applies_retry_delay():
             if len(attempts) == 1:
                 return TaskFailureResult(
                     message=f"temporary failure on {host.hostname}",
-                    kind="external",
+                    kind=TaskFailureKind.EXTERNAL,
                     retryable=True,
                 )
             return TaskSuccessResult(summary=f"retried {host.hostname}")

@@ -41,6 +41,59 @@ cd genja-core-python
 pdm install
 ```
 
+## VS Code And Rust Analyzer
+
+### Optional Feature Analysis
+
+Rust Analyzer normally analyses the default Cargo features. Code behind a
+feature gate, such as `genja-cli`'s `tui` module, can be treated as inactive
+unless that feature is enabled for the editor. The CLI's `commands`,
+`discovery`, and `output` modules are not feature-gated within `genja-cli`,
+so they do not need the same configuration.
+
+For TUI work, add this to your private VS Code workspace settings, preserving
+any other features you already enable:
+
+```json
+{
+  "rust-analyzer.cargo.features": ["genja-cli/tui"]
+}
+```
+
+Alternatively, use `"rust-analyzer.cargo.features": "all"` to analyse all
+optional features. This can increase analysis time and compile additional
+dependencies. These editor settings do not change the crate's default features
+or enable features for separate Cargo commands you run in a terminal.
+
+Reload the Rust Analyzer workspace after changing the configuration.
+
+### Inline Type Hints
+
+Inlay type hints display inferred types alongside variables in the editor;
+they are not part of the source code. If hover and autocomplete work but
+inline hints are missing, enable inlay hints in VS Code's Settings UI and
+check this Rust Analyzer setting:
+
+```json
+{
+  "rust-analyzer.inlayHints.typeHints.enable": true
+}
+```
+
+Showing inline hints is an editor preference, separate from enabling feature
+analysis. Enabling hints alone does not activate optional Cargo modules.
+Explicitly typed declarations may not need an inferred type hint; hover can
+still show their type information. See the
+[Rust Analyzer configuration reference](https://rust-analyzer.github.io/book/configuration)
+for available hint settings.
+
+### Personal Editor Settings
+
+Keep personal settings in VS Code's user settings or an untracked workspace
+configuration. The examples above are optional contributor setup; they do not
+require adding `.vscode/settings.json` to the repository. Agree on shared
+editor settings with maintainers before committing them.
+
 ## Rust Checks
 
 Run the Rust workspace tests before sending changes that affect Rust behavior.
@@ -48,7 +101,17 @@ Exclude `genja-core-python` from the workspace test run; its PyO3 tests depend
 on the Python environment and should be run with the PDM commands below.
 
 ```bash
-cargo test --workspace --exclude genja-core-python
+cargo test --workspace --exclude genja-core-python --all-features
+```
+
+`--all-features` includes optional feature-gated tests, such as discovery through
+`genja::cli`. Without it, Cargo enables only default features; selecting the
+`genja-cli` workspace member does not enable the `genja-cli` feature on `genja`.
+
+Also check that `genja` builds without optional features, as CI does:
+
+```bash
+cargo check -p genja --no-default-features
 ```
 
 For focused changes, run the package that owns the behavior:
@@ -56,6 +119,8 @@ For focused changes, run the package that owns the behavior:
 ```bash
 cargo test -p genja-core
 cargo test -p genja
+cargo test -p genja --features genja-cli
+cargo test -p genja-cli
 cargo test -p genja-core-derive
 cargo test -p genja-plugin-manager
 ```
@@ -76,7 +141,7 @@ cargo fmt --all
 Run Clippy with warnings treated as errors:
 
 ```bash
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 CI does not auto-fix formatting or Clippy warnings. If you use
@@ -280,7 +345,8 @@ change and the broader checks for any shared runtime or public API changes.
 
 GitHub Actions runs CI for pull requests and for pushes to `main`, `develop`,
 `feature/**`, and issue-style `*-genja-*` branches. CI runs formatting checks,
-Clippy with `-D warnings`, Rust tests excluding `genja-core-python`, and the
+Clippy with all features and `-D warnings`, Rust tests with all features excluding
+`genja-core-python`, a separate `genja` build without optional features, and the
 Python binding lint, typecheck, Python test, and PyO3 Rust test commands. A
 separate cross-platform compatibility workflow runs on pull requests into
 `main` and checks Linux, macOS, and Windows across all supported Python versions.
@@ -290,12 +356,80 @@ Release publishing is separate from CI. Rust crates are published only from
 publishes the publishable Rust crates in dependency order after validating crate
 versions and internal dependency metadata. Genja currently uses a unified Rust
 release train: when preparing `rs-vX.Y.Z`, bump `genja`, `genja-core`,
-`genja-core-derive`, and `genja-plugin-manager` to `X.Y.Z`, even if one crate
-only changed because the release train moved. Keep internal path dependency
-version requirements aligned to the dependency crate's released version. Python
-package releases use matching `py-vX.Y.Z` tags, validate
-`genja-core-python/pyproject.toml`, build wheels plus a source distribution,
-install and test each built wheel, and publish to PyPI with trusted publishing.
+`genja-core-derive`, `genja-plugin-manager`, and `genja-cli` to `X.Y.Z`, even if
+one crate only changed because the release train moved. Keep internal path dependency
+version requirements aligned to the dependency crate's released version.
+The publish order is `genja-core-derive`, `genja-core`, `genja-plugin-manager`,
+`genja-cli`, then `genja`. This includes the optional CLI dependency: `genja-cli`
+must be available on crates.io before publishing `genja`.
+
+Validate release metadata locally with `python scripts/validate-release.py`.
+During release preparation, pass `--tag rs-vX.Y.Z` to check the intended version.
+Package verification against crates.io requires internal dependency versions to
+be published first; the release workflow publishes and waits for each dependency
+before packaging the next crate.
+
+Python package releases use matching `py-vX.Y.Z` tags. The release workflow
+checks the `genja-py` package version against the `genja-core-python` and
+`genja-cli` crate versions, and checks that the `cli` extra requires the
+matching minor release line. For v0.5.0, that requirement is
+`genja-cli>=0.5.0,<0.6.0`. Bump these versions together on the release branch.
+Update the examples in [Versions And Compatibility](version-compatibility.md)
+with the released version at the same time.
+The workflow builds platform wheels for both packages, tests base and optional
+wheel-only installs, and publishes the CLI wheels before the dependent
+`genja-py` wheels and source distribution. Configure PyPI trusted publishing
+for both distributions before tagging the release. The CLI package has no
+source distribution; unsupported platforms cannot build it through pip.
+Confirm that the `genja-cli` PyPI project name can be claimed before release;
+if unavailable, rename the wheel distribution and the `genja-py` extra's
+dependency consistently.
+
+### Documentation package versions
+
+The documentation package-version check is scoped to Markdown guides under
+`docs/`, the repository `README.md`, and the package-root READMEs for
+`genja`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`,
+`genja-cli`, and `genja-core-python`.
+
+After updating the release examples, run the checker from the repository root:
+
+```bash
+python scripts/check-doc-versions.py --version X.Y.Z
+```
+
+Use `--tag rs-vX.Y.Z` or `--tag py-vX.Y.Z` to validate a tag. The checker
+reports the file, line, found version, and expected version for each stale
+reference. CI runs it for `release/ISSUE-vX.Y.Z` branches, including SemVer
+pre-release suffixes such as `release/163-v0.5.0-alpha.1`, and before either
+publish workflow proceeds. A pre-release branch checks documentation against
+its base `X.Y.Z` version. To test the checker itself, run `pdm run test-doc-versions`
+from `genja-core-python`.
+
+Installation commands, Cargo dependencies, compatibility tables, release
+examples, and prose describing the current Genja release must
+use the intended release version. A compatible minor-version range, such as a
+`genja-py[cli]` requirement, keeps its lower bound at the first patch release
+of that minor line and its upper bound at the next minor line; those bounds do
+not change for later patch releases.
+
+Task IDs and task registration versions belong to task authors, so examples
+such as `example.hello@1.0.0` are outside this check. IP addresses and other
+numbers unrelated to Genja package versions are also outside it. Historical
+statements, such as when a feature first appeared, may retain an older version
+with an explanation immediately before the reference:
+
+```markdown
+<!-- genja-version-check: allow-next 0.5.0 reason="CLI support first appeared in this release" -->
+The CLI feature became available in v0.5.0.
+```
+
+The `allow-next` comment exempts only the next recognized occurrence of the
+specified Genja package version within three lines, including one inside a
+following code block.
+It must include a reason. Repeat it for each intentional older occurrence;
+do not exclude a whole file. The checker rejects unused or mismatched
+comments so moved text cannot silently leave stale exceptions behind.
 
 ## Issue Templates
 
@@ -309,12 +443,15 @@ after they are merged into `main`.
 ## Release Flow
 
 Use `develop` as the integration branch and `main` as the release branch. Release
-preparation should happen on a release branch cut from `develop`:
+preparation should happen on a branch named `release/ISSUE-vX.Y.Z`, where
+`ISSUE` is the release issue number, cut from `develop`. A SemVer pre-release
+suffix such as `-alpha.1` or `-rc.1` may follow `X.Y.Z` during preparation;
+the Rust and Python publication workflows currently require stable release tags:
 
 ```text
 feature/* -> PR -> develop
-develop -> release/x.y.z
-release/x.y.z -> PR -> main
+develop -> release/ISSUE-vX.Y.Z
+release/ISSUE-vX.Y.Z -> PR -> main
 main -> fast-forward develop
 ```
 
@@ -349,3 +486,17 @@ User-facing compatibility information belongs in
 [Versions And Compatibility](version-compatibility.md). Maintainer-only publish
 steps should stay out of the user guides unless they are needed by contributors
 building release artifacts.
+
+## Contributor FAQ
+
+### Why are type hints or autocomplete missing in optional Rust modules?
+
+Rust Analyzer may be analysing only default features. Enable the feature you
+are working on, such as `genja-cli/tui`. See
+[Optional Feature Analysis](#optional-feature-analysis) for configuration and
+[Inline Type Hints](#inline-type-hints) for hint display settings.
+
+### Should I commit my VS Code settings?
+
+Keep personal settings private unless maintainers agree to share them. See
+[Personal Editor Settings](#personal-editor-settings) for where to keep them.

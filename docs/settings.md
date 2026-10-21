@@ -91,8 +91,8 @@ should load inventory from `settings.inventory`:
 
     ```rust
     use genja::Genja;
-    use genja_core::Settings;
-    use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig};
+    use genja::genja_core::Settings;
+    use genja::genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig};
 
     let settings = Settings::builder()
         .inventory(
@@ -137,8 +137,8 @@ for sync-only inventory plugins such as `FileInventoryPlugin`.
 
     ```rust
     use genja::Genja;
-    use genja_core::Settings;
-    use genja_core::settings::InventoryConfig;
+    use genja::genja_core::Settings;
+    use genja::genja_core::settings::InventoryConfig;
 
     # async fn build_runtime() -> Result<(), Box<dyn std::error::Error>> {
     // Assumes `api_inventory` is available through runtime plugin discovery.

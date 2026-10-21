@@ -8,13 +8,13 @@ use ::genja_core::task::{
     validate_explicit_task_id, validate_task_version,
 };
 use async_trait::async_trait;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyModule};
 use pyo3_async_runtimes::tokio::future_into_py;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::plugin_manager::{
     python_connection_from_runtime_connection, resolve_python_maybe_awaitable_async,
@@ -26,6 +26,33 @@ enum PythonTaskExecutionMode {
     Async,
 }
 
+// Generate a Python-facing enum wrapper for a Rust enum whose public Python
+// representation is a stable lowercase string value.
+//
+// The generated wrapper exposes Python constants, `.value`, `str(...)`,
+// `repr(...)`, Rust/Python conversions, and Python copy hooks. The copy hooks
+// let immutable PyO3 enum values be reused safely when libraries such as
+// Pydantic copy model defaults before validation or serialization.
+//
+// Example:
+//
+// py_string_enum! {
+//     py: PyIdempotencyMode,
+//     rust: IdempotencyMode,
+//     python_name: "IdempotencyMode",
+//     variants: {
+//         Check => CHECK => "check",
+//     }
+// }
+//
+// That invocation generates a `PyIdempotencyMode::Check` Rust variant exposed
+// to Python as the `IdempotencyMode.CHECK` class attribute.
+//
+// Python users can then rely on:
+//
+// IdempotencyMode.CHECK.value == "check"
+// str(IdempotencyMode.CHECK) == "check"
+// repr(IdempotencyMode.CHECK) == "IdempotencyMode.CHECK"
 macro_rules! py_string_enum {
     (
         py: $py_enum:ident,
@@ -71,13 +98,43 @@ macro_rules! py_string_enum {
                 self.value_str()
             }
 
-            /// Return the stable string value for display.
+            /// Return the stable string value for `str(enum_value)`.
+            ///
+            /// This keeps Python display output aligned with `.value`, so task
+            /// enum values behave like compact value objects in logs and error
+            /// messages instead of using Python's default object formatting.
             fn __str__(&self) -> &'static str {
                 self.value_str()
             }
 
+            /// Return the qualified enum constant name for `repr(enum_value)`.
+            ///
+            /// The representation mirrors Python enum-style output without
+            /// including the serialized value, for example
+            /// `TaskFailureKind.CONNECTION`.
             fn __repr__(&self) -> String {
                 format!("{}.{}", $python_name, self.variant_name())
+            }
+
+            /// Return the same enum value for Python shallow-copy operations.
+            ///
+            /// Generated task enum values are immutable constants, so copying
+            /// them does not need to allocate a distinct object. Providing this
+            /// hook also prevents Python's `copy` module from falling back to
+            /// pickle-based reconstruction for PyO3 enum values.
+            fn __copy__(&self) -> Self {
+                *self
+            }
+
+            /// Return the same enum value for Python deep-copy operations.
+            ///
+            /// Pydantic may deep-copy field defaults while constructing models.
+            /// Because these enum values are immutable, the copied value is
+            /// identical to the original constant. Handling `__deepcopy__`
+            /// directly keeps PyO3 enum defaults usable without requiring them
+            /// to support Python pickle serialization.
+            fn __deepcopy__(&self, _memo: &Bound<'_, PyAny>) -> Self {
+                *self
             }
         }
 
@@ -108,6 +165,194 @@ py_string_enum! {
         Check => CHECK => "check",
         CheckAndVerify => CHECK_AND_VERIFY => "check_and_verify",
     }
+}
+
+py_string_enum! {
+    py: PyTaskMessageLevel,
+    rust: MessageLevel,
+    python_name: "TaskMessageLevel",
+    variants: {
+        Info => INFO => "info",
+        Warning => WARNING => "warning",
+        Error => ERROR => "error",
+        Debug => DEBUG => "debug",
+    }
+}
+
+py_string_enum! {
+    py: PyTaskFailureKind,
+    rust: TaskFailureKind,
+    python_name: "TaskFailureKind",
+    variants: {
+        Connection => CONNECTION => "connection",
+        Authentication => AUTHENTICATION => "authentication",
+        Validation => VALIDATION => "validation",
+        Timeout => TIMEOUT => "timeout",
+        Command => COMMAND => "command",
+        Unsupported => UNSUPPORTED => "unsupported",
+        Internal => INTERNAL => "internal",
+        External => EXTERNAL => "external",
+    }
+}
+
+/// Python wrapper for a structured task message backed by Rust `TaskMessage`.
+#[pyclass(name = "TaskMessage", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyTaskMessage {
+    inner: TaskMessage,
+}
+
+impl From<TaskMessage> for PyTaskMessage {
+    fn from(inner: TaskMessage) -> Self {
+        Self { inner }
+    }
+}
+
+impl From<PyTaskMessage> for TaskMessage {
+    fn from(value: PyTaskMessage) -> Self {
+        value.inner
+    }
+}
+
+#[pymethods]
+impl PyTaskMessage {
+    /// Create a structured task message.
+    #[new]
+    #[pyo3(signature = (level, text, code=None, timestamp=None))]
+    fn new(
+        level: PyRef<'_, PyTaskMessageLevel>,
+        text: String,
+        code: Option<String>,
+        timestamp: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let mut message = TaskMessage::new((*level).into(), text);
+        if let Some(code) = code {
+            message = message.with_code(code);
+        }
+        if let Some(timestamp) = timestamp {
+            message = message.with_timestamp(py_task_message_timestamp(&timestamp)?);
+        }
+        Ok(Self { inner: message })
+    }
+
+    /// Return the message severity level.
+    #[getter]
+    fn level(&self, py: Python<'_>) -> PyResult<Py<PyTaskMessageLevel>> {
+        Py::new(py, PyTaskMessageLevel::from(self.inner.level().clone()))
+    }
+
+    /// Return the human-readable message text.
+    #[getter]
+    fn text(&self) -> &str {
+        self.inner.text()
+    }
+
+    /// Return the optional machine-readable message code.
+    #[getter]
+    fn code(&self) -> Option<&str> {
+        self.inner.code()
+    }
+
+    /// Return the optional message timestamp as a UTC Python datetime.
+    #[getter]
+    fn timestamp(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match self.inner.timestamp() {
+            Some(timestamp) => system_time_to_py_datetime(py, timestamp),
+            None => Ok(py.None()),
+        }
+    }
+
+    /// Return the message as a JSON-compatible Python dictionary.
+    fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_value_to_py(py, &task_message_to_python_json(&self.inner))
+    }
+
+    /// Return the JSON-compatible dictionary value for item access.
+    fn __getitem__(&self, py: Python<'_>, key: &str) -> PyResult<Py<PyAny>> {
+        let value = task_message_to_python_json(&self.inner);
+        match value.get(key) {
+            Some(value) => json_value_to_py(py, value),
+            None => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TaskMessage(level={:?}, text={:?})",
+            self.inner.level(),
+            self.inner.text()
+        )
+    }
+}
+
+fn py_task_message_timestamp(timestamp: &Bound<'_, PyAny>) -> PyResult<SystemTime> {
+    if timestamp.is_none() {
+        return Err(PyTypeError::new_err(
+            "TaskMessage(timestamp=...) expected datetime | str | None",
+        ));
+    }
+
+    if let Ok(value) = timestamp.extract::<String>() {
+        return humantime::parse_rfc3339(&value).map_err(|err| {
+            PyValueError::new_err(format!("invalid task message timestamp '{value}': {err}"))
+        });
+    }
+
+    if timestamp.hasattr("timestamp")? {
+        let seconds = timestamp
+            .call_method0("timestamp")?
+            .extract::<f64>()
+            .map_err(|_| {
+                PyTypeError::new_err("TaskMessage(timestamp=...) timestamp() must return a number")
+            })?;
+        if !seconds.is_finite() {
+            return Err(PyValueError::new_err(
+                "TaskMessage(timestamp=...) timestamp() returned a non-finite value",
+            ));
+        }
+
+        let duration = Duration::from_secs_f64(seconds.abs());
+        return if seconds.is_sign_negative() {
+            UNIX_EPOCH
+                .checked_sub(duration)
+                .ok_or_else(|| PyValueError::new_err("TaskMessage(timestamp=...) is out of range"))
+        } else {
+            UNIX_EPOCH
+                .checked_add(duration)
+                .ok_or_else(|| PyValueError::new_err("TaskMessage(timestamp=...) is out of range"))
+        };
+    }
+
+    Err(PyTypeError::new_err(
+        "TaskMessage(timestamp=...) expected datetime | str | None",
+    ))
+}
+
+fn system_time_to_py_datetime(py: Python<'_>, timestamp: SystemTime) -> PyResult<Py<PyAny>> {
+    let seconds = match timestamp.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs_f64(),
+        Err(err) => -err.duration().as_secs_f64(),
+    };
+    let datetime = PyModule::import(py, "datetime")?;
+    let timezone = datetime.getattr("timezone")?.getattr("utc")?;
+    Ok(datetime
+        .getattr("datetime")?
+        .call_method1("fromtimestamp", (seconds, timezone))?
+        .unbind())
+}
+
+fn task_message_to_python_json(message: &TaskMessage) -> Value {
+    let timestamp = message
+        .timestamp()
+        .map(|timestamp| Value::String(humantime::format_rfc3339(timestamp).to_string()))
+        .unwrap_or(Value::Null);
+
+    json!({
+        "level": PyTaskMessageLevel::from(message.level().clone()).value_str(),
+        "text": message.text(),
+        "code": message.code(),
+        "timestamp": timestamp,
+    })
 }
 
 impl PyIdempotencyMode {
@@ -1326,6 +1571,9 @@ fn resolve_task_run_options(
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyHostTaskResult>()?;
     module.add_class::<PyIdempotencyMode>()?;
+    module.add_class::<PyTaskMessageLevel>()?;
+    module.add_class::<PyTaskFailureKind>()?;
+    module.add_class::<PyTaskMessage>()?;
     module.add_class::<PySessionVerificationConfig>()?;
     module.add_class::<PyIdempotencyCheckResult>()?;
     module.add_class::<PyTaskDefinition>()?;
@@ -2390,43 +2638,24 @@ fn json_to_task_results(value: &Value) -> PyResult<TaskResults> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::genja_core::task::{TaskFailure, TaskFailureKind};
+    use ::genja_core::task::{MessageLevel, TaskFailure, TaskFailureKind};
     use pyo3::types::PyModule;
     use pyo3::types::PyTuple;
 
     fn init_python() {
-        crate::init_embedded_python();
-        Python::attach(|py| {
-            let sys = PyModule::import(py, "sys").expect("sys module should import");
-            let modules = sys.getattr("modules").expect("sys.modules should exist");
-            let genja = PyModule::from_code(
-                py,
-                pyo3::ffi::c_str!("__path__ = []\n"),
-                pyo3::ffi::c_str!("genja/__init__.py"),
-                pyo3::ffi::c_str!("genja"),
-            )
-            .expect("genja stub should build");
-            let task = PyModule::from_code(
-                py,
-                pyo3::ffi::c_str!(
-                    "class _Model:\n    def __init__(self, **kwargs):\n        self.__dict__.update(kwargs)\n\n    def to_dict(self):\n        return dict(self.__dict__)\n\nclass _IdempotencyModeValue:\n    def __init__(self, value):\n        self.value = value\n\nclass IdempotencyMode:\n    DISABLED = _IdempotencyModeValue('disabled')\n    CHECK = _IdempotencyModeValue('check')\n    CHECK_AND_VERIFY = _IdempotencyModeValue('check_and_verify')\n\nclass TaskInfo(_Model):\n    pass\n\nclass Host(_Model):\n    pass\n\nclass TaskRuntimeContext(_Model):\n    def has_connection(self):\n        return self.connection is not None\n"
-                ),
-                pyo3::ffi::c_str!("genja/task.py"),
-                pyo3::ffi::c_str!("genja.task"),
-            )
-            .expect("task stub should build");
-            genja
-                .add("task", &task)
-                .expect("task module should attach to package");
-            modules
-                .set_item("genja", &genja)
-                .expect("genja stub should register");
-            modules
-                .set_item("genja.task", &task)
-                .expect("task stub should register");
-        });
+        crate::init_embedded_python_with_modules(
+            &["tests.fixtures.task_definitions"],
+            &["genja", "genja.task"],
+        );
     }
 
+    fn task_definition_fixture<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
+        PyModule::import(py, "tests.fixtures.task_definitions")?.getattr(name)
+    }
+
+    // Build synthetic task classes for metadata extraction tests. The metadata
+    // mirrors the real `@task` decorator defaults, while task methods come from
+    // Python fixtures so this helper does not duplicate inline Python source.
     fn make_task_class<'py>(
         py: Python<'py>,
         name: &str,
@@ -2448,40 +2677,105 @@ mod tests {
             None => info.set_item("connection_plugin_name", py.None())?,
         }
         info.set_item("retry", py.None())?;
+        info.set_item("processors", Vec::<String>::new())?;
+        info.set_item("session_verification", py.None())?;
         info.set_item("supports_dry_run", false)?;
-        info.set_item("idempotency", Py::new(py, PyIdempotencyMode::Disabled)?)?;
+        let task_module = PyModule::import(py, "genja.task")?;
+        let idempotency_mode = task_module
+            .getattr("IdempotencyMode")?
+            .getattr("DISABLED")?;
+        info.set_item("idempotency", idempotency_mode)?;
+        info.set_item("options", py.None())?;
         info.set_item("sub_tasks", sub_tasks)?;
 
         let attrs = PyDict::new(py);
         attrs.set_item("__genja_task_info__", info)?;
         match execution_mode {
             PythonTaskExecutionMode::Blocking => {
-                attrs.set_item(
-                    "start",
-                    PyModule::from_code(
-                        py,
-                        pyo3::ffi::c_str!("def start(self, task, host, context):\n    return {'status': 'passed'}\n"),
-                        pyo3::ffi::c_str!("tests/_task_stub.py"),
-                        pyo3::ffi::c_str!("tests._task_stub"),
-                    )?
-                    .getattr("start")?,
-                )?;
+                attrs.set_item("start", task_definition_fixture(py, "passed_start")?)?;
             }
             PythonTaskExecutionMode::Async => {
                 attrs.set_item(
                     "start_async",
-                    PyModule::from_code(
-                        py,
-                        pyo3::ffi::c_str!("async def start_async(self, task, host, context):\n    return {'status': 'passed'}\n"),
-                        pyo3::ffi::c_str!("tests/_task_stub.py"),
-                        pyo3::ffi::c_str!("tests._task_stub"),
-                    )?
-                    .getattr("start_async")?,
+                    task_definition_fixture(py, "passed_start_async")?,
                 )?;
             }
         }
 
         type_fn.call1((name, bases, attrs))
+    }
+
+    // Compare only metadata keys so the synthetic Rust-built task classes stay
+    // aligned with the real Python decorator without coupling tests to values.
+    fn task_metadata_keys(task_class: &Bound<'_, PyAny>) -> Vec<String> {
+        let metadata = task_class
+            .getattr("__genja_task_info__")
+            .expect("task metadata should exist");
+        let metadata = metadata
+            .cast::<PyDict>()
+            .expect("task metadata should be a dict");
+        let mut keys = metadata
+            .keys()
+            .iter()
+            .map(|key| {
+                key.extract::<String>()
+                    .expect("metadata key should be a string")
+            })
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn init_python_imports_real_genja_task_module() {
+        init_python();
+        Python::attach(|py| {
+            let task_module =
+                PyModule::import(py, "genja.task").expect("real genja.task should import");
+
+            for name in [
+                "Host",
+                "IdempotencyMode",
+                "RetryConfig",
+                "TaskInfo",
+                "TaskRuntimeContext",
+                "TaskSuccessResult",
+                "task",
+            ] {
+                assert!(
+                    task_module.hasattr(name).expect("hasattr should work"),
+                    "{name} should be exported from the real genja.task module"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn synthetic_task_metadata_matches_real_task_decorator_keys() {
+        init_python();
+        Python::attach(|py| {
+            let synthetic = make_task_class(
+                py,
+                "backup_config",
+                Some("ssh"),
+                &[],
+                PythonTaskExecutionMode::Blocking,
+            )
+            .expect("synthetic task class should be created");
+            let task_module =
+                PyModule::import(py, "genja.task").expect("real genja.task should import");
+            let task_decorator = task_module
+                .getattr("task")
+                .expect("task decorator should exist");
+            let real = task_decorator
+                .call1(("decorated_backup",))
+                .expect("task decorator should build")
+                .call1((task_definition_fixture(py, "DecoratedBackup")
+                    .expect("decorated class should exist"),))
+                .expect("task decorator should apply");
+
+            assert_eq!(task_metadata_keys(&synthetic), task_metadata_keys(&real));
+        });
     }
 
     #[test]
@@ -2651,6 +2945,34 @@ mod tests {
     }
 
     #[test]
+    fn py_task_message_matches_rust_serialization_shape() {
+        Python::attach(|py| {
+            let rust_message = TaskMessage::new(MessageLevel::Info, "backup complete".to_string())
+                .with_code("BACKUP_DONE".to_string())
+                .with_timestamp(UNIX_EPOCH + Duration::from_secs(1_777_461_600));
+            let expected = task_message_to_python_json(&rust_message);
+            let message = Py::new(py, PyTaskMessage::from(rust_message))
+                .expect("message should convert to python");
+            let message = message.bind(py);
+
+            for field in ["level", "text", "code", "timestamp"] {
+                assert!(
+                    message.hasattr(field).expect("hasattr should work"),
+                    "{field} should be exposed as a Python property"
+                );
+            }
+
+            let payload = message
+                .call_method0("to_dict")
+                .expect("to_dict should work");
+            assert_eq!(
+                py_any_to_json_value(&payload).expect("payload should convert"),
+                expected
+            );
+        });
+    }
+
+    #[test]
     fn py_idempotency_check_result_exposes_expected_fields() {
         Python::attach(|py| {
             let details =
@@ -2736,31 +3058,17 @@ mod tests {
     fn extract_python_task_spec_extracts_nested_sub_task_metadata() {
         init_python();
         Python::attach(|py| {
-            let verify = make_task_class(
-                py,
-                "verify_backup",
-                Some("ssh"),
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("sub task class should be created");
-            let backup = make_task_class(
-                py,
-                "backup_config",
-                Some("ssh"),
-                &[verify],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("parent task class should be created");
+            let backup = task_definition_fixture(py, "FixtureBackupConfigTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(backup).expect("task spec should extract");
 
-            assert_eq!(spec.name, "backup_config");
+            assert_eq!(spec.name, "fixture_backup_config");
             assert_eq!(spec.connection_plugin_name.as_deref(), Some("ssh"));
             assert_eq!(spec.retry_config, None);
             assert_eq!(spec.options, None);
             assert_eq!(spec.sub_tasks.len(), 1);
-            assert_eq!(spec.sub_tasks[0].name, "verify_backup");
+            assert_eq!(spec.sub_tasks[0].name, "fixture_verify_backup");
             assert_eq!(
                 spec.sub_tasks[0].connection_plugin_name.as_deref(),
                 Some("ssh")
@@ -2772,27 +3080,8 @@ mod tests {
     fn extract_python_task_spec_extracts_options_payload() {
         init_python();
         Python::attach(|py| {
-            let task = make_task_class(
-                py,
-                "backup_config",
-                Some("ssh"),
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("task class should be created");
-            task.getattr("__genja_task_info__")
-                .expect("task metadata should exist")
-                .cast::<PyDict>()
-                .expect("task metadata should be a dict")
-                .set_item(
-                    "options",
-                    json_value_to_py(
-                        py,
-                        &json!({"backup_path": "/tmp/configs", "compress": true}),
-                    )
-                    .unwrap(),
-                )
-                .unwrap();
+            let task = task_definition_fixture(py, "FixtureOptionsTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 
@@ -2807,26 +3096,8 @@ mod tests {
     fn extract_python_task_spec_extracts_retry_overrides() {
         init_python();
         Python::attach(|py| {
-            let task = make_task_class(
-                py,
-                "backup_config",
-                Some("ssh"),
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("task class should be created");
-            task.getattr("__genja_task_info__")
-                .expect("task metadata should exist")
-                .cast::<PyDict>()
-                .expect("task metadata should be a dict")
-                .set_item("retry", {
-                    let retry = PyDict::new(py);
-                    retry.set_item("allow", true).unwrap();
-                    retry.set_item("max_attempts", 3).unwrap();
-                    retry.set_item("delay_ms", 500).unwrap();
-                    retry
-                })
-                .unwrap();
+            let task = task_definition_fixture(py, "FixtureRetryTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 
@@ -2891,14 +3162,8 @@ mod tests {
     fn extract_python_task_spec_allows_missing_connection_plugin_name() {
         init_python();
         Python::attach(|py| {
-            let task = make_task_class(
-                py,
-                "backup_config",
-                None,
-                &[],
-                PythonTaskExecutionMode::Blocking,
-            )
-            .expect("task class should be created");
+            let task = task_definition_fixture(py, "FixtureNoConnectionTask")
+                .expect("fixture task class should import");
 
             let spec = extract_python_task_spec(task).expect("task spec should extract");
 

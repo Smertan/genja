@@ -31,6 +31,21 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
+//! ## Optional CLI Support
+//!
+//! Enable the `genja-cli` Cargo feature to access CLI helpers through
+//! `genja::cli`. This feature is disabled by default. A project-specific binary
+//! must link its task registrations and call `genja::cli::run_main()` to expose
+//! discovery commands. Enabling the feature does not install an executable.
+//! Configured Python task modules are discovered through `genja-py` in the
+//! selected Python environment when `[tool.genja.tasks]` is present.
+//!
+//! The optional `genja-tui` feature also enables CLI support and exposes the
+//! terminal task browser through `genja::cli::tui`. It is disabled by default. Browser
+//! state, descriptor loading, keyboard navigation, task table rendering, and the
+//! full-screen `run_tui` runner are available. Project-local binaries can call
+//! `genja::cli::tui::run_main()` after linking their task crate.
+//!
 //! ## Architecture
 //!
 //! - **Inventory**: Manages hosts, groups, and defaults
@@ -59,6 +74,34 @@
 //! See [`Genja`] for the main API and [`GenjaBuilder`] for construction patterns.
 
 pub use ::async_trait::async_trait;
+/// CLI helpers for project-local task registries, enabled by the `genja-cli` feature.
+///
+/// The `genja-tui` feature also enables this export and the `cli::tui` browser.
+///
+/// Link your task crate or declare your task modules in the binary before
+/// delegating to this entry point; Rust discovery sees linked registrations.
+/// Python tasks declared in `[tool.genja.tasks]` are imported through the
+/// selected Python interpreter when discovery runs.
+///
+/// ```no_run
+/// fn main() -> std::process::ExitCode {
+///     genja::cli::run_main()
+/// }
+/// ```
+///
+/// With `genja-tui`, a project-local TUI binary can use the same linked task
+/// registrations through the TUI helper:
+///
+/// ```no_run
+/// # #[cfg(feature = "genja-tui")]
+/// fn main() -> std::process::ExitCode {
+///     genja::cli::tui::run_main()
+/// }
+/// # #[cfg(not(feature = "genja-tui"))]
+/// # fn main() -> std::process::ExitCode { std::process::ExitCode::SUCCESS }
+/// ```
+#[cfg(feature = "genja-cli")]
+pub use genja_cli as cli;
 pub use genja_core;
 pub use genja_core::GenjaError;
 use genja_core::inventory::{
