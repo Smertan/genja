@@ -4,6 +4,14 @@ fn genja_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_genja"))
 }
 
+fn assert_help_usage(stdout: &str, command: &str) {
+    let usage = format!("Usage: genja{}{command}", std::env::consts::EXE_SUFFIX);
+    assert!(
+        stdout.contains(&usage),
+        "expected {usage:?} in help output:\n{stdout}"
+    );
+}
+
 #[cfg(all(feature = "python-wheel", unix))]
 #[test]
 fn wheel_selects_companion_python_and_honors_override() {
@@ -262,7 +270,7 @@ fn help_prints_top_level_usage() {
 
     let stdout = String::from_utf8(output.stdout).expect("help output should be UTF-8");
 
-    assert!(stdout.contains("Usage: genja"));
+    assert_help_usage(&stdout, "");
     assert!(stdout.contains("Commands:"));
     assert!(stdout.contains("task"));
     assert!(stdout.contains("version"));
@@ -283,7 +291,7 @@ fn tui_help_succeeds_without_starting_a_terminal_session() {
     assert!(output.status.success(), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 help");
-    assert!(stdout.contains("Usage: genja tui"), "{stdout}");
+    assert_help_usage(&stdout, " tui");
     assert!(
         stdout.contains("Open the terminal task browser"),
         "{stdout}"
@@ -334,7 +342,7 @@ fn task_help_prints_task_subcommands() {
 
     let stdout = String::from_utf8(output.stdout).expect("task help output should be UTF-8");
 
-    assert!(stdout.contains("Usage: genja task"));
+    assert_help_usage(&stdout, " task");
     assert!(stdout.contains("Commands:"));
     assert!(stdout.contains("describe"));
     assert!(stdout.contains("docs"));
@@ -357,7 +365,7 @@ fn task_docs_help_prints_markdown_output_format() {
 
     let stdout = String::from_utf8(output.stdout).expect("task docs help should be UTF-8");
 
-    assert!(stdout.contains("Usage: genja task docs"));
+    assert_help_usage(&stdout, " task docs");
     assert!(stdout.contains("--output"));
     assert!(stdout.contains("markdown"));
 }
@@ -438,7 +446,7 @@ fn task_describe_help_prints_identity_and_output_formats() {
 
     let stdout = String::from_utf8(output.stdout).expect("task describe help should be UTF-8");
 
-    assert!(stdout.contains("Usage: genja task describe"));
+    assert_help_usage(&stdout, " task describe");
     assert!(stdout.contains("<IDENTITY>"));
     assert!(stdout.contains("--output"));
     assert!(stdout.contains("table"));
@@ -550,7 +558,7 @@ fn task_list_help_prints_output_formats() {
 
     let stdout = String::from_utf8(output.stdout).expect("task list help output should be UTF-8");
 
-    assert!(stdout.contains("Usage: genja task list"));
+    assert_help_usage(&stdout, " task list");
     assert!(stdout.contains("compact summary views"));
     assert!(stdout.contains("genja task describe <identity>"));
     assert!(stdout.contains("JSON and YAML output"));
