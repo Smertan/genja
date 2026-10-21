@@ -225,10 +225,11 @@ mod tests {
         assert_eq!(implementations.len(), 1);
         assert_eq!(implementations[0].descriptor(), &expected);
         assert_eq!(implementations[0].language(), Some(TaskLanguage::Python));
+        let observed_cwd = fs::read_to_string(directory.path().join("observed_cwd.txt"))
+            .expect("working directory should be recorded");
         assert_eq!(
-            fs::read_to_string(directory.path().join("observed_cwd.txt"))
-                .expect("working directory should be recorded"),
-            directory.path().display().to_string()
+            fs::canonicalize(&observed_cwd).expect("recorded working directory should exist"),
+            fs::canonicalize(directory.path()).expect("project directory should exist")
         );
         assert_eq!(
             fs::read_to_string(directory.path().join("observed_pyproject.txt"))
