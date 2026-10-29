@@ -338,7 +338,7 @@ There is an existing Rust invocation API gap for root overrides:
 `TaskDefinition`, so callers cannot pass an already configured definition
 to those single-task methods. A constructed `TaskDefinition` can be pushed
 into `Tasks` and run with `Genja::run_tasks*`; `TaskSpec` construction also
-returns a definition for this path. Phase 4 will specify the public
+returns a definition for this path. The phase 4 API contract below adds
 single-definition and list-addition helpers for declarative invocation.
 
 `ExecutionPolicy` is the invocation's grouped configuration, not a trait
@@ -488,10 +488,13 @@ Expiry after an application result but before a required post-check or fresh
 session completes records verification as incomplete and preserves the fact
 that the change may already have been applied; it must not turn that result
 into an ordinary verified success or retry the application.
-The exact optional result fields and Rust/Python wrappers are phase 4 API
-decisions. Existing calls with no selected policy retain their raw and human
-JSON shape; Python result conversion must expose the same interruption facts
-when a deadline is selected.
+Phase 4 fixes the result compatibility boundary: interruption metadata is
+optional and omitted when absent, while the outer `TaskResults` shape stays
+the same. Exact field and wrapper names belong to the deadline and
+cancellation-reporting implementation follow-ups. Existing calls without a
+deadline or interruption retain their raw and human JSON shape; Python
+result conversion must expose the same interruption facts when a deadline
+is selected.
 
 ### Verification is a requirement over existing checks
 
