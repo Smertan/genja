@@ -1,7 +1,7 @@
 # Execution policy design: baseline, retry, deadline, and verification
 
 This note records the current execution behavior and the proposed retry,
-deadline, verification, and API contracts from design phases 2-4. The
+deadline, verification, API, and validation contracts from design phases 2-5. The
 baseline describes the current implementation; the proposals are not yet
 implemented.
 The relevant paths are `Genja::run_task*_with_options` and
@@ -790,3 +790,69 @@ task-host timeout across async, blocking, and Python work; add cancellation
 reporting that distinguishes requested from confirmed local termination;
 and integrate verification requirements over the existing checks. Each
 follow-up must preserve the no-policy compatibility baseline above.
+
+## Validation walkthrough and test matrix (phase 5)
+
+This phase maps the design to current tests and specifies the new cases for
+implementation follow-ups. It does not claim that the proposed APIs or
+deadline behavior already pass tests. Keep existing tests as the baseline;
+compare their observable results before and after each implementation step.
+
+### Current regression anchors
+
+| Behavior | Existing tests and what they establish |
+| --- | --- |
+| Retry defaults, precedence, delay, and safety | `genja-core/src/task.rs`: `start_uses_task_retry_config_over_default_policy`, `start_merges_task_retry_config_over_runner_retry_config_field_by_field`, `start_delays_before_retry_attempts`, `start_does_not_retry_without_effective_retry_policy`, `start_does_not_retry_or_delay_non_retryable_failures`, and `start_does_not_retry_or_delay_skipped_results`. These anchor the built-in policy when no new algorithm is selected. |
+| Attempt metadata and convergence | `genja-core/src/task.rs`: `task_runtime_context_exposes_current_retry_attempt`, `start_marks_retry_exhausted_after_final_retryable_failure`, `retry_converged_pre_check_returns_passed_with_warnings`, `idempotent_async_converged_check_skips_start_and_passes_unchanged`, and `check_and_verify_with_session_verification_uses_replacement_connection_for_post_check`. |
+| Dry-run | `genja/src/lib.rs`: `run_task_with_options_dry_run_calls_async_dry_run_not_start`, `run_task_with_options_dry_run_calls_blocking_dry_run_not_start`, and `run_task_with_options_dry_run_uses_existing_retry_policy`; `genja-core/src/task.rs`: `dry_run_does_not_invoke_idempotency_check` and `session_verification_does_not_replace_during_dry_run`. |
+| Replacement versus task attempts | `genja-core/src/task.rs`: `session_verification_succeeds_after_configured_retry_without_rerunning_task`, `session_verification_exhaustion_returns_connection_failure_without_rerunning_task`, and the validation tests for zero attempts and missing connection. `genja/src/lib.rs`: `run_verifies_replacement_sessions_across_serial_and_threaded_runners`. |
+| Rust execution and runner ordering | `genja/src/lib.rs`: `run_preserves_retry_behavior_across_serial_and_threaded_runners`, `run_task_async_executes_task_inside_existing_tokio_runtime`, `run_task_async_offloads_blocking_task_work`, `run_tasks_accepts_ordered_task_list_with_nested_subtasks`, and `run_tasks_async_preserves_root_task_order`. |
+| Python bridge and results | `genja-core-python/python/tests/test_async_tasks.py`: async task, subtask, dry-run, convergence, verification, and task-list tests; `test_task_definition.py`: retry delay and direct execution; `test_runtime.py`: result-shape conversion; `test_plugin_manager.py`: Python runner callback. Python `asyncio.wait_for` tests only caller-side timeout, not Genja's proposed structured task deadline. |
+
+These tests leave three design-specific gaps: no shared selected algorithm
+across independently configured task-host nodes; no per-task-host deadline
+and interruption report; and no migration test for the changed Rust and
+Python runner signatures. The follow-ups below close those gaps.
+
+### Required retry propagation case
+
+Run one ordered list on two hosts with both the serial and threaded runners.
+Set runner retry defaults to `allow = true`, `max_attempts = 3`, and a known
+delay. Select one custom retry algorithm for the whole invocation; have it
+return an immediate retry when the runtime safety gates permit one. Use
+host-specific scripted task results so the assertions are independent of
+runner scheduling:
+
+| Task node | Host 1 | Host 2 | Expected settings and result |
+| --- | --- | --- | --- |
+| Root A, first in list | Fails retryably twice, then passes | Fails retryably once, then passes | Inherits runner limit 3; `attempts` are 3 and 2 respectively. |
+| A's subtask | Fails retryably once, then passes | Fails retryably once, then passes | Authored `max_attempts = 2`; each host reports 2 attempts, independent of A. |
+| Root B, second in list | Fails retryably | Fails retryably | Authored `allow = false`; each host reports 1 attempt despite runner defaults and the selected algorithm. |
+
+Assert that the custom policy observes root A and subtask decisions with
+their resolved limits, and is not asked to retry B. Record policy calls for
+observation only; do not implement a shared budget in the test policy.
+Assert the result vector remains `[A, B]`, A's subtask is nested under A,
+retry flags match each host's own attempts, and host 2's attempts are not
+reduced by host 1. Repeat without selecting a new algorithm and compare
+decisions, configured delays, metadata, and serialized field sets to the
+existing fixed-delay baseline; compare timestamps by presence and type,
+not by their run-specific values. Include a root `TaskDefinition` retry override and a
+`TaskSpec`-constructed definition in separate focused cases to verify their
+current precedence and the new single-definition helper.
+
+### Deadline, verification, and compatibility cases
+
+| Boundary | Follow-up assertion |
+| --- | --- |
+| Task-host clock | A queued threaded host gets its full timeout when scheduled; a later root and each subtask get fresh clocks. Connection setup, retry waits, and replacement waits spend the same task-host budget; no retry resets it. Use controlled barriers or a test clock, not tight wall-time thresholds. |
+| Attempt domains | Expiry before the first task call reports zero task attempts. Initial connection failures do not enter the task retry loop. Replacement retries retain their own count and never rerun the applied task. |
+| Rust async and blocking | Async work that acknowledges cancellation may report confirmed local termination. A still-running `spawn_blocking` closure reports cancellation requested with termination unconfirmed; it cannot start another task attempt or an unsafe subtask while work remains active. |
+| Python async and blocking | Test both `start_async` through the asyncio bridge and blocking `start` through the Rust adapter. A timed-out Python coroutine or blocking call is not reported as stopped until Genja observes completion or acknowledgement. Direct Python `TaskDefinition.run_on_host(s)` uses the same policy semantics. |
+| Verification | A required post-check or fresh session fails validation before applying a task that lacks the needed hook, connection, or configuration. With both requirements available, preserve the existing replacement-session post-check order. Reject dry-run plus a verification requirement before execution. |
+| Outcome and serialization | Preserve `PassedWithWarnings`, retry metadata, processor ordering, and exact raw/human JSON for existing no-policy calls. When a deadline applies, omit interruption metadata if none occurred; otherwise distinguish trigger, cancellation request, local termination, and unknown external state without changing the outer `TaskResults` type. |
+| Runner migration | A Rust runner updated only to accept the new argument still runs default-policy calls; a selected policy is rejected before any task if its capability method remains false. Check the same boundary through the Python runner adapter and callback. An opted-in runner must pass policy to the core host entry point. |
+
+Implement these cases in the corresponding retry, deadline, cancellation,
+verification, and Python-binding follow-ups rather than adding tests for
+unimplemented APIs in this design issue.
