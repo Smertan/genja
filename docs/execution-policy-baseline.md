@@ -1,8 +1,9 @@
 # Execution policy design: baseline, retry, deadline, and verification
 
 This note records the current execution behavior and the proposed retry,
-deadline, and verification contracts from design phases 2 and 3. The baseline
-describes the current implementation; the proposals are not yet implemented.
+deadline, verification, and API contracts from design phases 2-4. The
+baseline describes the current implementation; the proposals are not yet
+implemented.
 The relevant paths are `Genja::run_task*_with_options` and
 `Genja::run_tasks*_with_options` in
 `genja/src/lib.rs`, `PluginRunner` in
@@ -145,7 +146,7 @@ proposed shape is:
 ```rust
 pub struct ExecutionPolicy {
     pub retry: Option<Arc<dyn RetryPolicy>>,
-    pub task_timeout: Option<Duration>,
+    pub task_timeout: Option<u64>, // whole seconds
     pub verification: VerificationRequirement,
 }
 ```
@@ -315,14 +316,15 @@ current positions.
 
 ### One monotonic deadline per task on each host
 
-`ExecutionPolicy.task_timeout: Option<Duration>` supplies a configurable
+`ExecutionPolicy.task_timeout: Option<u64>` supplies a configurable
 fallback duration for **each task-host execution**. It is not one clock for
-the whole invocation, the whole host across a task list, or each retry attempt. A task
-may select its own `task_timeout` setting. Public task settings are positive
-integer **seconds**; the runtime converts them to `Duration` and computes a
-monotonic deadline internally. The proposed precedence is:
+the whole invocation, the whole host across a task list, or each retry
+attempt. A task may select its own `task_timeout` setting. Public timeout
+durations are positive, whole **seconds**; the runtime converts them to
+`Duration` and computes a monotonic deadline internally. The proposed
+precedence is:
 
-1. A root `TaskDefinition` runtime override, including a future
+1. A root `TaskDefinition` runtime override, including a future declarative
    `TaskSpecOverrides.task_timeout` field, applies to that root only.
 2. Otherwise, the Rust task's `TaskInfo` metadata or Python `@task` metadata
    applies to that task. The Rust `#[genja_task(...)]` attribute macro and
@@ -361,15 +363,17 @@ time. Root B and host 2 do not spend A's time budget.
 
 An optional task setting should distinguish *inherit* from *disable the
 default*. A concrete shape is `Option<TaskTimeoutOverride>`, where `None`
-inherits, `Disabled` removes the invocation default, and `After(Duration)`
+inherits, `Disabled` removes the invocation default, and `AfterSeconds(u64)`
 replaces it. Reject a zero-second timeout during configuration validation;
 the explicit `Disabled` setting expresses no limit. A root override does not
-propagate to subtasks. One duration is resolved for each task on each host before that
-task begins; the selected retry algorithm remains separately inherited
-across the task tree.
+propagate to subtasks. One duration is resolved for each task on each host
+before that task begins; the selected retry algorithm remains separately
+inherited across the task tree.
 
 This design issue includes the public task-facing setting for both Rust and
-Python, plus its representation in task descriptors and `TaskSpec` overrides.
+Python. Phase 4 records the compatibility cost of adding the setting to
+task descriptors and `TaskSpec` overrides.
+
 The proposed macro and decorator keyword is `task_timeout`, with an integer
 number of seconds:
 
@@ -381,10 +385,9 @@ number of seconds:
 @task(name="deploy", task_timeout=30)
 ```
 
-Phase 4 must settle the exact binding shape for explicitly disabling an
-inherited default and how the seconds value appears in task descriptors.
-Adding those APIs and enforcing the deadline belong to implementation
-follow-ups. Existing tasks with no setting continue to
+Phase 4 specifies the explicit-disable syntax and descriptor compatibility
+boundary below. Adding those APIs and enforcing the deadline belong to
+implementation follow-ups. Existing tasks with no setting continue to
 inherit the invocation default, or have no deadline when no default exists.
 
 At entry to `TaskDefinition::start_with_depth` for a task-host pair, capture a
@@ -449,7 +452,7 @@ work that never produces a result. Dropping a Tokio future does not prove
 that spawned work or a remote operation stopped.
 
 An explicit caller cancellation request needs a reportable cancellation
-handle or token, to be defined with the phase 4 API. Simply dropping the
+handle or token, scoped in the phase 4 API contract below. Simply dropping the
 async invocation future may prevent Genja from returning any report at all;
 it must not be described as a reported, confirmed cancellation.
 
@@ -531,3 +534,259 @@ return `PassedWithWarnings`, and dry-run bypasses both automatic convergence
 and fresh-session checks. The requirement setting asserts that existing
 checks are present and observed; it does not introduce a new public trait
 or infer verification from a successful task result alone.
+
+## Proposed API and compatibility contract (phase 4)
+
+These are design decisions for follow-up implementation, not APIs available
+in the current release. The new invocation path must converge on the same
+runner and `TaskDefinition::start_with_depth` execution path as existing
+calls. It must not duplicate the host or retry loops.
+
+### Constructed definitions and declarative invocation
+
+Add `Tasks::add_definition(TaskDefinition)`. It appends the supplied
+definition unchanged, preserving root processor selections and retry,
+session verification, or future task-timeout overrides. Keep
+`Tasks::add_task(T: Task)` as the convenience that creates
+`TaskDefinition::new(task)`. Keep the existing `DerefMut<Vec<TaskDefinition>>`
+behavior, including `tasks.push(definition)`, for source compatibility; the
+new named method makes constructed definitions clear at call sites.
+
+Add a single-definition family to `Genja`:
+
+| Proposed Rust method | Input | Result |
+| --- | --- | --- |
+| `run_task_definition` | `TaskDefinition`, `max_depth` | `TaskResults` |
+| `run_task_definition_async` | `TaskDefinition`, `max_depth` | `TaskResults` after await |
+| `run_task_definition_with_options` | `TaskDefinition`, `TaskRunOptions` | `TaskResults` |
+| `run_task_definition_with_options_async` | `TaskDefinition`, `TaskRunOptions` | `TaskResults` after await |
+
+The existing private `run_task_definition_async` helper already feeds a
+definition to the configured runner. Rename that helper internally when
+adding the public async name, then route all four methods through it.
+Synchronous methods retain the existing rule that they cannot run inside
+an active Tokio runtime. Do not change the generic `run_task*` signatures;
+they continue to accept ordinary `T: Task` and create the definition.
+
+This closes the current `TaskSpec` single-task gap. The construction helper
+already returns a `TaskDefinition`, so the proposed call is:
+
+```rust
+let definition = create_compiled_task_from_spec_str(source)?;
+let result: TaskResults = genja.run_task_definition(definition, 0)?;
+```
+
+For an ordered list, callers may mix authored tasks and constructed
+definitions without wrapping a definition again:
+
+```rust
+let mut tasks = Tasks::new();
+tasks.add_task(MyTask);
+tasks.add_definition(create_compiled_task_from_spec_str(source)?);
+let results: Vec<TaskResults> = genja.run_tasks(tasks, 0)?;
+```
+
+`run_task_definition*` returns the same task-tree result as `run_task*`.
+`run_tasks*` still returns an outer vector with one `TaskResults` per root,
+in input order. No extra `tasks` node appears inside either result. A
+`TaskSpec` remains one registered-task construction request, rather than a
+task-list or controller workflow format.
+
+### Invocation policy and runner transport
+
+Keep `TaskRunOptions` focused on depth and dry-run. It currently implements
+`Copy`; storing an `Arc<dyn RetryPolicy>` in it would break that public
+property. Pass the grouped `ExecutionPolicy` separately through new
+policy-aware invocation methods for a raw task, one constructed definition,
+and an ordered `Tasks` list. Each needs sync and async forms. The proposed
+policy-aware form takes `TaskRunOptions` and `ExecutionPolicy`. The method
+families are `run_task_with_policy`, `run_task_definition_with_policy`, and
+`run_tasks_with_policy`, each with an `_async` counterpart. The simple
+depth-only entrypoints above can remain policy-free. For example:
+
+```rust
+genja.run_task_definition_with_policy(definition, run_options, policy)?;
+genja.run_tasks_with_policy(tasks, run_options, policy)?;
+```
+
+Keep all existing `Genja::run_task*` and `Genja::run_tasks*` invocation
+signatures and behavior. The `PluginRunner` signatures change below.
+`ExecutionPolicy::default()` selects no custom retry algorithm, no timeout,
+and no verification requirement, and must produce the same results as the
+current methods. A selected policy handle is shared through an invocation;
+the runner passes it to each root and the core recursion passes it to each
+subtask. Task-host retry settings, attempt counters, and deadlines are
+resolved locally as described above.
+
+Change the existing `PluginRunner::run_task` signature to take an
+`&ExecutionPolicy`; change `run_tasks` to take the same argument and forward
+it to `run_task` in its default implementation. Do not add parallel
+policy-aware runner methods. Define `ExecutionPolicy` in `genja-core` so
+both the plugin-manager trait and the runtime can use the same public type.
+In outline, the runner contract becomes:
+
+```rust
+async fn run_task(
+    &self,
+    task: &TaskDefinition,
+    hosts: &Hosts,
+    connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+    runner_config: &RunnerConfig,
+    run_options: TaskRunOptions,
+    policy: &ExecutionPolicy,
+) -> Result<TaskResults, GenjaError>;
+// run_tasks receives the same trailing policy argument and passes it to
+// run_task for each root in its default implementation.
+
+fn supports_execution_policy(&self) -> bool { false }
+```
+
+The invocation owns the policy. Make the policy a required argument to
+`TaskExecutor::new` and `TaskExecutor::run_host`; the serial executor stores
+a reference and forwards it for each host, while the threaded runner moves
+an owned policy handle into each spawned job and borrows it for `run_host`.
+There is no implicit default inside `TaskExecutor`. This makes a missing
+handoff a compile error for the built-in runners. Each task-host execution
+still resolves its own settings, attempt counter, and deadline.
+
+`TaskExecutor` is crate-private, so its signature cannot enforce forwarding
+by third-party runners. Add a policy-aware `TaskDefinition` host-execution
+entry point in `genja-core` that requires `&ExecutionPolicy` and funnels into
+`start_with_depth`; pass the same policy through recursive subtask calls.
+Keep existing public `TaskDefinition::start*` entry points as compatibility
+wrappers that call this path with `ExecutionPolicy::default()`. A custom
+runner claiming policy support must use the policy-aware core entry point
+or provide equivalent enforcement. The capability check rejects runners
+that have not opted in; an opt-in is the runner author's promise to enforce
+the selected features, not a runtime proof of their implementation.
+
+This is a deliberate source-breaking change for third-party Rust runner
+implementations: add the policy parameter to `run_task` and to any
+overridden `run_tasks` method. Existing invocation methods pass
+`ExecutionPolicy::default()`, preserving their runtime behavior and result
+shape. An implementation may initially leave its existing execution logic
+unchanged for that default value. The defaulted capability method above
+means the runtime rejects a non-default invocation policy before any task
+starts unless the runner opts in. Non-default means a custom retry algorithm,
+an invocation timeout, or a verification requirement was selected. Runners
+that forward and enforce all selected policy features opt in. Accepting the
+new argument without support must never silently ignore a selected policy.
+
+### Rust task metadata and declarative formats
+
+Add a default `TaskInfo` timeout getter so existing hand-written `TaskInfo`
+implementations compile unchanged. The Rust attribute macro records
+`task_timeout` in whole seconds and generates the getter; the Python task
+adapter implements the same getter from decorator metadata. A root
+`TaskDefinition` timeout override is an optional runtime value and does not
+alter the authored task or subtask metadata. The invocation fallback is
+`ExecutionPolicy.task_timeout`, which is resolved after the root override
+and authored metadata.
+
+Use `Option<TaskTimeoutOverride>` for the getter and root override:
+`None` means inherit, `AfterSeconds(positive_u64)` sets the duration, and
+`Disabled` suppresses the invocation fallback. The attribute macro accepts
+`task_timeout = 30` or `task_timeout = "disabled"`. The Python decorator
+accepts `task_timeout=30` or a typed `TaskTimeout.DISABLED` value; omitting
+the argument inherits. Zero seconds is invalid in all public forms. The
+`ExecutionPolicy.task_timeout` field is an optional whole-second fallback,
+with `None` meaning no invocation timeout. Validate values before running
+the task. The runtime creates an `Instant` cutoff only after resolving the
+value for a specific task and host.
+
+`TaskDescriptor` and `TaskDescriptorMetadata` are public Rust structs with
+public fields. `TaskSpecOverrides` is also a public struct and currently
+rejects unknown serialized fields. Adding `task_timeout` to any of these
+now would break Rust callers that use struct literals; adding it to
+serialized descriptors would also change catalog output. Preserve those
+shapes in the first implementation. Document that task timeout is available
+at runtime but not yet in descriptor output or declarative `TaskSpec`
+overrides. A later descriptor/spec change needs its own compatibility and
+migration decision. Existing `TaskSpec` retry and session verification
+overrides continue to map to the built-in behavior and are preserved by
+`run_task_definition*` and `Tasks::add_definition`.
+
+### Python invocation and runner APIs
+
+Keep existing Python `Genja.run_task*` and `run_tasks*` calls accepting task
+classes and `Tasks`, respectively. Add an optional policy keyword to those
+entrypoints and to direct `TaskDefinition.run_on_host(s)` execution. When
+omitted, Python follows the existing Rust path and returns the same result
+shape. Expose a Python `ExecutionPolicy` value with a `task_timeout` in
+whole seconds and the verification requirement. A Python-selected custom
+retry algorithm requires a synchronous adapter for the object-safe Rust
+`RetryPolicy::decide`; async policy callbacks are outside the initial
+interface. Update the Python `.pyi` stubs and top-level re-exports with
+the runtime binding in the same implementation change.
+
+The Python `Genja.run_task*` and `run_tasks*` bindings pass the selected or
+default policy to the Rust invocation, then through the runner and core
+task-host path. The Python `TaskDefinition.run_on_host(s)` bindings bypass
+the runner; their shared host-execution helper must pass the optional
+policy to the policy-aware `genja-core` entry point. The Python task adapter
+continues to call `start` or `start_async` as it does today: retry and
+deadline decisions remain in Rust around that call, so task authors do not
+need another method parameter.
+
+Add the same trailing `ExecutionPolicy` argument to Python
+`RunnerPluginBase.run_task` and `BatchRunnerPluginBase.run_tasks`; update the
+PyO3 runner adapter, base class documentation, and typing signatures. This
+is a deliberate source break for Python runner plugins. A plugin can accept
+the argument without changing its current execution logic for the default
+policy. The adapter rejects a selected non-default policy before dispatch
+unless the Python runner's default-false `supports_execution_policy()` hook
+declares support, so an ignored argument cannot silently disable an execution
+requirement. Supporting runners must forward
+the policy into task execution. The existing Python
+`Tasks.add_task` stores decorated task classes, so a Python
+`Tasks.add_definition` would also require changing its internal collection
+representation; that is separate from the additive Rust method above.
+There is no Python `TaskSpec` construction path to unblock in this phase.
+
+The first policy-aware API reports cancellation *requested by deadline
+expiry* and whether local termination was confirmed. An explicit caller
+cancellation handle is a separate follow-up API: it must preserve a way to
+await the final report, rather than relying on dropping a Rust future or
+Python coroutine. Reserve `CallerCancellation` as a future trigger value;
+do not claim that ordinary future dropping produces a report.
+
+### Results and migration compatibility
+
+An invocation that does not select a new policy still passes
+`ExecutionPolicy::default()` internally. This does **not** disable existing
+task, runner, Python, or `TaskSpec` retry settings. Those settings must
+produce the same decisions, delays, attempt counts, and results as today.
+For existing task definitions without a new `task_timeout` setting, raw and
+human JSON must be identical, including `HostTaskOutcome`, retry flags,
+`PassedWithWarnings`, dry-run, and session verification metadata. No new
+interruption field is serialized when there was no deadline or interruption.
+
+The runner-plugin migration is a separate source change. Document it as
+breaking in the top-level `CHANGELOG.md` when implemented: Rust runner
+implementations add the policy parameter to `run_task` and any `run_tasks`
+override; Python runner plugins add it to their corresponding callbacks.
+Existing `Genja` invocation call sites keep their signatures and need no
+changes when they do not select a policy.
+
+For a call with an effective task-host deadline, add optional interruption
+facts to that host's execution metadata. Omit the field when absent in both
+raw and human JSON. An expired host remains a host-level result inside the
+same `TaskResults` tree; it does not change the invocation return type.
+Python result conversion must expose the same optional facts. The timeout
+case can use existing `TaskFailureKind::Timeout`; do not add a new
+`HostTaskOutcome` variant merely to report expiry. If a new public enum
+variant becomes necessary for caller cancellation, record that source
+break and migration guidance before implementation.
+
+The declarative helper additions are independently implementable from
+retry refactoring, deadline enforcement, and verification integration.
+They should be a focused first follow-up: add the Rust methods, document
+them, and verify that a `TaskSpec`-constructed single task reaches the
+same runner and returns one `TaskResults`.
+
+Remaining follow-ups have separate boundaries: refactor the existing retry
+decision behind the built-in and custom `RetryPolicy` path; enforce the
+task-host timeout across async, blocking, and Python work; add cancellation
+reporting that distinguishes requested from confirmed local termination;
+and integrate verification requirements over the existing checks. Each
+follow-up must preserve the no-policy compatibility baseline above.
