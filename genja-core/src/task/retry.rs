@@ -1,6 +1,6 @@
-//! Internal resolution of task retry settings.
+//! Internal resolution of task retry settings and retry decisions.
 
-use super::Task;
+use super::{HostTaskResult, Task};
 use crate::settings::RunnerConfig;
 
 #[derive(Debug, Clone, Copy)]
@@ -47,15 +47,24 @@ impl RetrySettings {
         }
     }
 
-    pub(super) fn allow(self) -> bool {
-        self.allow
-    }
-
     pub(super) fn max_attempts(self) -> usize {
         self.max_attempts
     }
 
     pub(super) fn delay_ms(self) -> u64 {
         self.delay_ms
+    }
+
+    pub(super) fn should_retry(self, result: &HostTaskResult, attempts: usize) -> bool {
+        self.allow
+            && attempts < self.max_attempts
+            && matches!(result.failure(), Some(failure) if failure.retryable())
+    }
+
+    pub(super) fn retry_exhausted(self, result: &HostTaskResult, attempts: usize) -> bool {
+        self.allow
+            && attempts >= self.max_attempts
+            && self.max_attempts > 1
+            && matches!(result.failure(), Some(failure) if failure.retryable())
     }
 }

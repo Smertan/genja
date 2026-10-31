@@ -851,19 +851,6 @@ impl SessionVerificationMetadata {
     }
 }
 
-fn should_retry(settings: RetrySettings, result: &HostTaskResult, attempts: usize) -> bool {
-    settings.allow()
-        && attempts < settings.max_attempts()
-        && matches!(result.failure(), Some(failure) if failure.retryable())
-}
-
-fn retry_exhausted(settings: RetrySettings, result: &HostTaskResult, attempts: usize) -> bool {
-    settings.allow()
-        && attempts >= settings.max_attempts()
-        && settings.max_attempts() > 1
-        && matches!(result.failure(), Some(failure) if failure.retryable())
-}
-
 /// Represents an error that occurred during task execution.
 ///
 /// `TaskError` wraps an underlying error and preserves both the error itself and its
@@ -3670,6 +3657,62 @@ async fn run_task_attempt(
     }
 }
 
+/// Run task attempts with the resolved fixed-delay retry settings for one host.
+struct TaskRetryLoop<'a> {
+    task: Arc<dyn Task>,
+    hostname: &'a str,
+    host: &'a Host,
+    connection: Option<Arc<Mutex<dyn Connection>>>,
+    processor_context: &'a TaskProcessorContext,
+    processors: &'a [Arc<dyn TaskProcessor>],
+    depth: usize,
+    run_options: TaskRunOptions,
+    settings: RetrySettings,
+}
+
+impl TaskRetryLoop<'_> {
+    async fn run(self) -> Result<(HostTaskResult, usize), crate::GenjaError> {
+        let mut attempts = 0;
+        let host_result = loop {
+            attempts += 1;
+            for processor in self.processors {
+                processor.on_instance_start(self.processor_context)?;
+            }
+
+            let host_result = run_task_attempt(
+                Arc::clone(&self.task),
+                self.host,
+                self.connection.clone(),
+                TaskExecutionContext::new(self.depth, self.run_options.max_depth()),
+                attempts,
+                self.run_options.dry_run(),
+            )
+            .await;
+
+            if self.settings.should_retry(&host_result, attempts) {
+                if let Some(failure) = host_result.failure() {
+                    warn!(
+                        "retrying task '{}' for host '{}' after attempt {}/{}: {}",
+                        self.task.name(),
+                        self.hostname,
+                        attempts,
+                        self.settings.max_attempts(),
+                        failure.message()
+                    );
+                }
+                if self.settings.delay_ms() > 0 {
+                    sleep(Duration::from_millis(self.settings.delay_ms())).await;
+                }
+                continue;
+            }
+
+            break host_result;
+        };
+
+        Ok((host_result, attempts))
+    }
+}
+
 /// Task metadata required for execution.
 ///
 /// Task authoring macros such as `#[genja_task(...)]` implement this trait
@@ -4869,42 +4912,19 @@ impl TaskDefinition {
             return Ok(());
         }
 
-        let mut attempts = 0;
-        let host_result = loop {
-            attempts += 1;
-            for processor in &processors {
-                processor.on_instance_start(&processor_context)?;
-            }
-
-            let host_result = run_task_attempt(
-                Arc::clone(&task),
-                host,
-                connection.clone(),
-                TaskExecutionContext::new(depth, max_depth),
-                attempts,
-                run_options.dry_run(),
-            )
-            .await;
-
-            if should_retry(retry_settings, &host_result, attempts) {
-                if let Some(failure) = host_result.failure() {
-                    warn!(
-                        "retrying task '{}' for host '{}' after attempt {}/{}: {}",
-                        task.name(),
-                        hostname,
-                        attempts,
-                        retry_settings.max_attempts(),
-                        failure.message()
-                    );
-                }
-                if retry_settings.delay_ms() > 0 {
-                    sleep(Duration::from_millis(retry_settings.delay_ms())).await;
-                }
-                continue;
-            }
-
-            break host_result;
-        };
+        let (host_result, attempts) = TaskRetryLoop {
+            task: Arc::clone(&task),
+            hostname,
+            host,
+            connection,
+            processor_context: &processor_context,
+            processors: &processors,
+            depth,
+            run_options,
+            settings: retry_settings,
+        }
+        .run()
+        .await?;
 
         let mut host_result = host_result;
         if should_attempt_session_verification(task.as_ref(), &host_result, run_options.dry_run()) {
@@ -4966,7 +4986,7 @@ impl TaskDefinition {
 
         let status = host_result.status();
 
-        let retry_exhausted = retry_exhausted(retry_settings, &host_result, attempts);
+        let retry_exhausted = retry_settings.retry_exhausted(&host_result, attempts);
         let mut host_result =
             host_result.with_execution_timing(started_at, finished_at, duration_ns);
         *host_result.execution_metadata_mut() = host_result
@@ -4995,6 +5015,39 @@ impl TaskDefinition {
         }
         results.insert_host_result(hostname, host_result);
 
+        Self::run_sub_tasks(
+            task.as_ref(),
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            processor_resolver,
+            depth,
+            run_options,
+            retry_defaults,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Run child task trees after recording the parent's host result.
+    ///
+    /// Each child re-enters the full host execution path so it resolves its own
+    /// connection, retry settings, attempt count, verification, timing, and results.
+    /// The existing aggregate processor hooks surround each recursive call.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_sub_tasks(
+        task: &dyn Task,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        processor_resolver: Option<&dyn TaskProcessorResolver>,
+        depth: usize,
+        run_options: TaskRunOptions,
+        retry_defaults: RetryDefaults,
+    ) -> Result<(), crate::GenjaError> {
         for sub in task.sub_tasks() {
             let sub_task_name = sub.name().to_string();
             if results.sub_task(&sub_task_name).is_none() {
