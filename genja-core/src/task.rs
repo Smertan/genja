@@ -646,7 +646,9 @@ use tokio::task;
 use tokio::time::{Duration, sleep};
 
 pub mod registration;
+mod retry;
 pub mod spec;
+
 pub use registration::{
     CompiledTaskRegistration, InMemoryTaskRegistry, RegisteredTaskFactory, TaskCatalog,
     TaskDescriptor, TaskDescriptorMetadata, TaskFactoryRegistry, TaskIdSource,
@@ -655,6 +657,7 @@ pub use registration::{
     get_compiled_task_descriptor_by_identity, list_compiled_tasks, validate_explicit_task_id,
     validate_task_version,
 };
+use retry::{RetryDefaults, RetrySettings};
 pub use spec::{
     TaskSpec, TaskSpecConstructionError, TaskSpecError, TaskSpecFormat, TaskSpecOverrides,
     create_compiled_task_from_spec, create_compiled_task_from_spec_str,
@@ -845,76 +848,6 @@ impl SessionVerificationMetadata {
     /// Return whether a fresh session was successfully established.
     pub fn new_session_established(&self) -> bool {
         self.new_session_established
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TaskRetryDefaults {
-    allow: bool,
-    max_attempts: usize,
-    delay_ms: u64,
-}
-
-impl Default for TaskRetryDefaults {
-    fn default() -> Self {
-        Self {
-            allow: false,
-            max_attempts: 1,
-            delay_ms: 0,
-        }
-    }
-}
-
-impl From<&RunnerConfig> for TaskRetryDefaults {
-    fn from(runner_config: &RunnerConfig) -> Self {
-        Self {
-            allow: runner_config.retry_allow(),
-            max_attempts: runner_config.retry_max_attempts(),
-            delay_ms: runner_config.retry_delay_ms(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct EffectiveTaskRetryPolicy {
-    allow: bool,
-    max_attempts: usize,
-    delay_ms: u64,
-}
-
-impl EffectiveTaskRetryPolicy {
-    fn for_task(task: &dyn Task, defaults: TaskRetryDefaults) -> Self {
-        let retry_config = task.retry_config().copied().unwrap_or_default();
-        let allow = retry_config.resolved_allow(defaults.allow);
-        let configured_attempts = retry_config.resolved_max_attempts(defaults.max_attempts);
-        let delay_ms = retry_config.resolved_delay_ms(defaults.delay_ms);
-
-        Self {
-            allow,
-            max_attempts: configured_attempts,
-            delay_ms,
-        }
-    }
-
-    fn max_attempts(&self) -> usize {
-        self.max_attempts
-    }
-
-    fn delay_ms(&self) -> u64 {
-        self.delay_ms
-    }
-
-    fn should_retry(&self, result: &HostTaskResult, attempts: usize) -> bool {
-        self.allow
-            && attempts < self.max_attempts
-            && matches!(result.failure(), Some(failure) if failure.retryable())
-    }
-
-    fn retry_exhausted(&self, result: &HostTaskResult, attempts: usize) -> bool {
-        self.allow
-            && attempts >= self.max_attempts
-            && self.max_attempts > 1
-            && matches!(result.failure(), Some(failure) if failure.retryable())
     }
 }
 
@@ -3595,6 +3528,325 @@ async fn run_replacement_idempotency_post_check(
     }
 }
 
+/// Verify a changed task on a fresh connection after task retries finish.
+///
+/// Retrying the fresh connection and checking convergence do not rerun the task
+/// or change its attempt count. Preserve session-verification metadata if the
+/// convergence check produces a new result.
+#[allow(clippy::too_many_arguments)]
+async fn verify_after_retries(
+    task: &Arc<dyn Task>,
+    hostname: &str,
+    host: &Host,
+    mut host_result: HostTaskResult,
+    connection_resolver: Option<&dyn TaskConnectionResolver>,
+    depth: usize,
+    run_options: TaskRunOptions,
+    attempts: usize,
+) -> HostTaskResult {
+    if !should_attempt_session_verification(task.as_ref(), &host_result, run_options.dry_run()) {
+        return host_result;
+    }
+
+    let config = task
+        .session_verification_config()
+        .expect("session verification config should exist when verification is required");
+    let connection_resolver = connection_resolver
+        .expect("session verification request validation should require a resolver");
+    match verify_replacement_session(task.as_ref(), hostname, connection_resolver, config).await {
+        Ok((metadata, replacement_connection)) => {
+            host_result = with_session_verification_metadata(host_result, metadata);
+            if matches!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify) {
+                host_result = run_replacement_idempotency_post_check(
+                    Arc::clone(task),
+                    host,
+                    host_result,
+                    replacement_connection,
+                    TaskExecutionContext::new(depth, run_options.max_depth()),
+                    attempts,
+                )
+                .await;
+                host_result = with_session_verification_metadata(host_result, metadata);
+            }
+        }
+        Err(failure_result) => {
+            host_result = failure_result;
+        }
+    }
+
+    host_result
+}
+
+/// Record a host result after an early exit or the completed retry lifecycle.
+enum HostResultCompletion {
+    BeforeAttempts,
+    AfterRetries {
+        attempts: usize,
+        settings: RetrySettings,
+    },
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_host_result(
+    hostname: &str,
+    results: &mut TaskResults,
+    mut host_result: HostTaskResult,
+    started_at: SystemTime,
+    finished_at: SystemTime,
+    processor_context: &TaskProcessorContext,
+    processors: &[Arc<dyn TaskProcessor>],
+    dry_run: bool,
+    completion: HostResultCompletion,
+) -> Result<(), crate::GenjaError> {
+    let duration_ns = finished_at
+        .duration_since(started_at)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    results.record_execution_timing(started_at, finished_at);
+
+    if matches!(completion, HostResultCompletion::AfterRetries { .. }) {
+        if let Some(failure) = host_result.failure() {
+            warn!(
+                "task '{}' failed for host '{}': {}",
+                processor_context.task_name(),
+                hostname,
+                failure.message()
+            );
+        }
+        if let Some(skip) = host_result.skipped_detail() {
+            info!(
+                "task '{}' skipped for host '{}' reason='{}' message='{}'",
+                processor_context.task_name(),
+                hostname,
+                skip.reason().unwrap_or("none"),
+                skip.message().unwrap_or("")
+            );
+        }
+    }
+
+    let status = host_result.status();
+    let (attempts, retry_exhausted) = match completion {
+        HostResultCompletion::BeforeAttempts => (1, false),
+        HostResultCompletion::AfterRetries { attempts, settings } => {
+            (attempts, settings.retry_exhausted(&host_result, attempts))
+        }
+    };
+    host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
+    *host_result.execution_metadata_mut() = host_result
+        .execution_metadata()
+        .clone()
+        .with_attempts(attempts)
+        .with_retried(attempts > 1)
+        .with_retry_exhausted(retry_exhausted)
+        .with_dry_run(dry_run);
+
+    if matches!(completion, HostResultCompletion::AfterRetries { .. }) {
+        let duration_display = host_result
+            .execution_metadata()
+            .duration_display()
+            .unwrap_or_else(|| format_duration_display(duration_ns));
+        info!(
+            "finished task '{}' for host '{}' with status={} duration_ms={} duration={}",
+            processor_context.task_name(),
+            hostname,
+            status,
+            duration_ns / 1_000_000,
+            duration_display
+        );
+    }
+
+    for processor in processors {
+        processor.on_instance_finish(processor_context, &mut host_result)?;
+    }
+    results.insert_host_result(hostname, host_result);
+    Ok(())
+}
+
+/// Execute one task attempt, including dry-run and immediate convergence checks.
+async fn run_task_attempt(
+    task: Arc<dyn Task>,
+    host: &Host,
+    connection: Option<Arc<Mutex<dyn Connection>>>,
+    execution_context: TaskExecutionContext,
+    attempt: usize,
+    dry_run: bool,
+) -> HostTaskResult {
+    let result = match task.execution_mode() {
+        TaskExecutionMode::Async => {
+            let runtime_context = TaskRuntimeContext::new(execution_context, connection)
+                .with_current_attempt(attempt)
+                .with_dry_run(dry_run);
+            if dry_run {
+                task.dry_run_async(host, &runtime_context).await
+            } else {
+                match task.idempotency_mode() {
+                    IdempotencyMode::Disabled => task.start_async(host, &runtime_context).await,
+                    IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                        match task.check_async(host, &runtime_context).await {
+                            Ok(IdempotencyCheck::Converged { summary, details }) => {
+                                Ok(converged_check_to_host_result(summary, details, attempt))
+                            }
+                            Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                match task.start_async(host, &runtime_context).await {
+                                    Ok(host_result) => {
+                                        if matches!(
+                                            task.idempotency_mode(),
+                                            IdempotencyMode::CheckAndVerify
+                                        ) && host_result.is_passed()
+                                            && !should_defer_idempotency_post_check(
+                                                task.as_ref(),
+                                                &host_result,
+                                                dry_run,
+                                            )
+                                        {
+                                            match task.check_async(host, &runtime_context).await {
+                                                Ok(IdempotencyCheck::Converged { .. }) => {
+                                                    Ok(host_result)
+                                                }
+                                                Ok(IdempotencyCheck::ChangeRequired {
+                                                    diff,
+                                                    details,
+                                                }) => Ok(failed_verification_check_to_host_result(
+                                                    diff, details,
+                                                )),
+                                                Err(error) => Err(error),
+                                            }
+                                        } else {
+                                            Ok(host_result)
+                                        }
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                }
+            }
+        }
+        TaskExecutionMode::Blocking => {
+            let blocking_context =
+                BlockingTaskRuntimeContext::new(execution_context, connection, Handle::current())
+                    .with_current_attempt(attempt)
+                    .with_dry_run(dry_run);
+            let host = host.clone();
+            match task::spawn_blocking(move || {
+                if dry_run {
+                    task.dry_run(&host, &blocking_context)
+                } else {
+                    match task.idempotency_mode() {
+                        IdempotencyMode::Disabled => task.start(&host, &blocking_context),
+                        IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                            match task.check(&host, &blocking_context) {
+                                Ok(IdempotencyCheck::Converged { summary, details }) => {
+                                    Ok(converged_check_to_host_result(summary, details, attempt))
+                                }
+                                Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                    let host_result = task.start(&host, &blocking_context)?;
+                                    if matches!(
+                                        task.idempotency_mode(),
+                                        IdempotencyMode::CheckAndVerify
+                                    ) && host_result.is_passed()
+                                        && !should_defer_idempotency_post_check(
+                                            task.as_ref(),
+                                            &host_result,
+                                            dry_run,
+                                        )
+                                    {
+                                        match task.check(&host, &blocking_context) {
+                                            Ok(IdempotencyCheck::Converged { .. }) => {
+                                                Ok(host_result)
+                                            }
+                                            Ok(IdempotencyCheck::ChangeRequired {
+                                                diff,
+                                                details,
+                                            }) => Ok(failed_verification_check_to_host_result(
+                                                diff, details,
+                                            )),
+                                            Err(error) => Err(error),
+                                        }
+                                    } else {
+                                        Ok(host_result)
+                                    }
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(err) => Err(TaskError::new(std::io::Error::other(format!(
+                    "blocking task join error: {err}"
+                )))),
+            }
+        }
+    };
+
+    match result {
+        Ok(host_result) => host_result,
+        Err(error) => HostTaskResult::failed(TaskFailure::from_task_error(error)),
+    }
+}
+
+/// Run task attempts with the resolved fixed-delay retry settings for one host.
+struct TaskRetryLoop<'a> {
+    task: Arc<dyn Task>,
+    hostname: &'a str,
+    host: &'a Host,
+    connection: Option<Arc<Mutex<dyn Connection>>>,
+    processor_context: &'a TaskProcessorContext,
+    processors: &'a [Arc<dyn TaskProcessor>],
+    depth: usize,
+    run_options: TaskRunOptions,
+    settings: RetrySettings,
+}
+
+impl TaskRetryLoop<'_> {
+    async fn run(self) -> Result<(HostTaskResult, usize), crate::GenjaError> {
+        let mut attempts = 0;
+        let host_result = loop {
+            attempts += 1;
+            for processor in self.processors {
+                processor.on_instance_start(self.processor_context)?;
+            }
+
+            let host_result = run_task_attempt(
+                Arc::clone(&self.task),
+                self.host,
+                self.connection.clone(),
+                TaskExecutionContext::new(self.depth, self.run_options.max_depth()),
+                attempts,
+                self.run_options.dry_run(),
+            )
+            .await;
+
+            if self.settings.should_retry(&host_result, attempts) {
+                if let Some(failure) = host_result.failure() {
+                    warn!(
+                        "retrying task '{}' for host '{}' after attempt {}/{}: {}",
+                        self.task.name(),
+                        self.hostname,
+                        attempts,
+                        self.settings.max_attempts(),
+                        failure.message()
+                    );
+                }
+                if self.settings.delay_ms() > 0 {
+                    sleep(Duration::from_millis(self.settings.delay_ms())).await;
+                }
+                continue;
+            }
+
+            break host_result;
+        };
+
+        Ok((host_result, attempts))
+    }
+}
+
 /// Task metadata required for execution.
 ///
 /// Task authoring macros such as `#[genja_task(...)]` implement this trait
@@ -4461,7 +4713,7 @@ impl TaskDefinition {
             results,
             None,
             run_options,
-            TaskRetryDefaults::default(),
+            RetryDefaults::default(),
         )
         .await
     }
@@ -4500,7 +4752,7 @@ impl TaskDefinition {
             results,
             connection_resolver,
             run_options,
-            TaskRetryDefaults::default(),
+            RetryDefaults::default(),
         )
         .await
     }
@@ -4542,7 +4794,7 @@ impl TaskDefinition {
             results,
             connection_resolver,
             run_options,
-            TaskRetryDefaults::from(runner_config),
+            RetryDefaults::from(runner_config),
         )
         .await
     }
@@ -4554,7 +4806,7 @@ impl TaskDefinition {
         results: &mut TaskResults,
         connection_resolver: Option<&dyn TaskConnectionResolver>,
         run_options: TaskRunOptions,
-        retry_defaults: TaskRetryDefaults,
+        retry_defaults: RetryDefaults,
     ) -> Result<(), crate::GenjaError> {
         Self::start_with_depth(
             Arc::clone(&self.inner),
@@ -4593,9 +4845,10 @@ impl TaskDefinition {
     /// Recursively executes a task and its sub-tasks with depth tracking.
     ///
     /// This internal helper method performs the actual recursive task execution,
-    /// tracking the current depth to enforce the maximum depth limit. It executes
-    /// the task by calling its runtime-aware `start()` method, stores the result,
-    /// then recursively processes all sub-tasks returned by `sub_tasks()`.
+    /// tracking the current depth to enforce the maximum depth limit. It resolves
+    /// the initial connection before the retry loop, verifies changed tasks through
+    /// a fresh session after retries, records the host result, then recursively
+    /// processes all sub-tasks returned by `sub_tasks()`.
     ///
     /// Sub-tasks are executed in iteration order. Results are grouped by task name, so
     /// a sub-task named `"validate"` produces a single `TaskResults` node containing
@@ -4614,7 +4867,7 @@ impl TaskDefinition {
     ///   Used as the key when storing task results.
     ///
     /// * `host` - A reference to the `Host` object representing the target system.
-    ///   This is passed to the task's `start()` method for execution.
+    ///   This is passed to each task attempt for execution.
     ///
     /// * `results` - A mutable reference to the `TaskResults` structure where
     ///   execution results for this task and its sub-tasks will be stored.
@@ -4623,7 +4876,7 @@ impl TaskDefinition {
     ///   starts at depth 0, its immediate sub-tasks are at depth 1, and so on.
     ///
     /// * `max_depth` - The maximum allowed depth for task nesting. If `depth`
-    ///   exceeds this value, the method returns an error and stops execution.
+    ///   exceeds this value, the method records a failed host result.
     ///   Because the check is `depth > max_depth`, a task at depth exactly equal
     ///   to `max_depth` is still allowed to run.
     ///
@@ -4634,9 +4887,8 @@ impl TaskDefinition {
     ///
     /// # Errors
     ///
-    /// Depth overflow is handled by inserting a failed host result with
-    /// [`TaskFailureKind::Internal`]. This helper only returns an error if a future
-    /// implementation path introduces one explicitly.
+    /// Processor resolution and processor hooks may return an error. Depth overflow
+    /// is handled by inserting a failed host result with [`TaskFailureKind::Internal`].
     #[async_recursion]
     #[allow(clippy::too_many_arguments)]
     async fn start_with_depth(
@@ -4650,7 +4902,7 @@ impl TaskDefinition {
         parent_task_name: Option<&str>,
         depth: usize,
         run_options: TaskRunOptions,
-        retry_defaults: TaskRetryDefaults,
+        retry_defaults: RetryDefaults,
     ) -> Result<(), crate::GenjaError> {
         let max_depth = run_options.max_depth();
         if depth > max_depth {
@@ -4690,37 +4942,32 @@ impl TaskDefinition {
             max_depth,
             connection_resolver.is_some()
         );
-        let retry_policy = EffectiveTaskRetryPolicy::for_task(task.as_ref(), retry_defaults);
+        let retry_settings = RetrySettings::for_task(task.as_ref(), retry_defaults);
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
 
-        if let Some(mut host_result) = validate_session_verification_request(
+        if let Some(host_result) = validate_session_verification_request(
             task.as_ref(),
             connection_resolver,
             run_options.dry_run(),
         ) {
             let finished_at = SystemTime::now();
-            let duration_ns = finished_at
-                .duration_since(started_at)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0);
-            results.record_execution_timing(started_at, finished_at);
-            host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
-            *host_result.execution_metadata_mut() = host_result
-                .execution_metadata()
-                .clone()
-                .with_attempts(1)
-                .with_retried(false)
-                .with_retry_exhausted(false)
-                .with_dry_run(run_options.dry_run());
-            for processor in &processors {
-                processor.on_instance_finish(&processor_context, &mut host_result)?;
-            }
-            results.insert_host_result(hostname, host_result);
+            record_host_result(
+                hostname,
+                results,
+                host_result,
+                started_at,
+                finished_at,
+                &processor_context,
+                &processors,
+                run_options.dry_run(),
+                HostResultCompletion::BeforeAttempts,
+            )?;
             return Ok(());
         }
 
+        // Resolve the initial connection once before any task attempt.
         let connection = if let Some(connection_resolver) = connection_resolver {
             match connection_resolver
                 .resolve_task_connection(task.as_ref(), hostname)
@@ -4729,12 +4976,6 @@ impl TaskDefinition {
                 Ok(connection) => connection,
                 Err(error) => {
                     let finished_at = SystemTime::now();
-                    let duration_ns = finished_at
-                        .duration_since(started_at)
-                        .map(|duration| duration.as_nanos())
-                        .unwrap_or(0);
-                    results.record_execution_timing(started_at, finished_at);
-
                     warn!(
                         "task '{}' failed to open connection for host '{}': {}",
                         task.name(),
@@ -4742,22 +4983,20 @@ impl TaskDefinition {
                         error
                     );
 
-                    let mut host_result = HostTaskResult::failed(
+                    let host_result = HostTaskResult::failed(
                         TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
                     );
-                    host_result =
-                        host_result.with_execution_timing(started_at, finished_at, duration_ns);
-                    *host_result.execution_metadata_mut() = host_result
-                        .execution_metadata()
-                        .clone()
-                        .with_attempts(1)
-                        .with_retried(false)
-                        .with_retry_exhausted(false)
-                        .with_dry_run(run_options.dry_run());
-                    for processor in &processors {
-                        processor.on_instance_finish(&processor_context, &mut host_result)?;
-                    }
-                    results.insert_host_result(hostname, host_result);
+                    record_host_result(
+                        hostname,
+                        results,
+                        host_result,
+                        started_at,
+                        finished_at,
+                        &processor_context,
+                        &processors,
+                        run_options.dry_run(),
+                        HostResultCompletion::BeforeAttempts,
+                    )?;
                     return Ok(());
                 }
             }
@@ -4767,287 +5006,102 @@ impl TaskDefinition {
 
         if run_options.dry_run() && !task.supports_dry_run() {
             let finished_at = SystemTime::now();
-            let duration_ns = finished_at
-                .duration_since(started_at)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0);
-            results.record_execution_timing(started_at, finished_at);
-            let mut host_result = HostTaskResult::failed(
+            let host_result = HostTaskResult::failed(
                 TaskFailure::new(crate::GenjaError::Message(format!(
                     "task '{}' does not support dry-run execution",
                     task.name()
                 )))
                 .with_kind(TaskFailureKind::Unsupported),
-            )
-            .with_execution_timing(started_at, finished_at, duration_ns);
-            *host_result.execution_metadata_mut() = host_result
-                .execution_metadata()
-                .clone()
-                .with_attempts(1)
-                .with_retried(false)
-                .with_retry_exhausted(false)
-                .with_dry_run(true);
-            for processor in &processors {
-                processor.on_instance_finish(&processor_context, &mut host_result)?;
-            }
-            results.insert_host_result(hostname, host_result);
+            );
+            record_host_result(
+                hostname,
+                results,
+                host_result,
+                started_at,
+                finished_at,
+                &processor_context,
+                &processors,
+                true,
+                HostResultCompletion::BeforeAttempts,
+            )?;
             return Ok(());
         }
 
-        let mut attempts = 0;
-        let host_result = loop {
-            attempts += 1;
-            for processor in &processors {
-                processor.on_instance_start(&processor_context)?;
-            }
-
-            let execution_context = TaskExecutionContext::new(depth, max_depth);
-            let host_result = match task.execution_mode() {
-                TaskExecutionMode::Async => {
-                    let runtime_context =
-                        TaskRuntimeContext::new(execution_context, connection.clone())
-                            .with_current_attempt(attempts)
-                            .with_dry_run(run_options.dry_run());
-                    if run_options.dry_run() {
-                        task.dry_run_async(host, &runtime_context).await
-                    } else {
-                        match task.idempotency_mode() {
-                            IdempotencyMode::Disabled => {
-                                task.start_async(host, &runtime_context).await
-                            }
-                            IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
-                                match task.check_async(host, &runtime_context).await {
-                                    Ok(IdempotencyCheck::Converged { summary, details }) => Ok(
-                                        converged_check_to_host_result(summary, details, attempts),
-                                    ),
-                                    Ok(IdempotencyCheck::ChangeRequired { .. }) => {
-                                        match task.start_async(host, &runtime_context).await {
-                                            Ok(host_result) => {
-                                                if matches!(
-                                                    task.idempotency_mode(),
-                                                    IdempotencyMode::CheckAndVerify
-                                                ) && host_result.is_passed()
-                                                    && !should_defer_idempotency_post_check(
-                                                        task.as_ref(),
-                                                        &host_result,
-                                                        run_options.dry_run(),
-                                                    )
-                                                {
-                                                    match task
-                                                        .check_async(host, &runtime_context)
-                                                        .await
-                                                    {
-                                                        Ok(IdempotencyCheck::Converged {
-                                                            ..
-                                                        }) => Ok(host_result),
-                                                        Ok(IdempotencyCheck::ChangeRequired {
-                                                            diff,
-                                                            details,
-                                                        }) => {
-                                                            Ok(failed_verification_check_to_host_result(
-                                                                diff, details,
-                                                            ))
-                                                        }
-                                                        Err(error) => Err(error),
-                                                    }
-                                                } else {
-                                                    Ok(host_result)
-                                                }
-                                            }
-                                            Err(error) => Err(error),
-                                        }
-                                    }
-                                    Err(error) => Err(error),
-                                }
-                            }
-                        }
-                    }
-                }
-                TaskExecutionMode::Blocking => {
-                    let blocking_context = BlockingTaskRuntimeContext::new(
-                        execution_context,
-                        connection.clone(),
-                        Handle::current(),
-                    )
-                    .with_current_attempt(attempts)
-                    .with_dry_run(run_options.dry_run());
-                    let task = Arc::clone(&task);
-                    let host = host.clone();
-                    let dry_run = run_options.dry_run();
-                    match task::spawn_blocking(move || {
-                        if dry_run {
-                            task.dry_run(&host, &blocking_context)
-                        } else {
-                            match task.idempotency_mode() {
-                                IdempotencyMode::Disabled => task.start(&host, &blocking_context),
-                                IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
-                                    match task.check(&host, &blocking_context) {
-                                        Ok(IdempotencyCheck::Converged { summary, details }) => {
-                                            Ok(converged_check_to_host_result(
-                                                summary, details, attempts,
-                                            ))
-                                        }
-                                        Ok(IdempotencyCheck::ChangeRequired { .. }) => {
-                                            let host_result =
-                                                task.start(&host, &blocking_context)?;
-                                            if matches!(
-                                                task.idempotency_mode(),
-                                                IdempotencyMode::CheckAndVerify
-                                            ) && host_result.is_passed()
-                                                && !should_defer_idempotency_post_check(
-                                                    task.as_ref(),
-                                                    &host_result,
-                                                    dry_run,
-                                                )
-                                            {
-                                                match task.check(&host, &blocking_context) {
-                                                    Ok(IdempotencyCheck::Converged { .. }) => {
-                                                        Ok(host_result)
-                                                    }
-                                                    Ok(IdempotencyCheck::ChangeRequired {
-                                                        diff,
-                                                        details,
-                                                    }) => Ok(
-                                                        failed_verification_check_to_host_result(
-                                                            diff, details,
-                                                        ),
-                                                    ),
-                                                    Err(error) => Err(error),
-                                                }
-                                            } else {
-                                                Ok(host_result)
-                                            }
-                                        }
-                                        Err(error) => Err(error),
-                                    }
-                                }
-                            }
-                        }
-                    })
-                    .await
-                    {
-                        Ok(result) => result,
-                        Err(err) => Err(TaskError::new(std::io::Error::other(format!(
-                            "blocking task join error: {err}"
-                        )))),
-                    }
-                }
-            };
-
-            let host_result = match host_result {
-                Ok(host_result) => host_result,
-                Err(error) => HostTaskResult::failed(TaskFailure::from_task_error(error)),
-            };
-
-            if retry_policy.should_retry(&host_result, attempts) {
-                if let Some(failure) = host_result.failure() {
-                    warn!(
-                        "retrying task '{}' for host '{}' after attempt {}/{}: {}",
-                        task.name(),
-                        hostname,
-                        attempts,
-                        retry_policy.max_attempts(),
-                        failure.message()
-                    );
-                }
-                if retry_policy.delay_ms() > 0 {
-                    sleep(Duration::from_millis(retry_policy.delay_ms())).await;
-                }
-                continue;
-            }
-
-            break host_result;
-        };
-
-        let mut host_result = host_result;
-        if should_attempt_session_verification(task.as_ref(), &host_result, run_options.dry_run()) {
-            let config = task
-                .session_verification_config()
-                .expect("session verification config should exist when verification is required");
-            let connection_resolver = connection_resolver
-                .expect("session verification request validation should require a resolver");
-            match verify_replacement_session(task.as_ref(), hostname, connection_resolver, config)
-                .await
-            {
-                Ok((metadata, replacement_connection)) => {
-                    host_result = with_session_verification_metadata(host_result, metadata);
-                    if matches!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify) {
-                        host_result = run_replacement_idempotency_post_check(
-                            Arc::clone(&task),
-                            host,
-                            host_result,
-                            replacement_connection,
-                            TaskExecutionContext::new(depth, max_depth),
-                            attempts,
-                        )
-                        .await;
-                        host_result = with_session_verification_metadata(host_result, metadata);
-                    }
-                }
-                Err(failure_result) => {
-                    host_result = failure_result;
-                }
-            }
+        let (host_result, attempts) = TaskRetryLoop {
+            task: Arc::clone(&task),
+            hostname,
+            host,
+            connection,
+            processor_context: &processor_context,
+            processors: &processors,
+            depth,
+            run_options,
+            settings: retry_settings,
         }
+        .run()
+        .await?;
+
+        let host_result = verify_after_retries(
+            &task,
+            hostname,
+            host,
+            host_result,
+            connection_resolver,
+            depth,
+            run_options,
+            attempts,
+        )
+        .await;
 
         let finished_at = SystemTime::now();
-        let duration_ns = finished_at
-            .duration_since(started_at)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-
-        results.record_execution_timing(started_at, finished_at);
-
-        if let Some(failure) = host_result.failure() {
-            warn!(
-                "task '{}' failed for host '{}': {}",
-                task.name(),
-                hostname,
-                failure.message()
-            );
-        }
-
-        if let Some(skip) = host_result.skipped_detail() {
-            info!(
-                "task '{}' skipped for host '{}' reason='{}' message='{}'",
-                task.name(),
-                hostname,
-                skip.reason().unwrap_or("none"),
-                skip.message().unwrap_or("")
-            );
-        }
-
-        let status = host_result.status();
-
-        let retry_exhausted = retry_policy.retry_exhausted(&host_result, attempts);
-        let mut host_result =
-            host_result.with_execution_timing(started_at, finished_at, duration_ns);
-        *host_result.execution_metadata_mut() = host_result
-            .execution_metadata()
-            .clone()
-            .with_attempts(attempts)
-            .with_retried(attempts > 1)
-            .with_retry_exhausted(retry_exhausted)
-            .with_dry_run(run_options.dry_run());
-        let duration_display = host_result
-            .execution_metadata()
-            .duration_display()
-            .unwrap_or_else(|| format_duration_display(duration_ns));
-
-        info!(
-            "finished task '{}' for host '{}' with status={} duration_ms={} duration={}",
-            task.name(),
+        record_host_result(
             hostname,
-            status,
-            duration_ns / 1_000_000,
-            duration_display
-        );
+            results,
+            host_result,
+            started_at,
+            finished_at,
+            &processor_context,
+            &processors,
+            run_options.dry_run(),
+            HostResultCompletion::AfterRetries {
+                attempts,
+                settings: retry_settings,
+            },
+        )?;
 
-        for processor in &processors {
-            processor.on_instance_finish(&processor_context, &mut host_result)?;
-        }
-        results.insert_host_result(hostname, host_result);
+        Self::run_sub_tasks(
+            task.as_ref(),
+            hostname,
+            host,
+            results,
+            connection_resolver,
+            processor_resolver,
+            depth,
+            run_options,
+            retry_defaults,
+        )
+        .await?;
 
+        Ok(())
+    }
+
+    /// Run child task trees after recording the parent's host result.
+    ///
+    /// Each child re-enters the full host execution path so it resolves its own
+    /// connection, retry settings, attempt count, verification, timing, and results.
+    /// The existing aggregate processor hooks surround each recursive call.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_sub_tasks(
+        task: &dyn Task,
+        hostname: &str,
+        host: &Host,
+        results: &mut TaskResults,
+        connection_resolver: Option<&dyn TaskConnectionResolver>,
+        processor_resolver: Option<&dyn TaskProcessorResolver>,
+        depth: usize,
+        run_options: TaskRunOptions,
+        retry_defaults: RetryDefaults,
+    ) -> Result<(), crate::GenjaError> {
         for sub in task.sub_tasks() {
             let sub_task_name = sub.name().to_string();
             if results.sub_task(&sub_task_name).is_none() {

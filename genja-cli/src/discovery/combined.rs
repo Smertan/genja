@@ -130,8 +130,6 @@ fn find_unique_descriptor(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     #[cfg(any(unix, windows))]
     use std::path::Path;
 
@@ -311,22 +309,14 @@ mod tests {
             ("fake-python", "fake_python_discovery.sh")
         };
         let interpreter = directory.path().join(interpreter_name);
-        fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures")
-                .join(fixture_name),
-            &interpreter,
-        )
-        .expect("fixture interpreter should be copied");
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(fixture_name);
         #[cfg(unix)]
-        {
-            let mut permissions = fs::metadata(&interpreter)
-                .expect("fixture interpreter should exist")
-                .permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&interpreter, permissions)
-                .expect("fixture interpreter should be executable");
-        }
+        std::os::unix::fs::symlink(&fixture, &interpreter)
+            .expect("fixture interpreter should be linked");
+        #[cfg(windows)]
+        fs::copy(&fixture, &interpreter).expect("fixture interpreter should be copied");
 
         let python_descriptor = implementation(ID, "1.0.0", TaskLanguage::Python);
         fs::write(

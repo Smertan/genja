@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Test double for the Python executable, not a Python module. Rust tests copy
+# Test double for the Python executable, not a Python module. Rust tests link
 # this file as "fake-python" and run it through PythonTaskDescriptorSource.
 # It checks the helper command without requiring Python or genja-py.
 if [ "$#" -ne 4 ] || [ "$1" != "-m" ] || [ "$2" != "genja._discovery_cli" ] || [ "$3" != "--pyproject" ]; then

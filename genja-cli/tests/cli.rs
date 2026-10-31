@@ -16,7 +16,8 @@ fn assert_help_usage(stdout: &str, command: &str) {
 #[test]
 fn wheel_selects_companion_python_and_honors_override() {
     use std::env;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::symlink;
+    use std::path::Path;
 
     let directory = tempfile::tempdir().expect("temporary directory should exist");
     let scripts = directory.path().join("venv/bin");
@@ -29,17 +30,11 @@ fn wheel_selects_companion_python_and_honors_override() {
     let genja = scripts.join("genja");
     fs::copy(env!("CARGO_BIN_EXE_genja"), &genja).expect("CLI binary should be copied");
     let companion = scripts.join("python");
-    fs::copy("tests/fixtures/fake_python_discovery.sh", &companion)
-        .expect("companion fixture should be copied");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    symlink(fixtures.join("fake_python_discovery.sh"), &companion)
+        .expect("companion fixture should be linked");
     let decoy = unrelated.join("python");
-    fs::copy("tests/fixtures/wrong_python.sh", &decoy).expect("PATH decoy should be copied");
-    for script in [&companion, &decoy] {
-        let mut permissions = fs::metadata(script)
-            .expect("script should exist")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(script, permissions).expect("script should be executable");
-    }
+    symlink(fixtures.join("wrong_python.sh"), &decoy).expect("PATH decoy should be linked");
 
     fs::write(
         project.join("pyproject.toml"),
