@@ -3541,6 +3541,135 @@ async fn run_replacement_idempotency_post_check(
     }
 }
 
+/// Execute one task attempt, including dry-run and immediate convergence checks.
+async fn run_task_attempt(
+    task: Arc<dyn Task>,
+    host: &Host,
+    connection: Option<Arc<Mutex<dyn Connection>>>,
+    execution_context: TaskExecutionContext,
+    attempt: usize,
+    dry_run: bool,
+) -> HostTaskResult {
+    let result = match task.execution_mode() {
+        TaskExecutionMode::Async => {
+            let runtime_context = TaskRuntimeContext::new(execution_context, connection)
+                .with_current_attempt(attempt)
+                .with_dry_run(dry_run);
+            if dry_run {
+                task.dry_run_async(host, &runtime_context).await
+            } else {
+                match task.idempotency_mode() {
+                    IdempotencyMode::Disabled => task.start_async(host, &runtime_context).await,
+                    IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                        match task.check_async(host, &runtime_context).await {
+                            Ok(IdempotencyCheck::Converged { summary, details }) => {
+                                Ok(converged_check_to_host_result(summary, details, attempt))
+                            }
+                            Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                match task.start_async(host, &runtime_context).await {
+                                    Ok(host_result) => {
+                                        if matches!(
+                                            task.idempotency_mode(),
+                                            IdempotencyMode::CheckAndVerify
+                                        ) && host_result.is_passed()
+                                            && !should_defer_idempotency_post_check(
+                                                task.as_ref(),
+                                                &host_result,
+                                                dry_run,
+                                            )
+                                        {
+                                            match task.check_async(host, &runtime_context).await {
+                                                Ok(IdempotencyCheck::Converged { .. }) => {
+                                                    Ok(host_result)
+                                                }
+                                                Ok(IdempotencyCheck::ChangeRequired {
+                                                    diff,
+                                                    details,
+                                                }) => Ok(failed_verification_check_to_host_result(
+                                                    diff, details,
+                                                )),
+                                                Err(error) => Err(error),
+                                            }
+                                        } else {
+                                            Ok(host_result)
+                                        }
+                                    }
+                                    Err(error) => Err(error),
+                                }
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                }
+            }
+        }
+        TaskExecutionMode::Blocking => {
+            let blocking_context =
+                BlockingTaskRuntimeContext::new(execution_context, connection, Handle::current())
+                    .with_current_attempt(attempt)
+                    .with_dry_run(dry_run);
+            let host = host.clone();
+            match task::spawn_blocking(move || {
+                if dry_run {
+                    task.dry_run(&host, &blocking_context)
+                } else {
+                    match task.idempotency_mode() {
+                        IdempotencyMode::Disabled => task.start(&host, &blocking_context),
+                        IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                            match task.check(&host, &blocking_context) {
+                                Ok(IdempotencyCheck::Converged { summary, details }) => {
+                                    Ok(converged_check_to_host_result(summary, details, attempt))
+                                }
+                                Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                    let host_result = task.start(&host, &blocking_context)?;
+                                    if matches!(
+                                        task.idempotency_mode(),
+                                        IdempotencyMode::CheckAndVerify
+                                    ) && host_result.is_passed()
+                                        && !should_defer_idempotency_post_check(
+                                            task.as_ref(),
+                                            &host_result,
+                                            dry_run,
+                                        )
+                                    {
+                                        match task.check(&host, &blocking_context) {
+                                            Ok(IdempotencyCheck::Converged { .. }) => {
+                                                Ok(host_result)
+                                            }
+                                            Ok(IdempotencyCheck::ChangeRequired {
+                                                diff,
+                                                details,
+                                            }) => Ok(failed_verification_check_to_host_result(
+                                                diff, details,
+                                            )),
+                                            Err(error) => Err(error),
+                                        }
+                                    } else {
+                                        Ok(host_result)
+                                    }
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(err) => Err(TaskError::new(std::io::Error::other(format!(
+                    "blocking task join error: {err}"
+                )))),
+            }
+        }
+    };
+
+    match result {
+        Ok(host_result) => host_result,
+        Err(error) => HostTaskResult::failed(TaskFailure::from_task_error(error)),
+    }
+}
+
 /// Task metadata required for execution.
 ///
 /// Task authoring macros such as `#[genja_task(...)]` implement this trait
@@ -4747,143 +4876,15 @@ impl TaskDefinition {
                 processor.on_instance_start(&processor_context)?;
             }
 
-            let execution_context = TaskExecutionContext::new(depth, max_depth);
-            let host_result = match task.execution_mode() {
-                TaskExecutionMode::Async => {
-                    let runtime_context =
-                        TaskRuntimeContext::new(execution_context, connection.clone())
-                            .with_current_attempt(attempts)
-                            .with_dry_run(run_options.dry_run());
-                    if run_options.dry_run() {
-                        task.dry_run_async(host, &runtime_context).await
-                    } else {
-                        match task.idempotency_mode() {
-                            IdempotencyMode::Disabled => {
-                                task.start_async(host, &runtime_context).await
-                            }
-                            IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
-                                match task.check_async(host, &runtime_context).await {
-                                    Ok(IdempotencyCheck::Converged { summary, details }) => Ok(
-                                        converged_check_to_host_result(summary, details, attempts),
-                                    ),
-                                    Ok(IdempotencyCheck::ChangeRequired { .. }) => {
-                                        match task.start_async(host, &runtime_context).await {
-                                            Ok(host_result) => {
-                                                if matches!(
-                                                    task.idempotency_mode(),
-                                                    IdempotencyMode::CheckAndVerify
-                                                ) && host_result.is_passed()
-                                                    && !should_defer_idempotency_post_check(
-                                                        task.as_ref(),
-                                                        &host_result,
-                                                        run_options.dry_run(),
-                                                    )
-                                                {
-                                                    match task
-                                                        .check_async(host, &runtime_context)
-                                                        .await
-                                                    {
-                                                        Ok(IdempotencyCheck::Converged {
-                                                            ..
-                                                        }) => Ok(host_result),
-                                                        Ok(IdempotencyCheck::ChangeRequired {
-                                                            diff,
-                                                            details,
-                                                        }) => {
-                                                            Ok(failed_verification_check_to_host_result(
-                                                                diff, details,
-                                                            ))
-                                                        }
-                                                        Err(error) => Err(error),
-                                                    }
-                                                } else {
-                                                    Ok(host_result)
-                                                }
-                                            }
-                                            Err(error) => Err(error),
-                                        }
-                                    }
-                                    Err(error) => Err(error),
-                                }
-                            }
-                        }
-                    }
-                }
-                TaskExecutionMode::Blocking => {
-                    let blocking_context = BlockingTaskRuntimeContext::new(
-                        execution_context,
-                        connection.clone(),
-                        Handle::current(),
-                    )
-                    .with_current_attempt(attempts)
-                    .with_dry_run(run_options.dry_run());
-                    let task = Arc::clone(&task);
-                    let host = host.clone();
-                    let dry_run = run_options.dry_run();
-                    match task::spawn_blocking(move || {
-                        if dry_run {
-                            task.dry_run(&host, &blocking_context)
-                        } else {
-                            match task.idempotency_mode() {
-                                IdempotencyMode::Disabled => task.start(&host, &blocking_context),
-                                IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
-                                    match task.check(&host, &blocking_context) {
-                                        Ok(IdempotencyCheck::Converged { summary, details }) => {
-                                            Ok(converged_check_to_host_result(
-                                                summary, details, attempts,
-                                            ))
-                                        }
-                                        Ok(IdempotencyCheck::ChangeRequired { .. }) => {
-                                            let host_result =
-                                                task.start(&host, &blocking_context)?;
-                                            if matches!(
-                                                task.idempotency_mode(),
-                                                IdempotencyMode::CheckAndVerify
-                                            ) && host_result.is_passed()
-                                                && !should_defer_idempotency_post_check(
-                                                    task.as_ref(),
-                                                    &host_result,
-                                                    dry_run,
-                                                )
-                                            {
-                                                match task.check(&host, &blocking_context) {
-                                                    Ok(IdempotencyCheck::Converged { .. }) => {
-                                                        Ok(host_result)
-                                                    }
-                                                    Ok(IdempotencyCheck::ChangeRequired {
-                                                        diff,
-                                                        details,
-                                                    }) => Ok(
-                                                        failed_verification_check_to_host_result(
-                                                            diff, details,
-                                                        ),
-                                                    ),
-                                                    Err(error) => Err(error),
-                                                }
-                                            } else {
-                                                Ok(host_result)
-                                            }
-                                        }
-                                        Err(error) => Err(error),
-                                    }
-                                }
-                            }
-                        }
-                    })
-                    .await
-                    {
-                        Ok(result) => result,
-                        Err(err) => Err(TaskError::new(std::io::Error::other(format!(
-                            "blocking task join error: {err}"
-                        )))),
-                    }
-                }
-            };
-
-            let host_result = match host_result {
-                Ok(host_result) => host_result,
-                Err(error) => HostTaskResult::failed(TaskFailure::from_task_error(error)),
-            };
+            let host_result = run_task_attempt(
+                Arc::clone(&task),
+                host,
+                connection.clone(),
+                TaskExecutionContext::new(depth, max_depth),
+                attempts,
+                run_options.dry_run(),
+            )
+            .await;
 
             if should_retry(retry_settings, &host_result, attempts) {
                 if let Some(failure) = host_result.failure() {
