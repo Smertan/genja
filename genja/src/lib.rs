@@ -1457,6 +1457,74 @@ mod tests {
         succeed_on_attempt: usize,
     }
 
+    struct RetryTreeTask {
+        name: &'static str,
+        retry_config: Option<RetryConfig>,
+        sub_tasks: Vec<Arc<dyn Task>>,
+        attempts: Arc<Mutex<HashMap<(&'static str, String), usize>>>,
+    }
+
+    impl TaskInfo for RetryTreeTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            None
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+
+        fn retry_config(&self) -> Option<&RetryConfig> {
+            self.retry_config.as_ref()
+        }
+    }
+
+    #[async_trait]
+    impl Task for RetryTreeTask {
+        async fn start_async(
+            &self,
+            host: &Host,
+            context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let hostname = host.hostname().expect("test host should have a hostname");
+            let mut attempts = self
+                .attempts
+                .lock()
+                .expect("attempt lock should not be poisoned");
+            let count = attempts
+                .entry((self.name, hostname.to_string()))
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
+            assert_eq!(*count, context.current_attempt());
+            let succeed_on = match (self.name, hostname) {
+                ("root-a", "10.0.0.1") => 3,
+                ("root-a", "10.0.0.2") => 2,
+                ("child", _) => 2,
+                ("root-b", _) => 2,
+                _ => unreachable!("unexpected task or host"),
+            };
+            if *count < succeed_on {
+                Ok(HostTaskResult::failed(
+                    TaskFailure::new(std::io::Error::other("temporary failure"))
+                        .with_retryable(true),
+                ))
+            } else {
+                Ok(HostTaskResult::passed(TaskSuccess::new()))
+            }
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            self.sub_tasks.clone()
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
     impl TaskInfo for SkippedTask {
         fn name(&self) -> &str {
             "skipped-task"
@@ -2775,6 +2843,88 @@ mod tests {
             assert_eq!(host_result.execution_metadata().attempts(), 2);
             assert!(host_result.execution_metadata().retried());
             assert!(!host_result.execution_metadata().retry_exhausted());
+        }
+    }
+
+    #[test]
+    fn run_tasks_keeps_retry_attempts_independent_per_node_and_host() {
+        for runner_plugin in ["serial", "threaded"] {
+            let attempts = Arc::new(Mutex::new(HashMap::new()));
+            let settings = Settings::builder()
+                .runner(
+                    RunnerConfig::builder()
+                        .plugin(runner_plugin)
+                        .worker_count(2)
+                        .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
+                        .build(),
+                )
+                .build();
+            let genja = Genja::builder(test_inventory())
+                .with_settings(settings)
+                .build()
+                .expect("genja should build with retry settings");
+
+            let child = Arc::new(RetryTreeTask {
+                name: "child",
+                retry_config: Some(RetryConfig::builder().max_attempts(2).build()),
+                sub_tasks: Vec::new(),
+                attempts: Arc::clone(&attempts),
+            });
+            let mut tasks = Tasks::new();
+            tasks.add_task(RetryTreeTask {
+                name: "root-a",
+                retry_config: None,
+                sub_tasks: vec![child],
+                attempts: Arc::clone(&attempts),
+            });
+            tasks.add_task(RetryTreeTask {
+                name: "root-b",
+                retry_config: Some(RetryConfig::builder().allow(false).build()),
+                sub_tasks: Vec::new(),
+                attempts: Arc::clone(&attempts),
+            });
+
+            let results = genja.run_tasks(tasks, 1).expect("task list should run");
+            assert_eq!(results.len(), 2);
+            assert_eq!(results[0].task_name(), "root-a");
+            assert_eq!(results[1].task_name(), "root-b");
+            let child_results = results[0].sub_task("child").expect("child results");
+
+            for (hostname, root_attempts) in [("router1", 3), ("router2", 2)] {
+                let root = results[0].host_result(hostname).expect("root-a result");
+                let child = child_results.host_result(hostname).expect("child result");
+                let disabled = results[1].host_result(hostname).expect("root-b result");
+
+                assert!(root.is_passed(), "{runner_plugin} {hostname} root-a");
+                assert_eq!(root.execution_metadata().attempts(), root_attempts);
+                assert!(root.execution_metadata().retried());
+                assert!(!root.execution_metadata().retry_exhausted());
+
+                assert!(child.is_passed(), "{runner_plugin} {hostname} child");
+                assert_eq!(child.execution_metadata().attempts(), 2);
+                assert!(child.execution_metadata().retried());
+                assert!(!child.execution_metadata().retry_exhausted());
+
+                assert!(disabled.failure().expect("root-b failure").retryable());
+                assert_eq!(disabled.execution_metadata().attempts(), 1);
+                assert!(!disabled.execution_metadata().retried());
+                assert!(!disabled.execution_metadata().retry_exhausted());
+            }
+
+            let attempts = attempts
+                .lock()
+                .expect("attempt lock should not be poisoned");
+            assert_eq!(attempts.len(), 6);
+            for (name, hostname, expected) in [
+                ("root-a", "10.0.0.1", 3),
+                ("root-a", "10.0.0.2", 2),
+                ("child", "10.0.0.1", 2),
+                ("child", "10.0.0.2", 2),
+                ("root-b", "10.0.0.1", 1),
+                ("root-b", "10.0.0.2", 1),
+            ] {
+                assert_eq!(attempts.get(&(name, hostname.to_string())), Some(&expected));
+            }
         }
     }
 
