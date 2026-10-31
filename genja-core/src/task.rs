@@ -646,7 +646,9 @@ use tokio::task;
 use tokio::time::{Duration, sleep};
 
 pub mod registration;
+mod retry;
 pub mod spec;
+
 pub use registration::{
     CompiledTaskRegistration, InMemoryTaskRegistry, RegisteredTaskFactory, TaskCatalog,
     TaskDescriptor, TaskDescriptorMetadata, TaskFactoryRegistry, TaskIdSource,
@@ -655,6 +657,7 @@ pub use registration::{
     get_compiled_task_descriptor_by_identity, list_compiled_tasks, validate_explicit_task_id,
     validate_task_version,
 };
+use retry::{RetryDefaults, RetrySettings};
 pub use spec::{
     TaskSpec, TaskSpecConstructionError, TaskSpecError, TaskSpecFormat, TaskSpecOverrides,
     create_compiled_task_from_spec, create_compiled_task_from_spec_str,
@@ -848,74 +851,17 @@ impl SessionVerificationMetadata {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct TaskRetryDefaults {
-    allow: bool,
-    max_attempts: usize,
-    delay_ms: u64,
+fn should_retry(settings: RetrySettings, result: &HostTaskResult, attempts: usize) -> bool {
+    settings.allow()
+        && attempts < settings.max_attempts()
+        && matches!(result.failure(), Some(failure) if failure.retryable())
 }
 
-impl Default for TaskRetryDefaults {
-    fn default() -> Self {
-        Self {
-            allow: false,
-            max_attempts: 1,
-            delay_ms: 0,
-        }
-    }
-}
-
-impl From<&RunnerConfig> for TaskRetryDefaults {
-    fn from(runner_config: &RunnerConfig) -> Self {
-        Self {
-            allow: runner_config.retry_allow(),
-            max_attempts: runner_config.retry_max_attempts(),
-            delay_ms: runner_config.retry_delay_ms(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct EffectiveTaskRetryPolicy {
-    allow: bool,
-    max_attempts: usize,
-    delay_ms: u64,
-}
-
-impl EffectiveTaskRetryPolicy {
-    fn for_task(task: &dyn Task, defaults: TaskRetryDefaults) -> Self {
-        let retry_config = task.retry_config().copied().unwrap_or_default();
-        let allow = retry_config.resolved_allow(defaults.allow);
-        let configured_attempts = retry_config.resolved_max_attempts(defaults.max_attempts);
-        let delay_ms = retry_config.resolved_delay_ms(defaults.delay_ms);
-
-        Self {
-            allow,
-            max_attempts: configured_attempts,
-            delay_ms,
-        }
-    }
-
-    fn max_attempts(&self) -> usize {
-        self.max_attempts
-    }
-
-    fn delay_ms(&self) -> u64 {
-        self.delay_ms
-    }
-
-    fn should_retry(&self, result: &HostTaskResult, attempts: usize) -> bool {
-        self.allow
-            && attempts < self.max_attempts
-            && matches!(result.failure(), Some(failure) if failure.retryable())
-    }
-
-    fn retry_exhausted(&self, result: &HostTaskResult, attempts: usize) -> bool {
-        self.allow
-            && attempts >= self.max_attempts
-            && self.max_attempts > 1
-            && matches!(result.failure(), Some(failure) if failure.retryable())
-    }
+fn retry_exhausted(settings: RetrySettings, result: &HostTaskResult, attempts: usize) -> bool {
+    settings.allow()
+        && attempts >= settings.max_attempts()
+        && settings.max_attempts() > 1
+        && matches!(result.failure(), Some(failure) if failure.retryable())
 }
 
 /// Represents an error that occurred during task execution.
@@ -4461,7 +4407,7 @@ impl TaskDefinition {
             results,
             None,
             run_options,
-            TaskRetryDefaults::default(),
+            RetryDefaults::default(),
         )
         .await
     }
@@ -4500,7 +4446,7 @@ impl TaskDefinition {
             results,
             connection_resolver,
             run_options,
-            TaskRetryDefaults::default(),
+            RetryDefaults::default(),
         )
         .await
     }
@@ -4542,7 +4488,7 @@ impl TaskDefinition {
             results,
             connection_resolver,
             run_options,
-            TaskRetryDefaults::from(runner_config),
+            RetryDefaults::from(runner_config),
         )
         .await
     }
@@ -4554,7 +4500,7 @@ impl TaskDefinition {
         results: &mut TaskResults,
         connection_resolver: Option<&dyn TaskConnectionResolver>,
         run_options: TaskRunOptions,
-        retry_defaults: TaskRetryDefaults,
+        retry_defaults: RetryDefaults,
     ) -> Result<(), crate::GenjaError> {
         Self::start_with_depth(
             Arc::clone(&self.inner),
@@ -4650,7 +4596,7 @@ impl TaskDefinition {
         parent_task_name: Option<&str>,
         depth: usize,
         run_options: TaskRunOptions,
-        retry_defaults: TaskRetryDefaults,
+        retry_defaults: RetryDefaults,
     ) -> Result<(), crate::GenjaError> {
         let max_depth = run_options.max_depth();
         if depth > max_depth {
@@ -4690,7 +4636,7 @@ impl TaskDefinition {
             max_depth,
             connection_resolver.is_some()
         );
-        let retry_policy = EffectiveTaskRetryPolicy::for_task(task.as_ref(), retry_defaults);
+        let retry_settings = RetrySettings::for_task(task.as_ref(), retry_defaults);
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
@@ -4939,19 +4885,19 @@ impl TaskDefinition {
                 Err(error) => HostTaskResult::failed(TaskFailure::from_task_error(error)),
             };
 
-            if retry_policy.should_retry(&host_result, attempts) {
+            if should_retry(retry_settings, &host_result, attempts) {
                 if let Some(failure) = host_result.failure() {
                     warn!(
                         "retrying task '{}' for host '{}' after attempt {}/{}: {}",
                         task.name(),
                         hostname,
                         attempts,
-                        retry_policy.max_attempts(),
+                        retry_settings.max_attempts(),
                         failure.message()
                     );
                 }
-                if retry_policy.delay_ms() > 0 {
-                    sleep(Duration::from_millis(retry_policy.delay_ms())).await;
+                if retry_settings.delay_ms() > 0 {
+                    sleep(Duration::from_millis(retry_settings.delay_ms())).await;
                 }
                 continue;
             }
@@ -5019,7 +4965,7 @@ impl TaskDefinition {
 
         let status = host_result.status();
 
-        let retry_exhausted = retry_policy.retry_exhausted(&host_result, attempts);
+        let retry_exhausted = retry_exhausted(retry_settings, &host_result, attempts);
         let mut host_result =
             host_result.with_execution_timing(started_at, finished_at, duration_ns);
         *host_result.execution_metadata_mut() = host_result
