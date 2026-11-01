@@ -10,14 +10,14 @@ use pyo3::types::{PyAny, PyModule};
 use crate::task;
 
 /// Default task retry settings configured at runner scope.
-#[pyclass(name = "RunnerRetryConfig", skip_from_py_object)]
+#[pyclass(name = "RunnerTaskRetryConfig", skip_from_py_object)]
 #[derive(Clone)]
-pub struct PyRunnerRetryConfig {
+pub struct PyRunnerTaskRetryConfig {
     pub(crate) inner: ::genja_core::task::TaskRetryConfig,
 }
 
 #[pymethods]
-impl PyRunnerRetryConfig {
+impl PyRunnerTaskRetryConfig {
     /// Create runner retry configuration.
     ///
     /// # Parameters
@@ -58,7 +58,7 @@ impl PyRunnerRetryConfig {
 
     fn __repr__(&self) -> String {
         format!(
-            "RunnerRetryConfig(allow={:?}, max_attempts={:?}, delay_ms={:?})",
+            "RunnerTaskRetryConfig(allow={:?}, max_attempts={:?}, delay_ms={:?})",
             self.allow(),
             self.max_attempts(),
             self.delay_ms()
@@ -332,15 +332,15 @@ impl PyRunnerConfig {
     /// * `worker_count` - Optional maximum worker count for runners that support parallelism.
     /// * `max_task_depth` - Optional maximum nested sub-task depth.
     /// * `max_connection_attempts` - Optional maximum connection attempts per host.
-    /// * `retry` - Optional default retry behavior for task execution.
+    /// * `task_retry` - Optional default retry behavior for task execution.
     #[new]
-    #[pyo3(signature = (plugin=None, worker_count=None, max_task_depth=None, max_connection_attempts=None, retry=None))]
+    #[pyo3(signature = (plugin=None, worker_count=None, max_task_depth=None, max_connection_attempts=None, task_retry=None))]
     fn new(
         plugin: Option<String>,
         worker_count: Option<usize>,
         max_task_depth: Option<usize>,
         max_connection_attempts: Option<usize>,
-        retry: Option<PyRef<'_, PyRunnerRetryConfig>>,
+        task_retry: Option<PyRef<'_, PyRunnerTaskRetryConfig>>,
     ) -> Self {
         let mut builder = RunnerConfig::builder();
         if let Some(plugin) = plugin {
@@ -355,8 +355,8 @@ impl PyRunnerConfig {
         if let Some(max_connection_attempts) = max_connection_attempts {
             builder = builder.max_connection_attempts(max_connection_attempts);
         }
-        if let Some(retry) = retry {
-            builder = builder.task_retry(retry.inner);
+        if let Some(task_retry) = task_retry {
+            builder = builder.task_retry(task_retry.inner);
         }
         Self {
             inner: builder.build(),
@@ -389,20 +389,20 @@ impl PyRunnerConfig {
 
     /// Default retry behavior for task execution.
     #[getter]
-    pub(crate) fn retry(&self) -> PyRunnerRetryConfig {
-        PyRunnerRetryConfig {
+    pub(crate) fn task_retry(&self) -> PyRunnerTaskRetryConfig {
+        PyRunnerTaskRetryConfig {
             inner: *self.inner.task_retry(),
         }
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "RunnerConfig(plugin={:?}, worker_count={:?}, max_task_depth={}, max_connection_attempts={}, retry={})",
+            "RunnerConfig(plugin={:?}, worker_count={:?}, max_task_depth={}, max_connection_attempts={}, task_retry={})",
             self.plugin(),
             self.worker_count(),
             self.max_task_depth(),
             self.max_connection_attempts(),
-            self.retry().__repr__()
+            self.task_retry().__repr__()
         )
     }
 }
@@ -650,7 +650,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyInventoryConfig>()?;
     module.add_class::<PySSHConfig>()?;
     module.add_class::<PyRunnerConfig>()?;
-    module.add_class::<PyRunnerRetryConfig>()?;
+    module.add_class::<PyRunnerTaskRetryConfig>()?;
     module.add_class::<PyLoggingConfig>()?;
     Ok(())
 }
@@ -713,7 +713,8 @@ mod tests {
             assert!(module.getattr("InventoryConfig").is_ok());
             assert!(module.getattr("SSHConfig").is_ok());
             assert!(module.getattr("RunnerConfig").is_ok());
-            assert!(module.getattr("RunnerRetryConfig").is_ok());
+            assert!(module.getattr("RunnerTaskRetryConfig").is_ok());
+            assert!(module.getattr("RunnerRetryConfig").is_err());
             assert!(module.getattr("LoggingConfig").is_ok());
         });
     }

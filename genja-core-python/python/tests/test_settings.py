@@ -15,9 +15,9 @@ def test_settings_from_file_loads_yaml():
     assert settings.ssh.config_file is None
     assert settings.runner.plugin == "threaded"
     assert settings.runner.worker_count == 10
-    assert settings.runner.retry.allow is True
-    assert settings.runner.retry.max_attempts == 4
-    assert settings.runner.retry.delay_ms == 250
+    assert settings.runner.task_retry.allow is True
+    assert settings.runner.task_retry.max_attempts == 4
+    assert settings.runner.task_retry.delay_ms == 250
     assert settings.logging.level == "info"
     assert settings.logging.max_file_count == 10
 
@@ -40,7 +40,7 @@ def test_settings_can_be_constructed_programmatically():
             worker_count=2,
             max_task_depth=4,
             max_connection_attempts=5,
-            retry=genja.RunnerRetryConfig(
+            task_retry=genja.RunnerTaskRetryConfig(
                 allow=True,
                 max_attempts=3,
                 delay_ms=250,
@@ -68,9 +68,9 @@ def test_settings_can_be_constructed_programmatically():
     assert settings.runner.worker_count == 2
     assert settings.runner.max_task_depth == 4
     assert settings.runner.max_connection_attempts == 5
-    assert settings.runner.retry.allow is True
-    assert settings.runner.retry.max_attempts == 3
-    assert settings.runner.retry.delay_ms == 250
+    assert settings.runner.task_retry.allow is True
+    assert settings.runner.task_retry.max_attempts == 3
+    assert settings.runner.task_retry.delay_ms == 250
     assert settings.logging.enabled is False
     assert settings.logging.level == "debug"
     assert settings.logging.log_file == "./genja.log"
@@ -95,9 +95,12 @@ def test_programmatic_settings_preserve_omitted_defaults():
         settings.runner.max_connection_attempts
         == defaults.runner.max_connection_attempts
     )
-    assert settings.runner.retry.allow == defaults.runner.retry.allow
-    assert settings.runner.retry.max_attempts == defaults.runner.retry.max_attempts
-    assert settings.runner.retry.delay_ms == defaults.runner.retry.delay_ms
+    assert settings.runner.task_retry.allow == defaults.runner.task_retry.allow
+    assert (
+        settings.runner.task_retry.max_attempts
+        == defaults.runner.task_retry.max_attempts
+    )
+    assert settings.runner.task_retry.delay_ms == defaults.runner.task_retry.delay_ms
     assert settings.logging.enabled == defaults.logging.enabled
     assert settings.logging.level == "debug"
     assert settings.logging.log_file == defaults.logging.log_file
@@ -107,16 +110,27 @@ def test_programmatic_runner_retry_omitted_fields_use_defaults():
     defaults = genja.Settings()
     settings = genja.Settings(
         runner=genja.RunnerConfig(
-            retry=genja.RunnerRetryConfig(
+            task_retry=genja.RunnerTaskRetryConfig(
                 allow=True,
                 delay_ms=500,
             ),
         )
     )
 
-    assert settings.runner.retry.allow is True
-    assert settings.runner.retry.max_attempts == defaults.runner.retry.max_attempts
-    assert settings.runner.retry.delay_ms == 500
+    assert settings.runner.task_retry.allow is True
+    assert (
+        settings.runner.task_retry.max_attempts
+        == defaults.runner.task_retry.max_attempts
+    )
+    assert settings.runner.task_retry.delay_ms == 500
+
+
+def test_old_python_runner_retry_names_are_unavailable():
+    assert not hasattr(genja, "RunnerRetryConfig")
+    assert not hasattr(genja.RunnerConfig(), "retry")
+
+    with pytest.raises(TypeError):
+        genja.RunnerConfig(retry=genja.RunnerTaskRetryConfig(allow=True))
 
 
 def test_programmatic_settings_are_accepted_by_runtime():

@@ -82,7 +82,7 @@ enter the task attempt loop.
 
 ## Retry settings and decision baseline
 
-Rust `TaskRetryConfig` (Python `RetryConfig`) has optional `allow`,
+`TaskRetryConfig` has optional `allow`,
 `max_attempts`, and `delay_ms` fields.
 The effective values are resolved field by field from the task's
 `TaskInfo::retry_config()` over `RunnerConfig` retry defaults. Without a
@@ -91,7 +91,7 @@ runner, core defaults are `allow = false`, `max_attempts = 1`, and
 attempt. A `TaskDefinition` retry override replaces the root task's authored
 `TaskRetryConfig`; it is not applied to subtasks. `TaskSpecOverrides.retry` is
 implemented through that root override. Rust `#[genja_task(..., retry(...))]`
-and Python `@task(..., retry=RetryConfig(...))` supply authored task metadata;
+and Python `@task(..., retry=TaskRetryConfig(...))` supply authored task metadata;
 Python runner retry settings feed the same `RunnerConfig` path.
 
 Today the task retries only when all three conditions hold: effective
@@ -169,7 +169,7 @@ optional:
 | --- | --- |
 | Core defaults | `allow = false`, `max_attempts = 1`, `delay_ms = 0` when no runner configuration is supplied |
 | `runner.task_retry` | Supplies normalized invocation defaults to runner-mediated execution |
-| Rust `retry(...)` or Python `RetryConfig` task metadata | Supplies only the fields the task declares; other fields inherit runner defaults |
+| Rust `retry(...)` or Python `TaskRetryConfig` task metadata | Supplies only the fields the task declares; other fields inherit runner defaults |
 | Root `TaskDefinition` override, including `TaskSpecOverrides.retry` | Replaces that root's authored retry metadata; unset fields still inherit runner defaults; does not apply to subtasks |
 
 Selecting an algorithm does not become another precedence layer for these

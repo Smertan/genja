@@ -9,7 +9,7 @@ inventory:
 runner:
   plugin: threaded
   worker_count: 10
-  retry:
+  task_retry:
     allow: true
     max_attempts: 4
     delay_ms: 250

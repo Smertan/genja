@@ -195,7 +195,7 @@ import genja
 settings = genja.Settings(
     runner=genja.RunnerConfig(
         plugin="serial",
-        retry=genja.RunnerRetryConfig(
+        task_retry=genja.RunnerTaskRetryConfig(
             allow=True,
             max_attempts=3,
             delay_ms=250,

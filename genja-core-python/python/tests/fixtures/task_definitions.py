@@ -1,4 +1,4 @@
-from genja.task import RetryConfig, task
+from genja.task import TaskRetryConfig, task
 
 
 def passed_start(self, task, host, context):
@@ -43,7 +43,7 @@ class FixtureOptionsTask:
 @task(
     name="fixture_retry_task",
     connection_plugin_name="ssh",
-    retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
+    retry=TaskRetryConfig(allow=True, max_attempts=3, delay_ms=500),
 )
 class FixtureRetryTask:
     def start(self, task, host, context):

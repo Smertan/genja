@@ -10,7 +10,7 @@ directly. The top-level package re-exports these names for compatibility, but
 - ``TaskSuccessResult``
 - ``TaskFailureResult``
 - ``TaskSkipResult``
-- ``RetryConfig``
+- ``TaskRetryConfig``
 - ``SessionVerificationConfig``
 - ``IdempotencyMode``
 - ``IdempotencyCheckResult``
@@ -27,7 +27,7 @@ The canonical authoring shape is:
         TaskRuntimeContext,
         IdempotencyCheckResult,
         IdempotencyMode,
-        RetryConfig,
+        TaskRetryConfig,
         SessionVerificationConfig,
         TaskInfo,
         TaskMessage,
@@ -41,7 +41,7 @@ The canonical authoring shape is:
         connection_plugin_name="ssh",
         idempotency=IdempotencyMode.CHECK,
         processors=["audit"],
-        retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
+        retry=TaskRetryConfig(allow=True, max_attempts=3, delay_ms=500),
         session_verification=SessionVerificationConfig(max_attempts=3, delay_ms=5000),
         options={"backup_path": "/tmp/configs", "compress": True},
     )
@@ -676,10 +676,10 @@ def create_registered_task_by_identity(
     return _PYTHON_TASK_REGISTRY.create_by_identity(identity, input)
 
 
-class RetryConfig(_GenjaModel):
+class TaskRetryConfig(_GenjaModel):
     """Optional task retry metadata.
 
-    ``RetryConfig`` groups task-level retry overrides used by ``@task(...)`` and
+    ``TaskRetryConfig`` groups task-level retry overrides used by ``@task(...)`` and
     ``TaskInfo``. Every field is optional; omitted fields fall back to runner
     retry defaults before built-in defaults are applied by the runtime. The
     runtime applies omitted fields field by field.
@@ -762,7 +762,7 @@ class TaskInfo(_GenjaModel):
             that can observe or modify task execution before and after task or
             host-level result handling. Defaults to an empty list if no
             processors are specified.
-        retry (RetryConfig | None): Optional task-level retry overrides. If
+        retry (TaskRetryConfig | None): Optional task-level retry overrides. If
             None, runner defaults apply.
         session_verification (SessionVerificationConfig | None): Optional
             post-change new-session verification configuration. If None,
@@ -789,7 +789,7 @@ class TaskInfo(_GenjaModel):
         default_factory=list,
         description="Processor plugin names applied to this task.",
     )
-    retry: RetryConfig | None = Field(
+    retry: TaskRetryConfig | None = Field(
         default=None,
         description="Optional grouped task retry overrides.",
     )
@@ -1121,7 +1121,7 @@ def _register_python_task(
     version = cast(str, registration.version)
     info = task_cls.__genja_task_info__
     retry = info.get("retry")
-    retry_payload = retry.to_dict() if isinstance(retry, RetryConfig) else retry
+    retry_payload = retry.to_dict() if isinstance(retry, TaskRetryConfig) else retry
     input_schema = registration.resolved_input_schema()
     descriptor = TaskDescriptor(
         id=registration.id,
@@ -1270,7 +1270,7 @@ def task(
     connection_plugin_name: str | None = None,
     sub_tasks: list[type[GenjaTaskProtocol]] | None = None,
     processors: list[str] | None = None,
-    retry: RetryConfig | None = None,
+    retry: TaskRetryConfig | None = None,
     session_verification: SessionVerificationConfig | None = None,
     supports_dry_run: bool = False,
     idempotency: IdempotencyMode = IdempotencyMode.DISABLED,
@@ -1300,7 +1300,7 @@ def task(
         processors (list[str] | None): Optional list of processor plugin names
             to apply to this task's execution. If provided, must be a list of
             non-empty strings. If None, no processors will be applied.
-        retry (RetryConfig | None): Optional grouped task-level retry
+        retry (TaskRetryConfig | None): Optional grouped task-level retry
             overrides. This setting does not force retries by itself; the task
             must still return ``TaskFailureResult(..., retryable=True)``. Omitted
             retry fields fall back to runner defaults field by field.
@@ -1331,23 +1331,23 @@ def task(
             if the name is not a non-empty string, if connection_plugin_name is
             not a non-empty string or None, if sub_tasks is not a list of
             @task-decorated classes or None, if processors is not a list of
-            non-empty strings or None, if retry is not RetryConfig or None, if
+            non-empty strings or None, if retry is not TaskRetryConfig or None, if
             session_verification is not SessionVerificationConfig or None, if
             session_verification is provided without connection_plugin_name, if
             idempotency is not IdempotencyMode, if retry fields are passed
-            outside RetryConfig, or if options is not JSON-serializable.
+            outside TaskRetryConfig, or if options is not JSON-serializable.
     """
     if "allow_retries" in kwargs:
         raise TypeError(
-            "@task got keyword argument 'allow_retries'; did you mean retry=RetryConfig(allow=...)?"
+            "@task got keyword argument 'allow_retries'; did you mean retry=TaskRetryConfig(allow=...)?"
         )
     if "max_task_attempts" in kwargs:
         raise TypeError(
-            "@task got keyword argument 'max_task_attempts'; did you mean retry=RetryConfig(max_attempts=...)?"
+            "@task got keyword argument 'max_task_attempts'; did you mean retry=TaskRetryConfig(max_attempts=...)?"
         )
     if "delay_ms" in kwargs:
         raise TypeError(
-            "@task got keyword argument 'delay_ms'; did you mean retry=RetryConfig(delay_ms=...)?"
+            "@task got keyword argument 'delay_ms'; did you mean retry=TaskRetryConfig(delay_ms=...)?"
         )
     if kwargs:
         unknown = next(iter(kwargs))
@@ -1474,9 +1474,9 @@ def task(
                     raise TypeError(
                         f"@task-decorated class '{cls.__name__}' processors must contain non-empty strings"
                     )
-        if retry is not None and not isinstance(retry, RetryConfig):
+        if retry is not None and not isinstance(retry, TaskRetryConfig):
             raise TypeError(
-                f"@task-decorated class '{cls.__name__}' retry must be RetryConfig or None"
+                f"@task-decorated class '{cls.__name__}' retry must be TaskRetryConfig or None"
             )
         if session_verification is not None and not isinstance(
             session_verification, SessionVerificationConfig
@@ -1832,7 +1832,7 @@ __all__ = [
     "ExplicitInputSchema",
     "GenjaTaskProtocol",
     "PydanticInputSchema",
-    "RetryConfig",
+    "TaskRetryConfig",
     "TaskDescriptor",
     "TaskExecutionMode",
     "TaskFactory",

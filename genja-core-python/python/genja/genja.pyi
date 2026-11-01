@@ -119,7 +119,7 @@ class RunnerConfig:
         worker_count: int | None = None,
         max_task_depth: int | None = None,
         max_connection_attempts: int | None = None,
-        retry: RunnerRetryConfig | None = None,
+        task_retry: RunnerTaskRetryConfig | None = None,
     ) -> None:
         """Create runner configuration."""
         ...
@@ -140,11 +140,11 @@ class RunnerConfig:
         """Maximum connection attempts per host."""
         ...
     @property
-    def retry(self) -> RunnerRetryConfig:
+    def task_retry(self) -> RunnerTaskRetryConfig:
         """Default retry behavior for task execution."""
         ...
 
-class RunnerRetryConfig:
+class RunnerTaskRetryConfig:
     """Default task retry settings configured at runner scope."""
 
     def __init__(
