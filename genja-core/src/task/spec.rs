@@ -643,6 +643,28 @@ overrides:
     }
 
     #[test]
+    fn task_spec_preserves_retry_override_json_field_name() {
+        let source = serde_json::json!({
+            "task": "acme.examples.backup_config@1.0.0",
+            "overrides": {
+                "retry": {"allow": true, "max_attempts": 4, "delay_ms": 250}
+            }
+        });
+        let spec = TaskSpec::from_json_str(&source.to_string()).unwrap();
+        let serialized = serde_json::to_value(&spec).unwrap();
+
+        assert_eq!(
+            serialized["overrides"]["retry"],
+            source["overrides"]["retry"]
+        );
+        assert!(serialized["overrides"].get("task_retry").is_none());
+        assert_eq!(
+            spec.overrides.unwrap().retry.unwrap().max_attempts(),
+            Some(4)
+        );
+    }
+
+    #[test]
     fn task_spec_rejects_unsupported_processor_override() {
         let error = TaskSpec::from_yaml_str(
             r#"
