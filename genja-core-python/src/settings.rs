@@ -13,7 +13,7 @@ use crate::task;
 #[pyclass(name = "RunnerRetryConfig", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyRunnerRetryConfig {
-    pub(crate) inner: ::genja_core::task::RetryConfig,
+    pub(crate) inner: ::genja_core::task::TaskRetryConfig,
 }
 
 #[pymethods]
@@ -30,7 +30,7 @@ impl PyRunnerRetryConfig {
     #[pyo3(signature = (allow=None, max_attempts=None, delay_ms=None))]
     fn new(allow: Option<bool>, max_attempts: Option<usize>, delay_ms: Option<u64>) -> Self {
         Self {
-            inner: ::genja_core::task::RetryConfig::new(
+            inner: ::genja_core::task::TaskRetryConfig::new(
                 allow,
                 max_attempts.map(|value| value.max(1)),
                 delay_ms,
@@ -356,7 +356,7 @@ impl PyRunnerConfig {
             builder = builder.max_connection_attempts(max_connection_attempts);
         }
         if let Some(retry) = retry {
-            builder = builder.retry(retry.inner);
+            builder = builder.task_retry(retry.inner);
         }
         Self {
             inner: builder.build(),
@@ -391,7 +391,7 @@ impl PyRunnerConfig {
     #[getter]
     pub(crate) fn retry(&self) -> PyRunnerRetryConfig {
         PyRunnerRetryConfig {
-            inner: *self.inner.retry(),
+            inner: *self.inner.task_retry(),
         }
     }
 

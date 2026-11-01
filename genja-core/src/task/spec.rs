@@ -7,8 +7,8 @@
 //! or provide a workflow language.
 
 use super::{
-    RetryConfig, SessionVerificationConfig, TaskDefinition, TaskRegistrationError,
-    TaskRegistrationKey, create_compiled_task_by_identity,
+    SessionVerificationConfig, TaskDefinition, TaskRegistrationError, TaskRegistrationKey,
+    TaskRetryConfig, create_compiled_task_by_identity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -154,7 +154,7 @@ impl From<TaskRegistrationError> for TaskSpecConstructionError {
 pub struct TaskSpecOverrides {
     /// Optional retry policy override for this task construction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry: Option<RetryConfig>,
+    pub retry: Option<TaskRetryConfig>,
     /// Optional post-change session verification override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_verification: Option<SessionVerificationConfig>,

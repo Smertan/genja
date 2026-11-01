@@ -3,7 +3,7 @@ use super::env_defaults::{
     get_runner_options_default, get_runner_plugin_default, get_runner_retry_allow_default,
     get_runner_retry_delay_ms_default, get_runner_retry_max_attempts_default,
 };
-use crate::task::RetryConfig;
+use crate::task::TaskRetryConfig;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// The plugin name defaults from `GENJA_RUNNER_PLUGIN`. `worker_count`,
 /// `max_task_depth`, and `max_connection_attempts` control built-in runner
-/// behavior. `retry` carries runner-level task retry defaults and `options`
+/// behavior. `task_retry` carries runner-level task retry defaults and `options`
 /// carries plugin-specific JSON for custom runners.
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default, deny_unknown_fields)]
@@ -25,7 +25,7 @@ pub struct RunnerConfig {
         default = "default_retry_config",
         deserialize_with = "deserialize_retry_config"
     )]
-    retry: RetryConfig,
+    task_retry: TaskRetryConfig,
 }
 
 impl Default for RunnerConfig {
@@ -36,7 +36,7 @@ impl Default for RunnerConfig {
             worker_count: None,
             max_task_depth: get_runner_max_task_depth_default(),
             max_connection_attempts: get_runner_max_connection_attempts_default(),
-            retry: default_retry_config(),
+            task_retry: default_retry_config(),
         }
     }
 }
@@ -66,24 +66,25 @@ impl RunnerConfig {
         self.max_connection_attempts
     }
 
-    pub fn retry(&self) -> &RetryConfig {
-        &self.retry
+    /// Return normalized default task retry settings for this runner.
+    pub fn task_retry(&self) -> &TaskRetryConfig {
+        &self.task_retry
     }
 
     pub(crate) fn retry_allow(&self) -> bool {
-        self.retry
+        self.task_retry
             .allow()
             .unwrap_or_else(get_runner_retry_allow_default)
     }
 
     pub(crate) fn retry_max_attempts(&self) -> usize {
-        self.retry
+        self.task_retry
             .max_attempts()
             .unwrap_or_else(get_runner_retry_max_attempts_default)
     }
 
     pub(crate) fn retry_delay_ms(&self) -> u64 {
-        self.retry
+        self.task_retry
             .delay_ms()
             .unwrap_or_else(get_runner_retry_delay_ms_default)
     }
@@ -97,7 +98,7 @@ pub struct RunnerConfigBuilder {
     worker_count: Option<usize>,
     max_task_depth: Option<usize>,
     max_connection_attempts: Option<usize>,
-    retry: Option<RetryConfig>,
+    task_retry: Option<TaskRetryConfig>,
 }
 
 impl RunnerConfigBuilder {
@@ -126,8 +127,9 @@ impl RunnerConfigBuilder {
         self
     }
 
-    pub fn retry(mut self, retry: RetryConfig) -> Self {
-        self.retry = Some(normalize_retry_config(retry));
+    /// Set default task retry settings for this runner.
+    pub fn task_retry(mut self, task_retry: TaskRetryConfig) -> Self {
+        self.task_retry = Some(normalize_retry_config(task_retry));
         self
     }
 
@@ -142,21 +144,21 @@ impl RunnerConfigBuilder {
             max_connection_attempts: self
                 .max_connection_attempts
                 .unwrap_or_else(get_runner_max_connection_attempts_default),
-            retry: self.retry.unwrap_or_else(default_retry_config),
+            task_retry: self.task_retry.unwrap_or_else(default_retry_config),
         }
     }
 }
 
-fn default_retry_config() -> RetryConfig {
-    RetryConfig::builder()
+fn default_retry_config() -> TaskRetryConfig {
+    TaskRetryConfig::builder()
         .allow(get_runner_retry_allow_default())
         .max_attempts(get_runner_retry_max_attempts_default())
         .delay_ms(get_runner_retry_delay_ms_default())
         .build()
 }
 
-fn normalize_retry_config(retry: RetryConfig) -> RetryConfig {
-    RetryConfig::new(
+fn normalize_retry_config(retry: TaskRetryConfig) -> TaskRetryConfig {
+    TaskRetryConfig::new(
         Some(retry.allow().unwrap_or_else(get_runner_retry_allow_default)),
         Some(
             retry
@@ -172,9 +174,9 @@ fn normalize_retry_config(retry: RetryConfig) -> RetryConfig {
     )
 }
 
-fn deserialize_retry_config<'de, D>(deserializer: D) -> Result<RetryConfig, D::Error>
+fn deserialize_retry_config<'de, D>(deserializer: D) -> Result<TaskRetryConfig, D::Error>
 where
     D: Deserializer<'de>,
 {
-    RetryConfig::deserialize(deserializer).map(normalize_retry_config)
+    TaskRetryConfig::deserialize(deserializer).map(normalize_retry_config)
 }

@@ -4,7 +4,7 @@ use std::cell::Cell;
 
 use genja_cli::discovery::{DiscoveryResult, TaskDescriptor, TaskDescriptorSource};
 use genja_cli::tui::{BrowserAction, BrowserPanel, TaskBrowser};
-use genja_core::task::{RetryConfig, TaskDescriptorMetadata, TaskExecutionMode};
+use genja_core::task::{TaskDescriptorMetadata, TaskExecutionMode, TaskRetryConfig};
 use ratatui::{
     Terminal,
     backend::TestBackend,
@@ -161,13 +161,13 @@ fn generated_details_explain_missing_optional_metadata_and_factory() {
 fn details_show_explicit_retry_overrides_without_resolving_missing_values() {
     for (retry, allowed, attempts, delay) in [
         (
-            RetryConfig::new(Some(false), None, Some(250)),
+            TaskRetryConfig::new(Some(false), None, Some(250)),
             "false",
             "Not specified (runner/default policy)",
             "250 ms",
         ),
         (
-            RetryConfig::builder()
+            TaskRetryConfig::builder()
                 .allow(true)
                 .max_attempts(3)
                 .delay_ms(0)

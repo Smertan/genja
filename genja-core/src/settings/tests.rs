@@ -5,7 +5,7 @@ use super::env_defaults::{
     raise_on_error,
 };
 use super::{OptionsConfig, RunnerConfig, SSHConfig};
-use crate::task::RetryConfig;
+use crate::task::TaskRetryConfig;
 use regex::Regex;
 use serde_json::json;
 use std::env;
@@ -213,9 +213,9 @@ fn runner_config_default_values() {
     assert_eq!(runner.worker_count(), None);
     assert_eq!(runner.max_task_depth(), 10);
     assert_eq!(runner.max_connection_attempts(), 3);
-    assert_eq!(runner.retry().allow(), Some(false));
-    assert_eq!(runner.retry().max_attempts(), Some(1));
-    assert_eq!(runner.retry().delay_ms(), Some(0));
+    assert_eq!(runner.task_retry().allow(), Some(false));
+    assert_eq!(runner.task_retry().max_attempts(), Some(1));
+    assert_eq!(runner.task_retry().delay_ms(), Some(0));
 }
 
 #[test]
@@ -226,9 +226,9 @@ fn runner_config_deserializes_empty_object_to_defaults() {
     assert_eq!(runner.worker_count(), None);
     assert_eq!(runner.max_task_depth(), 10);
     assert_eq!(runner.max_connection_attempts(), 3);
-    assert_eq!(runner.retry().allow(), Some(false));
-    assert_eq!(runner.retry().max_attempts(), Some(1));
-    assert_eq!(runner.retry().delay_ms(), Some(0));
+    assert_eq!(runner.task_retry().allow(), Some(false));
+    assert_eq!(runner.task_retry().max_attempts(), Some(1));
+    assert_eq!(runner.task_retry().delay_ms(), Some(0));
 }
 
 #[test]
@@ -239,7 +239,7 @@ fn runner_config_deserializes_with_values() {
         "worker_count": 6,
         "max_task_depth": 5,
         "max_connection_attempts": 7,
-        "retry": {
+        "task_retry": {
             "allow": true,
             "max_attempts": 4,
             "delay_ms": 250
@@ -254,23 +254,44 @@ fn runner_config_deserializes_with_values() {
     assert_eq!(runner.worker_count(), Some(6));
     assert_eq!(runner.max_task_depth(), 5);
     assert_eq!(runner.max_connection_attempts(), 7);
-    assert_eq!(runner.retry().allow(), Some(true));
-    assert_eq!(runner.retry().max_attempts(), Some(4));
-    assert_eq!(runner.retry().delay_ms(), Some(250));
+    assert_eq!(runner.task_retry().allow(), Some(true));
+    assert_eq!(runner.task_retry().max_attempts(), Some(4));
+    assert_eq!(runner.task_retry().delay_ms(), Some(250));
 }
 
 #[test]
 fn runner_config_deserializes_partial_retry_to_defaults() {
     let json = r#"{
-        "retry": {
+        "task_retry": {
             "max_attempts": 4
         }
     }"#;
     let runner: RunnerConfig = serde_json::from_str(json).unwrap();
 
-    assert_eq!(runner.retry().allow(), Some(false));
-    assert_eq!(runner.retry().max_attempts(), Some(4));
-    assert_eq!(runner.retry().delay_ms(), Some(0));
+    assert_eq!(runner.task_retry().allow(), Some(false));
+    assert_eq!(runner.task_retry().max_attempts(), Some(4));
+    assert_eq!(runner.task_retry().delay_ms(), Some(0));
+}
+
+#[test]
+fn runner_config_serializes_task_retry_key() {
+    let runner = RunnerConfig::builder()
+        .task_retry(TaskRetryConfig::builder().allow(true).build())
+        .build();
+    let value = serde_json::to_value(&runner).unwrap();
+
+    assert_eq!(value["task_retry"]["allow"], true);
+    assert!(value.get("retry").is_none());
+}
+
+#[test]
+fn runner_config_rejects_old_retry_key() {
+    let error = serde_json::from_value::<RunnerConfig>(json!({
+        "retry": {"allow": true}
+    }))
+    .unwrap_err();
+
+    assert!(error.to_string().contains("unknown field `retry`"));
 }
 
 #[test]
@@ -283,8 +304,8 @@ fn runner_config_builder_sets_max_connection_attempts() {
 #[test]
 fn runner_config_builder_sets_retry_controls() {
     let runner = RunnerConfig::builder()
-        .retry(
-            RetryConfig::builder()
+        .task_retry(
+            TaskRetryConfig::builder()
                 .allow(true)
                 .max_attempts(5)
                 .delay_ms(250)
@@ -292,9 +313,9 @@ fn runner_config_builder_sets_retry_controls() {
         )
         .build();
 
-    assert_eq!(runner.retry().allow(), Some(true));
-    assert_eq!(runner.retry().max_attempts(), Some(5));
-    assert_eq!(runner.retry().delay_ms(), Some(250));
+    assert_eq!(runner.task_retry().allow(), Some(true));
+    assert_eq!(runner.task_retry().max_attempts(), Some(5));
+    assert_eq!(runner.task_retry().delay_ms(), Some(250));
 }
 
 #[test]
@@ -504,7 +525,7 @@ fn settings_from_file_errors_on_unknown_retry_field() {
         &file_path,
         r#"
 runner:
-  retry:
+  task_retry:
     max_attempt_count: 3
 "#,
     )
@@ -514,10 +535,22 @@ runner:
 
     assert!(matches!(err, crate::ConfigLoadError::Deserialize { .. }));
     assert!(err.to_string().contains("unknown settings field"));
-    assert!(err.to_string().contains("section: `runner.retry`"));
+    assert!(err.to_string().contains("section: `runner.task_retry`"));
     assert!(err.to_string().contains("field: `max_attempt_count`"));
     assert!(err.to_string().contains("did you mean `max_attempts`?"));
     assert!(err.to_string().contains("max_attempt_count"));
+}
+
+#[test]
+fn settings_from_file_rejects_old_runner_retry_key() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let file_path = tempdir.path().join("config.yaml");
+    std::fs::write(&file_path, "runner:\n  retry:\n    allow: true\n").unwrap();
+
+    let error = super::Settings::from_file(file_path.to_string_lossy().as_ref()).unwrap_err();
+
+    assert!(error.to_string().contains("section: `runner`"));
+    assert!(error.to_string().contains("field: `retry`"));
 }
 
 #[test]
@@ -679,7 +712,7 @@ runner:
   worker_count: 6
   max_task_depth: 5
   max_connection_attempts: 7
-  retry:
+  task_retry:
     allow: true
     max_attempts: 4
     delay_ms: 250
@@ -740,9 +773,9 @@ logging:
     assert_eq!(settings.runner().worker_count(), Some(6));
     assert_eq!(settings.runner().max_task_depth(), 5);
     assert_eq!(settings.runner().max_connection_attempts(), 7);
-    assert_eq!(settings.runner().retry().allow(), Some(true));
-    assert_eq!(settings.runner().retry().max_attempts(), Some(4));
-    assert_eq!(settings.runner().retry().delay_ms(), Some(250));
+    assert_eq!(settings.runner().task_retry().allow(), Some(true));
+    assert_eq!(settings.runner().task_retry().max_attempts(), Some(4));
+    assert_eq!(settings.runner().task_retry().delay_ms(), Some(250));
     assert!(!settings.logging().enabled());
     assert_eq!(settings.logging().level(), "debug");
     assert_eq!(settings.logging().log_file(), "./custom.log");

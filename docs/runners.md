@@ -26,7 +26,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
-  retry:
+  task_retry:
     allow: false
     max_attempts: 1
     delay_ms: 0

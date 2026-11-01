@@ -44,7 +44,7 @@ there is a close match:
 unknown settings field
   section: `runner`
   field: `worker_counts`
-  expected fields: `plugin`, `options`, `worker_count`, `max_task_depth`, `max_connection_attempts`, `retry`
+  expected fields: `plugin`, `options`, `worker_count`, `max_task_depth`, `max_connection_attempts`, `task_retry`
   suggestion: did you mean `worker_count`?
 ```
 
@@ -241,7 +241,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
-  retry:
+  task_retry:
     allow: false
     max_attempts: 1
     delay_ms: 0
@@ -403,7 +403,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
-  retry:
+  task_retry:
     allow: false
     max_attempts: 1
     delay_ms: 0
@@ -416,15 +416,15 @@ runner:
 | `worker_count` | number or null | `null` | none |
 | `max_task_depth` | number | `10` | none |
 | `max_connection_attempts` | number | `3` | none |
-| `retry.allow` | boolean | `false` | none |
-| `retry.max_attempts` | number | `1` | none |
-| `retry.delay_ms` | number | `0` | none |
+| `task_retry.allow` | boolean | `false` | none |
+| `task_retry.max_attempts` | number | `1` | none |
+| `task_retry.delay_ms` | number | `0` | none |
 
 Common `plugin` values are `threaded` and `serial`.
 
 `runner.options` is a free-form object for runner plugin-specific settings.
-Unknown fields inside typed runner settings, including `runner.retry`, are
-rejected.
+Unknown fields inside typed runner settings are rejected. The old
+`runner.retry` key is rejected; rename it to `runner.task_retry`.
 
 `worker_count` is used by runners that support fixed concurrency. The built-in
 `threaded` runner uses it as the maximum number of in-flight host executions.
@@ -438,9 +438,9 @@ use this setting.
 `max_connection_attempts` is part of shared runner configuration. Connection
 plugins or connection layers are responsible for interpreting retry behavior.
 
-`retry.allow` controls whether retries are allowed by default for task
-execution. `retry.max_attempts` controls the default total attempt count for a
-task, including the first attempt. `retry.delay_ms` is a fixed in-process delay
+`task_retry.allow` controls whether retries are allowed by default for task
+execution. `task_retry.max_attempts` controls the default total attempt count for a
+task, including the first attempt. `task_retry.delay_ms` is a fixed in-process delay
 before retry attempts. Tasks may override runner retry defaults field by field
 through task metadata. Retries are only attempted for failures explicitly marked
 as retryable.

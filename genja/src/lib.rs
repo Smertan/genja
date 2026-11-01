@@ -1342,7 +1342,7 @@ mod tests {
         ResolvedConnectionParams,
     };
     use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig, SSHConfig};
-    use genja_core::task::RetryConfig;
+    use genja_core::task::TaskRetryConfig;
     use genja_core::task::{
         BlockingTaskRuntimeContext, HostTaskResult, Task, TaskConnectionResolver, TaskDefinition,
         TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskRuntimeContext,
@@ -1459,7 +1459,7 @@ mod tests {
 
     struct RetryTreeTask {
         name: &'static str,
-        retry_config: Option<RetryConfig>,
+        retry_config: Option<TaskRetryConfig>,
         sub_tasks: Vec<Arc<dyn Task>>,
         attempts: Arc<Mutex<HashMap<(&'static str, String), usize>>>,
     }
@@ -1477,7 +1477,7 @@ mod tests {
             None
         }
 
-        fn retry_config(&self) -> Option<&RetryConfig> {
+        fn retry_config(&self) -> Option<&TaskRetryConfig> {
             self.retry_config.as_ref()
         }
     }
@@ -2811,7 +2811,12 @@ mod tests {
                     RunnerConfig::builder()
                         .plugin(runner_plugin)
                         .worker_count(2)
-                        .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
+                        .task_retry(
+                            TaskRetryConfig::builder()
+                                .allow(true)
+                                .max_attempts(3)
+                                .build(),
+                        )
                         .build(),
                 )
                 .build();
@@ -2855,7 +2860,12 @@ mod tests {
                     RunnerConfig::builder()
                         .plugin(runner_plugin)
                         .worker_count(2)
-                        .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
+                        .task_retry(
+                            TaskRetryConfig::builder()
+                                .allow(true)
+                                .max_attempts(3)
+                                .build(),
+                        )
                         .build(),
                 )
                 .build();
@@ -2866,7 +2876,7 @@ mod tests {
 
             let child = Arc::new(RetryTreeTask {
                 name: "child",
-                retry_config: Some(RetryConfig::builder().max_attempts(2).build()),
+                retry_config: Some(TaskRetryConfig::builder().max_attempts(2).build()),
                 sub_tasks: Vec::new(),
                 attempts: Arc::clone(&attempts),
             });
@@ -2879,7 +2889,7 @@ mod tests {
             });
             tasks.add_task(RetryTreeTask {
                 name: "root-b",
-                retry_config: Some(RetryConfig::builder().allow(false).build()),
+                retry_config: Some(TaskRetryConfig::builder().allow(false).build()),
                 sub_tasks: Vec::new(),
                 attempts: Arc::clone(&attempts),
             });

@@ -82,13 +82,14 @@ enter the task attempt loop.
 
 ## Retry settings and decision baseline
 
-`RetryConfig` has optional `allow`, `max_attempts`, and `delay_ms` fields.
+Rust `TaskRetryConfig` (Python `RetryConfig`) has optional `allow`,
+`max_attempts`, and `delay_ms` fields.
 The effective values are resolved field by field from the task's
 `TaskInfo::retry_config()` over `RunnerConfig` retry defaults. Without a
 runner, core defaults are `allow = false`, `max_attempts = 1`, and
 `delay_ms = 0`. The effective maximum is at least one and includes the first
 attempt. A `TaskDefinition` retry override replaces the root task's authored
-`RetryConfig`; it is not applied to subtasks. `TaskSpecOverrides.retry` is
+`TaskRetryConfig`; it is not applied to subtasks. `TaskSpecOverrides.retry` is
 implemented through that root override. Rust `#[genja_task(..., retry(...))]`
 and Python `@task(..., retry=RetryConfig(...))` supply authored task metadata;
 Python runner retry settings feed the same `RunnerConfig` path.
@@ -161,13 +162,13 @@ The initial contract selects one algorithm for the whole invocation; it has
 no per-root algorithm override.
 
 For every task node on every host, resolve effective settings exactly as in
-the baseline. The precedence is per field where `RetryConfig` fields are
+the baseline. The precedence is per field where task retry config fields are
 optional:
 
 | Source | Effect |
 | --- | --- |
 | Core defaults | `allow = false`, `max_attempts = 1`, `delay_ms = 0` when no runner configuration is supplied |
-| `runner.retry` | Supplies normalized invocation defaults to runner-mediated execution |
+| `runner.task_retry` | Supplies normalized invocation defaults to runner-mediated execution |
 | Rust `retry(...)` or Python `RetryConfig` task metadata | Supplies only the fields the task declares; other fields inherit runner defaults |
 | Root `TaskDefinition` override, including `TaskSpecOverrides.retry` | Replaces that root's authored retry metadata; unset fields still inherit runner defaults; does not apply to subtasks |
 

@@ -1182,13 +1182,13 @@ fn expand_genja_task(
             Some(ref delay_ms) => quote! { Some(#delay_ms) },
             None => quote! { None },
         };
-        quote! { genja_core::task::RetryConfig::new(#allow, #max_attempts, #delay_ms) }
+        quote! { genja_core::task::TaskRetryConfig::new(#allow, #max_attempts, #delay_ms) }
     });
 
     let retry_config_impl = if let Some(retry_config_value) = &retry_config_value {
         quote! {
-            fn retry_config(&self) -> Option<&genja_core::task::RetryConfig> {
-                static RETRY_CONFIG: genja_core::task::RetryConfig =
+            fn retry_config(&self) -> Option<&genja_core::task::TaskRetryConfig> {
+                static RETRY_CONFIG: genja_core::task::TaskRetryConfig =
                     #retry_config_value;
                 Some(&RETRY_CONFIG)
             }

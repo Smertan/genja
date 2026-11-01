@@ -2,7 +2,7 @@
 
 use clap::ValueEnum;
 use comfy_table::{Table, presets};
-use genja_core::task::{RetryConfig, TaskDescriptor, TaskExecutionMode, TaskIdSource};
+use genja_core::task::{TaskDescriptor, TaskExecutionMode, TaskIdSource, TaskRetryConfig};
 use serde::Serialize;
 use std::error::Error;
 use std::fmt;
@@ -631,14 +631,14 @@ fn processors_markdown_label(processors: &[String]) -> String {
     }
 }
 
-fn retry_label(retry: Option<&RetryConfig>) -> Result<String, OutputError> {
+fn retry_label(retry: Option<&TaskRetryConfig>) -> Result<String, OutputError> {
     retry.map_or_else(
         || Ok("-".to_string()),
         |retry| serde_json::to_string(retry).map_err(OutputError::Json),
     )
 }
 
-fn retry_markdown_label(retry: Option<&RetryConfig>) -> Result<String, OutputError> {
+fn retry_markdown_label(retry: Option<&TaskRetryConfig>) -> Result<String, OutputError> {
     retry_label(retry).map(|label| {
         if label == "-" {
             label
@@ -714,7 +714,7 @@ mod tests {
         execution_mode: TaskExecutionMode,
         constructible: bool,
         processor_names: Vec<String>,
-        retry: Option<RetryConfig>,
+        retry: Option<TaskRetryConfig>,
         input_schema: Option<Value>,
     ) -> TaskDescriptor {
         TaskDescriptor::explicit(
@@ -742,7 +742,7 @@ mod tests {
             TaskExecutionMode::Blocking,
             true,
             vec!["audit".to_string(), "notify".to_string()],
-            Some(RetryConfig::new(Some(true), Some(3), Some(250))),
+            Some(TaskRetryConfig::new(Some(true), Some(3), Some(250))),
             Some(json!({
                 "type": "object",
                 "required": ["backup_path", "compress"],
