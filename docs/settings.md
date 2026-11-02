@@ -445,6 +445,27 @@ before retry attempts. Tasks may override runner retry defaults field by field
 through task metadata. Retries are only attempted for failures explicitly marked
 as retryable.
 
+### Migrating task retry names from v0.5.x
+
+The task retry names change in v0.6.0. Replace the old names directly; there
+are no compatibility aliases.
+
+| v0.5.x | v0.6.0 |
+| --- | --- |
+| YAML/JSON `runner.retry` | `runner.task_retry` |
+| Rust `RetryConfig` | `TaskRetryConfig` |
+| Rust `RetryConfigBuilder` | `TaskRetryConfigBuilder` |
+| Rust `RunnerConfig::retry()` | `RunnerConfig::task_retry()` |
+| Rust `RunnerConfigBuilder::retry(...)` | `RunnerConfigBuilder::task_retry(...)` |
+| Python task `RetryConfig` | `TaskRetryConfig` |
+| Python `RunnerRetryConfig` | `RunnerTaskRetryConfig` |
+| Python `RunnerConfig(retry=...)` | `RunnerConfig(task_retry=...)` |
+| Python `RunnerConfig.retry` | `RunnerConfig.task_retry` |
+
+Rust task macro `retry(...)`, Python task decorator `retry=TaskRetryConfig(...)`,
+and `TaskSpec.overrides.retry` keep their task-scoped names. Task descriptor and
+execution-result field names also stay the same.
+
 See [Runners](runners.md) for execution behavior and ordering details.
 
 ## Logging

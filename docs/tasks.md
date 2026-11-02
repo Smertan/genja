@@ -251,7 +251,8 @@ Common decorator options:
 ### Python Retry Overrides
 
 Use `TaskRetryConfig` when a Python task should opt into retries or override the
-runner defaults for retry count or fixed retry delay:
+runner defaults for retry count or fixed retry delay. For v0.5.x names, see
+[Migrating task retry names from v0.5.x](settings.md#migrating-task-retry-names-from-v05x).
 
 ```python
 from genja.task import (
