@@ -11,7 +11,8 @@ Changed packages:
 
 ### Added
 
-- Added the public Rust task retry policy context and decision contract, with documented selection precedence and exponential delay parameters.
+- Added the public Rust task retry policy context and decision contract, with documented selection precedence and exponential delay parameters. Refs: #172
+- Added public `NoRetry`, `FixedRetry`, and bounded `ExponentialRetry` Rust policies; the existing fixed-delay path now uses the policy decision contract without changing retry behavior. Refs: #172
 
 ### Changed
 

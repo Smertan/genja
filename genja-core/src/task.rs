@@ -20,9 +20,11 @@
 //!   of execution results for tasks and their sub-tasks across all hosts.
 //! - **Rich Metadata**: Tasks can attach detailed metadata including per-host execution
 //!   timing, retry state, warnings, messages, diffs, and custom data to their results.
-//! - **Retry Policy Contract**: [`TaskRetryPolicy`] receives a read-only
-//!   [`TaskRetryContext`] and returns a [`TaskRetryDecision`]; the runtime
-//!   retains retry safety checks and task-host attempt accounting.
+//! - **Retry Policies**: [`TaskRetryPolicy`] receives a read-only
+//!   [`TaskRetryContext`] and returns a [`TaskRetryDecision`]. Built-in
+//!   [`NoRetry`], [`FixedRetry`], and [`ExponentialRetry`] implementations
+//!   provide standard algorithms; the runtime retains retry safety checks
+//!   and task-host attempt accounting.
 //! - **Summaries and Serialization**: Task results can be aggregated with
 //!   [`TaskResults::host_summary`] and [`TaskResults::task_summary`], then exported in
 //!   either human-readable or raw JSON forms.
@@ -660,8 +662,11 @@ pub use registration::{
     get_compiled_task_descriptor_by_identity, list_compiled_tasks, validate_explicit_task_id,
     validate_task_version,
 };
+pub use retry::{
+    ExponentialRetry, ExponentialRetryError, FixedRetry, NoRetry, TaskRetryContext,
+    TaskRetryDecision, TaskRetryPolicy, TaskRetrySettings,
+};
 use retry::{RetryDefaults, RetrySettings};
-pub use retry::{TaskRetryContext, TaskRetryDecision, TaskRetryPolicy, TaskRetrySettings};
 pub use spec::{
     TaskSpec, TaskSpecConstructionError, TaskSpecError, TaskSpecFormat, TaskSpecOverrides,
     create_compiled_task_from_spec, create_compiled_task_from_spec_str,
@@ -3795,7 +3800,7 @@ async fn run_task_attempt(
     }
 }
 
-/// Run task attempts with the resolved fixed-delay retry settings for one host.
+/// Run task attempts with the default fixed-delay policy for one host.
 struct TaskRetryLoop<'a> {
     task: Arc<dyn Task>,
     hostname: &'a str,
@@ -3827,7 +3832,12 @@ impl TaskRetryLoop<'_> {
             )
             .await;
 
-            if self.settings.should_retry(&host_result, attempts) {
+            if let TaskRetryDecision::RetryAfter(delay) = self.settings.decide(
+                &FixedRetry,
+                &host_result,
+                attempts,
+                self.task.idempotency_mode(),
+            ) {
                 if let Some(failure) = host_result.failure() {
                     warn!(
                         "retrying task '{}' for host '{}' after attempt {}/{}: {}",
@@ -3838,8 +3848,8 @@ impl TaskRetryLoop<'_> {
                         failure.message()
                     );
                 }
-                if self.settings.delay_ms() > 0 {
-                    sleep(Duration::from_millis(self.settings.delay_ms())).await;
+                if !delay.is_zero() {
+                    sleep(delay).await;
                 }
                 continue;
             }
