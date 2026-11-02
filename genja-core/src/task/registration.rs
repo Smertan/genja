@@ -125,7 +125,7 @@
 //! }
 //! ```
 
-use super::{RetryConfig, TaskDefinition, TaskExecutionMode};
+use super::{TaskDefinition, TaskExecutionMode, TaskRetryConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -885,7 +885,7 @@ pub struct TaskDescriptor {
     /// Processor plugins selected by the task.
     pub processor_names: Vec<String>,
     /// Task-specific retry metadata, if configured.
-    pub retry: Option<RetryConfig>,
+    pub retry: Option<TaskRetryConfig>,
     /// Optional JSON Schema describing accepted construction input.
     pub input_schema: Option<Value>,
     /// Whether this process can construct the task from JSON-compatible input.
@@ -971,7 +971,7 @@ pub struct TaskDescriptorMetadata {
     /// Processor plugins selected by the task.
     pub processor_names: Vec<String>,
     /// Task-specific retry metadata, if configured.
-    pub retry: Option<RetryConfig>,
+    pub retry: Option<TaskRetryConfig>,
 }
 
 #[cfg(test)]
@@ -992,7 +992,12 @@ mod tests {
             execution_mode: TaskExecutionMode::Async,
             connection_plugin_name: Some("ssh".to_string()),
             processor_names: vec!["audit".to_string()],
-            retry: Some(RetryConfig::builder().allow(true).max_attempts(3).build()),
+            retry: Some(
+                TaskRetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(3)
+                    .build(),
+            ),
         }
     }
 

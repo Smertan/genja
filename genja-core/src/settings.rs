@@ -43,14 +43,14 @@
 //! ```
 //! use genja_core::Settings;
 //! use genja_core::settings::{LoggingConfig, RunnerConfig};
-//! use genja_core::task::RetryConfig;
+//! use genja_core::task::TaskRetryConfig;
 //!
 //! let settings = Settings::builder()
 //!     .logging(LoggingConfig::builder().level("debug").build())
 //!     .runner(
 //!         RunnerConfig::builder()
 //!             .plugin("threaded")
-//!             .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
+//!             .task_retry(TaskRetryConfig::builder().allow(true).max_attempts(3).build())
 //!             .build()
 //!     )
 //!     .build();

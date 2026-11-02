@@ -250,13 +250,14 @@ Common decorator options:
 
 ### Python Retry Overrides
 
-Use `RetryConfig` when a Python task should opt into retries or override the
-runner defaults for retry count or fixed retry delay:
+Use `TaskRetryConfig` when a Python task should opt into retries or override the
+runner defaults for retry count or fixed retry delay. For v0.5.x names, see
+[Migrating task retry names from v0.5.x](settings.md#migrating-task-retry-names-from-v05x).
 
 ```python
 from genja.task import (
     Host,
-    RetryConfig,
+    TaskRetryConfig,
     TaskFailureResult,
     TaskFailureKind,
     TaskInfo,
@@ -268,7 +269,7 @@ from genja.task import (
 @task(
     name="retryable_backup",
     connection_plugin_name="ssh",
-    retry=RetryConfig(
+    retry=TaskRetryConfig(
         allow=True,
         max_attempts=3,
         delay_ms=500,

@@ -198,7 +198,7 @@
 //! Static task metadata can also include retry overrides. The
 //! [`genja_task`](crate::genja_task) macro accepts grouped retry metadata with
 //! `retry(allow = true, max_attempts = 3, delay_ms = 500)`, then exposes it
-//! through [`TaskInfo::retry_config`] as a [`RetryConfig`]. These settings
+//! through [`TaskInfo::retry_config`] as a [`TaskRetryConfig`]. These settings
 //! control retry policy only. A retry still requires the task to return a
 //! failed [`HostTaskResult`] whose [`TaskFailure`] is explicitly marked
 //! retryable. `delay_ms` is a fixed local delay before retry attempts.
@@ -257,11 +257,11 @@
 //! `connection_plugin_name`, `processors`, and `retry(...)`, while dynamic
 //! metadata can be provided through helper methods such as `options()`.
 //! Task retry metadata is exposed as
-//! [`RetryConfig`] through [`TaskInfo::retry_config`].
+//! [`TaskRetryConfig`] through [`TaskInfo::retry_config`].
 //!
-//! ## [`RetryConfig`]
+//! ## [`TaskRetryConfig`]
 //!
-//! [`RetryConfig`] groups task retry metadata fields:
+//! [`TaskRetryConfig`] groups task retry metadata fields:
 //!
 //! - `allow`: optional explicit retry authorization.
 //! - `max_attempts`: optional total attempt count, including the first attempt.
@@ -673,16 +673,16 @@ pub use spec::{
 /// `delay_ms` is a fixed local delay before retry attempts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct RetryConfig {
+pub struct TaskRetryConfig {
     allow: Option<bool>,
     max_attempts: Option<usize>,
     delay_ms: Option<u64>,
 }
 
-impl RetryConfig {
+impl TaskRetryConfig {
     /// Create a retry config from optional field values.
     ///
-    /// Prefer [`RetryConfig::builder`] when constructing values from regular
+    /// Prefer [`TaskRetryConfig::builder`] when constructing values from regular
     /// application code. This constructor is also usable from generated code
     /// where optional field values are already available.
     pub const fn new(
@@ -698,8 +698,8 @@ impl RetryConfig {
     }
 
     /// Return a builder for retry config metadata.
-    pub fn builder() -> RetryConfigBuilder {
-        RetryConfigBuilder::default()
+    pub fn builder() -> TaskRetryConfigBuilder {
+        TaskRetryConfigBuilder::default()
     }
 
     /// Returns whether retries are explicitly allowed.
@@ -739,15 +739,15 @@ impl RetryConfig {
     }
 }
 
-/// Builder for [`RetryConfig`].
+/// Builder for [`TaskRetryConfig`].
 #[derive(Debug, Default, Clone, Copy)]
-pub struct RetryConfigBuilder {
+pub struct TaskRetryConfigBuilder {
     allow: Option<bool>,
     max_attempts: Option<usize>,
     delay_ms: Option<u64>,
 }
 
-impl RetryConfigBuilder {
+impl TaskRetryConfigBuilder {
     /// Set whether retries are allowed.
     pub fn allow(mut self, allow: bool) -> Self {
         self.allow = Some(allow);
@@ -767,8 +767,8 @@ impl RetryConfigBuilder {
     }
 
     /// Build the retry config.
-    pub fn build(self) -> RetryConfig {
-        RetryConfig {
+    pub fn build(self) -> TaskRetryConfig {
+        TaskRetryConfig {
             allow: self.allow,
             max_attempts: self.max_attempts,
             delay_ms: self.delay_ms,
@@ -3878,7 +3878,7 @@ pub trait TaskInfo {
     }
 
     /// Return task-specific retry metadata, if set.
-    fn retry_config(&self) -> Option<&RetryConfig> {
+    fn retry_config(&self) -> Option<&TaskRetryConfig> {
         None
     }
 
@@ -4522,7 +4522,7 @@ pub struct TaskDefinition {
     inner: Arc<dyn Task>,
     processor_resolver: Option<Arc<dyn TaskProcessorResolver>>,
     processor_names: Arc<Vec<String>>,
-    retry_config_override: Option<RetryConfig>,
+    retry_config_override: Option<TaskRetryConfig>,
     session_verification_config_override: Option<SessionVerificationConfig>,
 }
 
@@ -4593,7 +4593,7 @@ impl TaskDefinition {
     ///
     /// This is a per-definition runtime policy override. It does not mutate the
     /// authored task metadata and does not apply to sub-tasks.
-    pub fn with_retry_config_override(mut self, retry_config: RetryConfig) -> Self {
+    pub fn with_retry_config_override(mut self, retry_config: TaskRetryConfig) -> Self {
         self.retry_config_override = Some(retry_config);
         self
     }
@@ -5219,7 +5219,7 @@ impl TaskInfo for TaskDefinition {
         self.processor_names()
     }
 
-    fn retry_config(&self) -> Option<&RetryConfig> {
+    fn retry_config(&self) -> Option<&TaskRetryConfig> {
         self.retry_config_override
             .as_ref()
             .or_else(|| self.inner.retry_config())
@@ -5395,7 +5395,7 @@ mod tests {
 
     struct RetryConfiguredFlakyTask {
         inner: FlakyTask,
-        retry_config: RetryConfig,
+        retry_config: TaskRetryConfig,
     }
 
     struct RecordingFlakyTask {
@@ -6156,7 +6156,7 @@ mod tests {
             self.inner.options()
         }
 
-        fn retry_config(&self) -> Option<&RetryConfig> {
+        fn retry_config(&self) -> Option<&TaskRetryConfig> {
             Some(&self.retry_config)
         }
     }
@@ -6848,7 +6848,12 @@ mod tests {
             ),
         });
         let runner_config = RunnerConfig::builder()
-            .retry(RetryConfig::builder().allow(true).max_attempts(2).build())
+            .task_retry(
+                TaskRetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(2)
+                    .build(),
+            )
             .build();
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("check-and-verify-async-runtime");
@@ -6903,7 +6908,12 @@ mod tests {
             succeed_on_attempt: 2,
         });
         let runner_config = RunnerConfig::builder()
-            .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
+            .task_retry(
+                TaskRetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(3)
+                    .build(),
+            )
             .build();
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("flaky");
@@ -6939,7 +6949,12 @@ mod tests {
             succeed_on_attempt: 3,
         });
         let runner_config = RunnerConfig::builder()
-            .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
+            .task_retry(
+                TaskRetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(3)
+                    .build(),
+            )
             .build();
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("attempt_recording");
@@ -6970,7 +6985,7 @@ mod tests {
 
     #[test]
     fn retry_config_builder_sets_optional_task_retry_metadata() {
-        let retry_config = RetryConfig::builder()
+        let retry_config = TaskRetryConfig::builder()
             .allow(true)
             .max_attempts(3)
             .delay_ms(250)
@@ -6980,7 +6995,7 @@ mod tests {
         assert_eq!(retry_config.max_attempts(), Some(3));
         assert_eq!(retry_config.delay_ms(), Some(250));
 
-        let clamped_retry_config = RetryConfig::builder().max_attempts(0).build();
+        let clamped_retry_config = TaskRetryConfig::builder().max_attempts(0).build();
         assert_eq!(clamped_retry_config.max_attempts(), Some(1));
     }
 
@@ -6993,7 +7008,10 @@ mod tests {
                 attempts: Arc::clone(&attempts),
                 succeed_on_attempt: 2,
             },
-            retry_config: RetryConfig::builder().allow(true).max_attempts(3).build(),
+            retry_config: TaskRetryConfig::builder()
+                .allow(true)
+                .max_attempts(3)
+                .build(),
         });
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("task_retry_override");
@@ -7020,10 +7038,10 @@ mod tests {
                 attempts: Arc::clone(&attempts),
                 succeed_on_attempt: 3,
             },
-            retry_config: RetryConfig::builder().allow(true).build(),
+            retry_config: TaskRetryConfig::builder().allow(true).build(),
         });
         let runner_config = RunnerConfig::builder()
-            .retry(RetryConfig::builder().max_attempts(3).build())
+            .task_retry(TaskRetryConfig::builder().max_attempts(3).build())
             .build();
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("field_by_field_retry");
@@ -7059,8 +7077,8 @@ mod tests {
             succeed_on_attempt: 2,
         });
         let runner_config = RunnerConfig::builder()
-            .retry(
-                RetryConfig::builder()
+            .task_retry(
+                TaskRetryConfig::builder()
                     .allow(true)
                     .max_attempts(2)
                     .delay_ms(20)
@@ -7097,7 +7115,12 @@ mod tests {
             succeed_on_attempt: usize::MAX,
         });
         let runner_config = RunnerConfig::builder()
-            .retry(RetryConfig::builder().allow(true).max_attempts(3).build())
+            .task_retry(
+                TaskRetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(3)
+                    .build(),
+            )
             .build();
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new("always_fails");
@@ -7155,8 +7178,8 @@ mod tests {
             succeed_on_attempt: 2,
         });
         let runner_config = RunnerConfig::builder()
-            .retry(
-                RetryConfig::builder()
+            .task_retry(
+                TaskRetryConfig::builder()
                     .allow(true)
                     .max_attempts(1)
                     .delay_ms(20)
@@ -7190,8 +7213,8 @@ mod tests {
     fn start_does_not_retry_or_delay_non_retryable_failures() {
         let task = TaskDefinition::new(FailingTask);
         let runner_config = RunnerConfig::builder()
-            .retry(
-                RetryConfig::builder()
+            .task_retry(
+                TaskRetryConfig::builder()
                     .allow(true)
                     .max_attempts(3)
                     .delay_ms(20)
@@ -7224,8 +7247,8 @@ mod tests {
     fn start_does_not_retry_or_delay_skipped_results() {
         let task = TaskDefinition::new(SkippingTask);
         let runner_config = RunnerConfig::builder()
-            .retry(
-                RetryConfig::builder()
+            .task_retry(
+                TaskRetryConfig::builder()
                     .allow(true)
                     .max_attempts(3)
                     .delay_ms(20)
@@ -8221,14 +8244,14 @@ mod tests {
                 attempts: Arc::new(AtomicUsize::new(0)),
                 succeed_on_attempt: 1,
             },
-            retry_config: RetryConfig::builder()
+            retry_config: TaskRetryConfig::builder()
                 .allow(true)
                 .max_attempts(3)
                 .delay_ms(100)
                 .build(),
         })
         .with_retry_config_override(
-            RetryConfig::builder()
+            TaskRetryConfig::builder()
                 .allow(false)
                 .max_attempts(2)
                 .delay_ms(250)

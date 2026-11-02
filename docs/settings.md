@@ -44,7 +44,7 @@ there is a close match:
 unknown settings field
   section: `runner`
   field: `worker_counts`
-  expected fields: `plugin`, `options`, `worker_count`, `max_task_depth`, `max_connection_attempts`, `retry`
+  expected fields: `plugin`, `options`, `worker_count`, `max_task_depth`, `max_connection_attempts`, `task_retry`
   suggestion: did you mean `worker_count`?
 ```
 
@@ -195,7 +195,7 @@ import genja
 settings = genja.Settings(
     runner=genja.RunnerConfig(
         plugin="serial",
-        retry=genja.RunnerRetryConfig(
+        task_retry=genja.RunnerTaskRetryConfig(
             allow=True,
             max_attempts=3,
             delay_ms=250,
@@ -241,7 +241,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
-  retry:
+  task_retry:
     allow: false
     max_attempts: 1
     delay_ms: 0
@@ -403,7 +403,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
-  retry:
+  task_retry:
     allow: false
     max_attempts: 1
     delay_ms: 0
@@ -416,15 +416,15 @@ runner:
 | `worker_count` | number or null | `null` | none |
 | `max_task_depth` | number | `10` | none |
 | `max_connection_attempts` | number | `3` | none |
-| `retry.allow` | boolean | `false` | none |
-| `retry.max_attempts` | number | `1` | none |
-| `retry.delay_ms` | number | `0` | none |
+| `task_retry.allow` | boolean | `false` | none |
+| `task_retry.max_attempts` | number | `1` | none |
+| `task_retry.delay_ms` | number | `0` | none |
 
 Common `plugin` values are `threaded` and `serial`.
 
 `runner.options` is a free-form object for runner plugin-specific settings.
-Unknown fields inside typed runner settings, including `runner.retry`, are
-rejected.
+Unknown fields inside typed runner settings are rejected. The old
+`runner.retry` key is rejected; rename it to `runner.task_retry`.
 
 `worker_count` is used by runners that support fixed concurrency. The built-in
 `threaded` runner uses it as the maximum number of in-flight host executions.
@@ -438,12 +438,33 @@ use this setting.
 `max_connection_attempts` is part of shared runner configuration. Connection
 plugins or connection layers are responsible for interpreting retry behavior.
 
-`retry.allow` controls whether retries are allowed by default for task
-execution. `retry.max_attempts` controls the default total attempt count for a
-task, including the first attempt. `retry.delay_ms` is a fixed in-process delay
+`task_retry.allow` controls whether retries are allowed by default for task
+execution. `task_retry.max_attempts` controls the default total attempt count for a
+task, including the first attempt. `task_retry.delay_ms` is a fixed in-process delay
 before retry attempts. Tasks may override runner retry defaults field by field
 through task metadata. Retries are only attempted for failures explicitly marked
 as retryable.
+
+### Migrating task retry names from v0.5.x
+
+The task retry names change in v0.6.0. Replace the old names directly; there
+are no compatibility aliases.
+
+| v0.5.x | v0.6.0 |
+| --- | --- |
+| YAML/JSON `runner.retry` | `runner.task_retry` |
+| Rust `RetryConfig` | `TaskRetryConfig` |
+| Rust `RetryConfigBuilder` | `TaskRetryConfigBuilder` |
+| Rust `RunnerConfig::retry()` | `RunnerConfig::task_retry()` |
+| Rust `RunnerConfigBuilder::retry(...)` | `RunnerConfigBuilder::task_retry(...)` |
+| Python task `RetryConfig` | `TaskRetryConfig` |
+| Python `RunnerRetryConfig` | `RunnerTaskRetryConfig` |
+| Python `RunnerConfig(retry=...)` | `RunnerConfig(task_retry=...)` |
+| Python `RunnerConfig.retry` | `RunnerConfig.task_retry` |
+
+Rust task macro `retry(...)`, Python task decorator `retry=TaskRetryConfig(...)`,
+and `TaskSpec.overrides.retry` keep their task-scoped names. Task descriptor and
+execution-result field names also stay the same.
 
 See [Runners](runners.md) for execution behavior and ordering details.
 

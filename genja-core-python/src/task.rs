@@ -1,11 +1,11 @@
 use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
-    HostTaskResult, IdempotencyCheck, IdempotencyMode, MessageLevel, RetryConfig,
-    SessionVerificationConfig, Task, TaskConnectionResolver, TaskDefinition, TaskError,
-    TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskMessage, TaskResults,
-    TaskResultsSummary, TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
-    validate_explicit_task_id, validate_task_version,
+    HostTaskResult, IdempotencyCheck, IdempotencyMode, MessageLevel, SessionVerificationConfig,
+    Task, TaskConnectionResolver, TaskDefinition, TaskError, TaskExecutionMode, TaskFailure,
+    TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskRetryConfig,
+    TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks, validate_explicit_task_id,
+    validate_task_version,
 };
 use async_trait::async_trait;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -588,7 +588,7 @@ struct PythonTaskSpec {
     name: String,
     connection_plugin_name: Option<String>,
     processor_names: Vec<String>,
-    retry_config: Option<RetryConfig>,
+    retry_config: Option<TaskRetryConfig>,
     session_verification_config: Option<SessionVerificationConfig>,
     options: Option<Value>,
     supports_dry_run: bool,
@@ -662,7 +662,7 @@ impl TaskInfo for PythonBackedTask {
         self.spec.options.as_ref()
     }
 
-    fn retry_config(&self) -> Option<&RetryConfig> {
+    fn retry_config(&self) -> Option<&TaskRetryConfig> {
         self.spec.retry_config.as_ref()
     }
 
@@ -1883,7 +1883,7 @@ fn task_to_json(task: &dyn Task) -> Value {
     })
 }
 
-fn retry_config_to_json(retry_config: Option<&RetryConfig>) -> Value {
+fn retry_config_to_json(retry_config: Option<&TaskRetryConfig>) -> Value {
     match retry_config {
         Some(retry_config) => {
             serde_json::to_value(retry_config).expect("retry config should serialize")
@@ -2191,7 +2191,7 @@ fn python_task_spec_to_py_dict<'py>(
 
 fn retry_config_to_py_object(
     py: Python<'_>,
-    retry_config: Option<&RetryConfig>,
+    retry_config: Option<&TaskRetryConfig>,
 ) -> PyResult<Py<PyAny>> {
     let value = retry_config_to_json(retry_config);
     json_value_to_py(py, &value)
@@ -2278,7 +2278,9 @@ fn extract_session_verification_config_from_metadata(
     Ok(Some(config.inner))
 }
 
-fn extract_retry_config_from_metadata(info: &Bound<'_, PyDict>) -> PyResult<Option<RetryConfig>> {
+fn extract_retry_config_from_metadata(
+    info: &Bound<'_, PyDict>,
+) -> PyResult<Option<TaskRetryConfig>> {
     let Some(retry) = info.get_item("retry")? else {
         return Ok(None);
     };
@@ -2340,7 +2342,7 @@ fn extract_retry_config_from_metadata(info: &Bound<'_, PyDict>) -> PyResult<Opti
     };
 
     if allow.is_some() || max_attempts.is_some() || delay_ms.is_some() {
-        Ok(Some(RetryConfig::new(allow, max_attempts, delay_ms)))
+        Ok(Some(TaskRetryConfig::new(allow, max_attempts, delay_ms)))
     } else {
         Ok(None)
     }
@@ -2471,7 +2473,7 @@ impl TaskInfo for RuntimeTaskWrapper {
         self.inner.options()
     }
 
-    fn retry_config(&self) -> Option<&RetryConfig> {
+    fn retry_config(&self) -> Option<&TaskRetryConfig> {
         self.inner.retry_config()
     }
 
@@ -2736,7 +2738,7 @@ mod tests {
             for name in [
                 "Host",
                 "IdempotencyMode",
-                "RetryConfig",
+                "TaskRetryConfig",
                 "TaskInfo",
                 "TaskRuntimeContext",
                 "TaskSuccessResult",

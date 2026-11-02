@@ -4,6 +4,16 @@ All notable changes to this workspace should be documented in this file.
 
 ## Unreleased
 
+Changed packages:
+
+- Rust crates: `genja`, `genja-cli`, `genja-core`, `genja-core-derive`
+- Python package: `genja-py`, `genja-core-python`
+
+### Changed
+
+- **Breaking:** Rust task retry configuration is now `TaskRetryConfig` and `TaskRetryConfigBuilder`, and runner defaults use `runner.task_retry` with `RunnerConfig::task_retry()` and `RunnerConfigBuilder::task_retry(...)`. Rename uses of `RetryConfig`, `RetryConfigBuilder`, `runner.retry`, and the runner `retry()` methods; task macro `retry(...)` and `TaskSpec.overrides.retry` remain unchanged. Refs: #171
+- **Breaking:** Python task retry metadata now uses `TaskRetryConfig`, and runner defaults use `RunnerTaskRetryConfig` with `RunnerConfig(task_retry=...)` and `RunnerConfig.task_retry`. Rename imports of `RetryConfig` and `RunnerRetryConfig` and replace the runner `retry` argument and property; the task decorator's `retry=` argument remains unchanged. Refs: #171
+
 ## 0.5.0 - 2026-10-21
 
 Released packages:

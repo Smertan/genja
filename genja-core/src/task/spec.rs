@@ -7,8 +7,8 @@
 //! or provide a workflow language.
 
 use super::{
-    RetryConfig, SessionVerificationConfig, TaskDefinition, TaskRegistrationError,
-    TaskRegistrationKey, create_compiled_task_by_identity,
+    SessionVerificationConfig, TaskDefinition, TaskRegistrationError, TaskRegistrationKey,
+    TaskRetryConfig, create_compiled_task_by_identity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -154,7 +154,7 @@ impl From<TaskRegistrationError> for TaskSpecConstructionError {
 pub struct TaskSpecOverrides {
     /// Optional retry policy override for this task construction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry: Option<RetryConfig>,
+    pub retry: Option<TaskRetryConfig>,
     /// Optional post-change session verification override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_verification: Option<SessionVerificationConfig>,
@@ -640,6 +640,28 @@ overrides:
             .expect("session verification override should be present");
         assert_eq!(session_verification.max_attempts(), 2);
         assert_eq!(session_verification.delay_ms(), 1000);
+    }
+
+    #[test]
+    fn task_spec_preserves_retry_override_json_field_name() {
+        let source = serde_json::json!({
+            "task": "acme.examples.backup_config@1.0.0",
+            "overrides": {
+                "retry": {"allow": true, "max_attempts": 4, "delay_ms": 250}
+            }
+        });
+        let spec = TaskSpec::from_json_str(&source.to_string()).unwrap();
+        let serialized = serde_json::to_value(&spec).unwrap();
+
+        assert_eq!(
+            serialized["overrides"]["retry"],
+            source["overrides"]["retry"]
+        );
+        assert!(serialized["overrides"].get("task_retry").is_none());
+        assert_eq!(
+            spec.overrides.unwrap().retry.unwrap().max_attempts(),
+            Some(4)
+        );
     }
 
     #[test]

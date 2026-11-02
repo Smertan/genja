@@ -11,7 +11,7 @@ from genja.task import (
     IdempotencyCheckResult,
     IdempotencyMode,
     PydanticInputSchema,
-    RetryConfig,
+    TaskRetryConfig,
     SessionVerificationConfig,
     TaskDescriptor,
     TaskFactory,
@@ -136,7 +136,7 @@ def test_registered_python_task_descriptor_matches_rust_contract_shape():
         name="registered_descriptor_shape",
         connection_plugin_name="ssh",
         processors=["audit"],
-        retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
+        retry=TaskRetryConfig(allow=True, max_attempts=3, delay_ms=500),
         registration=TaskRegistration(
             id="acme.tests.registered_descriptor_shape",
             version="1.0.0",
@@ -513,7 +513,7 @@ def test_python_backed_task_applies_retry_delay():
 
     @task(
         name="delayed_retry",
-        retry=RetryConfig(allow=True, max_attempts=2, delay_ms=50),
+        retry=TaskRetryConfig(allow=True, max_attempts=2, delay_ms=50),
     )
     class DelayedRetryTask:
         def start(self, task, host, context):
@@ -958,7 +958,7 @@ def test_task_definition_from_python_class_allows_missing_connection_plugin_name
 
 
 def test_retry_config_accepts_valid_values():
-    retry = RetryConfig(allow=True, max_attempts=3, delay_ms=500)
+    retry = TaskRetryConfig(allow=True, max_attempts=3, delay_ms=500)
 
     assert retry.to_dict() == {
         "allow": True,
@@ -967,23 +967,29 @@ def test_retry_config_accepts_valid_values():
     }
 
 
+def test_old_task_retry_type_name_is_unavailable():
+    assert not hasattr(genja, "RetryConfig")
+
+
 def test_retry_config_rejects_invalid_values():
     with pytest.raises(ValidationError, match="max_attempts"):
-        RetryConfig(max_attempts=0)
+        TaskRetryConfig(max_attempts=0)
 
     with pytest.raises(ValidationError, match="delay_ms"):
-        RetryConfig(delay_ms=-1)
+        TaskRetryConfig(delay_ms=-1)
 
 
 def test_task_decorator_stores_nested_retry_metadata():
     @task(
         name="retryable_backup",
         connection_plugin_name="ssh",
-        retry=RetryConfig(allow=True, max_attempts=3, delay_ms=500),
+        retry=TaskRetryConfig(allow=True, max_attempts=3, delay_ms=500),
     )
     class RetryableTask:
         def start(self, task, host, context):
-            assert task.retry == RetryConfig(allow=True, max_attempts=3, delay_ms=500)
+            assert task.retry == TaskRetryConfig(
+                allow=True, max_attempts=3, delay_ms=500
+            )
             return TaskSuccessResult(summary="noop")
 
     metadata = cast(type[GenjaTaskProtocol], RetryableTask).__genja_task_info__
@@ -1142,7 +1148,7 @@ def test_task_definition_rejects_session_verification_without_connection_in_meta
 
 
 def test_task_decorator_rejects_flat_retry_kwargs():
-    with pytest.raises(TypeError, match=r"did you mean retry=RetryConfig\(allow="):
+    with pytest.raises(TypeError, match=r"did you mean retry=TaskRetryConfig\(allow="):
 
         @task(name="backup_config", allow_retries=True)
         class InvalidAllowTask:
@@ -1150,7 +1156,7 @@ def test_task_decorator_rejects_flat_retry_kwargs():
                 return TaskSuccessResult(summary="noop")
 
     with pytest.raises(
-        TypeError, match=r"did you mean retry=RetryConfig\(max_attempts="
+        TypeError, match=r"did you mean retry=TaskRetryConfig\(max_attempts="
     ):
 
         @task(name="backup_config", max_task_attempts=3)
@@ -1158,7 +1164,9 @@ def test_task_decorator_rejects_flat_retry_kwargs():
             def start(self, task, host, context):
                 return TaskSuccessResult(summary="noop")
 
-    with pytest.raises(TypeError, match=r"did you mean retry=RetryConfig\(delay_ms="):
+    with pytest.raises(
+        TypeError, match=r"did you mean retry=TaskRetryConfig\(delay_ms="
+    ):
 
         @task(name="backup_config", delay_ms=500)
         class InvalidDelayTask:

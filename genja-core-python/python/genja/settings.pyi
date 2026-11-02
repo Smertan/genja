@@ -10,7 +10,7 @@ directly. The top-level package re-exports these names for compatibility, but
 - ``OptionsConfig``
 - ``SSHConfig``
 - ``RunnerConfig``
-- ``RunnerRetryConfig``
+- ``RunnerTaskRetryConfig``
 - ``LoggingConfig``
 """
 
@@ -153,7 +153,7 @@ class RunnerConfig:
         worker_count: int | None = None,
         max_task_depth: int | None = None,
         max_connection_attempts: int | None = None,
-        retry: RunnerRetryConfig | None = None,
+        task_retry: RunnerTaskRetryConfig | None = None,
     ) -> None:
         """Create runner configuration.
 
@@ -164,7 +164,7 @@ class RunnerConfig:
                 parallelism.
             max_task_depth: Optional maximum nested sub-task depth.
             max_connection_attempts: Optional maximum connection attempts per host.
-            retry: Optional default retry behavior for task execution.
+            task_retry: Optional default retry behavior for task execution.
         """
         ...
 
@@ -189,11 +189,11 @@ class RunnerConfig:
         ...
 
     @property
-    def retry(self) -> RunnerRetryConfig:
+    def task_retry(self) -> RunnerTaskRetryConfig:
         """Default retry behavior for task execution."""
         ...
 
-class RunnerRetryConfig:
+class RunnerTaskRetryConfig:
     """Default task retry settings configured at runner scope."""
 
     def __init__(
