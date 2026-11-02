@@ -20,6 +20,9 @@
 //!   of execution results for tasks and their sub-tasks across all hosts.
 //! - **Rich Metadata**: Tasks can attach detailed metadata including per-host execution
 //!   timing, retry state, warnings, messages, diffs, and custom data to their results.
+//! - **Retry Policy Contract**: [`TaskRetryPolicy`] receives a read-only
+//!   [`TaskRetryContext`] and returns a [`TaskRetryDecision`]; the runtime
+//!   retains retry safety checks and task-host attempt accounting.
 //! - **Summaries and Serialization**: Task results can be aggregated with
 //!   [`TaskResults::host_summary`] and [`TaskResults::task_summary`], then exported in
 //!   either human-readable or raw JSON forms.
@@ -658,6 +661,7 @@ pub use registration::{
     validate_task_version,
 };
 use retry::{RetryDefaults, RetrySettings};
+pub use retry::{TaskRetryContext, TaskRetryDecision, TaskRetryPolicy, TaskRetrySettings};
 pub use spec::{
     TaskSpec, TaskSpecConstructionError, TaskSpecError, TaskSpecFormat, TaskSpecOverrides,
     create_compiled_task_from_spec, create_compiled_task_from_spec_str,

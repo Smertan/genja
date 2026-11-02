@@ -136,6 +136,11 @@ replacement behavior, processor ordering, and serialized result shape.
 
 ## Proposed retry contract (phase 2)
 
+The later [task retry policy contract](task-retry-policy-contract.md) extends
+this original proposal with built-in selection through task and runner retry
+configuration. Use that contract for the final algorithm precedence and
+exponential parameters.
+
 ### Selection and configuration
 
 Select an `ExecutionPolicy` once for a single-task or ordered-list invocation.

@@ -9,6 +9,10 @@ Changed packages:
 - Rust crates: `genja`, `genja-cli`, `genja-core`, `genja-core-derive`
 - Python package: `genja-py`, `genja-core-python`
 
+### Added
+
+- Added the public Rust task retry policy context and decision contract, with documented selection precedence and exponential delay parameters.
+
 ### Changed
 
 - **Breaking:** Rust task retry configuration is now `TaskRetryConfig` and `TaskRetryConfigBuilder`, and runner defaults use `runner.task_retry` with `RunnerConfig::task_retry()` and `RunnerConfigBuilder::task_retry(...)`. Rename uses of `RetryConfig`, `RetryConfigBuilder`, `runner.retry`, and the runner `retry()` methods; task macro `retry(...)` and `TaskSpec.overrides.retry` remain unchanged. Refs: #171
