@@ -61,13 +61,16 @@ with task metadata overriding runner defaults field by field. A root retry
 override replaces the root's authored retry metadata; its omitted fields
 inherit runner defaults. Subtasks use their own retry metadata.
 
-The additive Rust API will let a caller attach a custom policy to an
-individual `TaskDefinition` and place differently configured definitions in
-one `Tasks` list. A convenience single-task entry point may accept a policy
-directly, with synchronous and asynchronous forms. Existing run methods keep
-their signatures. Policy selection must reach both built-in runners; a runner
-that cannot carry a selected policy must report that explicitly rather than
-silently use another algorithm.
+The additive Rust API lets a caller add a task and its policy to a list with
+`Tasks::add_task_with_retry_policy(task, policy)`. The lower-level
+`TaskDefinition::with_retry_policy(...)` remains available for callers already
+customizing a definition. `run_task_with_retry_policy(...)` and
+`run_task_with_retry_policy_async(...)` attach a policy to one task tree.
+`run_tasks_with_retry_policy(...)` and its async counterpart supply a fallback
+policy for roots without their own selection. Existing run methods keep their
+signatures. Both built-in runners carry selected policies. A custom runner
+must report support through `supports_custom_task_retry_policy()` or Genja
+returns an error when a custom policy would be used.
 
 ## Built-in policies and exponential parameters
 
@@ -75,8 +78,7 @@ silently use another algorithm.
 construct `ExponentialRetry::new(factor, max_delay_ms)` or use its default
 factor of two and 24-hour cap. Invalid parameters return
 `ExponentialRetryError`. The runtime resolves built-in selections from task
-and runner configuration; direct attachment of a custom Rust policy is a
-later phase.
+and runner configuration.
 
 - `NoRetry` always returns `Stop`. Selecting it does not change `allow`.
 - `FixedRetry` returns `RetryAfter(delay_ms)` for an eligible failure and is

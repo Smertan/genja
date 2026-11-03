@@ -100,6 +100,10 @@ impl Plugin for SerialRunnerPlugin {
 
 #[async_trait]
 impl PluginRunner for SerialRunnerPlugin {
+    fn supports_custom_task_retry_policy(&self) -> bool {
+        true
+    }
+
     /// Executes a single task definition serially across all hosts.
     ///
     /// This method runs the provided task on all hosts in the inventory sequentially,

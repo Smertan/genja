@@ -70,14 +70,24 @@ override use runner defaults. The root override does not change subtasks.
 This resolution is per field, so a task can set `allow` while inheriting
 `max_attempts` and `delay_ms` from the runner.
 
-Algorithm selection has its own order. A root uses an explicit selection in
-its `TaskDefinition` override, otherwise its authored task metadata,
-otherwise `runner.task_retry.policy`, otherwise fixed delay. When a root
+Algorithm selection has its own order. A root uses a custom Rust policy
+attached to its `TaskDefinition`, otherwise an explicit selection in its
+`TaskDefinition` retry override, otherwise its authored task metadata,
+otherwise a Rust invocation fallback, otherwise `runner.task_retry.policy`,
+otherwise fixed delay. When a root
 override exists without a policy selection, the authored policy is replaced
 along with the other authored retry metadata. A subtask uses its own explicit
 algorithm selection if present; otherwise it inherits the parent's selected
 algorithm. Each subtask still resolves `allow`, `max_attempts`, and
 `delay_ms` from its own metadata and the runner defaults.
+
+Rust callers can add a root with its own policy using
+`tasks.add_task_with_retry_policy(task, policy)`.
+`Genja::run_task_with_retry_policy(...)` accepts a policy
+for one task tree, while `run_tasks_with_retry_policy(...)` supplies a fallback
+for roots in a list. Both have async forms. The built-in serial and threaded
+runners carry custom policies; other runner plugins must declare support or
+Genja reports an error when a custom policy is selected.
 
 See [Tasks](tasks.md) for Rust `#[genja_task(...)]` and Python `@task(...)`
 examples showing how to set task-level retry overrides.
@@ -244,7 +254,9 @@ authored in and register under the `RunnerPlugin` group.
     Rust runner plugins are async-only because `PluginRunner::run_task(...)` is
     an async trait method. When the plugin crate already depends on `genja`,
     import the macro from `genja::async_trait` instead of adding a separate
-    `async-trait` dependency just for the example.
+    `async-trait` dependency just for the example. A runner that delegates to
+    the core task start path can declare support for custom Rust retry policies
+    as shown below.
 
     ```rust
     use std::sync::Arc;
@@ -268,22 +280,27 @@ authored in and register under the `RunnerPlugin` group.
 
     #[async_trait]
     impl PluginRunner for FirstHostOnlyRunner {
+        fn supports_custom_task_retry_policy(&self) -> bool {
+            true
+        }
+
         async fn run_task(
             &self,
             task: &TaskDefinition,
             hosts: &Hosts,
             connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
-            _runner_config: &RunnerConfig,
+            runner_config: &RunnerConfig,
             run_options: TaskRunOptions,
         ) -> Result<TaskResults, genja::GenjaError> {
             let mut results = TaskResults::new(task.as_task().name());
 
             if let Some((host_id, host)) = hosts.iter().next() {
-                task.start_with_connection_resolver_and_options(
+                task.start_with_connection_resolver_runner_config_and_options(
                     host_id.as_ref(),
                     host,
                     &mut results,
                     connection_resolver.as_deref(),
+                    runner_config,
                     run_options,
                 )
                 .await?;
@@ -327,6 +344,30 @@ authored in and register under the `RunnerPlugin` group.
     plugins = genja_lib.PluginManager()
     plugins.register_plugin(FirstHostOnlyRunner())
     ```
+
+### Custom Retry Policy Support
+
+=== ":fontawesome-brands-rust: Rust"
+
+    Add this method inside your runner's `impl PluginRunner` block when it
+    delegates task execution to the core `TaskDefinition` start path:
+
+    ```rust
+    fn supports_custom_task_retry_policy(&self) -> bool {
+        true
+    }
+    ```
+
+    The method defaults to `false`. Return `true` only when `run_task(...)`
+    and any overridden `run_tasks(...)` path carry the selected policy through
+    the core runtime, or apply it with the same retry safety checks. Genja
+    returns an error before calling a runner that reports `false` for a custom
+    policy invocation. This method does not enable retries for tasks.
+
+=== ":fontawesome-brands-python: Python"
+
+    Python-authored custom retry policies are not currently supported, so
+    Python runner authors do not need a capability override.
 
 Custom runners may also implement `run_tasks(...)` for custom ordered task-list
 execution. If `run_tasks(...)` is not provided, Genja delegates each root task to

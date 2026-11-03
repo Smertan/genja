@@ -239,6 +239,60 @@ impl RetryableBackup {
 These values override runner defaults for that task only. Retries still happen
 only when the returned failure is explicitly marked `retryable`.
 
+### Custom Retry Policies (Rust only)
+
+**Rust only:** Python tasks can select the built-in retry policies, but cannot
+provide a custom `TaskRetryPolicy` implementation.
+
+The selected runner must support custom policies. The built-in `serial` and
+`threaded` runners do; a custom Rust runner must declare support or Genja
+returns an error before running the task. See
+[Custom Retry Policy Support](runners.md#custom-retry-policy-support) for runner
+authors.
+
+Implement `TaskRetryPolicy` to choose a wait after an eligible failure. The
+runtime checks retry authorization, the task's attempt limit, and the
+failure's `retryable` flag before calling the policy:
+
+```rust
+use genja_core::task::{TaskRetryContext, TaskRetryDecision, TaskRetryPolicy};
+use std::time::Duration;
+
+struct ImmediateRetry;
+
+impl TaskRetryPolicy for ImmediateRetry {
+    fn decide(&self, _context: &TaskRetryContext<'_>) -> TaskRetryDecision {
+        TaskRetryDecision::RetryAfter(Duration::ZERO)
+    }
+}
+
+// One task tree, with synchronous or asynchronous invocation:
+let results = genja.run_task_with_retry_policy(my_task, 1, ImmediateRetry)?;
+// genja.run_task_with_retry_policy_async(my_task, 1, ImmediateRetry).await?;
+```
+
+For a list, add each task with its own policy directly:
+
+```rust
+use genja_core::task::{ExponentialRetry, Tasks};
+
+let mut tasks = Tasks::new();
+tasks.add_task_with_retry_policy(RetryableBackup, ImmediateRetry);
+tasks.add_task_with_retry_policy(
+    RetryableBackup,
+    ExponentialRetry::new(3, 60_000)?,
+);
+let results = genja.run_tasks(tasks, 1)?;
+```
+
+`add_task(task)` still adds a task without an invocation policy. For a policy
+shared as a fallback across the list, use `run_tasks_with_retry_policy(...)`
+or its async form. `TaskDefinition::with_retry_policy(...)` remains available
+when a caller already has a task definition to customize.
+Subtasks inherit their parent's algorithm unless they select a built-in
+policy themselves. Each task retains its own `allow`, `max_attempts`, and
+`delay_ms` values and tracks attempts separately for each host.
+
 ## Python Task Decorator
 
 Python tasks use the `@task(...)` decorator for static task metadata.
@@ -262,6 +316,8 @@ Common decorator options:
 Use `TaskRetryConfig` when a Python task should opt into retries or override the
 runner defaults for retry count, base delay, or algorithm. For v0.5.x names, see
 [Migrating task retry names from v0.5.x](settings.md#migrating-task-retry-names-from-v05x).
+Python supports built-in policy selection; custom retry policy implementations
+are available to Rust callers only.
 
 ```python
 from genja.task import (

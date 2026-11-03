@@ -263,6 +263,10 @@ impl Plugin for ThreadedRunnerPlugin {
 
 #[async_trait]
 impl PluginRunner for ThreadedRunnerPlugin {
+    fn supports_custom_task_retry_policy(&self) -> bool {
+        true
+    }
+
     /// Executes a task across multiple hosts using bounded async concurrency.
     ///
     /// This method distributes task execution across the provided hosts using a configurable

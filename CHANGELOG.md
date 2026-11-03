@@ -14,6 +14,7 @@ Changed packages:
 - Added the public Rust task retry policy context and decision contract, with documented selection precedence and exponential delay parameters. Refs: #172
 - Added public `NoRetry`, `FixedRetry`, and bounded `ExponentialRetry` Rust policies; the existing fixed-delay path now uses the policy decision contract without changing retry behavior. Refs: #172
 - Added built-in task retry policy selection to Rust task metadata, `TaskRetryConfig`, runner settings, and `TaskSpec` overrides, plus Python task and runner configuration. Existing configurations continue to use fixed delay. Refs: #172
+- Added direct custom Rust retry policies for a task tree or task list, including `Tasks::add_task_with_retry_policy(...)`, synchronous and asynchronous invocation methods, and per-root policy attachment. Refs: #172
 
 ### Changed
 

@@ -1,9 +1,10 @@
 //! Task retry policy contract and internal resolution of retry settings.
 
-use super::{HostTaskResult, IdempotencyMode, Task, TaskRetryConfig, TaskRetryPolicyKind};
+use super::{HostTaskResult, IdempotencyMode, TaskRetryConfig, TaskRetryPolicyKind};
 use crate::settings::RunnerConfig;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Resolved retry settings for one task on one host.
@@ -245,7 +246,7 @@ impl TaskRetryPolicy for ExponentialRetry {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct RetryDefaults {
     allow: bool,
     max_attempts: usize,
@@ -285,12 +286,26 @@ impl RetryDefaults {
     }
 }
 
-/// Built-in algorithm resolved for a task node; the parameters travel with it.
-#[derive(Debug, Clone, Copy)]
+/// Algorithm resolved for a task node; the parameters travel with it.
+#[derive(Clone)]
 pub(super) enum ResolvedRetryPolicy {
     NoRetry,
     Fixed,
     Exponential(ExponentialRetry),
+    Custom(Arc<dyn TaskRetryPolicy>),
+}
+
+impl fmt::Debug for ResolvedRetryPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoRetry => formatter.write_str("NoRetry"),
+            Self::Fixed => formatter.write_str("Fixed"),
+            Self::Exponential(policy) => {
+                formatter.debug_tuple("Exponential").field(policy).finish()
+            }
+            Self::Custom(_) => formatter.write_str("Custom"),
+        }
+    }
 }
 
 impl ResolvedRetryPolicy {
@@ -311,10 +326,11 @@ impl ResolvedRetryPolicy {
         }
     }
 
-    pub(super) fn for_task(task: &dyn Task, defaults: RetryDefaults) -> Self {
-        task.retry_config().map_or(defaults.policy, |config| {
-            Self::from_config(config, defaults.policy)
-        })
+    pub(super) fn for_config(config: Option<&TaskRetryConfig>, defaults: &RetryDefaults) -> Self {
+        config.map_or_else(
+            || defaults.policy.clone(),
+            |config| Self::from_config(config, defaults.policy.clone()),
+        )
     }
 
     pub(super) fn as_policy(&self) -> &dyn TaskRetryPolicy {
@@ -322,6 +338,7 @@ impl ResolvedRetryPolicy {
             Self::NoRetry => &NoRetry,
             Self::Fixed => &FixedRetry,
             Self::Exponential(policy) => policy,
+            Self::Custom(policy) => policy.as_ref(),
         }
     }
 }
@@ -329,8 +346,8 @@ impl ResolvedRetryPolicy {
 pub(super) type RetrySettings = TaskRetrySettings;
 
 impl TaskRetrySettings {
-    pub(super) fn for_task(task: &dyn Task, defaults: RetryDefaults) -> Self {
-        let retry_config = task.retry_config().copied().unwrap_or_default();
+    pub(super) fn for_config(config: Option<&TaskRetryConfig>, defaults: &RetryDefaults) -> Self {
+        let retry_config = config.copied().unwrap_or_default();
         Self {
             allow: retry_config.resolved_allow(defaults.allow),
             max_attempts: retry_config.resolved_max_attempts(defaults.max_attempts),
@@ -457,13 +474,14 @@ mod tests {
         let selected =
             ResolvedRetryPolicy::from_config(&parent_config, ResolvedRetryPolicy::NoRetry);
         assert!(matches!(
-            selected,
+            &selected,
             ResolvedRetryPolicy::Exponential(policy)
                 if policy.factor() == 3 && policy.max_delay_ms() == 60_000
         ));
 
         let child_without_selection = TaskRetryConfig::builder().max_attempts(2).build();
-        let inherited = ResolvedRetryPolicy::from_config(&child_without_selection, selected);
+        let inherited =
+            ResolvedRetryPolicy::from_config(&child_without_selection, selected.clone());
         assert!(matches!(inherited, ResolvedRetryPolicy::Exponential(_)));
 
         let child_with_selection = TaskRetryConfig::builder()

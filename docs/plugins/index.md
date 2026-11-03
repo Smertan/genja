@@ -342,5 +342,5 @@ Plugin-specific behavior is documented in the relevant guide:
 - Inventory plugins: [Inventory](../inventory.md)
 - Transform plugins: [Transforms](../transforms.md)
 - Task processors: [Processors](../processors.md)
-- Runners: [Runners](../runners.md)
+- Runners, including author guidance for custom policies: [Runners](../runners.md#custom-runner-plugins)
 - Connection plugins: [Connections](../connection.md)
