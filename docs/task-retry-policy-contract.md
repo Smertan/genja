@@ -67,7 +67,9 @@ The additive Rust API lets a caller add a task and its policy to a list with
 customizing a definition. `run_task_with_retry_policy(...)` and
 `run_task_with_retry_policy_async(...)` attach a policy to one task tree.
 `run_tasks_with_retry_policy(...)` and its async counterpart supply a fallback
-policy for roots without their own selection. Existing run methods keep their
+policy for roots without their own selection. The corresponding
+`*_and_options` methods also accept `TaskRunOptions`, including dry-run mode.
+Existing run methods keep their
 signatures. Both built-in runners carry selected policies. A custom runner
 must report support through `supports_custom_task_retry_policy()` or Genja
 returns an error when a custom policy would be used.

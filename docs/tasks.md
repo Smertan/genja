@@ -271,6 +271,21 @@ let results = genja.run_task_with_retry_policy(my_task, 1, ImmediateRetry)?;
 // genja.run_task_with_retry_policy_async(my_task, 1, ImmediateRetry).await?;
 ```
 
+For a task that supports dry-run, pass runtime options alongside the policy:
+
+```rust
+use genja::TaskRunOptions;
+
+let options = TaskRunOptions::new(1).with_dry_run(true);
+let results = genja.run_task_with_retry_policy_and_options(
+    my_dry_run_task,
+    options,
+    ImmediateRetry,
+)?;
+```
+
+The async form is `run_task_with_retry_policy_and_options_async(...)`.
+
 For a list, add each task with its own policy directly:
 
 ```rust
@@ -287,7 +302,9 @@ let results = genja.run_tasks(tasks, 1)?;
 
 `add_task(task)` still adds a task without an invocation policy. For a policy
 shared as a fallback across the list, use `run_tasks_with_retry_policy(...)`
-or its async form. `TaskDefinition::with_retry_policy(...)` remains available
+or its async form. To combine a list-wide fallback with dry-run, use
+`run_tasks_with_retry_policy_and_options(...)` or its async form.
+`TaskDefinition::with_retry_policy(...)` remains available
 when a caller already has a task definition to customize.
 Subtasks inherit their parent's algorithm unless they select a built-in
 policy themselves. Each task retains its own `allow`, `max_attempts`, and

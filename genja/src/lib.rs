@@ -1127,11 +1127,37 @@ impl Genja {
             "run_task_with_retry_policy()",
             "run_task_with_retry_policy_async()",
         )?;
+        self.run_task_with_retry_policy_and_options(task, TaskRunOptions::new(max_depth), policy)
+    }
+
+    /// Runs a single task tree with a custom retry policy and runtime options.
+    ///
+    /// Use `run_options` for controls such as dry-run mode. The policy supplies
+    /// the retry algorithm while each task keeps its own retry authorization,
+    /// attempt limit, and base delay.
+    pub fn run_task_with_retry_policy_and_options<T, P>(
+        &self,
+        task: T,
+        run_options: TaskRunOptions,
+        policy: P,
+    ) -> Result<TaskResults, GenjaError>
+    where
+        T: Task + 'static,
+        P: TaskRetryPolicy + 'static,
+    {
+        ensure_sync_execution_outside_tokio(
+            "run_task_with_retry_policy_and_options()",
+            "run_task_with_retry_policy_and_options_async()",
+        )?;
         let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_task_with_retry_policy_async(task, max_depth, policy))
+        runtime.block_on(self.run_task_with_retry_policy_and_options_async(
+            task,
+            run_options,
+            policy,
+        ))
     }
 
     /// Asynchronously runs a single task tree with a custom Rust retry policy.
@@ -1148,9 +1174,29 @@ impl Genja {
         T: Task + 'static,
         P: TaskRetryPolicy + 'static,
     {
+        self.run_task_with_retry_policy_and_options_async(
+            task,
+            TaskRunOptions::new(max_depth),
+            policy,
+        )
+        .await
+    }
+
+    /// Asynchronously runs a single task tree with a custom retry policy and
+    /// runtime options, including dry-run mode.
+    pub async fn run_task_with_retry_policy_and_options_async<T, P>(
+        &self,
+        task: T,
+        run_options: TaskRunOptions,
+        policy: P,
+    ) -> Result<TaskResults, GenjaError>
+    where
+        T: Task + 'static,
+        P: TaskRetryPolicy + 'static,
+    {
         self.run_task_definition_async(
             TaskDefinition::new(task).with_retry_policy(policy),
-            TaskRunOptions::new(max_depth),
+            run_options,
         )
         .await
     }
@@ -1269,11 +1315,33 @@ impl Genja {
             "run_tasks_with_retry_policy()",
             "run_tasks_with_retry_policy_async()",
         )?;
+        self.run_tasks_with_retry_policy_and_options(tasks, TaskRunOptions::new(max_depth), policy)
+    }
+
+    /// Runs a task list with a custom fallback retry policy and runtime options.
+    ///
+    /// Use `run_options` for controls such as dry-run mode. A policy attached
+    /// to a root or an explicit built-in selection takes precedence over this
+    /// fallback.
+    pub fn run_tasks_with_retry_policy_and_options<P: TaskRetryPolicy + 'static>(
+        &self,
+        tasks: Tasks,
+        run_options: TaskRunOptions,
+        policy: P,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        ensure_sync_execution_outside_tokio(
+            "run_tasks_with_retry_policy_and_options()",
+            "run_tasks_with_retry_policy_and_options_async()",
+        )?;
         let runtime = Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_tasks_with_retry_policy_async(tasks, max_depth, policy))
+        runtime.block_on(self.run_tasks_with_retry_policy_and_options_async(
+            tasks,
+            run_options,
+            policy,
+        ))
     }
 
     /// Asynchronously runs a task list with a custom fallback retry policy.
@@ -1283,8 +1351,24 @@ impl Genja {
     /// they select a built-in policy themselves.
     pub async fn run_tasks_with_retry_policy_async<P: TaskRetryPolicy + 'static>(
         &self,
-        mut tasks: Tasks,
+        tasks: Tasks,
         max_depth: usize,
+        policy: P,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        self.run_tasks_with_retry_policy_and_options_async(
+            tasks,
+            TaskRunOptions::new(max_depth),
+            policy,
+        )
+        .await
+    }
+
+    /// Asynchronously runs a task list with a custom fallback retry policy
+    /// and runtime options, including dry-run mode.
+    pub async fn run_tasks_with_retry_policy_and_options_async<P: TaskRetryPolicy + 'static>(
+        &self,
+        mut tasks: Tasks,
+        run_options: TaskRunOptions,
         policy: P,
     ) -> Result<Vec<TaskResults>, GenjaError> {
         let shared_policy: Arc<dyn TaskRetryPolicy> = Arc::new(policy);
@@ -1293,8 +1377,7 @@ impl Genja {
                 .clone()
                 .with_retry_policy_fallback(Arc::clone(&shared_policy));
         }
-        self.run_tasks_with_options_async(tasks, TaskRunOptions::new(max_depth))
-            .await
+        self.run_tasks_with_options_async(tasks, run_options).await
     }
 
     /// Executes an ordered list of root task trees asynchronously using explicit runtime options.
@@ -3788,6 +3871,92 @@ mod tests {
         assert!(router1.execution_metadata().dry_run());
         assert_eq!(router1.execution_metadata().attempts(), 2);
         assert!(router1.execution_metadata().retried());
+    }
+
+    #[test]
+    fn custom_retry_policy_stops_retries_after_dry_run_failure() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let genja = Genja::builder(single_host_inventory())
+            .build()
+            .expect("genja should build");
+        let mut tasks = Tasks::new();
+        tasks.add_task_with_retry_policy(
+            FlakyDryRunTask {
+                attempts: Arc::clone(&attempts),
+            },
+            TestCustomRetryPolicy {
+                retry: false,
+                calls: Arc::clone(&calls),
+            },
+        );
+
+        let results = genja
+            .run_tasks_with_options(tasks, TaskRunOptions::new(0).with_dry_run(true))
+            .expect("dry-run should finish after the policy stops retrying");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let host_result = results[0].host_result("router1").expect("host result");
+        assert!(host_result.is_failed());
+        assert!(host_result.execution_metadata().dry_run());
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn custom_retry_policy_invocations_accept_dry_run_options() {
+        let genja = Genja::builder(single_host_inventory())
+            .build()
+            .expect("genja should build");
+        let single_attempts = Arc::new(AtomicUsize::new(0));
+        let single_calls = Arc::new(AtomicUsize::new(0));
+        let options = TaskRunOptions::new(0).with_dry_run(true);
+        let single_result = genja
+            .run_task_with_retry_policy_and_options(
+                FlakyDryRunTask {
+                    attempts: Arc::clone(&single_attempts),
+                },
+                options,
+                TestCustomRetryPolicy {
+                    retry: true,
+                    calls: Arc::clone(&single_calls),
+                },
+            )
+            .expect("single-task dry-run should retry once");
+        assert_eq!(single_attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(single_calls.load(Ordering::SeqCst), 1);
+        let single_host_result = single_result.host_result("router1").expect("host result");
+        assert!(single_host_result.is_passed());
+        assert!(single_host_result.execution_metadata().dry_run());
+        assert_eq!(single_host_result.execution_metadata().attempts(), 2);
+
+        let list_attempts = Arc::new(AtomicUsize::new(0));
+        let list_calls = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Tasks::new();
+        tasks.add_task(FlakyDryRunTask {
+            attempts: Arc::clone(&list_attempts),
+        });
+        let list_results = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(genja.run_tasks_with_retry_policy_and_options_async(
+                tasks,
+                options,
+                TestCustomRetryPolicy {
+                    retry: false,
+                    calls: Arc::clone(&list_calls),
+                },
+            ))
+            .expect("task-list dry-run should stop after one failure");
+        assert_eq!(list_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(list_calls.load(Ordering::SeqCst), 1);
+        let list_host_result = list_results[0].host_result("router1").expect("host result");
+        assert!(list_host_result.is_failed());
+        assert!(list_host_result.execution_metadata().dry_run());
+        assert_eq!(list_host_result.execution_metadata().attempts(), 1);
     }
 
     #[tokio::test]

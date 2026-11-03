@@ -570,6 +570,68 @@ def test_python_backed_no_retry_selection_stops_retryable_failure():
     assert host_result["execution_metadata"]["retry_exhausted"] is False
 
 
+def test_python_task_policy_overrides_runner_policy_during_execution():
+    inherited_attempts: list[int] = []
+    overridden_attempts: list[int] = []
+
+    @task(
+        name="runner_no_retry",
+        retry=TaskRetryConfig(allow=True, max_attempts=2),
+    )
+    class RunnerNoRetryTask:
+        def start(self, task, host, context):
+            inherited_attempts.append(context.current_attempt)
+            return TaskFailureResult(
+                message="temporary failure",
+                kind=TaskFailureKind.EXTERNAL,
+                retryable=True,
+            )
+
+    @task(
+        name="task_fixed_retry",
+        retry=TaskRetryConfig(
+            allow=True,
+            max_attempts=2,
+            policy=TaskRetryPolicyKind.FIXED,
+        ),
+    )
+    class TaskFixedRetryTask:
+        def start(self, task, host, context):
+            overridden_attempts.append(context.current_attempt)
+            if context.current_attempt == 1:
+                return TaskFailureResult(
+                    message="temporary failure",
+                    kind=TaskFailureKind.EXTERNAL,
+                    retryable=True,
+                )
+            return TaskSuccessResult(summary="recovered")
+
+    settings = genja.Settings(
+        runner=genja.RunnerConfig(
+            plugin="serial",
+            task_retry=genja.RunnerTaskRetryConfig(
+                policy=TaskRetryPolicyKind.NO_RETRY,
+            ),
+        )
+    )
+    runtime = genja.Genja.from_hosts(
+        {"router1": Host(hostname="router1")}, settings=settings
+    )
+
+    inherited = runtime.run_task(RunnerNoRetryTask)
+    overridden = runtime.run_task(TaskFixedRetryTask)
+
+    assert inherited_attempts == [1]
+    assert (
+        inherited.to_dict()["hosts"]["router1"]["execution_metadata"]["attempts"] == 1
+    )
+    assert overridden_attempts == [1, 2]
+    assert overridden.passed_hosts == ["router1"]
+    assert (
+        overridden.to_dict()["hosts"]["router1"]["execution_metadata"]["attempts"] == 2
+    )
+
+
 def test_python_backed_task_dry_run_calls_dry_run_not_start():
     calls: list[str] = []
 
