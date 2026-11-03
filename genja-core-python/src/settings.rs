@@ -26,16 +26,31 @@ impl PyRunnerTaskRetryConfig {
     /// * `max_attempts` - Maximum attempts for retryable tasks. Values lower than 1 are
     ///   normalized to 1 by the runtime.
     /// * `delay_ms` - Delay in milliseconds before retry attempts.
+    /// * `policy` - Optional `no_retry`, `fixed`, or `exponential` algorithm.
+    /// * `factor` - Exponential multiplier of at least 2.
+    /// * `max_delay_ms` - Exponential per-wait cap from 1 to 86400000 ms.
     #[new]
-    #[pyo3(signature = (allow=None, max_attempts=None, delay_ms=None))]
-    fn new(allow: Option<bool>, max_attempts: Option<usize>, delay_ms: Option<u64>) -> Self {
-        Self {
-            inner: ::genja_core::task::TaskRetryConfig::new(
-                allow,
-                max_attempts.map(|value| value.max(1)),
-                delay_ms,
-            ),
-        }
+    #[pyo3(signature = (allow=None, max_attempts=None, delay_ms=None, policy=None, factor=None, max_delay_ms=None))]
+    fn new(
+        allow: Option<bool>,
+        max_attempts: Option<usize>,
+        delay_ms: Option<u64>,
+        policy: Option<String>,
+        factor: Option<u32>,
+        max_delay_ms: Option<u64>,
+    ) -> PyResult<Self> {
+        let inner = serde_json::from_value(serde_json::json!({
+            "allow": allow,
+            "max_attempts": max_attempts.map(|value| value.max(1)),
+            "delay_ms": delay_ms,
+            "policy": policy,
+            "factor": factor,
+            "max_delay_ms": max_delay_ms,
+        }))
+        .map_err(|error| {
+            PyValueError::new_err(format!("invalid runner task retry config: {error}"))
+        })?;
+        Ok(Self { inner })
     }
 
     /// Whether retries are allowed by default.
@@ -56,12 +71,45 @@ impl PyRunnerTaskRetryConfig {
         self.inner.delay_ms()
     }
 
+    /// Selected built-in task retry algorithm, if any.
+    #[getter]
+    pub(crate) fn policy(&self) -> Option<&'static str> {
+        self.inner.policy().map(|policy| match policy {
+            ::genja_core::task::TaskRetryPolicyKind::NoRetry => "no_retry",
+            ::genja_core::task::TaskRetryPolicyKind::Fixed => "fixed",
+            ::genja_core::task::TaskRetryPolicyKind::Exponential => "exponential",
+        })
+    }
+
+    /// Exponential retry multiplier, if set.
+    #[getter]
+    pub(crate) fn factor(&self) -> Option<u32> {
+        self.inner.factor()
+    }
+
+    /// Exponential per-wait delay cap in milliseconds, if set.
+    #[getter]
+    pub(crate) fn max_delay_ms(&self) -> Option<u64> {
+        self.inner.max_delay_ms()
+    }
+
     fn __repr__(&self) -> String {
+        if self.policy().is_none() {
+            return format!(
+                "RunnerTaskRetryConfig(allow={:?}, max_attempts={:?}, delay_ms={:?})",
+                self.allow(),
+                self.max_attempts(),
+                self.delay_ms(),
+            );
+        }
         format!(
-            "RunnerTaskRetryConfig(allow={:?}, max_attempts={:?}, delay_ms={:?})",
+            "RunnerTaskRetryConfig(allow={:?}, max_attempts={:?}, delay_ms={:?}, policy={:?}, factor={:?}, max_delay_ms={:?})",
             self.allow(),
             self.max_attempts(),
-            self.delay_ms()
+            self.delay_ms(),
+            self.policy(),
+            self.factor(),
+            self.max_delay_ms(),
         )
     }
 }

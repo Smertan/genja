@@ -623,6 +623,9 @@ overrides:
     allow: true
     max_attempts: 4
     delay_ms: 250
+    policy: exponential
+    factor: 3
+    max_delay_ms: 60000
   session_verification:
     max_attempts: 2
     delay_ms: 1000
@@ -635,6 +638,12 @@ overrides:
         assert_eq!(retry.allow(), Some(true));
         assert_eq!(retry.max_attempts(), Some(4));
         assert_eq!(retry.delay_ms(), Some(250));
+        assert_eq!(
+            retry.policy(),
+            Some(crate::task::TaskRetryPolicyKind::Exponential)
+        );
+        assert_eq!(retry.factor(), Some(3));
+        assert_eq!(retry.max_delay_ms(), Some(60_000));
         let session_verification = overrides
             .session_verification
             .expect("session verification override should be present");

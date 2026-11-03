@@ -584,7 +584,10 @@ JSON:
     "retry": {
       "allow": true,
       "max_attempts": 3,
-      "delay_ms": 500
+      "delay_ms": 500,
+      "policy": "exponential",
+      "factor": 3,
+      "max_delay_ms": 60000
     },
     "session_verification": {
       "max_attempts": 2,

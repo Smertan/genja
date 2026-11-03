@@ -1342,12 +1342,12 @@ mod tests {
         ResolvedConnectionParams,
     };
     use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig, SSHConfig};
-    use genja_core::task::TaskRetryConfig;
     use genja_core::task::{
         BlockingTaskRuntimeContext, HostTaskResult, Task, TaskConnectionResolver, TaskDefinition,
         TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskRuntimeContext,
         TaskSuccess, Tasks,
     };
+    use genja_core::task::{TaskRetryConfig, TaskRetryPolicyKind};
     use genja_plugin_manager::PluginManager;
     use genja_plugin_manager::plugin_types::{
         AsyncPluginInventory, Plugin, PluginConnection, Plugins,
@@ -2934,6 +2934,93 @@ mod tests {
                 ("root-b", "10.0.0.2", 1),
             ] {
                 assert_eq!(attempts.get(&(name, hostname.to_string())), Some(&expected));
+            }
+        }
+    }
+
+    #[test]
+    fn run_tasks_resolves_builtin_retry_policies_per_node() {
+        for runner_plugin in ["serial", "threaded"] {
+            for child_selects_fixed in [false, true] {
+                let attempts = Arc::new(Mutex::new(HashMap::new()));
+                let settings = Settings::builder()
+                    .runner(
+                        RunnerConfig::builder()
+                            .plugin(runner_plugin)
+                            .worker_count(2)
+                            .task_retry(
+                                TaskRetryConfig::builder()
+                                    .allow(true)
+                                    .max_attempts(3)
+                                    .policy(TaskRetryPolicyKind::NoRetry)
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                    .build();
+                let genja = Genja::builder(test_inventory())
+                    .with_settings(settings)
+                    .build()
+                    .expect("genja should build");
+
+                let mut child_retry = TaskRetryConfig::builder().max_attempts(2);
+                if child_selects_fixed {
+                    child_retry = child_retry.policy(TaskRetryPolicyKind::Fixed);
+                }
+                let child = Arc::new(RetryTreeTask {
+                    name: "child",
+                    retry_config: Some(child_retry.build()),
+                    sub_tasks: Vec::new(),
+                    attempts: Arc::clone(&attempts),
+                });
+                let mut tasks = Tasks::new();
+                tasks.add_task(RetryTreeTask {
+                    name: "root-a",
+                    retry_config: Some(
+                        TaskRetryConfig::builder()
+                            .policy(TaskRetryPolicyKind::Exponential)
+                            .factor(3)
+                            .build(),
+                    ),
+                    sub_tasks: vec![child],
+                    attempts: Arc::clone(&attempts),
+                });
+                tasks.add_task(RetryTreeTask {
+                    name: "root-b",
+                    retry_config: None,
+                    sub_tasks: Vec::new(),
+                    attempts: Arc::clone(&attempts),
+                });
+
+                let results = genja.run_tasks(tasks, 1).expect("task list should run");
+                assert_eq!(results.len(), 2);
+                let child_results = results[0].sub_task("child").expect("child results");
+                for (hostname, expected_root_attempts) in [("router1", 3), ("router2", 2)] {
+                    assert_eq!(
+                        results[0]
+                            .host_result(hostname)
+                            .expect("root result")
+                            .execution_metadata()
+                            .attempts(),
+                        expected_root_attempts,
+                    );
+                    assert_eq!(
+                        child_results
+                            .host_result(hostname)
+                            .expect("child result")
+                            .execution_metadata()
+                            .attempts(),
+                        2,
+                    );
+                    assert_eq!(
+                        results[1]
+                            .host_result(hostname)
+                            .expect("root-b result")
+                            .execution_metadata()
+                            .attempts(),
+                        1,
+                    );
+                }
             }
         }
     }

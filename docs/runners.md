@@ -39,9 +39,11 @@ Runner settings:
 - `worker_count`: optional concurrency limit for runners that support it.
 - `max_task_depth`: maximum nested task depth. Defaults to `10`.
 - `max_connection_attempts`: maximum connection attempts. Defaults to `3`.
-- `retry.allow`: whether task retries are allowed by default. Defaults to `false`.
-- `retry.max_attempts`: total number of task attempts allowed by default. Defaults to `1`.
-- `retry.delay_ms`: fixed in-process delay in milliseconds between retry attempts. Defaults to `0`.
+- `task_retry.allow`: whether task retries are allowed by default. Defaults to `false`.
+- `task_retry.max_attempts`: total number of task attempts allowed by default. Defaults to `1`.
+- `task_retry.delay_ms`: base delay in milliseconds between retry attempts. Defaults to `0`.
+- `task_retry.policy`: optional `no_retry`, `fixed`, or `exponential` algorithm.
+- `task_retry.factor` and `task_retry.max_delay_ms`: optional exponential multiplier and per-wait cap; when omitted with exponential retry, they default to `2` and `86400000` ms.
 
 `max_connection_attempts` is part of the shared runner configuration. The
 built-in runners pass the task connection resolver into task execution; the
@@ -49,22 +51,33 @@ connection layer is responsible for interpreting connection retry behavior.
 Custom runners should pass the resolver through when they delegate to task
 execution helpers.
 
-`retry.allow`, `retry.max_attempts`, and `retry.delay_ms` define default retry
+`task_retry.allow`, `task_retry.max_attempts`, and `task_retry.delay_ms` define default retry
 policy for task execution. Tasks may override these defaults through task
 metadata. Retries are only attempted when the effective policy allows them and
 the task returns a failed host result marked as retryable.
 Genja does not infer task mutability or idempotency when applying retries; the
 decision is driven entirely by configured policy and the task's returned
-failure result. `retry.delay_ms` is a fixed local delay before retry attempts.
+failure result. Omitting `task_retry.policy` retains fixed-delay behavior;
+the default `allow = false` and `max_attempts = 1` still produce one attempt.
 
-Precedence for retry settings is:
+### Task Retry Precedence
 
-1. task-level retry metadata such as `retry.allow`, `retry.max_attempts`, and `retry.delay_ms`
-2. runner-level `retry` defaults
-3. built-in fallback defaults
+For `allow`, `max_attempts`, and `delay_ms`, each task first uses its own
+declared values, then `runner.task_retry`, then the built-in defaults. A root
+`TaskDefinition` retry override, including `TaskSpec.overrides.retry`,
+replaces that root's authored retry metadata; any fields omitted from the
+override use runner defaults. The root override does not change subtasks.
+This resolution is per field, so a task can set `allow` while inheriting
+`max_attempts` and `delay_ms` from the runner.
 
-Overrides are resolved field by field, so a task can set `retry.allow` while
-still inheriting `retry.max_attempts` and `retry.delay_ms` from the runner.
+Algorithm selection has its own order. A root uses an explicit selection in
+its `TaskDefinition` override, otherwise its authored task metadata,
+otherwise `runner.task_retry.policy`, otherwise fixed delay. When a root
+override exists without a policy selection, the authored policy is replaced
+along with the other authored retry metadata. A subtask uses its own explicit
+algorithm selection if present; otherwise it inherits the parent's selected
+algorithm. Each subtask still resolves `allow`, `max_attempts`, and
+`delay_ms` from its own metadata and the runner defaults.
 
 See [Tasks](tasks.md) for Rust `#[genja_task(...)]` and Python `@task(...)`
 examples showing how to set task-level retry overrides.

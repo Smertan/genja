@@ -419,6 +419,9 @@ runner:
 | `task_retry.allow` | boolean | `false` | none |
 | `task_retry.max_attempts` | number | `1` | none |
 | `task_retry.delay_ms` | number | `0` | none |
+| `task_retry.policy` | `no_retry`, `fixed`, or `exponential` | `fixed` when omitted | none |
+| `task_retry.factor` | number at least `2` | `2` for exponential | none |
+| `task_retry.max_delay_ms` | number from `1` to `86400000` | `86400000` for exponential | none |
 
 Common `plugin` values are `threaded` and `serial`.
 
@@ -440,10 +443,49 @@ plugins or connection layers are responsible for interpreting retry behavior.
 
 `task_retry.allow` controls whether retries are allowed by default for task
 execution. `task_retry.max_attempts` controls the default total attempt count for a
-task, including the first attempt. `task_retry.delay_ms` is a fixed in-process delay
-before retry attempts. Tasks may override runner retry defaults field by field
-through task metadata. Retries are only attempted for failures explicitly marked
-as retryable.
+task, including the first attempt. `task_retry.delay_ms` is the base delay in
+milliseconds. With no policy selected, the fixed-delay behavior is unchanged.
+`no_retry` stops after one attempt; `exponential` multiplies the base delay by
+`factor` after each retry, capped at `max_delay_ms` for each wait. A task can
+select its own policy and override the common fields independently. Selecting
+a policy never enables retries or overrides a non-retryable failure.
+
+For the full root and subtask selection order, see
+[Runner retry precedence](runners.md#task-retry-precedence).
+
+For example, these runner defaults allow six attempts with waits of 1, 3, 9,
+27, and 60 seconds when each earlier attempt fails retryably:
+
+```yaml
+runner:
+  task_retry:
+    allow: true
+    max_attempts: 6
+    delay_ms: 1000
+    policy: exponential
+    factor: 3
+    max_delay_ms: 60000
+```
+
+In Rust, place `TaskRetryConfig::builder().policy(TaskRetryPolicyKind::Exponential)`
+inside `RunnerConfig::builder().task_retry(...)` to set runner defaults. The
+same Rust `TaskRetryConfig` type is also used for task metadata; its placement
+determines its scope. Python uses `RunnerTaskRetryConfig` for runner defaults:
+
+```python
+import genja
+
+runner = genja.RunnerConfig(
+    task_retry=genja.RunnerTaskRetryConfig(
+        allow=True,
+        max_attempts=6,
+        delay_ms=1000,
+        policy=genja.TaskRetryPolicyKind.EXPONENTIAL,
+        factor=3,
+        max_delay_ms=60000,
+    )
+)
+```
 
 ### Migrating task retry names from v0.5.x
 

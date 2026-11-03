@@ -22,6 +22,26 @@ def test_settings_from_file_loads_yaml():
     assert settings.logging.max_file_count == 10
 
 
+def test_runner_retry_policy_can_be_selected_during_initialization():
+    runner = genja.RunnerConfig(
+        task_retry=genja.RunnerTaskRetryConfig(
+            allow=True,
+            max_attempts=6,
+            delay_ms=1000,
+            policy=genja.TaskRetryPolicyKind.EXPONENTIAL,
+            factor=3,
+            max_delay_ms=60_000,
+        )
+    )
+
+    assert runner.task_retry.policy == "exponential"
+    assert runner.task_retry.factor == 3
+    assert runner.task_retry.max_delay_ms == 60_000
+
+    with pytest.raises(ValueError, match="factor.*max_delay_ms"):
+        genja.RunnerTaskRetryConfig(policy="exponential", factor=1, max_delay_ms=0)
+
+
 def test_settings_can_be_constructed_programmatically():
     settings = genja.Settings(
         core=genja.CoreConfig(raise_on_error=True),

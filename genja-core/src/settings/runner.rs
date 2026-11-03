@@ -158,20 +158,28 @@ fn default_retry_config() -> TaskRetryConfig {
 }
 
 fn normalize_retry_config(retry: TaskRetryConfig) -> TaskRetryConfig {
-    TaskRetryConfig::new(
-        Some(retry.allow().unwrap_or_else(get_runner_retry_allow_default)),
-        Some(
+    let mut builder = TaskRetryConfig::builder()
+        .allow(retry.allow().unwrap_or_else(get_runner_retry_allow_default))
+        .max_attempts(
             retry
                 .max_attempts()
-                .unwrap_or_else(get_runner_retry_max_attempts_default)
-                .max(1),
-        ),
-        Some(
+                .unwrap_or_else(get_runner_retry_max_attempts_default),
+        )
+        .delay_ms(
             retry
                 .delay_ms()
                 .unwrap_or_else(get_runner_retry_delay_ms_default),
-        ),
-    )
+        );
+    if let Some(policy) = retry.policy() {
+        builder = builder.policy(policy);
+    }
+    if let Some(factor) = retry.factor() {
+        builder = builder.factor(factor);
+    }
+    if let Some(max_delay_ms) = retry.max_delay_ms() {
+        builder = builder.max_delay_ms(max_delay_ms);
+    }
+    builder.build()
 }
 
 fn deserialize_retry_config<'de, D>(deserializer: D) -> Result<TaskRetryConfig, D::Error>

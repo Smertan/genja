@@ -152,6 +152,9 @@ class RunnerTaskRetryConfig:
         allow: bool | None = None,
         max_attempts: int | None = None,
         delay_ms: int | None = None,
+        policy: str | None = None,
+        factor: int | None = None,
+        max_delay_ms: int | None = None,
     ) -> None:
         """Create runner retry configuration."""
         ...
@@ -166,6 +169,18 @@ class RunnerTaskRetryConfig:
     @property
     def delay_ms(self) -> int | None:
         """Delay in milliseconds between retry attempts."""
+        ...
+    @property
+    def policy(self) -> str | None:
+        """Selected built-in retry algorithm, if any."""
+        ...
+    @property
+    def factor(self) -> int | None:
+        """Exponential retry multiplier, if set."""
+        ...
+    @property
+    def max_delay_ms(self) -> int | None:
+        """Exponential per-wait delay cap in milliseconds, if set."""
         ...
 
 class LoggingConfig:

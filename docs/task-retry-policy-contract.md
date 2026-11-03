@@ -74,8 +74,9 @@ silently use another algorithm.
 `genja_core::task` exports all three built-in policy types. Rust callers can
 construct `ExponentialRetry::new(factor, max_delay_ms)` or use its default
 factor of two and 24-hour cap. Invalid parameters return
-`ExponentialRetryError`. The existing runtime path currently uses `FixedRetry`;
-configuration selection and direct policy attachment are later phases.
+`ExponentialRetryError`. The runtime resolves built-in selections from task
+and runner configuration; direct attachment of a custom Rust policy is a
+later phase.
 
 - `NoRetry` always returns `Stop`. Selecting it does not change `allow`.
 - `FixedRetry` returns `RetryAfter(delay_ms)` for an eligible failure and is

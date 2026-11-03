@@ -666,7 +666,7 @@ pub use retry::{
     ExponentialRetry, ExponentialRetryError, FixedRetry, NoRetry, TaskRetryContext,
     TaskRetryDecision, TaskRetryPolicy, TaskRetrySettings,
 };
-use retry::{RetryDefaults, RetrySettings};
+use retry::{ResolvedRetryPolicy, RetryDefaults, RetrySettings};
 pub use spec::{
     TaskSpec, TaskSpecConstructionError, TaskSpecError, TaskSpecFormat, TaskSpecOverrides,
     create_compiled_task_from_spec, create_compiled_task_from_spec_str,
@@ -679,13 +679,87 @@ pub use spec::{
 /// field by field. Policy resolution treats missing fields as built-in or
 /// runner-supplied defaults: `allow = false`, `max_attempts = 1`, and
 /// `delay_ms = 0`. Resolved `max_attempts` is clamped to at least `1`.
-/// `delay_ms` is a fixed local delay before retry attempts.
+/// `delay_ms` is the base delay before retry attempts. Without an explicit
+/// policy selection, the fixed-delay policy remains the default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "TaskRetryConfigWire")]
 pub struct TaskRetryConfig {
     allow: Option<bool>,
     max_attempts: Option<usize>,
     delay_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy: Option<TaskRetryPolicyKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    factor: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_delay_ms: Option<u64>,
+}
+
+/// Built-in task retry algorithm selected by task or runner configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskRetryPolicyKind {
+    /// Never retry a task failure.
+    NoRetry,
+    /// Wait for the resolved `delay_ms` before each retry.
+    Fixed,
+    /// Multiply the resolved base delay after each retry, up to a cap.
+    Exponential,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskRetryConfigWire {
+    allow: Option<bool>,
+    max_attempts: Option<usize>,
+    delay_ms: Option<u64>,
+    policy: Option<TaskRetryPolicyKind>,
+    factor: Option<u32>,
+    max_delay_ms: Option<u64>,
+}
+
+impl TryFrom<TaskRetryConfigWire> for TaskRetryConfig {
+    type Error = String;
+
+    fn try_from(wire: TaskRetryConfigWire) -> Result<Self, Self::Error> {
+        validate_retry_policy_parameters(wire.policy, wire.factor, wire.max_delay_ms)?;
+        Ok(Self {
+            allow: wire.allow,
+            max_attempts: wire.max_attempts,
+            delay_ms: wire.delay_ms,
+            policy: wire.policy,
+            factor: wire.factor,
+            max_delay_ms: wire.max_delay_ms,
+        })
+    }
+}
+
+fn validate_retry_policy_parameters(
+    policy: Option<TaskRetryPolicyKind>,
+    factor: Option<u32>,
+    max_delay_ms: Option<u64>,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if (factor.is_some() || max_delay_ms.is_some())
+        && policy != Some(TaskRetryPolicyKind::Exponential)
+    {
+        errors.push("factor and max_delay_ms require policy = exponential");
+    }
+    if let Some(factor) = factor
+        && factor < 2
+    {
+        errors.push("exponential retry factor must be at least 2");
+    }
+    if let Some(max_delay_ms) = max_delay_ms
+        && (max_delay_ms == 0 || max_delay_ms > ExponentialRetry::MAX_DELAY_MS)
+    {
+        errors.push("exponential max_delay_ms must be between 1 and 86400000");
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 impl TaskRetryConfig {
@@ -703,6 +777,47 @@ impl TaskRetryConfig {
             allow,
             max_attempts,
             delay_ms,
+            policy: None,
+            factor: None,
+            max_delay_ms: None,
+        }
+    }
+
+    /// Create a retry config with an explicit built-in policy selection.
+    ///
+    /// `factor` and `max_delay_ms` are accepted only for `Exponential`.
+    /// Invalid parameters panic, so generated task metadata fails at compile
+    /// time and application builders fail at construction time.
+    pub const fn new_with_policy(
+        allow: Option<bool>,
+        max_attempts: Option<usize>,
+        delay_ms: Option<u64>,
+        policy: TaskRetryPolicyKind,
+        factor: Option<u32>,
+        max_delay_ms: Option<u64>,
+    ) -> Self {
+        if (factor.is_some() || max_delay_ms.is_some())
+            && !matches!(policy, TaskRetryPolicyKind::Exponential)
+        {
+            panic!("factor and max_delay_ms require exponential retry");
+        }
+        if let Some(value) = factor
+            && value < 2
+        {
+            panic!("exponential retry factor must be at least 2");
+        }
+        if let Some(value) = max_delay_ms
+            && (value == 0 || value > ExponentialRetry::MAX_DELAY_MS)
+        {
+            panic!("exponential max_delay_ms must be between 1 and 86400000");
+        }
+        Self {
+            allow,
+            max_attempts,
+            delay_ms,
+            policy: Some(policy),
+            factor,
+            max_delay_ms,
         }
     }
 
@@ -727,12 +842,27 @@ impl TaskRetryConfig {
         self.max_attempts
     }
 
-    /// Returns the explicitly configured fixed delay between retry attempts.
+    /// Returns the explicitly configured base delay between retry attempts.
     ///
     /// The value is expressed in milliseconds. `None` means the effective
     /// policy should fall back to a runner or built-in default.
     pub fn delay_ms(&self) -> Option<u64> {
         self.delay_ms
+    }
+
+    /// Return the explicitly selected built-in retry algorithm, if any.
+    pub fn policy(&self) -> Option<TaskRetryPolicyKind> {
+        self.policy
+    }
+
+    /// Return the optional exponential retry multiplier.
+    pub fn factor(&self) -> Option<u32> {
+        self.factor
+    }
+
+    /// Return the optional exponential retry delay cap in milliseconds.
+    pub fn max_delay_ms(&self) -> Option<u64> {
+        self.max_delay_ms
     }
 
     fn resolved_allow(&self, default: bool) -> bool {
@@ -754,6 +884,9 @@ pub struct TaskRetryConfigBuilder {
     allow: Option<bool>,
     max_attempts: Option<usize>,
     delay_ms: Option<u64>,
+    policy: Option<TaskRetryPolicyKind>,
+    factor: Option<u32>,
+    max_delay_ms: Option<u64>,
 }
 
 impl TaskRetryConfigBuilder {
@@ -775,12 +908,42 @@ impl TaskRetryConfigBuilder {
         self
     }
 
+    /// Select a built-in retry algorithm for this task or runner.
+    pub fn policy(mut self, policy: TaskRetryPolicyKind) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+
+    /// Set the exponential retry multiplier. Requires `policy(Exponential)`.
+    pub fn factor(mut self, factor: u32) -> Self {
+        self.factor = Some(factor);
+        self
+    }
+
+    /// Set the exponential per-wait delay cap in milliseconds.
+    pub fn max_delay_ms(mut self, max_delay_ms: u64) -> Self {
+        self.max_delay_ms = Some(max_delay_ms);
+        self
+    }
+
     /// Build the retry config.
     pub fn build(self) -> TaskRetryConfig {
-        TaskRetryConfig {
-            allow: self.allow,
-            max_attempts: self.max_attempts,
-            delay_ms: self.delay_ms,
+        match self.policy {
+            Some(policy) => TaskRetryConfig::new_with_policy(
+                self.allow,
+                self.max_attempts,
+                self.delay_ms,
+                policy,
+                self.factor,
+                self.max_delay_ms,
+            ),
+            None => {
+                assert!(
+                    self.factor.is_none() && self.max_delay_ms.is_none(),
+                    "factor and max_delay_ms require exponential retry"
+                );
+                TaskRetryConfig::new(self.allow, self.max_attempts, self.delay_ms)
+            }
         }
     }
 }
@@ -3800,7 +3963,7 @@ async fn run_task_attempt(
     }
 }
 
-/// Run task attempts with the default fixed-delay policy for one host.
+/// Run task attempts with the resolved built-in retry policy for one host.
 struct TaskRetryLoop<'a> {
     task: Arc<dyn Task>,
     hostname: &'a str,
@@ -3811,6 +3974,7 @@ struct TaskRetryLoop<'a> {
     depth: usize,
     run_options: TaskRunOptions,
     settings: RetrySettings,
+    policy: ResolvedRetryPolicy,
 }
 
 impl TaskRetryLoop<'_> {
@@ -3833,7 +3997,7 @@ impl TaskRetryLoop<'_> {
             .await;
 
             if let TaskRetryDecision::RetryAfter(delay) = self.settings.decide(
-                &FixedRetry,
+                self.policy.as_policy(),
                 &host_result,
                 attempts,
                 self.task.idempotency_mode(),
@@ -4957,6 +5121,7 @@ impl TaskDefinition {
             connection_resolver.is_some()
         );
         let retry_settings = RetrySettings::for_task(task.as_ref(), retry_defaults);
+        let retry_policy = ResolvedRetryPolicy::for_task(task.as_ref(), retry_defaults);
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
@@ -5051,6 +5216,7 @@ impl TaskDefinition {
             depth,
             run_options,
             settings: retry_settings,
+            policy: retry_policy,
         }
         .run()
         .await?;
@@ -5092,7 +5258,7 @@ impl TaskDefinition {
             processor_resolver,
             depth,
             run_options,
-            retry_defaults,
+            retry_defaults.with_policy(retry_policy),
         )
         .await?;
 
@@ -7014,6 +7180,30 @@ mod tests {
     }
 
     #[test]
+    fn retry_config_validates_all_exponential_parameters_and_preserves_existing_shape() {
+        let error = serde_json::from_str::<TaskRetryConfig>(
+            r#"{"policy":"exponential","factor":1,"max_delay_ms":0}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("factor must be at least 2"));
+        assert!(error.contains("max_delay_ms must be between 1 and 86400000"));
+
+        let selected = TaskRetryConfig::builder()
+            .policy(TaskRetryPolicyKind::Exponential)
+            .factor(3)
+            .max_delay_ms(60_000)
+            .build();
+        assert_eq!(selected.policy(), Some(TaskRetryPolicyKind::Exponential));
+        assert_eq!(selected.factor(), Some(3));
+        assert_eq!(selected.max_delay_ms(), Some(60_000));
+        assert_eq!(
+            serde_json::to_value(TaskRetryConfig::new(Some(true), Some(3), Some(250))).unwrap(),
+            json!({"allow": true, "max_attempts": 3, "delay_ms": 250})
+        );
+    }
+
+    #[test]
     fn start_uses_task_retry_config_over_default_policy() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let task = TaskDefinition::new(RetryConfiguredFlakyTask {
@@ -8262,6 +8452,7 @@ mod tests {
                 .allow(true)
                 .max_attempts(3)
                 .delay_ms(100)
+                .policy(TaskRetryPolicyKind::Exponential)
                 .build(),
         })
         .with_retry_config_override(
@@ -8269,6 +8460,7 @@ mod tests {
                 .allow(false)
                 .max_attempts(2)
                 .delay_ms(250)
+                .policy(TaskRetryPolicyKind::Fixed)
                 .build(),
         );
 
@@ -8278,6 +8470,7 @@ mod tests {
         assert_eq!(retry_config.allow(), Some(false));
         assert_eq!(retry_config.max_attempts(), Some(2));
         assert_eq!(retry_config.delay_ms(), Some(250));
+        assert_eq!(retry_config.policy(), Some(TaskRetryPolicyKind::Fixed));
     }
 
     #[test]

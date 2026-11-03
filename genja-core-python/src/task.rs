@@ -2341,8 +2341,41 @@ fn extract_retry_config_from_metadata(
         None
     };
 
-    if allow.is_some() || max_attempts.is_some() || delay_ms.is_some() {
-        Ok(Some(TaskRetryConfig::new(allow, max_attempts, delay_ms)))
+    let policy = retry
+        .get_item("policy")?
+        .filter(|value| !value.is_none())
+        .map(|value| value.extract::<String>())
+        .transpose()?;
+    let factor = retry
+        .get_item("factor")?
+        .filter(|value| !value.is_none())
+        .map(|value| value.extract::<u32>())
+        .transpose()?;
+    let max_delay_ms = retry
+        .get_item("max_delay_ms")?
+        .filter(|value| !value.is_none())
+        .map(|value| value.extract::<u64>())
+        .transpose()?;
+
+    if allow.is_some()
+        || max_attempts.is_some()
+        || delay_ms.is_some()
+        || policy.is_some()
+        || factor.is_some()
+        || max_delay_ms.is_some()
+    {
+        let config = serde_json::from_value::<TaskRetryConfig>(json!({
+            "allow": allow,
+            "max_attempts": max_attempts,
+            "delay_ms": delay_ms,
+            "policy": policy,
+            "factor": factor,
+            "max_delay_ms": max_delay_ms,
+        }))
+        .map_err(|error| {
+            PyValueError::new_err(format!("invalid python task retry metadata: {error}"))
+        })?;
+        Ok(Some(config))
     } else {
         Ok(None)
     }

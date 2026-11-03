@@ -149,7 +149,9 @@ The common macro options are:
 - `processors`: processor plugin names to run around task execution
 - `retry.allow`: optional task-level override for whether retries are allowed
 - `retry.max_attempts`: optional task-level override for total task attempts
-- `retry.delay_ms`: optional fixed in-process delay in milliseconds between retry attempts
+- `retry.delay_ms`: optional base delay in milliseconds between retry attempts
+- `retry.policy`: optional `TaskRetryPolicyKind` algorithm selection
+- `retry.factor` and `retry.max_delay_ms`: optional exponential multiplier and per-wait cap
 - `session_verification.max_attempts`: optional post-change new-session attempt count
 - `session_verification.delay_ms`: optional fixed delay in milliseconds between new-session attempts
 - `supports_dry_run`: opt into runtime dry-run dispatch
@@ -176,6 +178,13 @@ impl BackupConfig {
     // task methods
 }
 ```
+
+To select exponential retry for a Rust task, add
+`policy = TaskRetryPolicyKind::Exponential`, `factor = 3`, and
+`max_delay_ms = 60000` inside `retry(...)`. Import
+`genja_core::task::TaskRetryPolicyKind`; the factor and cap are optional when
+using the defaults of 2 and 86,400,000 ms. The Rust builder uses
+`TaskRetryConfig::builder().policy(TaskRetryPolicyKind::Exponential)`.
 
 Define exactly one task entrypoint in the macro `impl` block:
 
@@ -251,13 +260,14 @@ Common decorator options:
 ### Python Retry Overrides
 
 Use `TaskRetryConfig` when a Python task should opt into retries or override the
-runner defaults for retry count or fixed retry delay. For v0.5.x names, see
+runner defaults for retry count, base delay, or algorithm. For v0.5.x names, see
 [Migrating task retry names from v0.5.x](settings.md#migrating-task-retry-names-from-v05x).
 
 ```python
 from genja.task import (
     Host,
     TaskRetryConfig,
+    TaskRetryPolicyKind,
     TaskFailureResult,
     TaskFailureKind,
     TaskInfo,
@@ -273,6 +283,9 @@ from genja.task import (
         allow=True,
         max_attempts=3,
         delay_ms=500,
+        policy=TaskRetryPolicyKind.EXPONENTIAL,
+        factor=3,
+        max_delay_ms=60000,
     ),
 )
 class RetryableBackup:
@@ -291,7 +304,11 @@ class RetryableBackup:
 
 These values override runner defaults for that task only, field by field.
 Retries still happen only when the returned failure result is explicitly marked
-`retryable`. `delay_ms` is a fixed local delay before retry attempts.
+`retryable`. `delay_ms` is the base delay; the selected algorithm determines
+later waits. A subtask inherits its parent's selected algorithm unless it
+selects its own, while its `allow`, `max_attempts`, and `delay_ms` resolve from
+its own metadata and runner defaults. A `TaskSpec.overrides.retry` selection
+replaces authored retry metadata for that root only.
 
 ## Session Verification
 
