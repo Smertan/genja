@@ -7,6 +7,8 @@ The runner does not decide which hosts are selected. Inventory loading and
 filtering decide the selected host set, then the runner decides how task work is
 scheduled across those hosts.
 
+To create your own runner, see the [Runner Plugins](plugins/runners.md) guide.
+
 ## Built-In Runners
 
 Genja includes two built-in runners:
@@ -48,8 +50,6 @@ Runner settings:
 `max_connection_attempts` is part of the shared runner configuration. The
 built-in runners pass the task connection resolver into task execution; the
 connection layer is responsible for interpreting connection retry behavior.
-Custom runners should pass the resolver through when they delegate to task
-execution helpers.
 
 `task_retry.allow`, `task_retry.max_attempts`, and `task_retry.delay_ms` define default retry
 policy for task execution. Tasks may override these defaults through task
@@ -242,169 +242,6 @@ outcome instead of a runtime crash. If an empty host set is unexpected, check
     ```python
     if not genja.host_ids():
         print("no hosts selected")
-    ```
-
-## Custom Runner Plugins
-
-Custom runner plugins implement the runner interface for the language they are
-authored in and register under the `RunnerPlugin` group.
-
-=== ":fontawesome-brands-rust: Rust"
-
-    Rust runner plugins are async-only because `PluginRunner::run_task(...)` is
-    an async trait method. When the plugin crate already depends on `genja`,
-    import the macro from `genja::async_trait` instead of adding a separate
-    `async-trait` dependency just for the example. A runner that delegates to
-    the core task start path can declare support for custom Rust retry policies
-    as shown below.
-
-    ```rust
-    use std::sync::Arc;
-    use genja::async_trait;
-    use genja::genja_core::inventory::Hosts;
-    use genja::genja_core::settings::RunnerConfig;
-    use genja::genja_core::task::{
-        TaskConnectionResolver, TaskDefinition, TaskResults, TaskRunOptions,
-    };
-    use genja::genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
-    use genja::genja_plugin_manager::PluginManager;
-
-    #[derive(Debug)]
-    struct FirstHostOnlyRunner;
-
-    impl Plugin for FirstHostOnlyRunner {
-        fn name(&self) -> String {
-            "first_host_only".to_string()
-        }
-    }
-
-    #[async_trait]
-    impl PluginRunner for FirstHostOnlyRunner {
-        fn supports_custom_task_retry_policy(&self) -> bool {
-            true
-        }
-
-        async fn run_task(
-            &self,
-            task: &TaskDefinition,
-            hosts: &Hosts,
-            connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
-            runner_config: &RunnerConfig,
-            run_options: TaskRunOptions,
-        ) -> Result<TaskResults, genja::GenjaError> {
-            let mut results = TaskResults::new(task.as_task().name());
-
-            if let Some((host_id, host)) = hosts.iter().next() {
-                task.start_with_connection_resolver_runner_config_and_options(
-                    host_id.as_ref(),
-                    host,
-                    &mut results,
-                    connection_resolver.as_deref(),
-                    runner_config,
-                    run_options,
-                )
-                .await?;
-            }
-
-            Ok(results)
-        }
-    }
-
-    let mut plugins = PluginManager::new();
-    plugins.register_plugin(Plugins::Runner(Box::new(FirstHostOnlyRunner)));
-    ```
-
-=== ":fontawesome-brands-python: Python"
-
-    ```python
-    import genja as genja_lib
-    from genja.runner import RunnerPluginBase
-    from genja.settings import RunnerConfig
-
-
-    class FirstHostOnlyRunner(RunnerPluginBase):
-        name = "first_host_only"
-
-        def run_task(
-            self,
-            task: genja_lib.TaskDefinition,
-            hosts: dict[str, object],
-            connection_resolver: genja_lib.TaskConnectionResolver | None,
-            runner_config: RunnerConfig,
-            run_options: genja_lib.TaskRunOptions,
-        ) -> genja_lib.TaskResults:
-            _, first_host = next(iter(hosts.items()))
-            return task.run_on_host(
-                first_host,
-                connection_resolver=connection_resolver,
-                run_options=run_options,
-            )
-
-
-    plugins = genja_lib.PluginManager()
-    plugins.register_plugin(FirstHostOnlyRunner())
-    ```
-
-### Custom Retry Policy Support
-
-=== ":fontawesome-brands-rust: Rust"
-
-    Add this method inside your runner's `impl PluginRunner` block when it
-    delegates task execution to the core `TaskDefinition` start path:
-
-    ```rust
-    fn supports_custom_task_retry_policy(&self) -> bool {
-        true
-    }
-    ```
-
-    The method defaults to `false`. Return `true` only when `run_task(...)`
-    and any overridden `run_tasks(...)` path carry the selected policy through
-    the core runtime, or apply it with the same retry safety checks. Genja
-    returns an error before calling a runner that reports `false` for a custom
-    policy invocation. This method does not enable retries for tasks.
-
-=== ":fontawesome-brands-python: Python"
-
-    Python-authored custom retry policies are not currently supported, so
-    Python runner authors do not need a capability override.
-
-Custom runners may also implement `run_tasks(...)` for custom ordered task-list
-execution. If `run_tasks(...)` is not provided, Genja delegates each root task to
-`run_task(...)` in order.
-
-Python runners that implement `run_tasks(...)` should inherit from
-`BatchRunnerPluginBase` when using the typed public API.
-
-### Python Async Variant
-
-Async Python runners use the same base class:
-
-=== ":fontawesome-brands-python: Python"
-
-    ```python
-    import genja as genja_lib
-    from genja.runner import RunnerPluginBase
-    from genja.settings import RunnerConfig
-
-
-    class AsyncFirstHostOnlyRunner(RunnerPluginBase):
-        name = "async_first_host_only"
-
-        async def run_task(
-            self,
-            task: genja_lib.TaskDefinition,
-            hosts: dict[str, object],
-            connection_resolver: genja_lib.TaskConnectionResolver | None,
-            runner_config: RunnerConfig,
-            run_options: genja_lib.TaskRunOptions,
-        ) -> genja_lib.TaskResults:
-            _, first_host = next(iter(hosts.items()))
-            return task.run_on_host(
-                first_host,
-                connection_resolver=connection_resolver,
-                run_options=run_options,
-            )
     ```
 
 ## Choosing A Runner

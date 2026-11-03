@@ -247,7 +247,7 @@ provide a custom `TaskRetryPolicy` implementation.
 The selected runner must support custom policies. The built-in `serial` and
 `threaded` runners do; a custom Rust runner must declare support or Genja
 returns an error before running the task. See
-[Custom Retry Policy Support](runners.md#custom-retry-policy-support) for runner
+[Custom Retry Policy Support](plugins/runners.md#custom-retry-policy-support) for runner
 authors.
 
 Implement `TaskRetryPolicy` to choose a wait after an eligible failure. The
