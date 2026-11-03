@@ -11,6 +11,7 @@ directly. The top-level package re-exports these names for compatibility, but
 - ``TaskFailureResult``
 - ``TaskSkipResult``
 - ``TaskRetryConfig``
+- ``TaskRetryPolicyKind``
 - ``SessionVerificationConfig``
 - ``IdempotencyMode``
 - ``IdempotencyCheckResult``
@@ -676,6 +677,14 @@ def create_registered_task_by_identity(
     return _PYTHON_TASK_REGISTRY.create_by_identity(identity, input)
 
 
+class TaskRetryPolicyKind(str, Enum):
+    """Built-in task retry algorithms accepted by task and runner settings."""
+
+    NO_RETRY = "no_retry"
+    FIXED = "fixed"
+    EXPONENTIAL = "exponential"
+
+
 class TaskRetryConfig(_GenjaModel):
     """Optional task retry metadata.
 
@@ -690,8 +699,12 @@ class TaskRetryConfig(_GenjaModel):
         max_attempts (int | None): Optional total-attempt override. When
             provided, it must be at least 1. A value of 1 means the initial
             attempt only.
-        delay_ms (int | None): Optional fixed in-process delay before retry
-            attempts, in milliseconds. When provided, it must be 0 or greater.
+        delay_ms (int | None): Optional base delay before retry attempts, in
+            milliseconds. When provided, it must be 0 or greater.
+        policy (TaskRetryPolicyKind | None): Optional built-in algorithm.
+        factor (int | None): Exponential multiplier, at least 2; defaults to 2.
+        max_delay_ms (int | None): Exponential per-wait cap, between 1 and
+            86,400,000 milliseconds; defaults to 86,400,000.
     """
 
     allow: bool | None = Field(
@@ -704,7 +717,19 @@ class TaskRetryConfig(_GenjaModel):
     )
     delay_ms: int | None = Field(
         default=None,
-        description="Optional fixed delay before retry attempts, in milliseconds.",
+        description="Optional base delay before retry attempts, in milliseconds.",
+    )
+    policy: TaskRetryPolicyKind | None = Field(
+        default=None,
+        description="Optional built-in task retry algorithm.",
+    )
+    factor: int | None = Field(
+        default=None,
+        description="Optional exponential retry multiplier of at least 2.",
+    )
+    max_delay_ms: int | None = Field(
+        default=None,
+        description="Optional exponential retry delay cap in milliseconds.",
     )
 
     @field_validator("max_attempts", mode="before")
@@ -726,6 +751,53 @@ class TaskRetryConfig(_GenjaModel):
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError("delay_ms must be a non-negative integer or None")
         return value
+
+    @field_validator("factor", mode="before")
+    @classmethod
+    def _validate_factor(cls, value: Any) -> Any:
+        """Validate the optional exponential retry multiplier."""
+        if value is None:
+            return value
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 2 <= value <= 4_294_967_295
+        ):
+            raise ValueError(
+                "factor must be an integer between 2 and 4294967295 or None"
+            )
+        return value
+
+    @field_validator("max_delay_ms", mode="before")
+    @classmethod
+    def _validate_max_delay_ms(cls, value: Any) -> Any:
+        """Validate the optional exponential retry delay cap."""
+        if value is None:
+            return value
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 1 <= value <= 86_400_000
+        ):
+            raise ValueError("max_delay_ms must be between 1 and 86400000 or None")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_policy_parameters(self) -> TaskRetryConfig:
+        """Require an explicit exponential selection for backoff parameters."""
+        if (
+            self.factor is not None or self.max_delay_ms is not None
+        ) and self.policy != TaskRetryPolicyKind.EXPONENTIAL:
+            raise ValueError("factor and max_delay_ms require policy='exponential'")
+        return self
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize retry metadata, omitting unset new policy fields."""
+        payload = super().to_dict()
+        for key in ("policy", "factor", "max_delay_ms"):
+            if payload[key] is None:
+                del payload[key]
+        return payload
 
 
 class TaskInfo(_GenjaModel):
@@ -1833,6 +1905,7 @@ __all__ = [
     "GenjaTaskProtocol",
     "PydanticInputSchema",
     "TaskRetryConfig",
+    "TaskRetryPolicyKind",
     "TaskDescriptor",
     "TaskExecutionMode",
     "TaskFactory",

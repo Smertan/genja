@@ -20,6 +20,11 @@
 //!   of execution results for tasks and their sub-tasks across all hosts.
 //! - **Rich Metadata**: Tasks can attach detailed metadata including per-host execution
 //!   timing, retry state, warnings, messages, diffs, and custom data to their results.
+//! - **Retry Policies**: [`TaskRetryPolicy`] receives a read-only
+//!   [`TaskRetryContext`] and returns a [`TaskRetryDecision`]. Built-in
+//!   [`NoRetry`], [`FixedRetry`], and [`ExponentialRetry`] implementations
+//!   provide standard algorithms; the runtime retains retry safety checks
+//!   and task-host attempt accounting.
 //! - **Summaries and Serialization**: Task results can be aggregated with
 //!   [`TaskResults::host_summary`] and [`TaskResults::task_summary`], then exported in
 //!   either human-readable or raw JSON forms.
@@ -657,7 +662,11 @@ pub use registration::{
     get_compiled_task_descriptor_by_identity, list_compiled_tasks, validate_explicit_task_id,
     validate_task_version,
 };
-use retry::{RetryDefaults, RetrySettings};
+pub use retry::{
+    ExponentialRetry, ExponentialRetryError, FixedRetry, NoRetry, TaskRetryContext,
+    TaskRetryDecision, TaskRetryPolicy, TaskRetrySettings,
+};
+use retry::{ResolvedRetryPolicy, RetryDefaults, RetrySettings};
 pub use spec::{
     TaskSpec, TaskSpecConstructionError, TaskSpecError, TaskSpecFormat, TaskSpecOverrides,
     create_compiled_task_from_spec, create_compiled_task_from_spec_str,
@@ -670,13 +679,87 @@ pub use spec::{
 /// field by field. Policy resolution treats missing fields as built-in or
 /// runner-supplied defaults: `allow = false`, `max_attempts = 1`, and
 /// `delay_ms = 0`. Resolved `max_attempts` is clamped to at least `1`.
-/// `delay_ms` is a fixed local delay before retry attempts.
+/// `delay_ms` is the base delay before retry attempts. Without an explicit
+/// policy selection, the fixed-delay policy remains the default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "TaskRetryConfigWire")]
 pub struct TaskRetryConfig {
     allow: Option<bool>,
     max_attempts: Option<usize>,
     delay_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy: Option<TaskRetryPolicyKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    factor: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_delay_ms: Option<u64>,
+}
+
+/// Built-in task retry algorithm selected by task or runner configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskRetryPolicyKind {
+    /// Never retry a task failure.
+    NoRetry,
+    /// Wait for the resolved `delay_ms` before each retry.
+    Fixed,
+    /// Multiply the resolved base delay after each retry, up to a cap.
+    Exponential,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskRetryConfigWire {
+    allow: Option<bool>,
+    max_attempts: Option<usize>,
+    delay_ms: Option<u64>,
+    policy: Option<TaskRetryPolicyKind>,
+    factor: Option<u32>,
+    max_delay_ms: Option<u64>,
+}
+
+impl TryFrom<TaskRetryConfigWire> for TaskRetryConfig {
+    type Error = String;
+
+    fn try_from(wire: TaskRetryConfigWire) -> Result<Self, Self::Error> {
+        validate_retry_policy_parameters(wire.policy, wire.factor, wire.max_delay_ms)?;
+        Ok(Self {
+            allow: wire.allow,
+            max_attempts: wire.max_attempts,
+            delay_ms: wire.delay_ms,
+            policy: wire.policy,
+            factor: wire.factor,
+            max_delay_ms: wire.max_delay_ms,
+        })
+    }
+}
+
+fn validate_retry_policy_parameters(
+    policy: Option<TaskRetryPolicyKind>,
+    factor: Option<u32>,
+    max_delay_ms: Option<u64>,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if (factor.is_some() || max_delay_ms.is_some())
+        && policy != Some(TaskRetryPolicyKind::Exponential)
+    {
+        errors.push("factor and max_delay_ms require policy = exponential");
+    }
+    if let Some(factor) = factor
+        && factor < 2
+    {
+        errors.push("exponential retry factor must be at least 2");
+    }
+    if let Some(max_delay_ms) = max_delay_ms
+        && (max_delay_ms == 0 || max_delay_ms > ExponentialRetry::MAX_DELAY_MS)
+    {
+        errors.push("exponential max_delay_ms must be between 1 and 86400000");
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 impl TaskRetryConfig {
@@ -694,6 +777,47 @@ impl TaskRetryConfig {
             allow,
             max_attempts,
             delay_ms,
+            policy: None,
+            factor: None,
+            max_delay_ms: None,
+        }
+    }
+
+    /// Create a retry config with an explicit built-in policy selection.
+    ///
+    /// `factor` and `max_delay_ms` are accepted only for `Exponential`.
+    /// Invalid parameters panic, so generated task metadata fails at compile
+    /// time and application builders fail at construction time.
+    pub const fn new_with_policy(
+        allow: Option<bool>,
+        max_attempts: Option<usize>,
+        delay_ms: Option<u64>,
+        policy: TaskRetryPolicyKind,
+        factor: Option<u32>,
+        max_delay_ms: Option<u64>,
+    ) -> Self {
+        if (factor.is_some() || max_delay_ms.is_some())
+            && !matches!(policy, TaskRetryPolicyKind::Exponential)
+        {
+            panic!("factor and max_delay_ms require exponential retry");
+        }
+        if let Some(value) = factor
+            && value < 2
+        {
+            panic!("exponential retry factor must be at least 2");
+        }
+        if let Some(value) = max_delay_ms
+            && (value == 0 || value > ExponentialRetry::MAX_DELAY_MS)
+        {
+            panic!("exponential max_delay_ms must be between 1 and 86400000");
+        }
+        Self {
+            allow,
+            max_attempts,
+            delay_ms,
+            policy: Some(policy),
+            factor,
+            max_delay_ms,
         }
     }
 
@@ -718,12 +842,27 @@ impl TaskRetryConfig {
         self.max_attempts
     }
 
-    /// Returns the explicitly configured fixed delay between retry attempts.
+    /// Returns the explicitly configured base delay between retry attempts.
     ///
     /// The value is expressed in milliseconds. `None` means the effective
     /// policy should fall back to a runner or built-in default.
     pub fn delay_ms(&self) -> Option<u64> {
         self.delay_ms
+    }
+
+    /// Return the explicitly selected built-in retry algorithm, if any.
+    pub fn policy(&self) -> Option<TaskRetryPolicyKind> {
+        self.policy
+    }
+
+    /// Return the optional exponential retry multiplier.
+    pub fn factor(&self) -> Option<u32> {
+        self.factor
+    }
+
+    /// Return the optional exponential retry delay cap in milliseconds.
+    pub fn max_delay_ms(&self) -> Option<u64> {
+        self.max_delay_ms
     }
 
     fn resolved_allow(&self, default: bool) -> bool {
@@ -745,6 +884,9 @@ pub struct TaskRetryConfigBuilder {
     allow: Option<bool>,
     max_attempts: Option<usize>,
     delay_ms: Option<u64>,
+    policy: Option<TaskRetryPolicyKind>,
+    factor: Option<u32>,
+    max_delay_ms: Option<u64>,
 }
 
 impl TaskRetryConfigBuilder {
@@ -766,12 +908,42 @@ impl TaskRetryConfigBuilder {
         self
     }
 
+    /// Select a built-in retry algorithm for this task or runner.
+    pub fn policy(mut self, policy: TaskRetryPolicyKind) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+
+    /// Set the exponential retry multiplier. Requires `policy(Exponential)`.
+    pub fn factor(mut self, factor: u32) -> Self {
+        self.factor = Some(factor);
+        self
+    }
+
+    /// Set the exponential per-wait delay cap in milliseconds.
+    pub fn max_delay_ms(mut self, max_delay_ms: u64) -> Self {
+        self.max_delay_ms = Some(max_delay_ms);
+        self
+    }
+
     /// Build the retry config.
     pub fn build(self) -> TaskRetryConfig {
-        TaskRetryConfig {
-            allow: self.allow,
-            max_attempts: self.max_attempts,
-            delay_ms: self.delay_ms,
+        match self.policy {
+            Some(policy) => TaskRetryConfig::new_with_policy(
+                self.allow,
+                self.max_attempts,
+                self.delay_ms,
+                policy,
+                self.factor,
+                self.max_delay_ms,
+            ),
+            None => {
+                assert!(
+                    self.factor.is_none() && self.max_delay_ms.is_none(),
+                    "factor and max_delay_ms require exponential retry"
+                );
+                TaskRetryConfig::new(self.allow, self.max_attempts, self.delay_ms)
+            }
         }
     }
 }
@@ -3791,7 +3963,7 @@ async fn run_task_attempt(
     }
 }
 
-/// Run task attempts with the resolved fixed-delay retry settings for one host.
+/// Run task attempts with the resolved built-in retry policy for one host.
 struct TaskRetryLoop<'a> {
     task: Arc<dyn Task>,
     hostname: &'a str,
@@ -3802,6 +3974,7 @@ struct TaskRetryLoop<'a> {
     depth: usize,
     run_options: TaskRunOptions,
     settings: RetrySettings,
+    policy: ResolvedRetryPolicy,
 }
 
 impl TaskRetryLoop<'_> {
@@ -3823,7 +3996,12 @@ impl TaskRetryLoop<'_> {
             )
             .await;
 
-            if self.settings.should_retry(&host_result, attempts) {
+            if let TaskRetryDecision::RetryAfter(delay) = self.settings.decide(
+                self.policy.as_policy(),
+                &host_result,
+                attempts,
+                self.task.idempotency_mode(),
+            ) {
                 if let Some(failure) = host_result.failure() {
                     warn!(
                         "retrying task '{}' for host '{}' after attempt {}/{}: {}",
@@ -3834,8 +4012,8 @@ impl TaskRetryLoop<'_> {
                         failure.message()
                     );
                 }
-                if self.settings.delay_ms() > 0 {
-                    sleep(Duration::from_millis(self.settings.delay_ms())).await;
+                if !delay.is_zero() {
+                    sleep(delay).await;
                 }
                 continue;
             }
@@ -4523,6 +4701,8 @@ pub struct TaskDefinition {
     processor_resolver: Option<Arc<dyn TaskProcessorResolver>>,
     processor_names: Arc<Vec<String>>,
     retry_config_override: Option<TaskRetryConfig>,
+    retry_policy_override: Option<Arc<dyn TaskRetryPolicy>>,
+    retry_policy_fallback: Option<Arc<dyn TaskRetryPolicy>>,
     session_verification_config_override: Option<SessionVerificationConfig>,
 }
 
@@ -4535,6 +4715,14 @@ impl fmt::Debug for TaskDefinition {
             .field("processor_names", &self.processor_names())
             .field("has_processor_resolver", &self.processor_resolver.is_some())
             .field("retry_config_override", &self.retry_config_override)
+            .field(
+                "has_retry_policy_override",
+                &self.retry_policy_override.is_some(),
+            )
+            .field(
+                "has_retry_policy_fallback",
+                &self.retry_policy_fallback.is_some(),
+            )
             .field(
                 "session_verification_config_override",
                 &self.session_verification_config_override,
@@ -4551,6 +4739,8 @@ impl TaskDefinition {
             processor_resolver: None,
             processor_names: Arc::new(Vec::new()),
             retry_config_override: None,
+            retry_policy_override: None,
+            retry_policy_fallback: None,
             session_verification_config_override: None,
         }
     }
@@ -4596,6 +4786,43 @@ impl TaskDefinition {
     pub fn with_retry_config_override(mut self, retry_config: TaskRetryConfig) -> Self {
         self.retry_config_override = Some(retry_config);
         self
+    }
+
+    /// Select a custom Rust retry algorithm for this root task tree.
+    ///
+    /// The root uses this policy even if its metadata selects a built-in
+    /// algorithm. Subtasks inherit it unless they select their own built-in
+    /// algorithm. Each task still resolves its own authorization, attempt
+    /// limit, base delay, and per-host attempt count.
+    pub fn with_retry_policy<P: TaskRetryPolicy + 'static>(mut self, policy: P) -> Self {
+        self.retry_policy_override = Some(Arc::new(policy));
+        self
+    }
+
+    /// Select an already shared custom retry algorithm for this root tree.
+    pub fn with_shared_retry_policy(mut self, policy: Arc<dyn TaskRetryPolicy>) -> Self {
+        self.retry_policy_override = Some(policy);
+        self
+    }
+
+    /// Supply a custom algorithm when this root has no explicit selection.
+    ///
+    /// This is useful for an invocation-wide fallback. Root retry metadata
+    /// and `TaskSpec` overrides still take precedence. Subtasks inherit the
+    /// selected algorithm unless they select their own.
+    pub fn with_retry_policy_fallback(mut self, policy: Arc<dyn TaskRetryPolicy>) -> Self {
+        self.retry_policy_fallback = Some(policy);
+        self
+    }
+
+    /// Return whether this definition needs a runner to support custom retry policies.
+    pub fn uses_custom_retry_policy(&self) -> bool {
+        self.retry_policy_override.is_some()
+            || (self.retry_policy_fallback.is_some()
+                && self
+                    .retry_config()
+                    .and_then(TaskRetryConfig::policy)
+                    .is_none())
     }
 
     /// Override the root task's post-change session verification policy.
@@ -4806,8 +5033,12 @@ impl TaskDefinition {
         results: &mut TaskResults,
         connection_resolver: Option<&dyn TaskConnectionResolver>,
         run_options: TaskRunOptions,
-        retry_defaults: RetryDefaults,
+        mut retry_defaults: RetryDefaults,
     ) -> Result<(), crate::GenjaError> {
+        if let Some(policy) = &self.retry_policy_fallback {
+            retry_defaults =
+                retry_defaults.with_policy(ResolvedRetryPolicy::Custom(Arc::clone(policy)));
+        }
         Self::start_with_depth(
             Arc::clone(&self.inner),
             hostname,
@@ -4820,6 +5051,8 @@ impl TaskDefinition {
             0,
             run_options,
             retry_defaults,
+            self.retry_policy_override.as_ref().map(Arc::clone),
+            self.retry_config_override,
         )
         .await
     }
@@ -4903,6 +5136,8 @@ impl TaskDefinition {
         depth: usize,
         run_options: TaskRunOptions,
         retry_defaults: RetryDefaults,
+        root_policy_override: Option<Arc<dyn TaskRetryPolicy>>,
+        root_retry_config_override: Option<TaskRetryConfig>,
     ) -> Result<(), crate::GenjaError> {
         let max_depth = run_options.max_depth();
         if depth > max_depth {
@@ -4942,7 +5177,13 @@ impl TaskDefinition {
             max_depth,
             connection_resolver.is_some()
         );
-        let retry_settings = RetrySettings::for_task(task.as_ref(), retry_defaults);
+        let retry_config = root_retry_config_override
+            .as_ref()
+            .or_else(|| task.retry_config());
+        let retry_settings = RetrySettings::for_config(retry_config, &retry_defaults);
+        let retry_policy = root_policy_override
+            .map(ResolvedRetryPolicy::Custom)
+            .unwrap_or_else(|| ResolvedRetryPolicy::for_config(retry_config, &retry_defaults));
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
@@ -5037,6 +5278,7 @@ impl TaskDefinition {
             depth,
             run_options,
             settings: retry_settings,
+            policy: retry_policy.clone(),
         }
         .run()
         .await?;
@@ -5078,7 +5320,7 @@ impl TaskDefinition {
             processor_resolver,
             depth,
             run_options,
-            retry_defaults,
+            retry_defaults.with_policy(retry_policy),
         )
         .await?;
 
@@ -5140,7 +5382,9 @@ impl TaskDefinition {
                 Some(task.name()),
                 depth + 1,
                 run_options,
-                retry_defaults,
+                retry_defaults.clone(),
+                None,
+                None,
             )
             .await?;
             if sub_task_started {
@@ -5247,8 +5491,9 @@ impl TaskInfo for TaskDefinition {
 /// `DerefMut` to allow direct access to the underlying vector's methods.
 ///
 /// This type is particularly useful when building a sequence of tasks to be executed
-/// as part of a larger workflow or playbook. Tasks can be added individually using
-/// the [`add_task`](Tasks::add_task) method.
+/// as part of a larger workflow or playbook. Use [`add_task`](Tasks::add_task)
+/// for ordinary tasks or [`add_task_with_retry_policy`](Tasks::add_task_with_retry_policy)
+/// to select a retry algorithm for one root task tree.
 ///
 /// # Example
 ///
@@ -5285,6 +5530,20 @@ impl Tasks {
 
     pub fn add_task<T: Task + 'static>(&mut self, task: T) {
         self.0.push(TaskDefinition::new(task));
+    }
+
+    /// Add a task tree with a retry policy for this root and its subtasks.
+    ///
+    /// A subtask can select its own built-in policy. The policy does not enable
+    /// retries or change any task's attempt limit, base delay, or per-host
+    /// attempt count. It is stored in the task definition used by the runner.
+    pub fn add_task_with_retry_policy<T, P>(&mut self, task: T, policy: P)
+    where
+        T: Task + 'static,
+        P: TaskRetryPolicy + 'static,
+    {
+        self.0
+            .push(TaskDefinition::new(task).with_retry_policy(policy));
     }
 }
 
@@ -7000,6 +7259,30 @@ mod tests {
     }
 
     #[test]
+    fn retry_config_validates_all_exponential_parameters_and_preserves_existing_shape() {
+        let error = serde_json::from_str::<TaskRetryConfig>(
+            r#"{"policy":"exponential","factor":1,"max_delay_ms":0}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("factor must be at least 2"));
+        assert!(error.contains("max_delay_ms must be between 1 and 86400000"));
+
+        let selected = TaskRetryConfig::builder()
+            .policy(TaskRetryPolicyKind::Exponential)
+            .factor(3)
+            .max_delay_ms(60_000)
+            .build();
+        assert_eq!(selected.policy(), Some(TaskRetryPolicyKind::Exponential));
+        assert_eq!(selected.factor(), Some(3));
+        assert_eq!(selected.max_delay_ms(), Some(60_000));
+        assert_eq!(
+            serde_json::to_value(TaskRetryConfig::new(Some(true), Some(3), Some(250))).unwrap(),
+            json!({"allow": true, "max_attempts": 3, "delay_ms": 250})
+        );
+    }
+
+    #[test]
     fn start_uses_task_retry_config_over_default_policy() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let task = TaskDefinition::new(RetryConfiguredFlakyTask {
@@ -8248,6 +8531,7 @@ mod tests {
                 .allow(true)
                 .max_attempts(3)
                 .delay_ms(100)
+                .policy(TaskRetryPolicyKind::Exponential)
                 .build(),
         })
         .with_retry_config_override(
@@ -8255,6 +8539,7 @@ mod tests {
                 .allow(false)
                 .max_attempts(2)
                 .delay_ms(250)
+                .policy(TaskRetryPolicyKind::Fixed)
                 .build(),
         );
 
@@ -8264,6 +8549,49 @@ mod tests {
         assert_eq!(retry_config.allow(), Some(false));
         assert_eq!(retry_config.max_attempts(), Some(2));
         assert_eq!(retry_config.delay_ms(), Some(250));
+        assert_eq!(retry_config.policy(), Some(TaskRetryPolicyKind::Fixed));
+    }
+
+    #[test]
+    fn root_retry_override_controls_runtime_settings_and_algorithm() {
+        for (policy, expected_attempts) in [
+            (TaskRetryPolicyKind::Fixed, 2),
+            (TaskRetryPolicyKind::NoRetry, 1),
+        ] {
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let task = TaskDefinition::new(RetryConfiguredFlakyTask {
+                inner: FlakyTask {
+                    name: "override-runtime",
+                    attempts: Arc::clone(&attempts),
+                    succeed_on_attempt: 2,
+                },
+                retry_config: TaskRetryConfig::builder()
+                    .allow(false)
+                    .policy(TaskRetryPolicyKind::Exponential)
+                    .build(),
+            })
+            .with_retry_config_override(
+                TaskRetryConfig::builder()
+                    .allow(true)
+                    .max_attempts(2)
+                    .policy(policy)
+                    .build(),
+            );
+            let host = Host::builder().hostname("router1").build();
+            let mut results = TaskResults::new("override-runtime");
+
+            run_async(task.start("router1", &host, &mut results, 0))
+                .expect("root retry override should be applied");
+            assert_eq!(attempts.load(Ordering::SeqCst), expected_attempts);
+            assert_eq!(
+                results
+                    .host_result("router1")
+                    .unwrap()
+                    .execution_metadata()
+                    .attempts(),
+                expected_attempts
+            );
+        }
     }
 
     #[test]

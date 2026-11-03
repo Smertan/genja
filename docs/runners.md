@@ -7,6 +7,8 @@ The runner does not decide which hosts are selected. Inventory loading and
 filtering decide the selected host set, then the runner decides how task work is
 scheduled across those hosts.
 
+To create your own runner, see the [Runner Plugins](plugins/runners.md) guide.
+
 ## Built-In Runners
 
 Genja includes two built-in runners:
@@ -39,32 +41,53 @@ Runner settings:
 - `worker_count`: optional concurrency limit for runners that support it.
 - `max_task_depth`: maximum nested task depth. Defaults to `10`.
 - `max_connection_attempts`: maximum connection attempts. Defaults to `3`.
-- `retry.allow`: whether task retries are allowed by default. Defaults to `false`.
-- `retry.max_attempts`: total number of task attempts allowed by default. Defaults to `1`.
-- `retry.delay_ms`: fixed in-process delay in milliseconds between retry attempts. Defaults to `0`.
+- `task_retry.allow`: whether task retries are allowed by default. Defaults to `false`.
+- `task_retry.max_attempts`: total number of task attempts allowed by default. Defaults to `1`.
+- `task_retry.delay_ms`: base delay in milliseconds between retry attempts. Defaults to `0`.
+- `task_retry.policy`: optional `no_retry`, `fixed`, or `exponential` algorithm.
+- `task_retry.factor` and `task_retry.max_delay_ms`: optional exponential multiplier and per-wait cap; when omitted with exponential retry, they default to `2` and `86400000` ms.
 
 `max_connection_attempts` is part of the shared runner configuration. The
 built-in runners pass the task connection resolver into task execution; the
 connection layer is responsible for interpreting connection retry behavior.
-Custom runners should pass the resolver through when they delegate to task
-execution helpers.
 
-`retry.allow`, `retry.max_attempts`, and `retry.delay_ms` define default retry
+`task_retry.allow`, `task_retry.max_attempts`, and `task_retry.delay_ms` define default retry
 policy for task execution. Tasks may override these defaults through task
 metadata. Retries are only attempted when the effective policy allows them and
 the task returns a failed host result marked as retryable.
 Genja does not infer task mutability or idempotency when applying retries; the
 decision is driven entirely by configured policy and the task's returned
-failure result. `retry.delay_ms` is a fixed local delay before retry attempts.
+failure result. Omitting `task_retry.policy` retains fixed-delay behavior;
+the default `allow = false` and `max_attempts = 1` still produce one attempt.
 
-Precedence for retry settings is:
+### Task Retry Precedence
 
-1. task-level retry metadata such as `retry.allow`, `retry.max_attempts`, and `retry.delay_ms`
-2. runner-level `retry` defaults
-3. built-in fallback defaults
+For `allow`, `max_attempts`, and `delay_ms`, each task first uses its own
+declared values, then `runner.task_retry`, then the built-in defaults. A root
+`TaskDefinition` retry override, including `TaskSpec.overrides.retry`,
+replaces that root's authored retry metadata; any fields omitted from the
+override use runner defaults. The root override does not change subtasks.
+This resolution is per field, so a task can set `allow` while inheriting
+`max_attempts` and `delay_ms` from the runner.
 
-Overrides are resolved field by field, so a task can set `retry.allow` while
-still inheriting `retry.max_attempts` and `retry.delay_ms` from the runner.
+Algorithm selection has its own order. A root uses a custom Rust policy
+attached to its `TaskDefinition`, otherwise an explicit selection in its
+`TaskDefinition` retry override, otherwise its authored task metadata,
+otherwise a Rust invocation fallback, otherwise `runner.task_retry.policy`,
+otherwise fixed delay. When a root
+override exists without a policy selection, the authored policy is replaced
+along with the other authored retry metadata. A subtask uses its own explicit
+algorithm selection if present; otherwise it inherits the parent's selected
+algorithm. Each subtask still resolves `allow`, `max_attempts`, and
+`delay_ms` from its own metadata and the runner defaults.
+
+Rust callers can add a root with its own policy using
+`tasks.add_task_with_retry_policy(task, policy)`.
+`Genja::run_task_with_retry_policy(...)` accepts a policy
+for one task tree, while `run_tasks_with_retry_policy(...)` supplies a fallback
+for roots in a list. Both have async forms. The built-in serial and threaded
+runners carry custom policies; other runner plugins must declare support or
+Genja reports an error when a custom policy is selected.
 
 See [Tasks](tasks.md) for Rust `#[genja_task(...)]` and Python `@task(...)`
 examples showing how to set task-level retry overrides.
@@ -219,138 +242,6 @@ outcome instead of a runtime crash. If an empty host set is unexpected, check
     ```python
     if not genja.host_ids():
         print("no hosts selected")
-    ```
-
-## Custom Runner Plugins
-
-Custom runner plugins implement the runner interface for the language they are
-authored in and register under the `RunnerPlugin` group.
-
-=== ":fontawesome-brands-rust: Rust"
-
-    Rust runner plugins are async-only because `PluginRunner::run_task(...)` is
-    an async trait method. When the plugin crate already depends on `genja`,
-    import the macro from `genja::async_trait` instead of adding a separate
-    `async-trait` dependency just for the example.
-
-    ```rust
-    use std::sync::Arc;
-    use genja::async_trait;
-    use genja::genja_core::inventory::Hosts;
-    use genja::genja_core::settings::RunnerConfig;
-    use genja::genja_core::task::{
-        TaskConnectionResolver, TaskDefinition, TaskResults, TaskRunOptions,
-    };
-    use genja::genja_plugin_manager::plugin_types::{Plugin, PluginRunner, Plugins};
-    use genja::genja_plugin_manager::PluginManager;
-
-    #[derive(Debug)]
-    struct FirstHostOnlyRunner;
-
-    impl Plugin for FirstHostOnlyRunner {
-        fn name(&self) -> String {
-            "first_host_only".to_string()
-        }
-    }
-
-    #[async_trait]
-    impl PluginRunner for FirstHostOnlyRunner {
-        async fn run_task(
-            &self,
-            task: &TaskDefinition,
-            hosts: &Hosts,
-            connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
-            _runner_config: &RunnerConfig,
-            run_options: TaskRunOptions,
-        ) -> Result<TaskResults, genja::GenjaError> {
-            let mut results = TaskResults::new(task.as_task().name());
-
-            if let Some((host_id, host)) = hosts.iter().next() {
-                task.start_with_connection_resolver_and_options(
-                    host_id.as_ref(),
-                    host,
-                    &mut results,
-                    connection_resolver.as_deref(),
-                    run_options,
-                )
-                .await?;
-            }
-
-            Ok(results)
-        }
-    }
-
-    let mut plugins = PluginManager::new();
-    plugins.register_plugin(Plugins::Runner(Box::new(FirstHostOnlyRunner)));
-    ```
-
-=== ":fontawesome-brands-python: Python"
-
-    ```python
-    import genja as genja_lib
-    from genja.runner import RunnerPluginBase
-    from genja.settings import RunnerConfig
-
-
-    class FirstHostOnlyRunner(RunnerPluginBase):
-        name = "first_host_only"
-
-        def run_task(
-            self,
-            task: genja_lib.TaskDefinition,
-            hosts: dict[str, object],
-            connection_resolver: genja_lib.TaskConnectionResolver | None,
-            runner_config: RunnerConfig,
-            run_options: genja_lib.TaskRunOptions,
-        ) -> genja_lib.TaskResults:
-            _, first_host = next(iter(hosts.items()))
-            return task.run_on_host(
-                first_host,
-                connection_resolver=connection_resolver,
-                run_options=run_options,
-            )
-
-
-    plugins = genja_lib.PluginManager()
-    plugins.register_plugin(FirstHostOnlyRunner())
-    ```
-
-Custom runners may also implement `run_tasks(...)` for custom ordered task-list
-execution. If `run_tasks(...)` is not provided, Genja delegates each root task to
-`run_task(...)` in order.
-
-Python runners that implement `run_tasks(...)` should inherit from
-`BatchRunnerPluginBase` when using the typed public API.
-
-### Python Async Variant
-
-Async Python runners use the same base class:
-
-=== ":fontawesome-brands-python: Python"
-
-    ```python
-    import genja as genja_lib
-    from genja.runner import RunnerPluginBase
-    from genja.settings import RunnerConfig
-
-
-    class AsyncFirstHostOnlyRunner(RunnerPluginBase):
-        name = "async_first_host_only"
-
-        async def run_task(
-            self,
-            task: genja_lib.TaskDefinition,
-            hosts: dict[str, object],
-            connection_resolver: genja_lib.TaskConnectionResolver | None,
-            runner_config: RunnerConfig,
-            run_options: genja_lib.TaskRunOptions,
-        ) -> genja_lib.TaskResults:
-            _, first_host = next(iter(hosts.items()))
-            return task.run_on_host(
-                first_host,
-                connection_resolver=connection_resolver,
-                run_options=run_options,
-            )
     ```
 
 ## Choosing A Runner

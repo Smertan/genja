@@ -162,7 +162,8 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 ///
 /// - `connection_plugin_name = "..."`; defaults to no task-scoped connection.
 /// - `processors = ["..."]`; defaults to no processors.
-/// - `retry(allow = ..., max_attempts = ..., delay_ms = ...)`; omitted fields
+/// - `retry(allow = ..., max_attempts = ..., delay_ms = ..., policy = TaskRetryPolicyKind::...,
+///   factor = ..., max_delay_ms = ...)`; omitted fields
 ///   fall back to runner retry defaults, then built-in retry defaults.
 /// - `idempotency = IdempotencyMode::...`; defaults to
 ///   `IdempotencyMode::Disabled`.
@@ -435,6 +436,9 @@ struct RetryArgs {
     allow: Option<LitBool>,
     max_attempts: Option<LitInt>,
     delay_ms: Option<LitInt>,
+    policy: Option<Path>,
+    factor: Option<LitInt>,
+    max_delay_ms: Option<LitInt>,
 }
 
 #[derive(Default)]
@@ -860,10 +864,69 @@ impl Parse for RetryArgs {
                     )?;
                     args.delay_ms = Some(delay_ms);
                 }
+                "policy" => {
+                    if args.policy.is_some() {
+                        return Err(syn::Error::new_spanned(key, "duplicate retry key `policy`"));
+                    }
+                    let policy: Path = input.parse()?;
+                    let variant = policy
+                        .segments
+                        .last()
+                        .map(|segment| segment.ident.to_string());
+                    if !matches!(
+                        variant.as_deref(),
+                        Some("NoRetry" | "Fixed" | "Exponential")
+                    ) {
+                        return Err(syn::Error::new_spanned(
+                            policy,
+                            "retry policy must be a `TaskRetryPolicyKind` variant",
+                        ));
+                    }
+                    args.policy = Some(policy);
+                }
+                "factor" => {
+                    if args.factor.is_some() {
+                        return Err(syn::Error::new_spanned(key, "duplicate retry key `factor`"));
+                    }
+                    let factor: LitInt = input.parse()?;
+                    let value = factor.base10_parse::<u32>().map_err(|_| {
+                        syn::Error::new_spanned(
+                            &factor,
+                            "retry factor must be an integer at least 2",
+                        )
+                    })?;
+                    if value < 2 {
+                        return Err(syn::Error::new_spanned(
+                            factor,
+                            "retry factor must be an integer at least 2",
+                        ));
+                    }
+                    args.factor = Some(factor);
+                }
+                "max_delay_ms" => {
+                    if args.max_delay_ms.is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate retry key `max_delay_ms`",
+                        ));
+                    }
+                    let max_delay_ms: LitInt = input.parse()?;
+                    let value = parse_non_negative_u64_literal(
+                        &max_delay_ms,
+                        "`max_delay_ms` must be between 1 and 86400000",
+                    )?;
+                    if value == 0 || value > 86_400_000 {
+                        return Err(syn::Error::new_spanned(
+                            max_delay_ms,
+                            "`max_delay_ms` must be between 1 and 86400000",
+                        ));
+                    }
+                    args.max_delay_ms = Some(max_delay_ms);
+                }
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "unsupported retry key; expected `allow`, `max_attempts`, or `delay_ms`",
+                        "unsupported retry key; expected `allow`, `max_attempts`, `delay_ms`, `policy`, `factor`, or `max_delay_ms`",
                     ));
                 }
             }
@@ -875,6 +938,19 @@ impl Parse for RetryArgs {
             input.parse::<Token![,]>()?;
         }
 
+        if (args.factor.is_some() || args.max_delay_ms.is_some())
+            && args.policy.as_ref().is_none_or(|policy| {
+                policy
+                    .segments
+                    .last()
+                    .is_none_or(|segment| segment.ident != "Exponential")
+            })
+        {
+            return Err(syn::Error::new(
+                input.span(),
+                "retry `factor` and `max_delay_ms` require policy = TaskRetryPolicyKind::Exponential",
+            ));
+        }
         Ok(args)
     }
 }
@@ -1182,7 +1258,26 @@ fn expand_genja_task(
             Some(ref delay_ms) => quote! { Some(#delay_ms) },
             None => quote! { None },
         };
-        quote! { genja_core::task::TaskRetryConfig::new(#allow, #max_attempts, #delay_ms) }
+        let factor = match retry.factor {
+            Some(ref factor) => quote! { Some(#factor) },
+            None => quote! { None },
+        };
+        let max_delay_ms = match retry.max_delay_ms {
+            Some(ref max_delay_ms) => quote! { Some(#max_delay_ms) },
+            None => quote! { None },
+        };
+        match retry.policy.as_ref() {
+            Some(policy) => quote! {
+                genja_core::task::TaskRetryConfig::new_with_policy(
+                    #allow, #max_attempts, #delay_ms,
+                    #policy,
+                    #factor, #max_delay_ms,
+                )
+            },
+            _ => {
+                quote! { genja_core::task::TaskRetryConfig::new(#allow, #max_attempts, #delay_ms) }
+            }
+        }
     });
 
     let retry_config_impl = if let Some(retry_config_value) = &retry_config_value {

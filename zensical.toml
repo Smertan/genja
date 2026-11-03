@@ -23,6 +23,7 @@ nav = [
   {"Runners" = "runners.md"},
   {"Plugins" = [
     "plugins/index.md",
+    {"Runner Plugins" = "plugins/runners.md"},
     {"Connections" = "connection.md"},
     {"Processors" = "processors.md"},
     {"Transforms" = "transforms.md"},

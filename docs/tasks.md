@@ -149,7 +149,9 @@ The common macro options are:
 - `processors`: processor plugin names to run around task execution
 - `retry.allow`: optional task-level override for whether retries are allowed
 - `retry.max_attempts`: optional task-level override for total task attempts
-- `retry.delay_ms`: optional fixed in-process delay in milliseconds between retry attempts
+- `retry.delay_ms`: optional base delay in milliseconds between retry attempts
+- `retry.policy`: optional `TaskRetryPolicyKind` algorithm selection
+- `retry.factor` and `retry.max_delay_ms`: optional exponential multiplier and per-wait cap
 - `session_verification.max_attempts`: optional post-change new-session attempt count
 - `session_verification.delay_ms`: optional fixed delay in milliseconds between new-session attempts
 - `supports_dry_run`: opt into runtime dry-run dispatch
@@ -176,6 +178,13 @@ impl BackupConfig {
     // task methods
 }
 ```
+
+To select exponential retry for a Rust task, add
+`policy = TaskRetryPolicyKind::Exponential`, `factor = 3`, and
+`max_delay_ms = 60000` inside `retry(...)`. Import
+`genja_core::task::TaskRetryPolicyKind`; the factor and cap are optional when
+using the defaults of 2 and 86,400,000 ms. The Rust builder uses
+`TaskRetryConfig::builder().policy(TaskRetryPolicyKind::Exponential)`.
 
 Define exactly one task entrypoint in the macro `impl` block:
 
@@ -230,6 +239,77 @@ impl RetryableBackup {
 These values override runner defaults for that task only. Retries still happen
 only when the returned failure is explicitly marked `retryable`.
 
+### Custom Retry Policies (Rust only)
+
+**Rust only:** Python tasks can select the built-in retry policies, but cannot
+provide a custom `TaskRetryPolicy` implementation.
+
+The selected runner must support custom policies. The built-in `serial` and
+`threaded` runners do; a custom Rust runner must declare support or Genja
+returns an error before running the task. See
+[Custom Retry Policy Support](plugins/runners.md#custom-retry-policy-support) for runner
+authors.
+
+Implement `TaskRetryPolicy` to choose a wait after an eligible failure. The
+runtime checks retry authorization, the task's attempt limit, and the
+failure's `retryable` flag before calling the policy:
+
+```rust
+use genja_core::task::{TaskRetryContext, TaskRetryDecision, TaskRetryPolicy};
+use std::time::Duration;
+
+struct ImmediateRetry;
+
+impl TaskRetryPolicy for ImmediateRetry {
+    fn decide(&self, _context: &TaskRetryContext<'_>) -> TaskRetryDecision {
+        TaskRetryDecision::RetryAfter(Duration::ZERO)
+    }
+}
+
+// One task tree, with synchronous or asynchronous invocation:
+let results = genja.run_task_with_retry_policy(my_task, 1, ImmediateRetry)?;
+// genja.run_task_with_retry_policy_async(my_task, 1, ImmediateRetry).await?;
+```
+
+For a task that supports dry-run, pass runtime options alongside the policy:
+
+```rust
+use genja::TaskRunOptions;
+
+let options = TaskRunOptions::new(1).with_dry_run(true);
+let results = genja.run_task_with_retry_policy_and_options(
+    my_dry_run_task,
+    options,
+    ImmediateRetry,
+)?;
+```
+
+The async form is `run_task_with_retry_policy_and_options_async(...)`.
+
+For a list, add each task with its own policy directly:
+
+```rust
+use genja_core::task::{ExponentialRetry, Tasks};
+
+let mut tasks = Tasks::new();
+tasks.add_task_with_retry_policy(RetryableBackup, ImmediateRetry);
+tasks.add_task_with_retry_policy(
+    RetryableBackup,
+    ExponentialRetry::new(3, 60_000)?,
+);
+let results = genja.run_tasks(tasks, 1)?;
+```
+
+`add_task(task)` still adds a task without an invocation policy. For a policy
+shared as a fallback across the list, use `run_tasks_with_retry_policy(...)`
+or its async form. To combine a list-wide fallback with dry-run, use
+`run_tasks_with_retry_policy_and_options(...)` or its async form.
+`TaskDefinition::with_retry_policy(...)` remains available
+when a caller already has a task definition to customize.
+Subtasks inherit their parent's algorithm unless they select a built-in
+policy themselves. Each task retains its own `allow`, `max_attempts`, and
+`delay_ms` values and tracks attempts separately for each host.
+
 ## Python Task Decorator
 
 Python tasks use the `@task(...)` decorator for static task metadata.
@@ -251,13 +331,16 @@ Common decorator options:
 ### Python Retry Overrides
 
 Use `TaskRetryConfig` when a Python task should opt into retries or override the
-runner defaults for retry count or fixed retry delay. For v0.5.x names, see
+runner defaults for retry count, base delay, or algorithm. For v0.5.x names, see
 [Migrating task retry names from v0.5.x](settings.md#migrating-task-retry-names-from-v05x).
+Python supports built-in policy selection; custom retry policy implementations
+are available to Rust callers only.
 
 ```python
 from genja.task import (
     Host,
     TaskRetryConfig,
+    TaskRetryPolicyKind,
     TaskFailureResult,
     TaskFailureKind,
     TaskInfo,
@@ -273,6 +356,9 @@ from genja.task import (
         allow=True,
         max_attempts=3,
         delay_ms=500,
+        policy=TaskRetryPolicyKind.EXPONENTIAL,
+        factor=3,
+        max_delay_ms=60000,
     ),
 )
 class RetryableBackup:
@@ -291,7 +377,11 @@ class RetryableBackup:
 
 These values override runner defaults for that task only, field by field.
 Retries still happen only when the returned failure result is explicitly marked
-`retryable`. `delay_ms` is a fixed local delay before retry attempts.
+`retryable`. `delay_ms` is the base delay; the selected algorithm determines
+later waits. A subtask inherits its parent's selected algorithm unless it
+selects its own, while its `allow`, `max_attempts`, and `delay_ms` resolve from
+its own metadata and runner defaults. A `TaskSpec.overrides.retry` selection
+replaces authored retry metadata for that root only.
 
 ## Session Verification
 

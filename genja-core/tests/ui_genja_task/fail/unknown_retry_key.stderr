@@ -1,4 +1,4 @@
-error: unsupported retry key; expected `allow`, `max_attempts`, or `delay_ms`
+error: unsupported retry key; expected `allow`, `max_attempts`, `delay_ms`, `policy`, `factor`, or `max_delay_ms`
  --> tests/ui_genja_task/fail/unknown_retry_key.rs:9:11
   |
 9 |     retry(backoff = true)

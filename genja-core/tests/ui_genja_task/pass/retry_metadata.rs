@@ -9,7 +9,10 @@ struct RetryTask;
     retry(
         allow = true,
         max_attempts = 3,
-        delay_ms = 500
+        delay_ms = 500,
+        policy = genja_core::task::TaskRetryPolicyKind::Exponential,
+        factor = 3,
+        max_delay_ms = 60000
     )
 )]
 impl RetryTask {

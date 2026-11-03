@@ -111,7 +111,7 @@ use genja_core::settings::RunnerConfig;
 pub use genja_core::task::TaskRunOptions;
 use genja_core::task::{
     Task, TaskConnectionResolver, TaskDefinition, TaskInfo, TaskProcessorResolver, TaskResults,
-    TaskResultsSummary, Tasks,
+    TaskResultsSummary, TaskRetryPolicy, Tasks,
 };
 use genja_core::{ConfigLoadError, NatString, Settings};
 pub use genja_core_derive::genja_task;
@@ -1108,6 +1108,99 @@ impl Genja {
             .await
     }
 
+    /// Runs a single task tree with a custom Rust retry policy.
+    ///
+    /// The policy supplies the algorithm to the root and its subtasks, except
+    /// where a subtask explicitly selects a built-in policy. Each task still
+    /// controls whether retries are allowed and how many attempts are permitted.
+    pub fn run_task_with_retry_policy<T, P>(
+        &self,
+        task: T,
+        max_depth: usize,
+        policy: P,
+    ) -> Result<TaskResults, GenjaError>
+    where
+        T: Task + 'static,
+        P: TaskRetryPolicy + 'static,
+    {
+        ensure_sync_execution_outside_tokio(
+            "run_task_with_retry_policy()",
+            "run_task_with_retry_policy_async()",
+        )?;
+        self.run_task_with_retry_policy_and_options(task, TaskRunOptions::new(max_depth), policy)
+    }
+
+    /// Runs a single task tree with a custom retry policy and runtime options.
+    ///
+    /// Use `run_options` for controls such as dry-run mode. The policy supplies
+    /// the retry algorithm while each task keeps its own retry authorization,
+    /// attempt limit, and base delay.
+    pub fn run_task_with_retry_policy_and_options<T, P>(
+        &self,
+        task: T,
+        run_options: TaskRunOptions,
+        policy: P,
+    ) -> Result<TaskResults, GenjaError>
+    where
+        T: Task + 'static,
+        P: TaskRetryPolicy + 'static,
+    {
+        ensure_sync_execution_outside_tokio(
+            "run_task_with_retry_policy_and_options()",
+            "run_task_with_retry_policy_and_options_async()",
+        )?;
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
+        runtime.block_on(self.run_task_with_retry_policy_and_options_async(
+            task,
+            run_options,
+            policy,
+        ))
+    }
+
+    /// Asynchronously runs a single task tree with a custom Rust retry policy.
+    ///
+    /// The policy supplies the algorithm to the root and its subtasks, except
+    /// where a subtask explicitly selects a built-in policy.
+    pub async fn run_task_with_retry_policy_async<T, P>(
+        &self,
+        task: T,
+        max_depth: usize,
+        policy: P,
+    ) -> Result<TaskResults, GenjaError>
+    where
+        T: Task + 'static,
+        P: TaskRetryPolicy + 'static,
+    {
+        self.run_task_with_retry_policy_and_options_async(
+            task,
+            TaskRunOptions::new(max_depth),
+            policy,
+        )
+        .await
+    }
+
+    /// Asynchronously runs a single task tree with a custom retry policy and
+    /// runtime options, including dry-run mode.
+    pub async fn run_task_with_retry_policy_and_options_async<T, P>(
+        &self,
+        task: T,
+        run_options: TaskRunOptions,
+        policy: P,
+    ) -> Result<TaskResults, GenjaError>
+    where
+        T: Task + 'static,
+        P: TaskRetryPolicy + 'static,
+    {
+        self.run_task_definition_async(
+            TaskDefinition::new(task).with_retry_policy(policy),
+            run_options,
+        )
+        .await
+    }
+
     async fn run_task_definition_async(
         &self,
         task_definition: TaskDefinition,
@@ -1138,6 +1231,12 @@ impl Genja {
             host_count
         );
         let runner = self.get_runner_plugin(runner_name)?;
+        if task_definition.uses_custom_retry_policy() && !runner.supports_custom_task_retry_policy()
+        {
+            return Err(GenjaError::Message(format!(
+                "runner '{runner_name}' does not support custom task retry policies"
+            )));
+        }
         let results = runner
             .run_task(
                 &task_definition,
@@ -1200,6 +1299,87 @@ impl Genja {
             .await
     }
 
+    /// Runs a task list with a custom fallback retry policy.
+    ///
+    /// Each root may have its own policy through
+    /// [`Tasks::add_task_with_retry_policy`]. An explicit built-in selection on
+    /// a root or subtask also takes precedence over this fallback. Retry
+    /// authorization and attempt counts remain independent for each task.
+    pub fn run_tasks_with_retry_policy<P: TaskRetryPolicy + 'static>(
+        &self,
+        tasks: Tasks,
+        max_depth: usize,
+        policy: P,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        ensure_sync_execution_outside_tokio(
+            "run_tasks_with_retry_policy()",
+            "run_tasks_with_retry_policy_async()",
+        )?;
+        self.run_tasks_with_retry_policy_and_options(tasks, TaskRunOptions::new(max_depth), policy)
+    }
+
+    /// Runs a task list with a custom fallback retry policy and runtime options.
+    ///
+    /// Use `run_options` for controls such as dry-run mode. A policy attached
+    /// to a root or an explicit built-in selection takes precedence over this
+    /// fallback.
+    pub fn run_tasks_with_retry_policy_and_options<P: TaskRetryPolicy + 'static>(
+        &self,
+        tasks: Tasks,
+        run_options: TaskRunOptions,
+        policy: P,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        ensure_sync_execution_outside_tokio(
+            "run_tasks_with_retry_policy_and_options()",
+            "run_tasks_with_retry_policy_and_options_async()",
+        )?;
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
+        runtime.block_on(self.run_tasks_with_retry_policy_and_options_async(
+            tasks,
+            run_options,
+            policy,
+        ))
+    }
+
+    /// Asynchronously runs a task list with a custom fallback retry policy.
+    ///
+    /// A policy attached directly to a root or an explicit built-in selection
+    /// takes precedence. Subtasks inherit the root's resolved algorithm unless
+    /// they select a built-in policy themselves.
+    pub async fn run_tasks_with_retry_policy_async<P: TaskRetryPolicy + 'static>(
+        &self,
+        tasks: Tasks,
+        max_depth: usize,
+        policy: P,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        self.run_tasks_with_retry_policy_and_options_async(
+            tasks,
+            TaskRunOptions::new(max_depth),
+            policy,
+        )
+        .await
+    }
+
+    /// Asynchronously runs a task list with a custom fallback retry policy
+    /// and runtime options, including dry-run mode.
+    pub async fn run_tasks_with_retry_policy_and_options_async<P: TaskRetryPolicy + 'static>(
+        &self,
+        mut tasks: Tasks,
+        run_options: TaskRunOptions,
+        policy: P,
+    ) -> Result<Vec<TaskResults>, GenjaError> {
+        let shared_policy: Arc<dyn TaskRetryPolicy> = Arc::new(policy);
+        for task in tasks.iter_mut() {
+            *task = task
+                .clone()
+                .with_retry_policy_fallback(Arc::clone(&shared_policy));
+        }
+        self.run_tasks_with_options_async(tasks, run_options).await
+    }
+
     /// Executes an ordered list of root task trees asynchronously using explicit runtime options.
     ///
     /// Use this when the invocation needs controls beyond the required maximum
@@ -1240,6 +1420,13 @@ impl Genja {
             task_names
         );
         let runner = self.get_runner_plugin(runner_name)?;
+        if tasks.iter().any(TaskDefinition::uses_custom_retry_policy)
+            && !runner.supports_custom_task_retry_policy()
+        {
+            return Err(GenjaError::Message(format!(
+                "runner '{runner_name}' does not support custom task retry policies"
+            )));
+        }
         let results = runner
             .run_tasks(
                 &tasks,
@@ -1342,15 +1529,17 @@ mod tests {
         ResolvedConnectionParams,
     };
     use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig, SSHConfig};
-    use genja_core::task::TaskRetryConfig;
     use genja_core::task::{
         BlockingTaskRuntimeContext, HostTaskResult, Task, TaskConnectionResolver, TaskDefinition,
         TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskRuntimeContext,
         TaskSuccess, Tasks,
     };
+    use genja_core::task::{
+        TaskRetryConfig, TaskRetryContext, TaskRetryDecision, TaskRetryPolicy, TaskRetryPolicyKind,
+    };
     use genja_plugin_manager::PluginManager;
     use genja_plugin_manager::plugin_types::{
-        AsyncPluginInventory, Plugin, PluginConnection, Plugins,
+        AsyncPluginInventory, Plugin, PluginConnection, PluginRunner, Plugins,
     };
     use serde_json::{Value, json};
     use std::collections::HashMap;
@@ -1361,6 +1550,28 @@ mod tests {
 
     struct TestTask {
         name: String,
+    }
+
+    struct RunnerWithoutCustomRetry;
+
+    impl Plugin for RunnerWithoutCustomRetry {
+        fn name(&self) -> String {
+            "no-custom-retry".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl PluginRunner for RunnerWithoutCustomRetry {
+        async fn run_task(
+            &self,
+            _task: &TaskDefinition,
+            _hosts: &Hosts,
+            _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+            _runner_config: &RunnerConfig,
+            _run_options: TaskRunOptions,
+        ) -> Result<genja_core::task::TaskResults, GenjaError> {
+            panic!("unsupported runner must be rejected before execution")
+        }
     }
 
     #[derive(Debug)]
@@ -1462,6 +1673,23 @@ mod tests {
         retry_config: Option<TaskRetryConfig>,
         sub_tasks: Vec<Arc<dyn Task>>,
         attempts: Arc<Mutex<HashMap<(&'static str, String), usize>>>,
+    }
+
+    struct TestCustomRetryPolicy {
+        retry: bool,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl TaskRetryPolicy for TestCustomRetryPolicy {
+        fn decide(&self, context: &TaskRetryContext<'_>) -> TaskRetryDecision {
+            assert!(context.completed_attempts() >= 1);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.retry {
+                TaskRetryDecision::RetryAfter(Duration::ZERO)
+            } else {
+                TaskRetryDecision::Stop
+            }
+        }
     }
 
     impl TaskInfo for RetryTreeTask {
@@ -2939,6 +3167,418 @@ mod tests {
     }
 
     #[test]
+    fn custom_retry_policies_apply_per_root_and_inherit_to_subtasks() {
+        for runner_plugin in ["serial", "threaded"] {
+            let attempts = Arc::new(Mutex::new(HashMap::new()));
+            let retry_calls = Arc::new(AtomicUsize::new(0));
+            let stop_calls = Arc::new(AtomicUsize::new(0));
+            let settings = Settings::builder()
+                .runner(
+                    RunnerConfig::builder()
+                        .plugin(runner_plugin)
+                        .worker_count(2)
+                        .task_retry(
+                            TaskRetryConfig::builder()
+                                .allow(true)
+                                .max_attempts(3)
+                                .policy(TaskRetryPolicyKind::NoRetry)
+                                .build(),
+                        )
+                        .build(),
+                )
+                .build();
+            let genja = Genja::builder(test_inventory())
+                .with_settings(settings)
+                .build()
+                .expect("genja should build");
+            let child = Arc::new(RetryTreeTask {
+                name: "child",
+                retry_config: Some(TaskRetryConfig::builder().max_attempts(2).build()),
+                sub_tasks: Vec::new(),
+                attempts: Arc::clone(&attempts),
+            });
+            let mut tasks = Tasks::new();
+            tasks.add_task_with_retry_policy(
+                RetryTreeTask {
+                    name: "root-a",
+                    retry_config: None,
+                    sub_tasks: vec![child],
+                    attempts: Arc::clone(&attempts),
+                },
+                TestCustomRetryPolicy {
+                    retry: true,
+                    calls: Arc::clone(&retry_calls),
+                },
+            );
+            tasks.add_task_with_retry_policy(
+                RetryTreeTask {
+                    name: "root-b",
+                    retry_config: None,
+                    sub_tasks: Vec::new(),
+                    attempts: Arc::clone(&attempts),
+                },
+                TestCustomRetryPolicy {
+                    retry: false,
+                    calls: Arc::clone(&stop_calls),
+                },
+            );
+
+            let results = genja.run_tasks(tasks, 1).expect("task list should run");
+            let child = results[0].sub_task("child").expect("child results");
+            for (hostname, root_attempts) in [("router1", 3), ("router2", 2)] {
+                assert_eq!(
+                    results[0]
+                        .host_result(hostname)
+                        .expect("root result")
+                        .execution_metadata()
+                        .attempts(),
+                    root_attempts
+                );
+                assert_eq!(
+                    child
+                        .host_result(hostname)
+                        .expect("child result")
+                        .execution_metadata()
+                        .attempts(),
+                    2
+                );
+                assert_eq!(
+                    results[1]
+                        .host_result(hostname)
+                        .expect("stopped result")
+                        .execution_metadata()
+                        .attempts(),
+                    1
+                );
+            }
+            assert_eq!(retry_calls.load(Ordering::SeqCst), 5);
+            assert_eq!(stop_calls.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn custom_retry_policy_invocation_apis_accept_a_rust_type() {
+        let settings = Settings::builder()
+            .runner(
+                RunnerConfig::builder()
+                    .task_retry(
+                        TaskRetryConfig::builder()
+                            .allow(true)
+                            .max_attempts(2)
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build();
+        let genja = Genja::builder(single_host_inventory())
+            .with_settings(settings)
+            .build()
+            .expect("genja should build");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let result = genja
+            .run_task_with_retry_policy(
+                FlakyRetryTask {
+                    attempts: Arc::new(AtomicUsize::new(0)),
+                    succeed_on_attempt: 2,
+                },
+                0,
+                TestCustomRetryPolicy {
+                    retry: true,
+                    calls: Arc::clone(&calls),
+                },
+            )
+            .expect("single task should run");
+        assert_eq!(
+            result
+                .host_result("router1")
+                .unwrap()
+                .execution_metadata()
+                .attempts(),
+            2
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let mut tasks = Tasks::new();
+        tasks.add_task(FlakyRetryTask {
+            attempts: Arc::new(AtomicUsize::new(0)),
+            succeed_on_attempt: 2,
+        });
+        let results = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(genja.run_tasks_with_retry_policy_async(
+                tasks,
+                0,
+                TestCustomRetryPolicy {
+                    retry: true,
+                    calls: Arc::clone(&calls),
+                },
+            ))
+            .expect("task list should run");
+        assert_eq!(
+            results[0]
+                .host_result("router1")
+                .unwrap()
+                .execution_metadata()
+                .attempts(),
+            2
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn explicit_builtin_policy_precedes_custom_invocation_fallback() {
+        let settings = Settings::builder()
+            .runner(
+                RunnerConfig::builder()
+                    .task_retry(
+                        TaskRetryConfig::builder()
+                            .allow(true)
+                            .max_attempts(2)
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build();
+        let genja = Genja::builder(single_host_inventory())
+            .with_settings(settings)
+            .build()
+            .expect("genja should build");
+        let attempts = Arc::new(Mutex::new(HashMap::new()));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Tasks::new();
+        tasks.add_task(RetryTreeTask {
+            name: "root-b",
+            retry_config: Some(
+                TaskRetryConfig::builder()
+                    .policy(TaskRetryPolicyKind::NoRetry)
+                    .build(),
+            ),
+            sub_tasks: Vec::new(),
+            attempts: Arc::clone(&attempts),
+        });
+        tasks.add_task(RetryTreeTask {
+            name: "root-b",
+            retry_config: None,
+            sub_tasks: Vec::new(),
+            attempts: Arc::new(Mutex::new(HashMap::new())),
+        });
+
+        let results = genja
+            .run_tasks_with_retry_policy(
+                tasks,
+                0,
+                TestCustomRetryPolicy {
+                    retry: true,
+                    calls: Arc::clone(&calls),
+                },
+            )
+            .expect("task list should run");
+        assert_eq!(
+            results[0]
+                .host_result("router1")
+                .unwrap()
+                .execution_metadata()
+                .attempts(),
+            1
+        );
+        assert_eq!(
+            results[1]
+                .host_result("router1")
+                .unwrap()
+                .execution_metadata()
+                .attempts(),
+            2
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn custom_retry_policy_rejects_runner_without_policy_support() {
+        let mut plugins = PluginManager::new();
+        plugins.register_plugin(Plugins::Runner(Box::new(RunnerWithoutCustomRetry)));
+        let settings = Settings::builder()
+            .runner(RunnerConfig::builder().plugin("no-custom-retry").build())
+            .build();
+        let genja = Genja::builder(single_host_inventory())
+            .with_settings(settings)
+            .with_plugin_manager(plugins)
+            .build()
+            .expect("genja should build");
+        let error = genja
+            .run_task_with_retry_policy(
+                TestTask {
+                    name: "task".to_string(),
+                },
+                0,
+                TestCustomRetryPolicy {
+                    retry: true,
+                    calls: Arc::new(AtomicUsize::new(0)),
+                },
+            )
+            .expect_err("unsupported runner should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("does not support custom task retry policies")
+        );
+    }
+
+    #[test]
+    fn subtask_builtin_policy_overrides_inherited_custom_policy() {
+        let settings = Settings::builder()
+            .runner(
+                RunnerConfig::builder()
+                    .task_retry(
+                        TaskRetryConfig::builder()
+                            .allow(true)
+                            .max_attempts(3)
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build();
+        let genja = Genja::builder(single_host_inventory())
+            .with_settings(settings)
+            .build()
+            .expect("genja should build");
+        let attempts = Arc::new(Mutex::new(HashMap::new()));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let child = Arc::new(RetryTreeTask {
+            name: "child",
+            retry_config: Some(
+                TaskRetryConfig::builder()
+                    .policy(TaskRetryPolicyKind::NoRetry)
+                    .build(),
+            ),
+            sub_tasks: Vec::new(),
+            attempts: Arc::clone(&attempts),
+        });
+        let mut tasks = Tasks::new();
+        tasks.add_task_with_retry_policy(
+            RetryTreeTask {
+                name: "root-a",
+                retry_config: None,
+                sub_tasks: vec![child],
+                attempts,
+            },
+            TestCustomRetryPolicy {
+                retry: true,
+                calls: Arc::clone(&calls),
+            },
+        );
+
+        let results = genja.run_tasks(tasks, 1).expect("task tree should run");
+        assert_eq!(
+            results[0]
+                .host_result("router1")
+                .unwrap()
+                .execution_metadata()
+                .attempts(),
+            3
+        );
+        assert_eq!(
+            results[0]
+                .sub_task("child")
+                .unwrap()
+                .host_result("router1")
+                .unwrap()
+                .execution_metadata()
+                .attempts(),
+            1
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn run_tasks_resolves_builtin_retry_policies_per_node() {
+        for runner_plugin in ["serial", "threaded"] {
+            for child_selects_fixed in [false, true] {
+                let attempts = Arc::new(Mutex::new(HashMap::new()));
+                let settings = Settings::builder()
+                    .runner(
+                        RunnerConfig::builder()
+                            .plugin(runner_plugin)
+                            .worker_count(2)
+                            .task_retry(
+                                TaskRetryConfig::builder()
+                                    .allow(true)
+                                    .max_attempts(3)
+                                    .policy(TaskRetryPolicyKind::NoRetry)
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                    .build();
+                let genja = Genja::builder(test_inventory())
+                    .with_settings(settings)
+                    .build()
+                    .expect("genja should build");
+
+                let mut child_retry = TaskRetryConfig::builder().max_attempts(2);
+                if child_selects_fixed {
+                    child_retry = child_retry.policy(TaskRetryPolicyKind::Fixed);
+                }
+                let child = Arc::new(RetryTreeTask {
+                    name: "child",
+                    retry_config: Some(child_retry.build()),
+                    sub_tasks: Vec::new(),
+                    attempts: Arc::clone(&attempts),
+                });
+                let mut tasks = Tasks::new();
+                tasks.add_task(RetryTreeTask {
+                    name: "root-a",
+                    retry_config: Some(
+                        TaskRetryConfig::builder()
+                            .policy(TaskRetryPolicyKind::Exponential)
+                            .factor(3)
+                            .build(),
+                    ),
+                    sub_tasks: vec![child],
+                    attempts: Arc::clone(&attempts),
+                });
+                tasks.add_task(RetryTreeTask {
+                    name: "root-b",
+                    retry_config: None,
+                    sub_tasks: Vec::new(),
+                    attempts: Arc::clone(&attempts),
+                });
+
+                let results = genja.run_tasks(tasks, 1).expect("task list should run");
+                assert_eq!(results.len(), 2);
+                let child_results = results[0].sub_task("child").expect("child results");
+                for (hostname, expected_root_attempts) in [("router1", 3), ("router2", 2)] {
+                    assert_eq!(
+                        results[0]
+                            .host_result(hostname)
+                            .expect("root result")
+                            .execution_metadata()
+                            .attempts(),
+                        expected_root_attempts,
+                    );
+                    assert_eq!(
+                        child_results
+                            .host_result(hostname)
+                            .expect("child result")
+                            .execution_metadata()
+                            .attempts(),
+                        2,
+                    );
+                    assert_eq!(
+                        results[1]
+                            .host_result(hostname)
+                            .expect("root-b result")
+                            .execution_metadata()
+                            .attempts(),
+                        1,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn run_verifies_replacement_sessions_across_serial_and_threaded_runners() {
         for runner_plugin in ["serial", "threaded"] {
             let open_counts = Arc::new(Mutex::new(HashMap::new()));
@@ -3231,6 +3871,92 @@ mod tests {
         assert!(router1.execution_metadata().dry_run());
         assert_eq!(router1.execution_metadata().attempts(), 2);
         assert!(router1.execution_metadata().retried());
+    }
+
+    #[test]
+    fn custom_retry_policy_stops_retries_after_dry_run_failure() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let genja = Genja::builder(single_host_inventory())
+            .build()
+            .expect("genja should build");
+        let mut tasks = Tasks::new();
+        tasks.add_task_with_retry_policy(
+            FlakyDryRunTask {
+                attempts: Arc::clone(&attempts),
+            },
+            TestCustomRetryPolicy {
+                retry: false,
+                calls: Arc::clone(&calls),
+            },
+        );
+
+        let results = genja
+            .run_tasks_with_options(tasks, TaskRunOptions::new(0).with_dry_run(true))
+            .expect("dry-run should finish after the policy stops retrying");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let host_result = results[0].host_result("router1").expect("host result");
+        assert!(host_result.is_failed());
+        assert!(host_result.execution_metadata().dry_run());
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+    }
+
+    #[test]
+    fn custom_retry_policy_invocations_accept_dry_run_options() {
+        let genja = Genja::builder(single_host_inventory())
+            .build()
+            .expect("genja should build");
+        let single_attempts = Arc::new(AtomicUsize::new(0));
+        let single_calls = Arc::new(AtomicUsize::new(0));
+        let options = TaskRunOptions::new(0).with_dry_run(true);
+        let single_result = genja
+            .run_task_with_retry_policy_and_options(
+                FlakyDryRunTask {
+                    attempts: Arc::clone(&single_attempts),
+                },
+                options,
+                TestCustomRetryPolicy {
+                    retry: true,
+                    calls: Arc::clone(&single_calls),
+                },
+            )
+            .expect("single-task dry-run should retry once");
+        assert_eq!(single_attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(single_calls.load(Ordering::SeqCst), 1);
+        let single_host_result = single_result.host_result("router1").expect("host result");
+        assert!(single_host_result.is_passed());
+        assert!(single_host_result.execution_metadata().dry_run());
+        assert_eq!(single_host_result.execution_metadata().attempts(), 2);
+
+        let list_attempts = Arc::new(AtomicUsize::new(0));
+        let list_calls = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Tasks::new();
+        tasks.add_task(FlakyDryRunTask {
+            attempts: Arc::clone(&list_attempts),
+        });
+        let list_results = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(genja.run_tasks_with_retry_policy_and_options_async(
+                tasks,
+                options,
+                TestCustomRetryPolicy {
+                    retry: false,
+                    calls: Arc::clone(&list_calls),
+                },
+            ))
+            .expect("task-list dry-run should stop after one failure");
+        assert_eq!(list_attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(list_calls.load(Ordering::SeqCst), 1);
+        let list_host_result = list_results[0].host_result("router1").expect("host result");
+        assert!(list_host_result.is_failed());
+        assert!(list_host_result.execution_metadata().dry_run());
+        assert_eq!(list_host_result.execution_metadata().attempts(), 1);
     }
 
     #[tokio::test]

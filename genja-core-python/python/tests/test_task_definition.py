@@ -12,6 +12,7 @@ from genja.task import (
     IdempotencyMode,
     PydanticInputSchema,
     TaskRetryConfig,
+    TaskRetryPolicyKind,
     SessionVerificationConfig,
     TaskDescriptor,
     TaskFactory,
@@ -539,6 +540,98 @@ def test_python_backed_task_applies_retry_delay():
     assert host_result["execution_metadata"]["retried"] is True
 
 
+def test_python_backed_no_retry_selection_stops_retryable_failure():
+    attempts: list[int] = []
+
+    @task(
+        name="no_retry_selected",
+        retry=TaskRetryConfig(
+            allow=True,
+            max_attempts=3,
+            policy=TaskRetryPolicyKind.NO_RETRY,
+        ),
+    )
+    class NoRetrySelectedTask:
+        def start(self, task, host, context):
+            attempts.append(context.current_attempt)
+            return TaskFailureResult(
+                message="temporary failure",
+                kind=TaskFailureKind.EXTERNAL,
+                retryable=True,
+            )
+
+    result = genja.TaskDefinition.from_python_class(NoRetrySelectedTask).run_on_host(
+        Host(hostname="router1")
+    )
+
+    assert attempts == [1]
+    host_result = result.to_dict()["hosts"]["router1"]
+    assert host_result["execution_metadata"]["attempts"] == 1
+    assert host_result["execution_metadata"]["retry_exhausted"] is False
+
+
+def test_python_task_policy_overrides_runner_policy_during_execution():
+    inherited_attempts: list[int] = []
+    overridden_attempts: list[int] = []
+
+    @task(
+        name="runner_no_retry",
+        retry=TaskRetryConfig(allow=True, max_attempts=2),
+    )
+    class RunnerNoRetryTask:
+        def start(self, task, host, context):
+            inherited_attempts.append(context.current_attempt)
+            return TaskFailureResult(
+                message="temporary failure",
+                kind=TaskFailureKind.EXTERNAL,
+                retryable=True,
+            )
+
+    @task(
+        name="task_fixed_retry",
+        retry=TaskRetryConfig(
+            allow=True,
+            max_attempts=2,
+            policy=TaskRetryPolicyKind.FIXED,
+        ),
+    )
+    class TaskFixedRetryTask:
+        def start(self, task, host, context):
+            overridden_attempts.append(context.current_attempt)
+            if context.current_attempt == 1:
+                return TaskFailureResult(
+                    message="temporary failure",
+                    kind=TaskFailureKind.EXTERNAL,
+                    retryable=True,
+                )
+            return TaskSuccessResult(summary="recovered")
+
+    settings = genja.Settings(
+        runner=genja.RunnerConfig(
+            plugin="serial",
+            task_retry=genja.RunnerTaskRetryConfig(
+                policy=TaskRetryPolicyKind.NO_RETRY,
+            ),
+        )
+    )
+    runtime = genja.Genja.from_hosts(
+        {"router1": Host(hostname="router1")}, settings=settings
+    )
+
+    inherited = runtime.run_task(RunnerNoRetryTask)
+    overridden = runtime.run_task(TaskFixedRetryTask)
+
+    assert inherited_attempts == [1]
+    assert (
+        inherited.to_dict()["hosts"]["router1"]["execution_metadata"]["attempts"] == 1
+    )
+    assert overridden_attempts == [1, 2]
+    assert overridden.passed_hosts == ["router1"]
+    assert (
+        overridden.to_dict()["hosts"]["router1"]["execution_metadata"]["attempts"] == 2
+    )
+
+
 def test_python_backed_task_dry_run_calls_dry_run_not_start():
     calls: list[str] = []
 
@@ -977,6 +1070,60 @@ def test_retry_config_rejects_invalid_values():
 
     with pytest.raises(ValidationError, match="delay_ms"):
         TaskRetryConfig(delay_ms=-1)
+
+    with pytest.raises(ValidationError, match="factor"):
+        TaskRetryConfig(policy=TaskRetryPolicyKind.EXPONENTIAL, factor=1)
+
+    with pytest.raises(ValidationError, match="max_delay_ms"):
+        TaskRetryConfig(policy=TaskRetryPolicyKind.EXPONENTIAL, max_delay_ms=0)
+
+
+def test_retry_config_serializes_enum_selection_without_changing_existing_shape():
+    assert TaskRetryConfig(allow=True, max_attempts=3, delay_ms=250).to_dict() == {
+        "allow": True,
+        "max_attempts": 3,
+        "delay_ms": 250,
+    }
+    assert TaskRetryConfig(
+        allow=True,
+        policy=TaskRetryPolicyKind.EXPONENTIAL,
+        factor=3,
+        max_delay_ms=60_000,
+    ).to_dict() == {
+        "allow": True,
+        "max_attempts": None,
+        "delay_ms": None,
+        "policy": "exponential",
+        "factor": 3,
+        "max_delay_ms": 60_000,
+    }
+
+
+def test_task_definition_transfers_selected_retry_policy_to_rust():
+    @task(
+        name="exponential_retry_task",
+        retry=TaskRetryConfig(
+            allow=True,
+            max_attempts=3,
+            delay_ms=1,
+            policy=TaskRetryPolicyKind.EXPONENTIAL,
+            factor=3,
+            max_delay_ms=60_000,
+        ),
+    )
+    class ExponentialRetryTask:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="done")
+
+    definition = genja.TaskDefinition.from_python_class(ExponentialRetryTask)
+    assert definition.retry == {
+        "allow": True,
+        "max_attempts": 3,
+        "delay_ms": 1,
+        "policy": "exponential",
+        "factor": 3,
+        "max_delay_ms": 60_000,
+    }
 
 
 def test_task_decorator_stores_nested_retry_metadata():

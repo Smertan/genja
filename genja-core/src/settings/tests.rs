@@ -5,7 +5,7 @@ use super::env_defaults::{
     raise_on_error,
 };
 use super::{OptionsConfig, RunnerConfig, SSHConfig};
-use crate::task::TaskRetryConfig;
+use crate::task::{TaskRetryConfig, TaskRetryPolicyKind};
 use regex::Regex;
 use serde_json::json;
 use std::env;
@@ -316,6 +316,32 @@ fn runner_config_builder_sets_retry_controls() {
     assert_eq!(runner.task_retry().allow(), Some(true));
     assert_eq!(runner.task_retry().max_attempts(), Some(5));
     assert_eq!(runner.task_retry().delay_ms(), Some(250));
+}
+
+#[test]
+fn runner_config_preserves_selected_retry_policy_during_normalization() {
+    let config = TaskRetryConfig::builder()
+        .policy(TaskRetryPolicyKind::Exponential)
+        .factor(3)
+        .max_delay_ms(60_000)
+        .build();
+    let built = RunnerConfig::builder().task_retry(config).build();
+    assert_eq!(
+        built.task_retry().policy(),
+        Some(TaskRetryPolicyKind::Exponential)
+    );
+    assert_eq!(built.task_retry().factor(), Some(3));
+    assert_eq!(built.task_retry().max_delay_ms(), Some(60_000));
+
+    let parsed: RunnerConfig = serde_json::from_value(json!({
+        "task_retry": {"policy": "exponential", "factor": 3, "max_delay_ms": 60000}
+    }))
+    .unwrap();
+    assert_eq!(
+        parsed.task_retry().policy(),
+        Some(TaskRetryPolicyKind::Exponential)
+    );
+    assert_eq!(parsed.task_retry().factor(), Some(3));
 }
 
 #[test]

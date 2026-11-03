@@ -6,11 +6,19 @@ All notable changes to this workspace should be documented in this file.
 
 Changed packages:
 
-- Rust crates: `genja`, `genja-cli`, `genja-core`, `genja-core-derive`
+- Rust crates: `genja`, `genja-cli`, `genja-core`, `genja-core-derive`, `genja-plugin-manager`
 - Python package: `genja-py`, `genja-core-python`
+
+### Added
+
+- Added the public Rust task retry policy context and decision contract, with documented selection precedence and exponential delay parameters. Refs: #172
+- Added public `NoRetry`, `FixedRetry`, and bounded `ExponentialRetry` Rust policies; the existing fixed-delay path now uses the policy decision contract without changing retry behavior. Refs: #172
+- Added built-in task retry policy selection to Rust task metadata, `TaskRetryConfig`, runner settings, and `TaskSpec` overrides, plus Python task and runner configuration. Existing configurations continue to use fixed delay. Refs: #172
+- Added direct custom Rust retry policies for a task tree or task list, including `Tasks::add_task_with_retry_policy(...)`, synchronous and asynchronous invocation methods, runtime-options variants for dry-run, and per-root policy attachment. Refs: #172
 
 ### Changed
 
+- Moved runner plugin authoring guidance into the Plugins section, with links from the Tasks and Runners guides. Refs: #172
 - **Breaking:** Rust task retry configuration is now `TaskRetryConfig` and `TaskRetryConfigBuilder`, and runner defaults use `runner.task_retry` with `RunnerConfig::task_retry()` and `RunnerConfigBuilder::task_retry(...)`. Rename uses of `RetryConfig`, `RetryConfigBuilder`, `runner.retry`, and the runner `retry()` methods; task macro `retry(...)` and `TaskSpec.overrides.retry` remain unchanged. Refs: #171
 - **Breaking:** Python task retry metadata now uses `TaskRetryConfig`, and runner defaults use `RunnerTaskRetryConfig` with `RunnerConfig(task_retry=...)` and `RunnerConfig.task_retry`. Rename imports of `RetryConfig` and `RunnerRetryConfig` and replace the runner `retry` argument and property; the task decorator's `retry=` argument remains unchanged. Refs: #171
 

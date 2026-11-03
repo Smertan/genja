@@ -569,6 +569,16 @@ impl Debug for dyn PluginConnection {
 /// mutating shared state without synchronization.
 #[async_trait]
 pub trait PluginRunner: Plugin {
+    /// Whether this runner executes custom task retry policies attached to
+    /// [`TaskDefinition`] values.
+    ///
+    /// The default is `false`. Return `true` when the runner delegates task
+    /// execution to the core `TaskDefinition` start path or otherwise applies
+    /// its selected policy while retaining the runtime retry safety checks.
+    fn supports_custom_task_retry_policy(&self) -> bool {
+        false
+    }
+
     /// Run a single task against the provided hosts.
     async fn run_task(
         &self,
