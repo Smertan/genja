@@ -1021,11 +1021,12 @@ pub struct PyTaskConnectionResolver {
 /// Python wrapper for runtime task execution options.
 ///
 /// `TaskRunOptions` carries operator-selected execution controls such as
-/// maximum sub-task depth and dry-run mode. It is separate from task decorator
-/// `options`, which are task-authored metadata.
+/// maximum sub-task depth, dry-run mode, and an optional task timeout. It is
+/// separate from task decorator `options`, which are task-authored metadata.
 pub struct PyTaskRunOptions {
     pub(crate) max_depth: Option<usize>,
     pub(crate) dry_run: bool,
+    pub(crate) task_timeout: Option<u64>,
 }
 
 #[pymethods]
@@ -1152,13 +1153,21 @@ impl PyTaskDefinition {
 impl PyTaskRunOptions {
     /// Create runtime task execution options.
     #[new]
-    #[pyo3(signature = (max_depth=None, dry_run=false))]
-    fn new(max_depth: Option<Bound<'_, PyAny>>, dry_run: bool) -> PyResult<Self> {
+    #[pyo3(signature = (max_depth=None, dry_run=false, task_timeout=None))]
+    fn new(
+        max_depth: Option<Bound<'_, PyAny>>,
+        dry_run: bool,
+        task_timeout: Option<u64>,
+    ) -> PyResult<Self> {
         let max_depth = match max_depth {
             Some(value) => Some(extract_task_run_options_max_depth(&value)?),
             None => None,
         };
-        Ok(Self { max_depth, dry_run })
+        Ok(Self {
+            max_depth,
+            dry_run,
+            task_timeout,
+        })
     }
 
     /// Return the maximum nested sub-task depth override, if configured.
@@ -1173,11 +1182,18 @@ impl PyTaskRunOptions {
         self.dry_run
     }
 
+    /// Return the per-invocation task timeout in milliseconds, if configured.
+    #[getter]
+    fn task_timeout(&self) -> Option<u64> {
+        self.task_timeout
+    }
+
     /// Return a copy with a different maximum nested sub-task depth.
     fn with_max_depth(&self, max_depth: usize) -> Self {
         Self {
             max_depth: Some(max_depth),
             dry_run: self.dry_run,
+            task_timeout: self.task_timeout,
         }
     }
 
@@ -1186,6 +1202,15 @@ impl PyTaskRunOptions {
         Self {
             max_depth: self.max_depth,
             dry_run,
+            task_timeout: self.task_timeout,
+        }
+    }
+
+    /// Return a copy with a per-invocation task timeout in milliseconds.
+    fn with_task_timeout(&self, task_timeout: u64) -> Self {
+        Self {
+            task_timeout: Some(task_timeout),
+            ..self.clone()
         }
     }
 
@@ -1197,13 +1222,14 @@ impl PyTaskRunOptions {
             None => payload.set_item("max_depth", py.None())?,
         }
         payload.set_item("dry_run", self.dry_run)?;
+        payload.set_item("task_timeout", self.task_timeout)?;
         Ok(payload.unbind().into())
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "TaskRunOptions(max_depth={:?}, dry_run={})",
-            self.max_depth, self.dry_run
+            "TaskRunOptions(max_depth={:?}, dry_run={}, task_timeout={:?})",
+            self.max_depth, self.dry_run, self.task_timeout
         )
     }
 }
@@ -1554,10 +1580,13 @@ fn resolve_task_run_options(
         if run_options.is_none() {
             // Explicit None is equivalent to omitting run_options.
         } else if let Ok(run_options) = run_options.extract::<PyRef<'_, PyTaskRunOptions>>() {
-            return Ok(
+            let mut options =
                 TaskRunOptions::new(run_options.max_depth.unwrap_or(default_max_depth))
-                    .with_dry_run(run_options.dry_run),
-            );
+                    .with_dry_run(run_options.dry_run);
+            if let Some(task_timeout) = run_options.task_timeout {
+                options = options.with_task_timeout(Duration::from_millis(task_timeout));
+            }
+            return Ok(options);
         } else {
             return Err(PyValueError::new_err(
                 "run_options must be a genja.TaskRunOptions instance",
@@ -2818,7 +2847,7 @@ mod tests {
         init_python();
         Python::attach(|py| {
             let value = PyBool::new(py, true).to_owned().into_any();
-            let err = match PyTaskRunOptions::new(Some(value), false) {
+            let err = match PyTaskRunOptions::new(Some(value), false, None) {
                 Ok(_) => panic!("bool max_depth should fail"),
                 Err(err) => err,
             };
@@ -2839,10 +2868,15 @@ mod tests {
                 PyTaskRunOptions {
                     max_depth: Some(1),
                     dry_run: false,
+                    task_timeout: None,
                 },
             )
             .expect("nested run options should build");
-            let err = match PyTaskRunOptions::new(Some(nested.bind(py).clone().into_any()), false) {
+            let err = match PyTaskRunOptions::new(
+                Some(nested.bind(py).clone().into_any()),
+                false,
+                None,
+            ) {
                 Ok(_) => panic!("nested TaskRunOptions max_depth should fail"),
                 Err(err) => err,
             };

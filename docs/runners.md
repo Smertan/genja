@@ -28,6 +28,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
+  task_timeout: null # optional milliseconds per task and host
   task_retry:
     allow: false
     max_attempts: 1
@@ -41,6 +42,7 @@ Runner settings:
 - `worker_count`: optional concurrency limit for runners that support it.
 - `max_task_depth`: maximum nested task depth. Defaults to `10`.
 - `max_connection_attempts`: maximum connection attempts. Defaults to `3`.
+- `task_timeout`: optional task timeout in milliseconds for each host. Defaults to `null`.
 - `task_retry.allow`: whether task retries are allowed by default. Defaults to `false`.
 - `task_retry.max_attempts`: total number of task attempts allowed by default. Defaults to `1`.
 - `task_retry.delay_ms`: base delay in milliseconds between retry attempts. Defaults to `0`.
@@ -50,6 +52,11 @@ Runner settings:
 `max_connection_attempts` is part of the shared runner configuration. The
 built-in runners pass the task connection resolver into task execution; the
 connection layer is responsible for interpreting connection retry behavior.
+
+For `task_timeout`, an explicit `TaskRunOptions` invocation value overrides
+`runner.task_timeout`. Without either value, no timeout is configured. This
+configuration is available in Rust and Python; deadline enforcement follows
+in the next implementation phase.
 
 `task_retry.allow`, `task_retry.max_attempts`, and `task_retry.delay_ms` define default retry
 policy for task execution. Tasks may override these defaults through task

@@ -4089,11 +4089,13 @@ pub enum TaskExecutionMode {
 /// These options represent operator-selected execution behavior for a single
 /// invocation. Task metadata declares what a task supports; run options declare
 /// what the runtime should request. Use [`TaskRunOptions::with_dry_run`] to
-/// request dry-run execution for tasks that declare dry-run support.
+/// request dry-run execution for tasks that declare dry-run support. An optional
+/// task timeout overrides the runner default for this invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TaskRunOptions {
     max_depth: usize,
     dry_run: bool,
+    task_timeout: Option<Duration>,
 }
 
 impl TaskRunOptions {
@@ -4102,6 +4104,7 @@ impl TaskRunOptions {
         Self {
             max_depth,
             dry_run: false,
+            task_timeout: None,
         }
     }
 
@@ -4113,6 +4116,25 @@ impl TaskRunOptions {
     /// Return whether this invocation should run in dry-run mode.
     pub fn dry_run(&self) -> bool {
         self.dry_run
+    }
+
+    /// Return the per-invocation task timeout override, if set.
+    pub fn task_timeout(&self) -> Option<Duration> {
+        self.task_timeout
+    }
+
+    /// Resolve the task timeout for this invocation against the runner default.
+    ///
+    /// The invocation value takes precedence. With neither value set, no timeout
+    /// is configured.
+    pub fn effective_task_timeout(&self, runner: &RunnerConfig) -> Option<Duration> {
+        self.task_timeout.or_else(|| runner.task_timeout())
+    }
+
+    /// Set the per-invocation task timeout override.
+    pub fn with_task_timeout(mut self, task_timeout: Duration) -> Self {
+        self.task_timeout = Some(task_timeout);
+        self
     }
 
     /// Set whether this invocation should run in dry-run mode.

@@ -293,6 +293,7 @@ class TaskRunOptions:
         self,
         max_depth: int | None = None,
         dry_run: bool = False,
+        task_timeout: int | None = None,
     ) -> None:
         """Create runtime options for task execution."""
         ...
@@ -307,12 +308,21 @@ class TaskRunOptions:
         """Whether the runtime should call dry-run task entrypoints."""
         ...
 
+    @property
+    def task_timeout(self) -> int | None:
+        """Per-invocation task timeout in milliseconds, if configured."""
+        ...
+
     def with_max_depth(self, max_depth: int) -> TaskRunOptions:
         """Return a copy with a different maximum nested sub-task depth."""
         ...
 
     def with_dry_run(self, dry_run: bool) -> TaskRunOptions:
         """Return a copy with dry-run execution enabled or disabled."""
+        ...
+
+    def with_task_timeout(self, task_timeout: int) -> TaskRunOptions:
+        """Return a copy with a task timeout in milliseconds."""
         ...
 
     def to_dict(self) -> dict[str, Any]:

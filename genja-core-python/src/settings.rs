@@ -381,14 +381,16 @@ impl PyRunnerConfig {
     /// * `max_task_depth` - Optional maximum nested sub-task depth.
     /// * `max_connection_attempts` - Optional maximum connection attempts per host.
     /// * `task_retry` - Optional default retry behavior for task execution.
+    /// * `task_timeout` - Optional per-task, per-host timeout in milliseconds.
     #[new]
-    #[pyo3(signature = (plugin=None, worker_count=None, max_task_depth=None, max_connection_attempts=None, task_retry=None))]
+    #[pyo3(signature = (plugin=None, worker_count=None, max_task_depth=None, max_connection_attempts=None, task_retry=None, task_timeout=None))]
     fn new(
         plugin: Option<String>,
         worker_count: Option<usize>,
         max_task_depth: Option<usize>,
         max_connection_attempts: Option<usize>,
         task_retry: Option<PyRef<'_, PyRunnerTaskRetryConfig>>,
+        task_timeout: Option<u64>,
     ) -> Self {
         let mut builder = RunnerConfig::builder();
         if let Some(plugin) = plugin {
@@ -405,6 +407,9 @@ impl PyRunnerConfig {
         }
         if let Some(task_retry) = task_retry {
             builder = builder.task_retry(task_retry.inner);
+        }
+        if let Some(task_timeout) = task_timeout {
+            builder = builder.task_timeout(std::time::Duration::from_millis(task_timeout));
         }
         Self {
             inner: builder.build(),
@@ -443,14 +448,23 @@ impl PyRunnerConfig {
         }
     }
 
+    /// Default per-task, per-host timeout in milliseconds, if configured.
+    #[getter]
+    pub(crate) fn task_timeout(&self) -> Option<u64> {
+        self.inner
+            .task_timeout()
+            .map(|timeout| timeout.as_millis() as u64)
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "RunnerConfig(plugin={:?}, worker_count={:?}, max_task_depth={}, max_connection_attempts={}, task_retry={})",
+            "RunnerConfig(plugin={:?}, worker_count={:?}, max_task_depth={}, max_connection_attempts={}, task_retry={}, task_timeout={:?})",
             self.plugin(),
             self.worker_count(),
             self.max_task_depth(),
             self.max_connection_attempts(),
-            self.task_retry().__repr__()
+            self.task_retry().__repr__(),
+            self.task_timeout()
         )
     }
 }
