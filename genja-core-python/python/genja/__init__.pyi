@@ -293,7 +293,7 @@ class TaskRunOptions:
         self,
         max_depth: int | None = None,
         dry_run: bool = False,
-        task_timeout: int | None = None,
+        task_timeout: float | None = None,
     ) -> None:
         """Create runtime options for task execution."""
         ...
@@ -309,8 +309,8 @@ class TaskRunOptions:
         ...
 
     @property
-    def task_timeout(self) -> int | None:
-        """Per-invocation task timeout in milliseconds, if configured."""
+    def task_timeout(self) -> float | None:
+        """Per-invocation task timeout in seconds, if configured."""
         ...
 
     def with_max_depth(self, max_depth: int) -> TaskRunOptions:
@@ -321,8 +321,8 @@ class TaskRunOptions:
         """Return a copy with dry-run execution enabled or disabled."""
         ...
 
-    def with_task_timeout(self, task_timeout: int) -> TaskRunOptions:
-        """Return a copy with a task timeout in milliseconds."""
+    def with_task_timeout(self, task_timeout: float) -> TaskRunOptions:
+        """Return a copy with a task timeout in seconds."""
         ...
 
     def to_dict(self) -> dict[str, Any]:
@@ -350,6 +350,11 @@ class TaskDefinition:
     @property
     def retry(self) -> dict[str, Any] | None:
         """Task retry metadata, if configured."""
+        ...
+
+    @property
+    def task_timeout(self) -> float | None:
+        """Timeout declared by this task in seconds, if configured."""
         ...
 
     @property

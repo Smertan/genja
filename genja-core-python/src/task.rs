@@ -589,6 +589,7 @@ struct PythonTaskSpec {
     connection_plugin_name: Option<String>,
     processor_names: Vec<String>,
     retry_config: Option<TaskRetryConfig>,
+    task_timeout: Option<Duration>,
     session_verification_config: Option<SessionVerificationConfig>,
     options: Option<Value>,
     supports_dry_run: bool,
@@ -664,6 +665,10 @@ impl TaskInfo for PythonBackedTask {
 
     fn retry_config(&self) -> Option<&TaskRetryConfig> {
         self.spec.retry_config.as_ref()
+    }
+
+    fn task_timeout(&self) -> Option<Duration> {
+        self.spec.task_timeout
     }
 
     fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
@@ -1026,7 +1031,7 @@ pub struct PyTaskConnectionResolver {
 pub struct PyTaskRunOptions {
     pub(crate) max_depth: Option<usize>,
     pub(crate) dry_run: bool,
-    pub(crate) task_timeout: Option<u64>,
+    pub(crate) task_timeout: Option<Duration>,
 }
 
 #[pymethods]
@@ -1078,6 +1083,14 @@ impl PyTaskDefinition {
     #[getter]
     fn retry(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         retry_config_to_py_object(py, self.inner.retry_config())
+    }
+
+    /// Timeout declared by this task in seconds, if configured.
+    #[getter]
+    fn task_timeout(&self) -> Option<f64> {
+        self.inner
+            .task_timeout()
+            .map(|timeout| timeout.as_secs_f64())
     }
 
     #[getter]
@@ -1157,12 +1170,16 @@ impl PyTaskRunOptions {
     fn new(
         max_depth: Option<Bound<'_, PyAny>>,
         dry_run: bool,
-        task_timeout: Option<u64>,
+        task_timeout: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let max_depth = match max_depth {
             Some(value) => Some(extract_task_run_options_max_depth(&value)?),
             None => None,
         };
+        let task_timeout = task_timeout
+            .filter(|value| !value.is_none())
+            .map(|value| extract_task_timeout_seconds(&value))
+            .transpose()?;
         Ok(Self {
             max_depth,
             dry_run,
@@ -1182,10 +1199,10 @@ impl PyTaskRunOptions {
         self.dry_run
     }
 
-    /// Return the per-invocation task timeout in milliseconds, if configured.
+    /// Return the per-invocation task timeout in seconds, if configured.
     #[getter]
-    fn task_timeout(&self) -> Option<u64> {
-        self.task_timeout
+    fn task_timeout(&self) -> Option<f64> {
+        self.task_timeout.map(|timeout| timeout.as_secs_f64())
     }
 
     /// Return a copy with a different maximum nested sub-task depth.
@@ -1206,12 +1223,12 @@ impl PyTaskRunOptions {
         }
     }
 
-    /// Return a copy with a per-invocation task timeout in milliseconds.
-    fn with_task_timeout(&self, task_timeout: u64) -> Self {
-        Self {
-            task_timeout: Some(task_timeout),
+    /// Return a copy with a per-invocation task timeout in seconds.
+    fn with_task_timeout(&self, task_timeout: Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            task_timeout: Some(extract_task_timeout_seconds(&task_timeout)?),
             ..self.clone()
-        }
+        })
     }
 
     /// Convert the runtime options to a Python dictionary.
@@ -1222,14 +1239,16 @@ impl PyTaskRunOptions {
             None => payload.set_item("max_depth", py.None())?,
         }
         payload.set_item("dry_run", self.dry_run)?;
-        payload.set_item("task_timeout", self.task_timeout)?;
+        payload.set_item("task_timeout", self.task_timeout())?;
         Ok(payload.unbind().into())
     }
 
     fn __repr__(&self) -> String {
         format!(
             "TaskRunOptions(max_depth={:?}, dry_run={}, task_timeout={:?})",
-            self.max_depth, self.dry_run, self.task_timeout
+            self.max_depth,
+            self.dry_run,
+            self.task_timeout()
         )
     }
 }
@@ -1550,6 +1569,23 @@ fn task_run_options_max_depth_type_error(type_name: &str) -> PyErr {
     ))
 }
 
+pub(crate) fn extract_task_timeout_seconds(value: &Bound<'_, PyAny>) -> PyResult<Duration> {
+    let error =
+        || PyValueError::new_err("task_timeout must be a positive finite number of seconds");
+    if value.is_instance_of::<PyBool>() {
+        return Err(error());
+    }
+    let seconds = value.extract::<f64>().map_err(|_| error())?;
+    if !seconds.is_finite() || seconds <= 0.0 || seconds >= u64::MAX as f64 {
+        return Err(error());
+    }
+    let timeout = Duration::from_secs_f64(seconds);
+    if timeout.is_zero() {
+        return Err(error());
+    }
+    Ok(timeout)
+}
+
 fn extract_task_run_options_max_depth(value: &Bound<'_, PyAny>) -> PyResult<usize> {
     if value.is_none() {
         return Err(task_run_options_max_depth_type_error("NoneType"));
@@ -1584,7 +1620,7 @@ fn resolve_task_run_options(
                 TaskRunOptions::new(run_options.max_depth.unwrap_or(default_max_depth))
                     .with_dry_run(run_options.dry_run);
             if let Some(task_timeout) = run_options.task_timeout {
-                options = options.with_task_timeout(Duration::from_millis(task_timeout));
+                options = options.with_task_timeout(task_timeout);
             }
             return Ok(options);
         } else {
@@ -1899,7 +1935,7 @@ fn task_definition_to_json(task_definition: &TaskDefinition) -> Value {
 }
 
 fn task_to_json(task: &dyn Task) -> Value {
-    json!({
+    let mut value = json!({
         "name": task.name(),
         "connection_plugin_name": task.connection_plugin_name(),
         "processors": task.processor_names(),
@@ -1909,7 +1945,11 @@ fn task_to_json(task: &dyn Task) -> Value {
         "supports_dry_run": task.supports_dry_run(),
         "idempotency": PyIdempotencyMode::from(task.idempotency_mode()).value_str(),
         "sub_tasks": task.sub_tasks().into_iter().map(|sub_task| task_to_json(sub_task.as_ref())).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(timeout) = task.task_timeout() {
+        value["task_timeout"] = json!(timeout.as_secs_f64());
+    }
+    value
 }
 
 fn retry_config_to_json(retry_config: Option<&TaskRetryConfig>) -> Value {
@@ -2035,6 +2075,10 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     };
     reject_misplaced_retry_metadata(&info)?;
     let retry_config = extract_retry_config_from_metadata(&info)?;
+    let task_timeout = match info.get_item("task_timeout")? {
+        Some(value) if !value.is_none() => Some(extract_task_timeout_seconds(&value)?),
+        _ => None,
+    };
     let session_verification_config = extract_session_verification_config_from_metadata(
         &info,
         connection_plugin_name.as_deref(),
@@ -2138,6 +2182,7 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         connection_plugin_name,
         processor_names,
         retry_config,
+        task_timeout,
         session_verification_config,
         options,
         supports_dry_run,
@@ -2164,7 +2209,7 @@ fn task_definition_from_spec(spec: &PythonTaskSpec) -> TaskDefinition {
 }
 
 fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
-    json!({
+    let mut value = json!({
         "name": spec.name,
         "connection_plugin_name": spec.connection_plugin_name,
         "processors": spec.processor_names,
@@ -2174,7 +2219,11 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
         "supports_dry_run": spec.supports_dry_run,
         "idempotency": PyIdempotencyMode::from(spec.idempotency_mode).value_str(),
         "sub_tasks": spec.sub_tasks.iter().map(python_task_spec_to_json).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(timeout) = spec.task_timeout {
+        value["task_timeout"] = json!(timeout.as_secs_f64());
+    }
+    value
 }
 
 fn python_task_spec_to_py_dict<'py>(
@@ -2194,6 +2243,9 @@ fn python_task_spec_to_py_dict<'py>(
         "retry",
         retry_config_to_py_object(py, spec.retry_config.as_ref())?,
     )?;
+    if let Some(timeout) = spec.task_timeout {
+        task.set_item("task_timeout", timeout.as_secs_f64())?;
+    }
     task.set_item(
         "session_verification",
         session_verification_config_to_py_object(py, spec.session_verification_config.as_ref())?,
@@ -2539,6 +2591,10 @@ impl TaskInfo for RuntimeTaskWrapper {
         self.inner.retry_config()
     }
 
+    fn task_timeout(&self) -> Option<Duration> {
+        self.inner.task_timeout()
+    }
+
     fn supports_dry_run(&self) -> bool {
         self.inner.supports_dry_run()
     }
@@ -2741,6 +2797,7 @@ mod tests {
             None => info.set_item("connection_plugin_name", py.None())?,
         }
         info.set_item("retry", py.None())?;
+        info.set_item("task_timeout", py.None())?;
         info.set_item("processors", Vec::<String>::new())?;
         info.set_item("session_verification", py.None())?;
         info.set_item("supports_dry_run", false)?;

@@ -152,7 +152,7 @@ proposed shape is:
 ```rust
 pub struct ExecutionPolicy {
     pub retry: Option<Arc<dyn RetryPolicy>>,
-    pub task_timeout: Option<u64>, // whole seconds
+    pub task_timeout: Option<f64>, // positive seconds, including fractions
     pub verification: VerificationRequirement,
 }
 ```
@@ -322,11 +322,11 @@ current positions.
 
 ### One monotonic deadline per task on each host
 
-`ExecutionPolicy.task_timeout: Option<u64>` supplies a configurable
+`ExecutionPolicy.task_timeout: Option<f64>` supplies a configurable
 fallback duration for **each task-host execution**. It is not one clock for
 the whole invocation, the whole host across a task list, or each retry
 attempt. A task may select its own `task_timeout` setting. Public timeout
-durations are positive, whole **seconds**; the runtime converts them to
+durations are positive, finite **seconds**, including fractions; the runtime converts them to
 `Duration` and computes a monotonic deadline internally. The proposed
 precedence is:
 
@@ -369,7 +369,7 @@ time. Root B and host 2 do not spend A's time budget.
 
 An optional task setting should distinguish *inherit* from *disable the
 default*. A concrete shape is `Option<TaskTimeoutOverride>`, where `None`
-inherits, `Disabled` removes the invocation default, and `AfterSeconds(u64)`
+inherits, `Disabled` removes the invocation default, and `AfterSeconds(f64)`
 replaces it. Reject a zero-second timeout during configuration validation;
 the explicit `Disabled` setting expresses no limit. A root override does not
 propagate to subtasks. One duration is resolved for each task on each host
@@ -380,7 +380,7 @@ This design issue includes the public task-facing setting for both Rust and
 Python. Phase 4 records the compatibility cost of adding the setting to
 task descriptors and `TaskSpec` overrides.
 
-The proposed macro and decorator keyword is `task_timeout`, with an integer
+The proposed macro and decorator keyword is `task_timeout`, with a positive
 number of seconds:
 
 ```rust
@@ -685,7 +685,7 @@ new argument without support must never silently ignore a selected policy.
 
 Add a default `TaskInfo` timeout getter so existing hand-written `TaskInfo`
 implementations compile unchanged. The Rust attribute macro records
-`task_timeout` in whole seconds and generates the getter; the Python task
+`task_timeout` in seconds and generates the getter; the Python task
 adapter implements the same getter from decorator metadata. A root
 `TaskDefinition` timeout override is an optional runtime value and does not
 alter the authored task or subtask metadata. The invocation fallback is
@@ -693,12 +693,12 @@ alter the authored task or subtask metadata. The invocation fallback is
 and authored metadata.
 
 Use `Option<TaskTimeoutOverride>` for the getter and root override:
-`None` means inherit, `AfterSeconds(positive_u64)` sets the duration, and
+`None` means inherit, `AfterSeconds(positive_finite_f64)` sets the duration, and
 `Disabled` suppresses the invocation fallback. The attribute macro accepts
 `task_timeout = 30` or `task_timeout = "disabled"`. The Python decorator
 accepts `task_timeout=30` or a typed `TaskTimeout.DISABLED` value; omitting
 the argument inherits. Zero seconds is invalid in all public forms. The
-`ExecutionPolicy.task_timeout` field is an optional whole-second fallback,
+`ExecutionPolicy.task_timeout` field is an optional seconds fallback,
 with `None` meaning no invocation timeout. Validate values before running
 the task. The runtime creates an `Instant` cutoff only after resolving the
 value for a specific task and host.
@@ -722,7 +722,7 @@ classes and `Tasks`, respectively. Add an optional policy keyword to those
 entrypoints and to direct `TaskDefinition.run_on_host(s)` execution. When
 omitted, Python follows the existing Rust path and returns the same result
 shape. Expose a Python `ExecutionPolicy` value with a `task_timeout` in
-whole seconds and the verification requirement. A Python-selected custom
+seconds and the verification requirement. A Python-selected custom
 retry algorithm requires a synchronous adapter for the object-safe Rust
 `RetryPolicy::decide`; async policy callbacks are outside the initial
 interface. Update the Python `.pyi` stubs and top-level re-exports with

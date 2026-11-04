@@ -14,7 +14,7 @@ use std::time::Duration;
 /// `max_task_depth`, and `max_connection_attempts` control built-in runner
 /// behavior. `task_retry` carries runner-level task retry defaults and `options`
 /// carries plugin-specific JSON for custom runners. `task_timeout` is an optional
-/// per-task, per-host limit in milliseconds.
+/// per-task, per-host limit in seconds.
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default, deny_unknown_fields)]
 pub struct RunnerConfig {
@@ -23,8 +23,12 @@ pub struct RunnerConfig {
     worker_count: Option<usize>,
     max_task_depth: usize,
     max_connection_attempts: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    task_timeout: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_task_timeout"
+    )]
+    task_timeout: Option<f64>,
     #[serde(
         default = "default_retry_config",
         deserialize_with = "deserialize_retry_config"
@@ -73,7 +77,7 @@ impl RunnerConfig {
 
     /// Return the optional per-task, per-host timeout.
     pub fn task_timeout(&self) -> Option<Duration> {
-        self.task_timeout.map(Duration::from_millis)
+        self.task_timeout.map(Duration::from_secs_f64)
     }
 
     /// Return normalized default task retry settings for this runner.
@@ -140,6 +144,10 @@ impl RunnerConfigBuilder {
 
     /// Set the optional per-task, per-host timeout.
     pub fn task_timeout(mut self, task_timeout: Duration) -> Self {
+        assert!(
+            !task_timeout.is_zero(),
+            "task_timeout must be greater than zero"
+        );
         self.task_timeout = Some(task_timeout);
         self
     }
@@ -161,9 +169,7 @@ impl RunnerConfigBuilder {
             max_connection_attempts: self
                 .max_connection_attempts
                 .unwrap_or_else(get_runner_max_connection_attempts_default),
-            task_timeout: self.task_timeout.map(|timeout| {
-                u64::try_from(timeout.as_millis()).expect("task timeout exceeds u64 milliseconds")
-            }),
+            task_timeout: self.task_timeout.map(|timeout| timeout.as_secs_f64()),
             task_retry: self.task_retry.unwrap_or_else(default_retry_config),
         }
     }
@@ -207,4 +213,22 @@ where
     D: Deserializer<'de>,
 {
     TaskRetryConfig::deserialize(deserializer).map(normalize_retry_config)
+}
+
+fn deserialize_task_timeout<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let timeout = Option::<f64>::deserialize(deserializer)?;
+    if timeout.is_some_and(|seconds| {
+        !seconds.is_finite()
+            || seconds <= 0.0
+            || seconds >= u64::MAX as f64
+            || Duration::from_secs_f64(seconds).is_zero()
+    }) {
+        return Err(serde::de::Error::custom(
+            "task_timeout must be a positive finite number of seconds",
+        ));
+    }
+    Ok(timeout)
 }

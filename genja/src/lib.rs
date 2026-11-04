@@ -1628,6 +1628,36 @@ mod tests {
         }
     }
 
+    struct TimedChild;
+
+    #[genja_task(name = "timed-child", task_timeout = 0.5)]
+    impl TimedChild {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+    }
+
+    struct TimedParent;
+
+    #[genja_task(name = "timed-parent", task_timeout = 5)]
+    impl TimedParent {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            vec![Arc::new(TimedChild)]
+        }
+    }
+
     struct FailedTask;
 
     impl TaskInfo for FailedTask {
@@ -2550,6 +2580,18 @@ mod tests {
         ));
         fs::create_dir_all(&dir).expect("temp test dir should be created");
         dir
+    }
+
+    #[test]
+    fn task_timeout_metadata_is_independent_for_parent_and_child() {
+        let parent = TaskDefinition::new(TimedParent);
+        assert_eq!(parent.task_timeout(), Some(Duration::from_secs(5)));
+        let child = parent
+            .as_task()
+            .sub_tasks()
+            .pop()
+            .expect("child task exists");
+        assert_eq!(child.task_timeout(), Some(Duration::from_millis(500)));
     }
 
     #[test]

@@ -381,7 +381,7 @@ impl PyRunnerConfig {
     /// * `max_task_depth` - Optional maximum nested sub-task depth.
     /// * `max_connection_attempts` - Optional maximum connection attempts per host.
     /// * `task_retry` - Optional default retry behavior for task execution.
-    /// * `task_timeout` - Optional per-task, per-host timeout in milliseconds.
+    /// * `task_timeout` - Optional per-task, per-host timeout in seconds.
     #[new]
     #[pyo3(signature = (plugin=None, worker_count=None, max_task_depth=None, max_connection_attempts=None, task_retry=None, task_timeout=None))]
     fn new(
@@ -390,8 +390,8 @@ impl PyRunnerConfig {
         max_task_depth: Option<usize>,
         max_connection_attempts: Option<usize>,
         task_retry: Option<PyRef<'_, PyRunnerTaskRetryConfig>>,
-        task_timeout: Option<u64>,
-    ) -> Self {
+        task_timeout: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
         let mut builder = RunnerConfig::builder();
         if let Some(plugin) = plugin {
             builder = builder.plugin(plugin);
@@ -409,11 +409,13 @@ impl PyRunnerConfig {
             builder = builder.task_retry(task_retry.inner);
         }
         if let Some(task_timeout) = task_timeout {
-            builder = builder.task_timeout(std::time::Duration::from_millis(task_timeout));
+            if !task_timeout.is_none() {
+                builder = builder.task_timeout(task::extract_task_timeout_seconds(&task_timeout)?);
+            }
         }
-        Self {
+        Ok(Self {
             inner: builder.build(),
-        }
+        })
     }
 
     /// Runner plugin name.
@@ -448,12 +450,12 @@ impl PyRunnerConfig {
         }
     }
 
-    /// Default per-task, per-host timeout in milliseconds, if configured.
+    /// Default per-task, per-host timeout in seconds, if configured.
     #[getter]
-    pub(crate) fn task_timeout(&self) -> Option<u64> {
+    pub(crate) fn task_timeout(&self) -> Option<f64> {
         self.inner
             .task_timeout()
-            .map(|timeout| timeout.as_millis() as u64)
+            .map(|timeout| timeout.as_secs_f64())
     }
 
     fn __repr__(&self) -> String {

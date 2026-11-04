@@ -1124,9 +1124,7 @@ impl PluginRunner for PyRunnerPlugin {
                 PyTaskRunOptions {
                     max_depth: Some(run_options.max_depth()),
                     dry_run: run_options.dry_run(),
-                    task_timeout: run_options
-                        .task_timeout()
-                        .map(|timeout| timeout.as_millis() as u64),
+                    task_timeout: run_options.task_timeout(),
                 },
             )
             .map_err(python_processor_error)?;
@@ -1216,9 +1214,7 @@ impl PluginRunner for PyRunnerPlugin {
                 PyTaskRunOptions {
                     max_depth: Some(run_options.max_depth()),
                     dry_run: run_options.dry_run(),
-                    task_timeout: run_options
-                        .task_timeout()
-                        .map(|timeout| timeout.as_millis() as u64),
+                    task_timeout: run_options.task_timeout(),
                 },
             )
             .map_err(python_processor_error)?;

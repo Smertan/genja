@@ -636,7 +636,7 @@ use crate::settings::RunnerConfig;
 use crate::types::{CustomTreeMap, NatString};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::any::{Any, type_name};
@@ -648,7 +648,7 @@ use std::time::SystemTime;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::task;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, Instant, sleep};
 
 pub mod registration;
 mod retry;
@@ -3596,6 +3596,7 @@ async fn verify_replacement_session(
     hostname: &str,
     connection_resolver: &dyn TaskConnectionResolver,
     config: &SessionVerificationConfig,
+    deadline: Option<TaskDeadline>,
 ) -> Result<
     (
         SessionVerificationMetadata,
@@ -3607,6 +3608,12 @@ async fn verify_replacement_session(
     let mut last_error = None;
 
     for attempt in 1..=max_attempts {
+        if let Some(deadline) = deadline {
+            trace!(
+                "replacement session attempt {attempt} starts with {}ms remaining",
+                deadline.remaining().as_millis()
+            );
+        }
         match connection_resolver
             .replace_task_connection(task, hostname)
             .await
@@ -3666,7 +3673,14 @@ async fn run_replacement_idempotency_post_check(
     replacement_connection: Option<Arc<Mutex<dyn Connection>>>,
     execution_context: TaskExecutionContext,
     attempt: usize,
+    deadline: Option<TaskDeadline>,
 ) -> HostTaskResult {
+    if let Some(deadline) = deadline {
+        trace!(
+            "replacement post-check starts with {}ms remaining",
+            deadline.remaining().as_millis()
+        );
+    }
     let check_result = match task.execution_mode() {
         TaskExecutionMode::Async => {
             let runtime_context =
@@ -3715,6 +3729,7 @@ async fn verify_after_retries(
     depth: usize,
     run_options: TaskRunOptions,
     attempts: usize,
+    deadline: Option<TaskDeadline>,
 ) -> HostTaskResult {
     if !should_attempt_session_verification(task.as_ref(), &host_result, run_options.dry_run()) {
         return host_result;
@@ -3725,7 +3740,15 @@ async fn verify_after_retries(
         .expect("session verification config should exist when verification is required");
     let connection_resolver = connection_resolver
         .expect("session verification request validation should require a resolver");
-    match verify_replacement_session(task.as_ref(), hostname, connection_resolver, config).await {
+    match verify_replacement_session(
+        task.as_ref(),
+        hostname,
+        connection_resolver,
+        config,
+        deadline,
+    )
+    .await
+    {
         Ok((metadata, replacement_connection)) => {
             host_result = with_session_verification_metadata(host_result, metadata);
             if matches!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify) {
@@ -3736,6 +3759,7 @@ async fn verify_after_retries(
                     replacement_connection,
                     TaskExecutionContext::new(depth, run_options.max_depth()),
                     attempts,
+                    deadline,
                 )
                 .await;
                 host_result = with_session_verification_metadata(host_result, metadata);
@@ -3842,7 +3866,14 @@ async fn run_task_attempt(
     execution_context: TaskExecutionContext,
     attempt: usize,
     dry_run: bool,
+    deadline: Option<TaskDeadline>,
 ) -> HostTaskResult {
+    if let Some(deadline) = deadline {
+        trace!(
+            "task attempt {attempt} starts with {}ms remaining",
+            deadline.remaining().as_millis()
+        );
+    }
     let result = match task.execution_mode() {
         TaskExecutionMode::Async => {
             let runtime_context = TaskRuntimeContext::new(execution_context, connection)
@@ -3975,6 +4006,7 @@ struct TaskRetryLoop<'a> {
     run_options: TaskRunOptions,
     settings: RetrySettings,
     policy: ResolvedRetryPolicy,
+    deadline: Option<TaskDeadline>,
 }
 
 impl TaskRetryLoop<'_> {
@@ -3993,6 +4025,7 @@ impl TaskRetryLoop<'_> {
                 TaskExecutionContext::new(self.depth, self.run_options.max_depth()),
                 attempts,
                 self.run_options.dry_run(),
+                self.deadline,
             )
             .await;
 
@@ -4013,6 +4046,12 @@ impl TaskRetryLoop<'_> {
                     );
                 }
                 if !delay.is_zero() {
+                    if let Some(deadline) = self.deadline {
+                        trace!(
+                            "retry wait starts with {}ms remaining",
+                            deadline.remaining().as_millis()
+                        );
+                    }
                     sleep(delay).await;
                 }
                 continue;
@@ -4060,6 +4099,14 @@ pub trait TaskInfo {
         None
     }
 
+    /// Return this task's own timeout, if declared.
+    ///
+    /// This value takes precedence over invocation and runner defaults and is
+    /// not inherited by sub-tasks.
+    fn task_timeout(&self) -> Option<Duration> {
+        None
+    }
+
     /// Return task-specific post-change session verification metadata, if set.
     fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
         None
@@ -4098,6 +4145,29 @@ pub struct TaskRunOptions {
     task_timeout: Option<Duration>,
 }
 
+/// Monotonic budget shared by one task on one host across its full lifecycle.
+///
+/// A child task creates its own budget; retry attempts and verification retain
+/// the original budget of their task node.
+#[derive(Debug, Clone, Copy)]
+struct TaskDeadline {
+    started_at: Instant,
+    limit: Duration,
+}
+
+impl TaskDeadline {
+    fn new(limit: Duration) -> Self {
+        Self {
+            started_at: Instant::now(),
+            limit,
+        }
+    }
+
+    fn remaining(self) -> Duration {
+        self.limit.saturating_sub(self.started_at.elapsed())
+    }
+}
+
 impl TaskRunOptions {
     /// Create run options for normal task execution with the provided maximum depth.
     pub fn new(max_depth: usize) -> Self {
@@ -4133,6 +4203,10 @@ impl TaskRunOptions {
 
     /// Set the per-invocation task timeout override.
     pub fn with_task_timeout(mut self, task_timeout: Duration) -> Self {
+        assert!(
+            !task_timeout.is_zero(),
+            "task_timeout must be greater than zero"
+        );
         self.task_timeout = Some(task_timeout);
         self
     }
@@ -4963,6 +5037,7 @@ impl TaskDefinition {
             None,
             run_options,
             RetryDefaults::default(),
+            run_options.task_timeout(),
         )
         .await
     }
@@ -5002,6 +5077,7 @@ impl TaskDefinition {
             connection_resolver,
             run_options,
             RetryDefaults::default(),
+            run_options.task_timeout(),
         )
         .await
     }
@@ -5044,10 +5120,12 @@ impl TaskDefinition {
             connection_resolver,
             run_options,
             RetryDefaults::from(runner_config),
+            run_options.effective_task_timeout(runner_config),
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn start_with_retry_defaults(
         &self,
         hostname: &str,
@@ -5056,6 +5134,7 @@ impl TaskDefinition {
         connection_resolver: Option<&dyn TaskConnectionResolver>,
         run_options: TaskRunOptions,
         mut retry_defaults: RetryDefaults,
+        task_timeout: Option<Duration>,
     ) -> Result<(), crate::GenjaError> {
         if let Some(policy) = &self.retry_policy_fallback {
             retry_defaults =
@@ -5073,6 +5152,7 @@ impl TaskDefinition {
             0,
             run_options,
             retry_defaults,
+            task_timeout,
             self.retry_policy_override.as_ref().map(Arc::clone),
             self.retry_config_override,
         )
@@ -5158,6 +5238,7 @@ impl TaskDefinition {
         depth: usize,
         run_options: TaskRunOptions,
         retry_defaults: RetryDefaults,
+        task_timeout: Option<Duration>,
         root_policy_override: Option<Arc<dyn TaskRetryPolicy>>,
         root_retry_config_override: Option<TaskRetryConfig>,
     ) -> Result<(), crate::GenjaError> {
@@ -5188,7 +5269,16 @@ impl TaskDefinition {
             return Ok(());
         }
 
+        let deadline = task.task_timeout().or(task_timeout).map(TaskDeadline::new);
         let started_at = SystemTime::now();
+        if let Some(deadline) = deadline {
+            trace!(
+                "task '{}' for host '{}' starts with {}ms remaining",
+                task.name(),
+                hostname,
+                deadline.remaining().as_millis()
+            );
+        }
         let parent_task = parent_task_name.unwrap_or("none");
         debug!(
             "starting task '{}' for host '{}' parent_task='{}' depth={} max_depth={} has_connection={}",
@@ -5301,6 +5391,7 @@ impl TaskDefinition {
             run_options,
             settings: retry_settings,
             policy: retry_policy.clone(),
+            deadline,
         }
         .run()
         .await?;
@@ -5314,6 +5405,7 @@ impl TaskDefinition {
             depth,
             run_options,
             attempts,
+            deadline,
         )
         .await;
 
@@ -5343,6 +5435,7 @@ impl TaskDefinition {
             depth,
             run_options,
             retry_defaults.with_policy(retry_policy),
+            task_timeout,
         )
         .await?;
 
@@ -5365,6 +5458,7 @@ impl TaskDefinition {
         depth: usize,
         run_options: TaskRunOptions,
         retry_defaults: RetryDefaults,
+        task_timeout: Option<Duration>,
     ) -> Result<(), crate::GenjaError> {
         for sub in task.sub_tasks() {
             let sub_task_name = sub.name().to_string();
@@ -5405,6 +5499,7 @@ impl TaskDefinition {
                 depth + 1,
                 run_options,
                 retry_defaults.clone(),
+                task_timeout,
                 None,
                 None,
             )
@@ -5489,6 +5584,10 @@ impl TaskInfo for TaskDefinition {
         self.retry_config_override
             .as_ref()
             .or_else(|| self.inner.retry_config())
+    }
+
+    fn task_timeout(&self) -> Option<Duration> {
+        self.inner.task_timeout()
     }
 
     fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {

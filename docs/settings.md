@@ -241,7 +241,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
-  task_timeout: null # optional milliseconds per task and host
+  task_timeout: null # optional seconds per task and host
   task_retry:
     allow: false
     max_attempts: 1
@@ -404,7 +404,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
-  task_timeout: null # optional milliseconds per task and host
+  task_timeout: null # optional seconds per task and host
   task_retry:
     allow: false
     max_attempts: 1
@@ -418,7 +418,7 @@ runner:
 | `worker_count` | number or null | `null` | none |
 | `max_task_depth` | number | `10` | none |
 | `max_connection_attempts` | number | `3` | none |
-| `task_timeout` | number of milliseconds or null | `null` | none |
+| `task_timeout` | positive seconds or null | `null` | none |
 | `task_retry.allow` | boolean | `false` | none |
 | `task_retry.max_attempts` | number | `1` | none |
 | `task_retry.delay_ms` | number | `0` | none |
@@ -445,13 +445,16 @@ use this setting.
 plugins or connection layers are responsible for interpreting retry behavior.
 
 `task_timeout` sets the runner default for one task on one host. Rust callers
-set it with `RunnerConfig::builder().task_timeout(Duration::from_millis(...))`;
+set it with `RunnerConfig::builder().task_timeout(Duration::from_secs(...))`;
 Python callers pass `RunnerConfig(task_timeout=...)`. An invocation can supply
-`TaskRunOptions.with_task_timeout(...)` in Rust or
-`TaskRunOptions(task_timeout=...)` in Python. The invocation value takes
-precedence over the runner value; when both are omitted, no timeout is
-configured. Deadline enforcement is introduced in the next implementation
-phase.
+`TaskRunOptions::new(...).with_task_timeout(...)` in Rust or
+`TaskRunOptions(task_timeout=...)` in Python. A task's declared timeout takes
+precedence, followed by the invocation value and then the runner value. When
+all three are omitted, no timeout is configured. A child task can declare its
+own value; it does not inherit a timeout declared only by its parent. Deadline
+enforcement is introduced in the next implementation phase.
+
+Timeout values may include fractions of a second, such as `task_timeout: 0.5`.
 
 `task_retry.allow` controls whether retries are allowed by default for task
 execution. `task_retry.max_attempts` controls the default total attempt count for a

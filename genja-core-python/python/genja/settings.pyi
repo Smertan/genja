@@ -154,7 +154,7 @@ class RunnerConfig:
         max_task_depth: int | None = None,
         max_connection_attempts: int | None = None,
         task_retry: RunnerTaskRetryConfig | None = None,
-        task_timeout: int | None = None,
+        task_timeout: float | None = None,
     ) -> None:
         """Create runner configuration.
 
@@ -166,7 +166,7 @@ class RunnerConfig:
             max_task_depth: Optional maximum nested sub-task depth.
             max_connection_attempts: Optional maximum connection attempts per host.
             task_retry: Optional default retry behavior for task execution.
-            task_timeout: Optional per-task, per-host timeout in milliseconds.
+            task_timeout: Optional per-task, per-host timeout in seconds.
         """
         ...
 
@@ -196,8 +196,8 @@ class RunnerConfig:
         ...
 
     @property
-    def task_timeout(self) -> int | None:
-        """Default per-task, per-host timeout in milliseconds, if configured."""
+    def task_timeout(self) -> float | None:
+        """Default per-task, per-host timeout in seconds, if configured."""
         ...
 
 class RunnerTaskRetryConfig:

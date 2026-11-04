@@ -288,17 +288,24 @@ fn runner_config_serializes_task_retry_key() {
 }
 
 #[test]
-fn runner_task_timeout_round_trips_in_milliseconds() {
+fn runner_task_timeout_round_trips_in_seconds() {
     let runner = RunnerConfig::builder()
         .task_timeout(std::time::Duration::from_millis(1500))
         .build();
     let value = serde_json::to_value(&runner).unwrap();
-    assert_eq!(value["task_timeout"], 1500);
+    assert_eq!(value["task_timeout"], 1.5);
     let restored: RunnerConfig = serde_json::from_value(value).unwrap();
     assert_eq!(
         restored.task_timeout(),
         Some(std::time::Duration::from_millis(1500))
     );
+}
+
+#[test]
+fn runner_task_timeout_rejects_non_positive_seconds() {
+    for value in [json!({"task_timeout": 0}), json!({"task_timeout": -1})] {
+        assert!(serde_json::from_value::<RunnerConfig>(value).is_err());
+    }
 }
 
 #[test]
