@@ -3795,18 +3795,30 @@ enum HostResultCompletion {
     },
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Shared host, timing, and processor inputs used when recording a result.
+#[derive(Clone, Copy)]
+struct HostResultRecording<'a> {
+    hostname: &'a str,
+    started_at: SystemTime,
+    processor_context: &'a TaskProcessorContext,
+    processors: &'a [Arc<dyn TaskProcessor>],
+    dry_run: bool,
+}
+
 fn record_host_result(
-    hostname: &str,
     results: &mut TaskResults,
     mut host_result: HostTaskResult,
-    started_at: SystemTime,
     finished_at: SystemTime,
-    processor_context: &TaskProcessorContext,
-    processors: &[Arc<dyn TaskProcessor>],
-    dry_run: bool,
+    recording: HostResultRecording<'_>,
     completion: HostResultCompletion,
 ) -> Result<(), crate::GenjaError> {
+    let HostResultRecording {
+        hostname,
+        started_at,
+        processor_context,
+        processors,
+        dry_run,
+    } = recording;
     let duration_ns = finished_at
         .duration_since(started_at)
         .map(|duration| duration.as_nanos())
@@ -5355,6 +5367,13 @@ impl TaskDefinition {
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
+        let recording = HostResultRecording {
+            hostname,
+            started_at,
+            processor_context: &processor_context,
+            processors: &processors,
+            dry_run: run_options.dry_run(),
+        };
 
         if let Some(host_result) = validate_session_verification_request(
             task.as_ref(),
@@ -5363,14 +5382,10 @@ impl TaskDefinition {
         ) {
             let finished_at = SystemTime::now();
             record_host_result(
-                hostname,
                 results,
                 host_result,
-                started_at,
                 finished_at,
-                &processor_context,
-                &processors,
-                run_options.dry_run(),
+                recording,
                 HostResultCompletion::BeforeAttempts,
             )?;
             return Ok(());
@@ -5396,14 +5411,10 @@ impl TaskDefinition {
                         TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
                     );
                     record_host_result(
-                        hostname,
                         results,
                         host_result,
-                        started_at,
                         finished_at,
-                        &processor_context,
-                        &processors,
-                        run_options.dry_run(),
+                        recording,
                         HostResultCompletion::BeforeAttempts,
                     )?;
                     return Ok(());
@@ -5423,14 +5434,10 @@ impl TaskDefinition {
                 .with_kind(TaskFailureKind::Unsupported),
             );
             record_host_result(
-                hostname,
                 results,
                 host_result,
-                started_at,
                 finished_at,
-                &processor_context,
-                &processors,
-                true,
+                recording,
                 HostResultCompletion::BeforeAttempts,
             )?;
             return Ok(());
@@ -5469,14 +5476,10 @@ impl TaskDefinition {
 
         let finished_at = SystemTime::now();
         record_host_result(
-            hostname,
             results,
             host_result,
-            started_at,
             finished_at,
-            &processor_context,
-            &processors,
-            run_options.dry_run(),
+            recording,
             HostResultCompletion::AfterRetries {
                 attempts,
                 settings: retry_settings,
