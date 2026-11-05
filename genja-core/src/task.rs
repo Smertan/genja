@@ -4193,6 +4193,14 @@ struct TaskPolicyInputs {
     root_retry_config_override: Option<TaskRetryConfig>,
 }
 
+/// Parent position and execution defaults passed to each child task.
+struct SubTaskContext {
+    parent_depth: usize,
+    run_options: TaskRunOptions,
+    retry_defaults: RetryDefaults,
+    task_timeout: Option<Duration>,
+}
+
 impl TaskRunOptions {
     /// Create run options for normal task execution with the provided maximum depth.
     pub fn new(max_depth: usize) -> Self {
@@ -5462,15 +5470,19 @@ impl TaskDefinition {
 
         Self::run_sub_tasks(
             task.as_ref(),
-            hostname,
-            host,
+            HostExecution {
+                hostname,
+                host,
+                connection_resolver,
+                processor_resolver,
+            },
             results,
-            connection_resolver,
-            processor_resolver,
-            depth,
-            run_options,
-            retry_defaults.with_policy(retry_policy),
-            task_timeout,
+            SubTaskContext {
+                parent_depth: depth,
+                run_options,
+                retry_defaults: retry_defaults.with_policy(retry_policy),
+                task_timeout,
+            },
         )
         .await?;
 
@@ -5482,19 +5494,19 @@ impl TaskDefinition {
     /// Each child re-enters the full host execution path so it resolves its own
     /// connection, retry settings, attempt count, verification, timing, and results.
     /// The existing aggregate processor hooks surround each recursive call.
-    #[allow(clippy::too_many_arguments)]
     async fn run_sub_tasks(
         task: &dyn Task,
-        hostname: &str,
-        host: &Host,
+        host_execution: HostExecution<'_>,
         results: &mut TaskResults,
-        connection_resolver: Option<&dyn TaskConnectionResolver>,
-        processor_resolver: Option<&dyn TaskProcessorResolver>,
-        depth: usize,
-        run_options: TaskRunOptions,
-        retry_defaults: RetryDefaults,
-        task_timeout: Option<Duration>,
+        sub_task_context: SubTaskContext,
     ) -> Result<(), crate::GenjaError> {
+        let SubTaskContext {
+            parent_depth,
+            run_options,
+            retry_defaults,
+            task_timeout,
+        } = sub_task_context;
+        let child_depth = parent_depth + 1;
         for sub in task.sub_tasks() {
             let sub_task_name = sub.name().to_string();
             if results.sub_task(&sub_task_name).is_none() {
@@ -5505,7 +5517,7 @@ impl TaskDefinition {
                 .expect("sub task results should exist after insertion");
             let sub_processor_names = sub.processor_names();
             let sub_processors =
-                Self::resolve_processors(processor_resolver, &sub_processor_names)?;
+                Self::resolve_processors(host_execution.processor_resolver, &sub_processor_names)?;
             let mut sub_task_started = false;
             if !sub_processors.is_empty()
                 && sub_results.hosts().is_empty()
@@ -5514,7 +5526,7 @@ impl TaskDefinition {
                 let sub_context = TaskProcessorContext::new(
                     sub_task_name.as_str(),
                     Some(task.name()),
-                    depth + 1,
+                    child_depth,
                     None::<&str>,
                 );
                 for processor in &sub_processors {
@@ -5524,17 +5536,12 @@ impl TaskDefinition {
             }
             Self::start_with_depth(
                 Arc::clone(&sub),
-                HostExecution {
-                    hostname,
-                    host,
-                    connection_resolver,
-                    processor_resolver,
-                },
+                host_execution,
                 sub_results,
                 TaskNodeContext {
                     processor_names: sub_processor_names,
                     parent_task_name: Some(task.name()),
-                    depth: depth + 1,
+                    depth: child_depth,
                     run_options,
                 },
                 TaskPolicyInputs {
@@ -5549,7 +5556,7 @@ impl TaskDefinition {
                 let sub_context = TaskProcessorContext::new(
                     sub_task_name.as_str(),
                     Some(task.name()),
-                    depth + 1,
+                    child_depth,
                     None::<&str>,
                 );
                 for processor in &sub_processors {
