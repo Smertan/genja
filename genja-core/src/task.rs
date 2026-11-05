@@ -3714,24 +3714,37 @@ async fn run_replacement_idempotency_post_check(
     }
 }
 
+/// Host and execution state retained across fresh-session verification.
+struct VerificationContext<'a> {
+    hostname: &'a str,
+    host: &'a Host,
+    connection_resolver: Option<&'a dyn TaskConnectionResolver>,
+    execution: TaskExecutionContext,
+    dry_run: bool,
+    attempts: usize,
+    deadline: Option<TaskDeadline>,
+}
+
 /// Verify a changed task on a fresh connection after task retries finish.
 ///
 /// Retrying the fresh connection and checking convergence do not rerun the task
 /// or change its attempt count. Preserve session-verification metadata if the
 /// convergence check produces a new result.
-#[allow(clippy::too_many_arguments)]
 async fn verify_after_retries(
     task: &Arc<dyn Task>,
-    hostname: &str,
-    host: &Host,
     mut host_result: HostTaskResult,
-    connection_resolver: Option<&dyn TaskConnectionResolver>,
-    depth: usize,
-    run_options: TaskRunOptions,
-    attempts: usize,
-    deadline: Option<TaskDeadline>,
+    context: VerificationContext<'_>,
 ) -> HostTaskResult {
-    if !should_attempt_session_verification(task.as_ref(), &host_result, run_options.dry_run()) {
+    let VerificationContext {
+        hostname,
+        host,
+        connection_resolver,
+        execution,
+        dry_run,
+        attempts,
+        deadline,
+    } = context;
+    if !should_attempt_session_verification(task.as_ref(), &host_result, dry_run) {
         return host_result;
     }
 
@@ -3757,7 +3770,7 @@ async fn verify_after_retries(
                     host,
                     host_result,
                     replacement_connection,
-                    TaskExecutionContext::new(depth, run_options.max_depth()),
+                    execution,
                     attempts,
                     deadline,
                 )
@@ -5441,14 +5454,16 @@ impl TaskDefinition {
 
         let host_result = verify_after_retries(
             &task,
-            hostname,
-            host,
             host_result,
-            connection_resolver,
-            depth,
-            run_options,
-            attempts,
-            deadline,
+            VerificationContext {
+                hostname,
+                host,
+                connection_resolver,
+                execution: TaskExecutionContext::new(depth, run_options.max_depth()),
+                dry_run: run_options.dry_run(),
+                attempts,
+                deadline,
+            },
         )
         .await;
 
