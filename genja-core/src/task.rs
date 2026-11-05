@@ -4168,6 +4168,31 @@ impl TaskDeadline {
     }
 }
 
+/// Host and services used by one task node.
+#[derive(Clone, Copy)]
+struct HostExecution<'a> {
+    hostname: &'a str,
+    host: &'a Host,
+    connection_resolver: Option<&'a dyn TaskConnectionResolver>,
+    processor_resolver: Option<&'a dyn TaskProcessorResolver>,
+}
+
+/// Position and execution options for one node in a task tree.
+struct TaskNodeContext<'a> {
+    processor_names: Vec<&'a str>,
+    parent_task_name: Option<&'a str>,
+    depth: usize,
+    run_options: TaskRunOptions,
+}
+
+/// Retry and timeout inputs inherited or overridden by a task node.
+struct TaskPolicyInputs {
+    retry_defaults: RetryDefaults,
+    task_timeout: Option<Duration>,
+    root_policy_override: Option<Arc<dyn TaskRetryPolicy>>,
+    root_retry_config_override: Option<TaskRetryConfig>,
+}
+
 impl TaskRunOptions {
     /// Create run options for normal task execution with the provided maximum depth.
     pub fn new(max_depth: usize) -> Self {
@@ -5142,19 +5167,25 @@ impl TaskDefinition {
         }
         Self::start_with_depth(
             Arc::clone(&self.inner),
-            hostname,
-            host,
+            HostExecution {
+                hostname,
+                host,
+                connection_resolver,
+                processor_resolver: self.processor_resolver.as_deref(),
+            },
             results,
-            connection_resolver,
-            self.processor_resolver.as_deref(),
-            self.processor_names(),
-            None,
-            0,
-            run_options,
-            retry_defaults,
-            task_timeout,
-            self.retry_policy_override.as_ref().map(Arc::clone),
-            self.retry_config_override,
+            TaskNodeContext {
+                processor_names: self.processor_names(),
+                parent_task_name: None,
+                depth: 0,
+                run_options,
+            },
+            TaskPolicyInputs {
+                retry_defaults,
+                task_timeout,
+                root_policy_override: self.retry_policy_override.as_ref().map(Arc::clone),
+                root_retry_config_override: self.retry_config_override,
+            },
         )
         .await
     }
@@ -5198,20 +5229,16 @@ impl TaskDefinition {
     /// * `task` - A reference to the task to execute, provided as a trait object.
     ///   This allows handling any type that implements the `Task` trait.
     ///
-    /// * `hostname` - The name of the host on which the task is being executed.
-    ///   Used as the key when storing task results.
-    ///
-    /// * `host` - A reference to the `Host` object representing the target system.
-    ///   This is passed to each task attempt for execution.
+    /// * `host_execution` - The target host and connection and processor services.
     ///
     /// * `results` - A mutable reference to the `TaskResults` structure where
     ///   execution results for this task and its sub-tasks will be stored.
     ///
-    /// * `depth` - The current depth in the task execution tree. The root task
-    ///   starts at depth 0, its immediate sub-tasks are at depth 1, and so on.
+    /// * `node` - The task-tree position, processor names, and run options.
     ///
-    /// * `max_depth` - The maximum allowed depth for task nesting. If `depth`
-    ///   exceeds this value, the method records a failed host result.
+    /// * `policy` - Retry defaults and timeout inherited by this node, plus root
+    ///   retry overrides. If the node depth exceeds the configured maximum, the
+    ///   method records a failed host result.
     ///   Because the check is `depth > max_depth`, a task at depth exactly equal
     ///   to `max_depth` is still allowed to run.
     ///
@@ -5225,23 +5252,31 @@ impl TaskDefinition {
     /// Processor resolution and processor hooks may return an error. Depth overflow
     /// is handled by inserting a failed host result with [`TaskFailureKind::Internal`].
     #[async_recursion]
-    #[allow(clippy::too_many_arguments)]
-    async fn start_with_depth(
+    async fn start_with_depth<'a: 'async_recursion>(
         task: Arc<dyn Task>,
-        hostname: &str,
-        host: &Host,
+        host_execution: HostExecution<'a>,
         results: &mut TaskResults,
-        connection_resolver: Option<&dyn TaskConnectionResolver>,
-        processor_resolver: Option<&dyn TaskProcessorResolver>,
-        processor_names: Vec<&str>,
-        parent_task_name: Option<&str>,
-        depth: usize,
-        run_options: TaskRunOptions,
-        retry_defaults: RetryDefaults,
-        task_timeout: Option<Duration>,
-        root_policy_override: Option<Arc<dyn TaskRetryPolicy>>,
-        root_retry_config_override: Option<TaskRetryConfig>,
+        node: TaskNodeContext<'a>,
+        policy: TaskPolicyInputs,
     ) -> Result<(), crate::GenjaError> {
+        let HostExecution {
+            hostname,
+            host,
+            connection_resolver,
+            processor_resolver,
+        } = host_execution;
+        let TaskNodeContext {
+            processor_names,
+            parent_task_name,
+            depth,
+            run_options,
+        } = node;
+        let TaskPolicyInputs {
+            retry_defaults,
+            task_timeout,
+            root_policy_override,
+            root_retry_config_override,
+        } = policy;
         let max_depth = run_options.max_depth();
         if depth > max_depth {
             let started_at = SystemTime::now();
@@ -5489,19 +5524,25 @@ impl TaskDefinition {
             }
             Self::start_with_depth(
                 Arc::clone(&sub),
-                hostname,
-                host,
+                HostExecution {
+                    hostname,
+                    host,
+                    connection_resolver,
+                    processor_resolver,
+                },
                 sub_results,
-                connection_resolver,
-                processor_resolver,
-                sub_processor_names,
-                Some(task.name()),
-                depth + 1,
-                run_options,
-                retry_defaults.clone(),
-                task_timeout,
-                None,
-                None,
+                TaskNodeContext {
+                    processor_names: sub_processor_names,
+                    parent_task_name: Some(task.name()),
+                    depth: depth + 1,
+                    run_options,
+                },
+                TaskPolicyInputs {
+                    retry_defaults: retry_defaults.clone(),
+                    task_timeout,
+                    root_policy_override: None,
+                    root_retry_config_override: None,
+                },
             )
             .await?;
             if sub_task_started {
