@@ -4432,6 +4432,61 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct BlockingDeadlineListTask {
+        finished: Arc<AtomicBool>,
+    }
+
+    impl TaskInfo for BlockingDeadlineListTask {
+        fn name(&self) -> &str {
+            "blocking-first"
+        }
+    }
+
+    #[async_trait]
+    impl Task for BlockingDeadlineListTask {
+        fn start(
+            &self,
+            _host: &Host,
+            _context: &genja_core::task::BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            std::thread::sleep(Duration::from_millis(80));
+            self.finished.store(true, Ordering::SeqCst);
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Blocking
+        }
+    }
+
+    struct ObserveBlockingCompletionTask {
+        first_finished: Arc<AtomicBool>,
+        observed_finished: Arc<AtomicBool>,
+    }
+
+    impl TaskInfo for ObserveBlockingCompletionTask {
+        fn name(&self) -> &str {
+            "observe-blocking-completion"
+        }
+    }
+
+    #[async_trait]
+    impl Task for ObserveBlockingCompletionTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.observed_finished
+                .store(self.first_finished.load(Ordering::SeqCst), Ordering::SeqCst);
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
     impl TaskInfo for DeadlineListTask {
         fn name(&self) -> &str {
             self.name
@@ -4591,6 +4646,49 @@ mod tests {
                     .is_some_and(HostTaskResult::is_passed)
             );
             assert_eq!(second_calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn ordered_tasks_wait_for_timed_out_blocking_work_on_the_same_host() {
+        for runner in ["serial", "threaded"] {
+            let settings = Settings::builder()
+                .runner(RunnerConfig::builder().plugin(runner).build())
+                .build();
+            let genja = Genja::builder(single_host_inventory())
+                .with_settings(settings)
+                .build()
+                .expect("runner should build");
+            let first_finished = Arc::new(AtomicBool::new(false));
+            let observed_finished = Arc::new(AtomicBool::new(false));
+            let mut tasks = Tasks::new();
+            tasks.add_task(BlockingDeadlineListTask {
+                finished: Arc::clone(&first_finished),
+            });
+            tasks.add_task(ObserveBlockingCompletionTask {
+                first_finished,
+                observed_finished: Arc::clone(&observed_finished),
+            });
+
+            let results = genja
+                .run_tasks_with_options(
+                    tasks,
+                    TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20)),
+                )
+                .expect("blocking timeout should be recorded");
+            let failure = results[0]
+                .host_result("router1")
+                .and_then(HostTaskResult::failure)
+                .expect("first task should time out");
+            assert!(matches!(failure.kind(), TaskFailureKind::Timeout));
+            assert_eq!(
+                failure
+                    .details()
+                    .and_then(|details| details.get("local_completion_observed"))
+                    .and_then(serde_json::Value::as_bool),
+                Some(true)
+            );
+            assert!(observed_finished.load(Ordering::SeqCst));
         }
     }
 

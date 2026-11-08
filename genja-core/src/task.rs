@@ -4096,6 +4096,12 @@ async fn run_task_attempt(
             }
         }
         TaskExecutionMode::Blocking => {
+            let phase = Arc::new(std::sync::atomic::AtomicU8::new(if dry_run {
+                3
+            } else {
+                0
+            }));
+            let work_phase = Arc::clone(&phase);
             let blocking_context =
                 BlockingTaskRuntimeContext::new(execution_context, connection, Handle::current())
                     .with_current_attempt(attempt)
@@ -4108,6 +4114,7 @@ async fn run_task_attempt(
                     match task.idempotency_mode() {
                         IdempotencyMode::Disabled => task.start(&host, &blocking_context),
                         IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                            work_phase.store(1, std::sync::atomic::Ordering::Relaxed);
                             match task.check(&host, &blocking_context) {
                                 Ok(IdempotencyCheck::Converged { summary, details }) => {
                                     Ok(converged_check_to_host_result(summary, details, attempt))
@@ -4121,6 +4128,7 @@ async fn run_task_attempt(
                                             true,
                                         ));
                                     }
+                                    work_phase.store(0, std::sync::atomic::Ordering::Relaxed);
                                     let host_result = task.start(&host, &blocking_context)?;
                                     if matches!(
                                         task.idempotency_mode(),
@@ -4140,6 +4148,7 @@ async fn run_task_attempt(
                                                 true,
                                             ));
                                         }
+                                        work_phase.store(2, std::sync::atomic::Ordering::Relaxed);
                                         match task.check(&host, &blocking_context) {
                                             Ok(IdempotencyCheck::Converged { .. }) => {
                                                 Ok(host_result)
@@ -4165,8 +4174,14 @@ async fn run_task_attempt(
             .await
             {
                 Ok(result) => {
+                    let phase = match phase.load(std::sync::atomic::Ordering::Relaxed) {
+                        1 => "convergence_check",
+                        2 => "post_check",
+                        3 => "dry_run",
+                        _ => "task_attempt",
+                    };
                     if let Some(timeout_result) =
-                        deadline_failure_if_expired(deadline, "task_attempt", attempt, true)
+                        deadline_failure_if_expired(deadline, phase, attempt, true)
                     {
                         return timeout_result;
                     }
@@ -4212,7 +4227,7 @@ impl TaskRetryLoop<'_> {
                 } else {
                     "retry_wait"
                 },
-                next_attempt,
+                attempts,
                 true,
             ) {
                 break timeout_result;
@@ -4221,7 +4236,7 @@ impl TaskRetryLoop<'_> {
                 processor.on_instance_start(self.processor_context)?;
             }
             if let Some(timeout_result) =
-                deadline_failure_if_expired(self.deadline, "instance_start", next_attempt, true)
+                deadline_failure_if_expired(self.deadline, "instance_start", attempts, true)
             {
                 break timeout_result;
             }
@@ -9690,6 +9705,13 @@ mod deadline_tests {
                 .and_then(Value::as_str),
             Some(phase)
         );
+        assert_eq!(
+            failure
+                .details()
+                .and_then(|d| d.get("attempt"))
+                .and_then(Value::as_u64),
+            Some(attempts as u64)
+        );
         assert_eq!(result.execution_metadata().attempts(), attempts);
     }
 
@@ -9812,6 +9834,23 @@ mod deadline_tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn blocking_convergence_timeout_reports_the_check_phase() {
+        let mut task = TimedTask::new("blocking_check");
+        task.mode = TaskExecutionMode::Blocking;
+        task.idempotency = IdempotencyMode::Check;
+        task.check_delay = Duration::from_millis(80);
+        let starts = Arc::clone(&task.starts);
+        let results = run_task(
+            &TaskDefinition::new(task),
+            None,
+            Some(Duration::from_millis(20)),
+        );
+
+        assert_timeout(&results, "convergence_check", 1);
+        assert_eq!(starts.load(Ordering::SeqCst), 0);
     }
 
     #[test]

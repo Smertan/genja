@@ -239,6 +239,15 @@ running on that host. Each later task starts its own deadline. To skip later
 roots on a host after a task deadline expires there, use list options. Other
 hosts continue, and ordinary task failures do not trigger this rule.
 
+Deadline timeout details report the configured limit and elapsed seconds, the
+phase, and the number of attempts that actually started. An expiry before the
+first attempt reports attempt `0`. `local_completion_observed` says whether
+the awaited local work finished before the result was recorded; it does not
+confirm the outcome of a remote operation. Blocking task work is awaited to
+completion before the runner returns a timeout result, so later list tasks
+cannot overlap that worker on the same host. Cancellation and cleanup grace
+periods are separate from task deadlines.
+
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
