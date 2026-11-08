@@ -329,6 +329,60 @@ class TaskRunOptions:
         """Return the runtime options as a dictionary."""
         ...
 
+class TaskListTimeoutControl:
+    """Action for later list tasks after a host deadline expires."""
+
+    CONTINUE: ClassVar[TaskListTimeoutControl]
+    SKIP_REMAINING_FOR_HOST: ClassVar[TaskListTimeoutControl]
+
+    @property
+    def value(self) -> str:
+        """Return the stable string value of this control."""
+        ...
+    def __str__(self) -> str:
+        """Return the stable string value for display."""
+        ...
+    def __repr__(self) -> str:
+        """Return the qualified enum constant name."""
+        ...
+    def __copy__(self) -> TaskListTimeoutControl:
+        """Return this immutable value for shallow copies."""
+        ...
+    def __deepcopy__(self, memo: dict[int, Any]) -> TaskListTimeoutControl:
+        """Return this immutable value for deep copies."""
+        ...
+
+class TaskListRunOptions:
+    """List execution controls with per-task options and timeout handling."""
+
+    def __init__(
+        self,
+        task_options: TaskRunOptions | None = None,
+        timeout_control: TaskListTimeoutControl | None = None,
+    ) -> None:
+        """Create list options; later tasks continue by default."""
+        ...
+
+    @property
+    def task_options(self) -> TaskRunOptions | None:
+        """Options applied to each task, or None for runner depth defaults."""
+        ...
+
+    @property
+    def timeout_control(self) -> TaskListTimeoutControl:
+        """Action for later tasks after a host deadline expires."""
+        ...
+
+    def with_task_options(self, task_options: TaskRunOptions) -> TaskListRunOptions:
+        """Return a copy with different per-task options."""
+        ...
+
+    def with_timeout_control(
+        self, timeout_control: TaskListTimeoutControl
+    ) -> TaskListRunOptions:
+        """Return a copy with different timeout handling."""
+        ...
+
 class TaskDefinition:
     """Runtime task definition built from a decorated Python task class."""
 
@@ -952,7 +1006,7 @@ class Genja:
     def run_tasks(
         self,
         tasks: Tasks,
-        run_options: TaskRunOptions | None = None,
+        run_options: TaskRunOptions | TaskListRunOptions | None = None,
     ) -> list[TaskResults]:
         """Execute an ordered task collection against selected hosts.
 
@@ -965,7 +1019,7 @@ class Genja:
     def run_tasks_async(
         self,
         tasks: Tasks,
-        run_options: TaskRunOptions | None = None,
+        run_options: TaskRunOptions | TaskListRunOptions | None = None,
     ) -> Awaitable[list[TaskResults]]:
         """Asynchronously execute an ordered task collection against selected hosts.
 
@@ -1042,6 +1096,8 @@ __all__ = [
     "TaskConnectionResolver",
     "TaskDefinition",
     "TaskRunOptions",
+    "TaskListRunOptions",
+    "TaskListTimeoutControl",
     "Tasks",
     "TaskResults",
     "Genja",

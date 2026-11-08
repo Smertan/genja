@@ -4370,6 +4370,68 @@ pub struct TaskRunOptions {
     task_timeout: Option<Duration>,
 }
 
+/// How an ordered task list treats a host after one of its task deadlines expires.
+///
+/// This controls later root tasks only. Each task and host retains its own
+/// timeout, attempt count, and result.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TaskListTimeoutControl {
+    /// Continue with later roots on every host, using fresh task deadlines.
+    #[default]
+    Continue,
+    /// Skip later roots on a host after a root or subtask deadline expires there.
+    SkipRemainingForHost,
+}
+
+/// Options for an ordered task list.
+///
+/// Wraps the options applied to each task and adds list-level control flow.
+/// Use [`Self::with_timeout_control`] to opt into skipping later roots on a
+/// host after a deadline expires. The default is to continue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskListRunOptions {
+    task_options: TaskRunOptions,
+    timeout_control: TaskListTimeoutControl,
+}
+
+impl TaskListRunOptions {
+    /// Create list options from the options applied to each task.
+    pub fn new(task_options: TaskRunOptions) -> Self {
+        Self {
+            task_options,
+            timeout_control: TaskListTimeoutControl::Continue,
+        }
+    }
+
+    /// Return the options applied to each task in the list.
+    pub fn task_options(&self) -> TaskRunOptions {
+        self.task_options
+    }
+
+    /// Return a copy with different options applied to each task in the list.
+    pub fn with_task_options(mut self, task_options: TaskRunOptions) -> Self {
+        self.task_options = task_options;
+        self
+    }
+
+    /// Return the action taken for later roots after a host deadline expires.
+    pub fn timeout_control(&self) -> TaskListTimeoutControl {
+        self.timeout_control
+    }
+
+    /// Set the action taken for later roots after a host deadline expires.
+    pub fn with_timeout_control(mut self, timeout_control: TaskListTimeoutControl) -> Self {
+        self.timeout_control = timeout_control;
+        self
+    }
+}
+
+impl From<TaskRunOptions> for TaskListRunOptions {
+    fn from(task_options: TaskRunOptions) -> Self {
+        Self::new(task_options)
+    }
+}
+
 /// Monotonic budget shared by one task on one host across its full lifecycle.
 ///
 /// A child task creates its own budget; retry attempts and verification retain

@@ -494,7 +494,9 @@ An expiry before the first task attempt reports zero attempts. Blocking work
 is observed to finish locally before another task step is started; the timeout
 result does not claim that remote work was terminated.
 In an ordered task list, later roots get fresh deadlines on every host,
-including hosts where an earlier root or subtask timed out.
+including hosts where an earlier root or subtask timed out. The optional
+[list timeout control](runners.md#list-timeout-control) can instead skip later
+roots on a host after its deadline expires.
 
 Timeout values may include fractions of a second, such as `task_timeout: 0.5`.
 

@@ -56,6 +56,8 @@ DUPLICATED_TOP_LEVEL_CLASSES = [
     "TaskMessageLevel",
     "TaskConnectionResolver",
     "TaskDefinition",
+    "TaskListRunOptions",
+    "TaskListTimeoutControl",
     "TaskRunOptions",
     "Tasks",
     "TaskResults",

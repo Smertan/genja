@@ -232,6 +232,48 @@ depth limit.
 This means the built-in threaded runner parallelizes hosts within a root task;
 it does not run separate root tasks from the same `Tasks` list at the same time.
 
+### List timeout control
+
+By default, a timed-out root or subtask does not prevent later roots from
+running on that host. Each later task starts its own deadline. To skip later
+roots on a host after a task deadline expires there, use list options. Other
+hosts continue, and ordinary task failures do not trigger this rule.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::{TaskListRunOptions, TaskListTimeoutControl, TaskRunOptions};
+    use std::time::Duration;
+
+    let options = TaskListRunOptions::new(
+        TaskRunOptions::new(1).with_task_timeout(Duration::from_secs(30)),
+    )
+    .with_timeout_control(TaskListTimeoutControl::SkipRemainingForHost);
+    let results = genja.run_tasks_with_options(tasks, options)?;
+    ```
+
+    Existing calls that pass `TaskRunOptions` continue with the default
+    `Continue` control. The async and custom-retry-policy list methods accept
+    `TaskListRunOptions` too.
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja
+
+    options = genja.TaskListRunOptions(
+        task_options=genja.TaskRunOptions(task_timeout=30),
+        timeout_control=genja.TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST,
+    )
+    results = runtime.run_tasks(tasks, run_options=options)
+    ```
+
+    `run_tasks_async(...)` accepts the same options. Omitting `task_options`
+    uses the runner's default depth and timeout settings.
+
+The opt-in skip mode calls the runner's single-task method for each root, so
+custom runners' `run_tasks` batching overrides are not used in that mode.
+
 ## Empty Host Selections
 
 If filtering selects no hosts, runners still return a task result object for the

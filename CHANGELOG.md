@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- Added `TaskListRunOptions` for ordered task lists, with an opt-in timeout control that skips later roots on a host after a task deadline expires there; the default continues with independent deadlines. Available in Rust and Python. Refs: #173
 - Added task-declared timeout values for Rust and Python tasks, including subtasks with different limits from their parents; task values take precedence over invocation and runner defaults. Refs: #173
 - Added optional per-task, per-host timeout configuration in positive seconds to Rust and Python runner settings and invocation options, including fractional values; invocation values take precedence over runner defaults. Refs: #173
 - Enforced one monotonic timeout across each task and host's connection setup, task attempts, retry waits, and verification. Expiry produces a non-retryable host timeout with the limit, elapsed time, phase, and attempt; blocking work is observed to finish locally, and later tasks in an ordered list get independent deadlines. Refs: #173

@@ -3,9 +3,9 @@ use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
     HostTaskResult, IdempotencyCheck, IdempotencyMode, MessageLevel, SessionVerificationConfig,
     Task, TaskConnectionResolver, TaskDefinition, TaskError, TaskExecutionMode, TaskFailure,
-    TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskRetryConfig,
-    TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks, validate_explicit_task_id,
-    validate_task_version,
+    TaskFailureKind, TaskInfo, TaskListRunOptions, TaskListTimeoutControl, TaskMessage,
+    TaskResults, TaskResultsSummary, TaskRetryConfig, TaskRunOptions, TaskRuntimeContext, TaskSkip,
+    TaskSuccess, Tasks, validate_explicit_task_id, validate_task_version,
 };
 use async_trait::async_trait;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -164,6 +164,16 @@ py_string_enum! {
         Disabled => DISABLED => "disabled",
         Check => CHECK => "check",
         CheckAndVerify => CHECK_AND_VERIFY => "check_and_verify",
+    }
+}
+
+py_string_enum! {
+    py: PyTaskListTimeoutControl,
+    rust: TaskListTimeoutControl,
+    python_name: "TaskListTimeoutControl",
+    variants: {
+        Continue => CONTINUE => "continue",
+        SkipRemainingForHost => SKIP_REMAINING_FOR_HOST => "skip_remaining_for_host",
     }
 }
 
@@ -1034,6 +1044,17 @@ pub struct PyTaskRunOptions {
     pub(crate) task_timeout: Option<Duration>,
 }
 
+/// Python options for an ordered task list.
+///
+/// `task_options` apply to each task. `timeout_control` chooses whether later
+/// roots continue or skip a host after one task deadline expires there.
+#[pyclass(name = "TaskListRunOptions", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyTaskListRunOptions {
+    task_options: Option<PyTaskRunOptions>,
+    timeout_control: TaskListTimeoutControl,
+}
+
 #[pymethods]
 impl PyTaskDefinition {
     #[staticmethod]
@@ -1249,6 +1270,59 @@ impl PyTaskRunOptions {
             self.max_depth,
             self.dry_run,
             self.task_timeout()
+        )
+    }
+}
+
+#[pymethods]
+impl PyTaskListRunOptions {
+    /// Create list options. The default continues later tasks on every host.
+    #[new]
+    #[pyo3(signature = (task_options=None, timeout_control=None))]
+    fn new(
+        task_options: Option<PyRef<'_, PyTaskRunOptions>>,
+        timeout_control: Option<PyRef<'_, PyTaskListTimeoutControl>>,
+    ) -> Self {
+        Self {
+            task_options: task_options.map(|options| options.clone()),
+            timeout_control: timeout_control
+                .map(|control| (*control).into())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Return the options applied to each task, if provided.
+    #[getter]
+    fn task_options(&self) -> Option<PyTaskRunOptions> {
+        self.task_options.clone()
+    }
+
+    /// Return the action for later roots after a host deadline expires.
+    #[getter]
+    fn timeout_control(&self) -> PyTaskListTimeoutControl {
+        self.timeout_control.into()
+    }
+
+    /// Return a copy with different per-task options.
+    fn with_task_options(&self, task_options: PyRef<'_, PyTaskRunOptions>) -> Self {
+        Self {
+            task_options: Some(task_options.clone()),
+            ..self.clone()
+        }
+    }
+
+    /// Return a copy with a different action after a host deadline expires.
+    fn with_timeout_control(&self, timeout_control: PyRef<'_, PyTaskListTimeoutControl>) -> Self {
+        Self {
+            timeout_control: (*timeout_control).into(),
+            ..self.clone()
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TaskListRunOptions(timeout_control={:?})",
+            self.timeout_control
         )
     }
 }
@@ -1516,7 +1590,7 @@ pub fn run_tasks(
         .map_err(|_| PyValueError::new_err("tasks must be a genja.Tasks instance"))?
         .to_runtime_tasks();
 
-    let run_options = resolve_task_run_options(
+    let run_options = resolve_task_list_run_options(
         run_options.as_ref(),
         runtime.settings().runner().max_task_depth(),
     )?;
@@ -1543,7 +1617,7 @@ pub fn run_tasks_async(
         .to_runtime_tasks();
 
     let runtime = runtime.clone();
-    let run_options = resolve_task_run_options(
+    let run_options = resolve_task_list_run_options(
         run_options.as_ref(),
         runtime.settings().runner().max_task_depth(),
     )?;
@@ -1616,13 +1690,10 @@ fn resolve_task_run_options(
         if run_options.is_none() {
             // Explicit None is equivalent to omitting run_options.
         } else if let Ok(run_options) = run_options.extract::<PyRef<'_, PyTaskRunOptions>>() {
-            let mut options =
-                TaskRunOptions::new(run_options.max_depth.unwrap_or(default_max_depth))
-                    .with_dry_run(run_options.dry_run);
-            if let Some(task_timeout) = run_options.task_timeout {
-                options = options.with_task_timeout(task_timeout);
-            }
-            return Ok(options);
+            return Ok(task_run_options_from_python(
+                &run_options,
+                default_max_depth,
+            ));
         } else {
             return Err(PyValueError::new_err(
                 "run_options must be a genja.TaskRunOptions instance",
@@ -1631,6 +1702,36 @@ fn resolve_task_run_options(
     }
 
     Ok(TaskRunOptions::new(default_max_depth))
+}
+
+fn task_run_options_from_python(
+    options: &PyTaskRunOptions,
+    default_max_depth: usize,
+) -> TaskRunOptions {
+    let mut task_options = TaskRunOptions::new(options.max_depth.unwrap_or(default_max_depth))
+        .with_dry_run(options.dry_run);
+    if let Some(task_timeout) = options.task_timeout {
+        task_options = task_options.with_task_timeout(task_timeout);
+    }
+    task_options
+}
+
+fn resolve_task_list_run_options(
+    run_options: Option<&Bound<'_, PyAny>>,
+    default_max_depth: usize,
+) -> PyResult<TaskListRunOptions> {
+    if let Some(run_options) = run_options {
+        if let Ok(list_options) = run_options.extract::<PyRef<'_, PyTaskListRunOptions>>() {
+            let task_options = list_options
+                .task_options
+                .as_ref()
+                .map(|options| task_run_options_from_python(options, default_max_depth))
+                .unwrap_or_else(|| TaskRunOptions::new(default_max_depth));
+            return Ok(TaskListRunOptions::new(task_options)
+                .with_timeout_control(list_options.timeout_control));
+        }
+    }
+    resolve_task_run_options(run_options, default_max_depth).map(TaskListRunOptions::new)
 }
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1645,6 +1746,8 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTasks>()?;
     module.add_class::<PyTaskConnectionResolver>()?;
     module.add_class::<PyTaskRunOptions>()?;
+    module.add_class::<PyTaskListTimeoutControl>()?;
+    module.add_class::<PyTaskListRunOptions>()?;
     module.add_class::<PyTaskResults>()?;
     module.add_function(wrap_pyfunction!(validate_registered_task_id, module)?)?;
     module.add_function(wrap_pyfunction!(validate_registered_task_version, module)?)?;
