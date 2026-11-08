@@ -406,16 +406,16 @@ impl PluginRunner for ThreadedRunnerPlugin {
     ) -> Result<Vec<TaskResults>, GenjaError> {
         let mut results = Vec::with_capacity(tasks.len());
         for task in tasks.iter() {
-            results.push(
-                self.run_task(
+            let task_results = self
+                .run_task(
                     task,
                     hosts,
                     connection_resolver.clone(),
                     runner_config,
                     run_options,
                 )
-                .await?,
-            );
+                .await?;
+            results.push(task_results);
         }
         Ok(results)
     }

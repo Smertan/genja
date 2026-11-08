@@ -11,8 +11,9 @@ Changed packages:
 
 ### Added
 
-- Added task-declared timeout values for Rust and Python tasks, including subtasks with different limits from their parents; task values take precedence over invocation and runner defaults. Deadline enforcement follows in a later phase. Refs: #173
-- Added optional per-task, per-host timeout configuration in positive seconds to Rust and Python runner settings and invocation options, including fractional values; invocation values take precedence over runner defaults. Deadline enforcement follows in a later phase. Refs: #173
+- Added task-declared timeout values for Rust and Python tasks, including subtasks with different limits from their parents; task values take precedence over invocation and runner defaults. Refs: #173
+- Added optional per-task, per-host timeout configuration in positive seconds to Rust and Python runner settings and invocation options, including fractional values; invocation values take precedence over runner defaults. Refs: #173
+- Enforced one monotonic timeout across each task and host's connection setup, task attempts, retry waits, and verification. Expiry produces a non-retryable host timeout with the limit, elapsed time, phase, and attempt; blocking work is observed to finish locally, and later tasks in an ordered list get independent deadlines. Refs: #173
 - Added the public Rust task retry policy context and decision contract, with documented selection precedence and exponential delay parameters. Refs: #172
 - Added public `NoRetry`, `FixedRetry`, and bounded `ExponentialRetry` Rust policies; the existing fixed-delay path now uses the policy decision contract without changing retry behavior. Refs: #172
 - Added built-in task retry policy selection to Rust task metadata, `TaskRetryConfig`, runner settings, and `TaskSpec` overrides, plus Python task and runner configuration. Existing configurations continue to use fixed delay. Refs: #172

@@ -25,6 +25,10 @@
 //!   [`NoRetry`], [`FixedRetry`], and [`ExponentialRetry`] implementations
 //!   provide standard algorithms; the runtime retains retry safety checks
 //!   and task-host attempt accounting.
+//! - **Task Timeouts**: [`TaskRunOptions`] and task metadata can select a
+//!   per-task, per-host deadline. One monotonic budget covers connection setup,
+//!   attempts, retry waits, and verification; expiry records a host-scoped
+//!   [`TaskFailureKind::Timeout`] without resetting the budget for retries.
 //! - **Summaries and Serialization**: Task results can be aggregated with
 //!   [`TaskResults::host_summary`] and [`TaskResults::task_summary`], then exported in
 //!   either human-readable or raw JSON forms.
@@ -642,13 +646,14 @@ use serde_json::{Value, json};
 use std::any::{Any, type_name};
 use std::error::Error;
 use std::fmt;
+use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tokio::task;
-use tokio::time::{Duration, Instant, sleep};
+use tokio::time::{Duration, Instant, sleep, timeout};
 
 pub mod registration;
 mod retry;
@@ -3596,6 +3601,7 @@ async fn verify_replacement_session(
     hostname: &str,
     connection_resolver: &dyn TaskConnectionResolver,
     config: &SessionVerificationConfig,
+    task_attempt: usize,
     deadline: Option<TaskDeadline>,
 ) -> Result<
     (
@@ -3608,34 +3614,77 @@ async fn verify_replacement_session(
     let mut last_error = None;
 
     for attempt in 1..=max_attempts {
+        if let Some(timeout_result) =
+            deadline_failure_if_expired(deadline, "fresh_session_verification", task_attempt, true)
+        {
+            return Err(with_session_verification_metadata(
+                timeout_result,
+                session_verification_metadata(attempt - 1, false),
+            ));
+        }
         if let Some(deadline) = deadline {
             trace!(
                 "replacement session attempt {attempt} starts with {}ms remaining",
                 deadline.remaining().as_millis()
             );
         }
-        match connection_resolver
-            .replace_task_connection(task, hostname)
-            .await
+        match within_deadline(
+            deadline,
+            connection_resolver.replace_task_connection(task, hostname),
+        )
+        .await
         {
-            Ok(Some(connection)) => {
+            Ok(Ok(Some(connection))) => {
                 return Ok((
                     session_verification_metadata(attempt, true),
                     Some(connection),
                 ));
             }
-            Ok(None) => {
+            Ok(Ok(None)) => {
                 last_error = Some(crate::GenjaError::Message(
                     "task connection resolver did not return a replacement connection".to_string(),
                 ));
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 last_error = Some(error);
+            }
+            Err(()) => {
+                return Err(with_session_verification_metadata(
+                    task_deadline_failure(
+                        deadline.expect("expired verification requires a deadline"),
+                        "fresh_session_verification",
+                        task_attempt,
+                        false,
+                    ),
+                    session_verification_metadata(attempt, false),
+                ));
             }
         }
 
-        if attempt < max_attempts && config.delay_ms() > 0 {
-            sleep(Duration::from_millis(config.delay_ms())).await;
+        if let Some(timeout_result) =
+            deadline_failure_if_expired(deadline, "fresh_session_verification", task_attempt, true)
+        {
+            return Err(with_session_verification_metadata(
+                timeout_result,
+                session_verification_metadata(attempt, false),
+            ));
+        }
+
+        if attempt < max_attempts
+            && config.delay_ms() > 0
+            && within_deadline(deadline, sleep(Duration::from_millis(config.delay_ms())))
+                .await
+                .is_err()
+        {
+            return Err(with_session_verification_metadata(
+                task_deadline_failure(
+                    deadline.expect("expired verification wait requires a deadline"),
+                    "verification_wait",
+                    task_attempt,
+                    true,
+                ),
+                session_verification_metadata(attempt, false),
+            ));
         }
     }
 
@@ -3675,6 +3724,11 @@ async fn run_replacement_idempotency_post_check(
     attempt: usize,
     deadline: Option<TaskDeadline>,
 ) -> HostTaskResult {
+    if let Some(timeout_result) =
+        deadline_failure_if_expired(deadline, "verification_post_check", attempt, true)
+    {
+        return timeout_result;
+    }
     if let Some(deadline) = deadline {
         trace!(
             "replacement post-check starts with {}ms remaining",
@@ -3686,7 +3740,17 @@ async fn run_replacement_idempotency_post_check(
             let runtime_context =
                 TaskRuntimeContext::new(execution_context, replacement_connection)
                     .with_current_attempt(attempt);
-            task.check_async(host, &runtime_context).await
+            match within_deadline(deadline, task.check_async(host, &runtime_context)).await {
+                Ok(result) => result,
+                Err(()) => {
+                    return task_deadline_failure(
+                        deadline.expect("expired post-check requires a deadline"),
+                        "verification_post_check",
+                        attempt,
+                        false,
+                    );
+                }
+            }
         }
         TaskExecutionMode::Blocking => {
             let blocking_context = BlockingTaskRuntimeContext::new(
@@ -3697,7 +3761,17 @@ async fn run_replacement_idempotency_post_check(
             .with_current_attempt(attempt);
             let host = host.clone();
             match task::spawn_blocking(move || task.check(&host, &blocking_context)).await {
-                Ok(result) => result,
+                Ok(result) => {
+                    if let Some(timeout_result) = deadline_failure_if_expired(
+                        deadline,
+                        "verification_post_check",
+                        attempt,
+                        true,
+                    ) {
+                        return timeout_result;
+                    }
+                    result
+                }
                 Err(err) => Err(TaskError::new(std::io::Error::other(format!(
                     "blocking task join error: {err}"
                 )))),
@@ -3744,6 +3818,14 @@ async fn verify_after_retries(
         attempts,
         deadline,
     } = context;
+    if is_deadline_timeout_result(&host_result) {
+        return host_result;
+    }
+    if let Some(timeout_result) =
+        deadline_failure_if_expired(deadline, "verification", attempts, true)
+    {
+        return timeout_result;
+    }
     if !should_attempt_session_verification(task.as_ref(), &host_result, dry_run) {
         return host_result;
     }
@@ -3758,12 +3840,18 @@ async fn verify_after_retries(
         hostname,
         connection_resolver,
         config,
+        attempts,
         deadline,
     )
     .await
     {
         Ok((metadata, replacement_connection)) => {
             host_result = with_session_verification_metadata(host_result, metadata);
+            if let Some(timeout_result) =
+                deadline_failure_if_expired(deadline, "fresh_session_verification", attempts, true)
+            {
+                return with_session_verification_metadata(timeout_result, metadata);
+            }
             if matches!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify) {
                 host_result = run_replacement_idempotency_post_check(
                     Arc::clone(task),
@@ -3789,6 +3877,7 @@ async fn verify_after_retries(
 /// Record a host result after an early exit or the completed retry lifecycle.
 enum HostResultCompletion {
     BeforeAttempts,
+    DeadlineBeforeAttempts,
     AfterRetries {
         attempts: usize,
         settings: RetrySettings,
@@ -3803,6 +3892,7 @@ struct HostResultRecording<'a> {
     processor_context: &'a TaskProcessorContext,
     processors: &'a [Arc<dyn TaskProcessor>],
     dry_run: bool,
+    deadline: Option<TaskDeadline>,
 }
 
 fn record_host_result(
@@ -3818,6 +3908,7 @@ fn record_host_result(
         processor_context,
         processors,
         dry_run,
+        deadline,
     } = recording;
     let duration_ns = finished_at
         .duration_since(started_at)
@@ -3848,9 +3939,12 @@ fn record_host_result(
     let status = host_result.status();
     let (attempts, retry_exhausted) = match completion {
         HostResultCompletion::BeforeAttempts => (1, false),
-        HostResultCompletion::AfterRetries { attempts, settings } => {
-            (attempts, settings.retry_exhausted(&host_result, attempts))
-        }
+        HostResultCompletion::DeadlineBeforeAttempts => (0, false),
+        HostResultCompletion::AfterRetries { attempts, settings } => (
+            attempts,
+            !is_deadline_timeout_result(&host_result)
+                && settings.retry_exhausted(&host_result, attempts),
+        ),
     };
     host_result = host_result.with_execution_timing(started_at, finished_at, duration_ns);
     *host_result.execution_metadata_mut() = host_result
@@ -3879,6 +3973,28 @@ fn record_host_result(
     for processor in processors {
         processor.on_instance_finish(processor_context, &mut host_result)?;
     }
+    if !is_deadline_timeout_result(&host_result) {
+        if let Some(mut timeout_result) =
+            deadline_failure_if_expired(deadline, "instance_finish", attempts, true)
+        {
+            let finished_at = SystemTime::now();
+            let duration_ns = finished_at
+                .duration_since(started_at)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            results.record_execution_timing(started_at, finished_at);
+            timeout_result =
+                timeout_result.with_execution_timing(started_at, finished_at, duration_ns);
+            *timeout_result.execution_metadata_mut() = host_result
+                .execution_metadata()
+                .clone()
+                .with_started_at(started_at)
+                .with_finished_at(finished_at)
+                .with_duration_ns(duration_ns)
+                .with_retry_exhausted(false);
+            host_result = timeout_result;
+        }
+    }
     results.insert_host_result(hostname, host_result);
     Ok(())
 }
@@ -3901,54 +4017,81 @@ async fn run_task_attempt(
     }
     let result = match task.execution_mode() {
         TaskExecutionMode::Async => {
-            let runtime_context = TaskRuntimeContext::new(execution_context, connection)
-                .with_current_attempt(attempt)
-                .with_dry_run(dry_run);
-            if dry_run {
-                task.dry_run_async(host, &runtime_context).await
-            } else {
-                match task.idempotency_mode() {
-                    IdempotencyMode::Disabled => task.start_async(host, &runtime_context).await,
-                    IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
-                        match task.check_async(host, &runtime_context).await {
-                            Ok(IdempotencyCheck::Converged { summary, details }) => {
-                                Ok(converged_check_to_host_result(summary, details, attempt))
-                            }
-                            Ok(IdempotencyCheck::ChangeRequired { .. }) => {
-                                match task.start_async(host, &runtime_context).await {
-                                    Ok(host_result) => {
-                                        if matches!(
-                                            task.idempotency_mode(),
-                                            IdempotencyMode::CheckAndVerify
-                                        ) && host_result.is_passed()
-                                            && !should_defer_idempotency_post_check(
-                                                task.as_ref(),
-                                                &host_result,
-                                                dry_run,
-                                            )
-                                        {
-                                            match task.check_async(host, &runtime_context).await {
-                                                Ok(IdempotencyCheck::Converged { .. }) => {
-                                                    Ok(host_result)
-                                                }
-                                                Ok(IdempotencyCheck::ChangeRequired {
-                                                    diff,
-                                                    details,
-                                                }) => Ok(failed_verification_check_to_host_result(
-                                                    diff, details,
-                                                )),
-                                                Err(error) => Err(error),
-                                            }
-                                        } else {
-                                            Ok(host_result)
-                                        }
-                                    }
-                                    Err(error) => Err(error),
+            let phase = std::sync::atomic::AtomicU8::new(if dry_run { 3 } else { 0 });
+            let work = async {
+                let runtime_context = TaskRuntimeContext::new(execution_context, connection)
+                    .with_current_attempt(attempt)
+                    .with_dry_run(dry_run);
+                if dry_run {
+                    task.dry_run_async(host, &runtime_context).await
+                } else {
+                    match task.idempotency_mode() {
+                        IdempotencyMode::Disabled => task.start_async(host, &runtime_context).await,
+                        IdempotencyMode::Check | IdempotencyMode::CheckAndVerify => {
+                            phase.store(1, std::sync::atomic::Ordering::Relaxed);
+                            match task.check_async(host, &runtime_context).await {
+                                Ok(IdempotencyCheck::Converged { summary, details }) => {
+                                    Ok(converged_check_to_host_result(summary, details, attempt))
                                 }
+                                Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                    phase.store(0, std::sync::atomic::Ordering::Relaxed);
+                                    match task.start_async(host, &runtime_context).await {
+                                        Ok(host_result) => {
+                                            if matches!(
+                                                task.idempotency_mode(),
+                                                IdempotencyMode::CheckAndVerify
+                                            ) && host_result.is_passed()
+                                                && !should_defer_idempotency_post_check(
+                                                    task.as_ref(),
+                                                    &host_result,
+                                                    dry_run,
+                                                )
+                                            {
+                                                phase
+                                                    .store(2, std::sync::atomic::Ordering::Relaxed);
+                                                match task.check_async(host, &runtime_context).await
+                                                {
+                                                    Ok(IdempotencyCheck::Converged { .. }) => {
+                                                        Ok(host_result)
+                                                    }
+                                                    Ok(IdempotencyCheck::ChangeRequired {
+                                                        diff,
+                                                        details,
+                                                    }) => Ok(
+                                                        failed_verification_check_to_host_result(
+                                                            diff, details,
+                                                        ),
+                                                    ),
+                                                    Err(error) => Err(error),
+                                                }
+                                            } else {
+                                                Ok(host_result)
+                                            }
+                                        }
+                                        Err(error) => Err(error),
+                                    }
+                                }
+                                Err(error) => Err(error),
                             }
-                            Err(error) => Err(error),
                         }
                     }
+                }
+            };
+            match within_deadline(deadline, work).await {
+                Ok(result) => result,
+                Err(()) => {
+                    let phase = match phase.load(std::sync::atomic::Ordering::Relaxed) {
+                        1 => "convergence_check",
+                        2 => "post_check",
+                        3 => "dry_run",
+                        _ => "task_attempt",
+                    };
+                    return task_deadline_failure(
+                        deadline.expect("expired work requires a deadline"),
+                        phase,
+                        attempt,
+                        false,
+                    );
                 }
             }
         }
@@ -3970,6 +4113,14 @@ async fn run_task_attempt(
                                     Ok(converged_check_to_host_result(summary, details, attempt))
                                 }
                                 Ok(IdempotencyCheck::ChangeRequired { .. }) => {
+                                    if let Some(deadline) = deadline.filter(|d| d.expired()) {
+                                        return Ok(task_deadline_failure(
+                                            deadline,
+                                            "convergence_check",
+                                            attempt,
+                                            true,
+                                        ));
+                                    }
                                     let host_result = task.start(&host, &blocking_context)?;
                                     if matches!(
                                         task.idempotency_mode(),
@@ -3981,6 +4132,14 @@ async fn run_task_attempt(
                                             dry_run,
                                         )
                                     {
+                                        if let Some(deadline) = deadline.filter(|d| d.expired()) {
+                                            return Ok(task_deadline_failure(
+                                                deadline,
+                                                "task_attempt",
+                                                attempt,
+                                                true,
+                                            ));
+                                        }
                                         match task.check(&host, &blocking_context) {
                                             Ok(IdempotencyCheck::Converged { .. }) => {
                                                 Ok(host_result)
@@ -4005,7 +4164,14 @@ async fn run_task_attempt(
             })
             .await
             {
-                Ok(result) => result,
+                Ok(result) => {
+                    if let Some(timeout_result) =
+                        deadline_failure_if_expired(deadline, "task_attempt", attempt, true)
+                    {
+                        return timeout_result;
+                    }
+                    result
+                }
                 Err(err) => Err(TaskError::new(std::io::Error::other(format!(
                     "blocking task join error: {err}"
                 )))),
@@ -4038,10 +4204,28 @@ impl TaskRetryLoop<'_> {
     async fn run(self) -> Result<(HostTaskResult, usize), crate::GenjaError> {
         let mut attempts = 0;
         let host_result = loop {
-            attempts += 1;
+            let next_attempt = attempts + 1;
+            if let Some(timeout_result) = deadline_failure_if_expired(
+                self.deadline,
+                if attempts == 0 {
+                    "task_attempt"
+                } else {
+                    "retry_wait"
+                },
+                next_attempt,
+                true,
+            ) {
+                break timeout_result;
+            }
             for processor in self.processors {
                 processor.on_instance_start(self.processor_context)?;
             }
+            if let Some(timeout_result) =
+                deadline_failure_if_expired(self.deadline, "instance_start", next_attempt, true)
+            {
+                break timeout_result;
+            }
+            attempts = next_attempt;
 
             let host_result = run_task_attempt(
                 Arc::clone(&self.task),
@@ -4053,6 +4237,14 @@ impl TaskRetryLoop<'_> {
                 self.deadline,
             )
             .await;
+            if is_deadline_timeout_result(&host_result) {
+                break host_result;
+            }
+            if let Some(timeout_result) =
+                deadline_failure_if_expired(self.deadline, "task_attempt", attempts, true)
+            {
+                break timeout_result;
+            }
 
             if let TaskRetryDecision::RetryAfter(delay) = self.settings.decide(
                 self.policy.as_policy(),
@@ -4077,7 +4269,15 @@ impl TaskRetryLoop<'_> {
                             deadline.remaining().as_millis()
                         );
                     }
-                    sleep(delay).await;
+                    if within_deadline(self.deadline, sleep(delay)).await.is_err() {
+                        break task_deadline_failure(
+                            self.deadline
+                                .expect("expired retry wait requires a deadline"),
+                            "retry_wait",
+                            attempts,
+                            true,
+                        );
+                    }
                 }
                 continue;
             }
@@ -4191,6 +4391,84 @@ impl TaskDeadline {
     fn remaining(self) -> Duration {
         self.limit.saturating_sub(self.started_at.elapsed())
     }
+
+    fn expired(self) -> bool {
+        self.remaining().is_zero()
+    }
+}
+
+async fn within_deadline<F: Future>(
+    deadline: Option<TaskDeadline>,
+    future: F,
+) -> Result<F::Output, ()> {
+    match deadline {
+        Some(deadline) => {
+            let remaining = deadline.remaining();
+            if remaining.is_zero() {
+                return Err(());
+            }
+            timeout(remaining, future).await.map_err(|_| ())
+        }
+        None => Ok(future.await),
+    }
+}
+
+fn task_deadline_failure(
+    deadline: TaskDeadline,
+    phase: &'static str,
+    attempt: usize,
+    local_completion_observed: bool,
+) -> HostTaskResult {
+    let verification_incomplete = matches!(
+        phase,
+        "verification"
+            | "fresh_session_verification"
+            | "verification_wait"
+            | "verification_post_check"
+            | "post_check"
+    );
+    let mut details = json!({
+        "configured_limit_seconds": deadline.limit.as_secs_f64(),
+        "elapsed_seconds": deadline.started_at.elapsed().as_secs_f64(),
+        "deadline_expired": true,
+        "phase": phase,
+        "attempt": attempt,
+        "local_completion_observed": local_completion_observed,
+    });
+    if verification_incomplete {
+        details["verification_incomplete"] = json!(true);
+        details["change_may_have_been_applied"] = json!(true);
+    }
+    HostTaskResult::failed(
+        TaskFailure::new(crate::GenjaError::Message(format!(
+            "task timeout expired during {phase}"
+        )))
+        .with_kind(TaskFailureKind::Timeout)
+        .with_retryable(false)
+        .with_details(details),
+    )
+}
+
+fn deadline_failure_if_expired(
+    deadline: Option<TaskDeadline>,
+    phase: &'static str,
+    attempt: usize,
+    local_completion_observed: bool,
+) -> Option<HostTaskResult> {
+    deadline
+        .filter(|deadline| deadline.expired())
+        .map(|deadline| task_deadline_failure(deadline, phase, attempt, local_completion_observed))
+}
+
+fn is_deadline_timeout_result(result: &HostTaskResult) -> bool {
+    result.failure().is_some_and(|failure| {
+        matches!(failure.kind(), TaskFailureKind::Timeout)
+            && failure
+                .details()
+                .and_then(|details| details.get("deadline_expired"))
+                .and_then(Value::as_bool)
+                == Some(true)
+    })
 }
 
 /// Host and services used by one task node.
@@ -5373,7 +5651,19 @@ impl TaskDefinition {
             processor_context: &processor_context,
             processors: &processors,
             dry_run: run_options.dry_run(),
+            deadline,
         };
+
+        if let Some(host_result) = deadline_failure_if_expired(deadline, "task_setup", 0, true) {
+            record_host_result(
+                results,
+                host_result,
+                SystemTime::now(),
+                recording,
+                HostResultCompletion::DeadlineBeforeAttempts,
+            )?;
+            return Ok(());
+        }
 
         if let Some(host_result) = validate_session_verification_request(
             task.as_ref(),
@@ -5381,24 +5671,42 @@ impl TaskDefinition {
             run_options.dry_run(),
         ) {
             let finished_at = SystemTime::now();
-            record_host_result(
-                results,
-                host_result,
-                finished_at,
-                recording,
-                HostResultCompletion::BeforeAttempts,
-            )?;
+            let host_result =
+                deadline_failure_if_expired(deadline, "task_setup", 0, true).unwrap_or(host_result);
+            let completion = if is_deadline_timeout_result(&host_result) {
+                HostResultCompletion::DeadlineBeforeAttempts
+            } else {
+                HostResultCompletion::BeforeAttempts
+            };
+            record_host_result(results, host_result, finished_at, recording, completion)?;
             return Ok(());
         }
 
         // Resolve the initial connection once before any task attempt.
         let connection = if let Some(connection_resolver) = connection_resolver {
-            match connection_resolver
-                .resolve_task_connection(task.as_ref(), hostname)
-                .await
+            match within_deadline(
+                deadline,
+                connection_resolver.resolve_task_connection(task.as_ref(), hostname),
+            )
+            .await
             {
-                Ok(connection) => connection,
-                Err(error) => {
+                Ok(Ok(connection)) => connection,
+                Err(()) => {
+                    record_host_result(
+                        results,
+                        task_deadline_failure(
+                            deadline.expect("expired connection requires a deadline"),
+                            "connection_setup",
+                            0,
+                            false,
+                        ),
+                        SystemTime::now(),
+                        recording,
+                        HostResultCompletion::DeadlineBeforeAttempts,
+                    )?;
+                    return Ok(());
+                }
+                Ok(Err(error)) => {
                     let finished_at = SystemTime::now();
                     warn!(
                         "task '{}' failed to open connection for host '{}': {}",
@@ -5407,22 +5715,38 @@ impl TaskDefinition {
                         error
                     );
 
-                    let host_result = HostTaskResult::failed(
-                        TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
-                    );
-                    record_host_result(
-                        results,
-                        host_result,
-                        finished_at,
-                        recording,
-                        HostResultCompletion::BeforeAttempts,
-                    )?;
+                    let host_result =
+                        deadline_failure_if_expired(deadline, "connection_setup", 0, true)
+                            .unwrap_or_else(|| {
+                                HostTaskResult::failed(
+                                    TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
+                                )
+                            });
+                    let completion = if is_deadline_timeout_result(&host_result) {
+                        HostResultCompletion::DeadlineBeforeAttempts
+                    } else {
+                        HostResultCompletion::BeforeAttempts
+                    };
+                    record_host_result(results, host_result, finished_at, recording, completion)?;
                     return Ok(());
                 }
             }
         } else {
             None
         };
+
+        if let Some(host_result) =
+            deadline_failure_if_expired(deadline, "connection_setup", 0, true)
+        {
+            record_host_result(
+                results,
+                host_result,
+                SystemTime::now(),
+                recording,
+                HostResultCompletion::DeadlineBeforeAttempts,
+            )?;
+            return Ok(());
+        }
 
         if run_options.dry_run() && !task.supports_dry_run() {
             let finished_at = SystemTime::now();
@@ -5485,6 +5809,13 @@ impl TaskDefinition {
                 settings: retry_settings,
             },
         )?;
+
+        if results
+            .host_result(hostname)
+            .is_some_and(is_deadline_timeout_result)
+        {
+            return Ok(());
+        }
 
         Self::run_sub_tasks(
             task.as_ref(),
@@ -9094,5 +9425,455 @@ mod tests {
         assert_eq!(collect_logs_summary.hosts().passed(), 1);
         assert_eq!(collect_logs_summary.hosts().failed(), 0);
         assert_eq!(collect_logs_summary.hosts().skipped(), 1);
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use crate::inventory::{BaseBuilderHost, ConnectionKey, ResolvedConnectionParams};
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant as WallInstant;
+    use tokio::runtime::Builder;
+
+    struct TimedTask {
+        name: &'static str,
+        mode: TaskExecutionMode,
+        start_delay: Duration,
+        check_delay: Duration,
+        idempotency: IdempotencyMode,
+        result: HostTaskResult,
+        starts: Arc<AtomicUsize>,
+        checks: Arc<AtomicUsize>,
+        retry: Option<TaskRetryConfig>,
+        verification: Option<SessionVerificationConfig>,
+        timeout: Option<Duration>,
+        children: Vec<Arc<dyn Task>>,
+    }
+
+    impl TimedTask {
+        fn new(name: &'static str) -> Self {
+            Self {
+                name,
+                mode: TaskExecutionMode::Async,
+                start_delay: Duration::ZERO,
+                check_delay: Duration::ZERO,
+                idempotency: IdempotencyMode::Disabled,
+                result: HostTaskResult::passed(TaskSuccess::new()),
+                starts: Arc::new(AtomicUsize::new(0)),
+                checks: Arc::new(AtomicUsize::new(0)),
+                retry: None,
+                verification: None,
+                timeout: None,
+                children: Vec::new(),
+            }
+        }
+    }
+
+    impl TaskInfo for TimedTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn connection_plugin_name(&self) -> Option<&str> {
+            self.verification.as_ref().map(|_| "ssh")
+        }
+        fn retry_config(&self) -> Option<&TaskRetryConfig> {
+            self.retry.as_ref()
+        }
+        fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
+            self.verification.as_ref()
+        }
+        fn task_timeout(&self) -> Option<Duration> {
+            self.timeout
+        }
+        fn idempotency_mode(&self) -> IdempotencyMode {
+            self.idempotency
+        }
+    }
+
+    #[async_trait]
+    impl Task for TimedTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            sleep(self.start_delay).await;
+            Ok(self.result.clone())
+        }
+        fn start(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(self.start_delay);
+            Ok(self.result.clone())
+        }
+        async fn check_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.checks.fetch_add(1, Ordering::SeqCst);
+            sleep(self.check_delay).await;
+            Ok(IdempotencyCheck::change_required("pending"))
+        }
+        fn check(
+            &self,
+            _host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<IdempotencyCheck, TaskError> {
+            self.checks.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(self.check_delay);
+            Ok(IdempotencyCheck::change_required("pending"))
+        }
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            self.children.clone()
+        }
+        fn execution_mode(&self) -> TaskExecutionMode {
+            self.mode
+        }
+    }
+
+    #[derive(Debug)]
+    struct TimedConnection {
+        key: ConnectionKey,
+    }
+
+    #[async_trait]
+    impl Connection for TimedConnection {
+        fn create(&self, key: &ConnectionKey) -> Box<dyn Connection> {
+            Box::new(Self { key: key.clone() })
+        }
+        fn is_alive(&self) -> bool {
+            true
+        }
+        async fn open(&mut self, _params: &ResolvedConnectionParams) -> Result<(), String> {
+            Ok(())
+        }
+        fn close(&mut self) -> ConnectionKey {
+            self.key.clone()
+        }
+    }
+
+    struct TimedResolver {
+        initial_delay: Duration,
+        replacement_delay: Duration,
+        replacements: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl TaskConnectionResolver for TimedResolver {
+        async fn resolve_task_connection(
+            &self,
+            task: &dyn Task,
+            hostname: &str,
+        ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError> {
+            sleep(self.initial_delay).await;
+            Ok(task.get_connection_key(hostname).map(|key| {
+                Arc::new(Mutex::new(TimedConnection { key })) as Arc<Mutex<dyn Connection>>
+            }))
+        }
+        async fn replace_task_connection(
+            &self,
+            task: &dyn Task,
+            hostname: &str,
+        ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError> {
+            self.replacements.fetch_add(1, Ordering::SeqCst);
+            sleep(self.replacement_delay).await;
+            Ok(task.get_connection_key(hostname).map(|key| {
+                Arc::new(Mutex::new(TimedConnection { key })) as Arc<Mutex<dyn Connection>>
+            }))
+        }
+    }
+
+    fn run_task(
+        task: &TaskDefinition,
+        resolver: Option<&dyn TaskConnectionResolver>,
+        timeout: Option<Duration>,
+    ) -> TaskResults {
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new(task.name());
+        let mut options = TaskRunOptions::new(1);
+        if let Some(timeout) = timeout {
+            options = options.with_task_timeout(timeout);
+        }
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(task.start_with_connection_resolver_and_options(
+                "router1",
+                &host,
+                &mut results,
+                resolver,
+                options,
+            ))
+            .unwrap();
+        results
+    }
+
+    fn assert_timeout(results: &TaskResults, phase: &str, attempts: usize) {
+        let result = results.host_result("router1").expect("host result");
+        let failure = result.failure().expect("timeout failure");
+        assert!(matches!(failure.kind(), TaskFailureKind::Timeout));
+        assert!(!failure.retryable());
+        assert_eq!(
+            failure
+                .details()
+                .and_then(|d| d.get("phase"))
+                .and_then(Value::as_str),
+            Some(phase)
+        );
+        assert_eq!(result.execution_metadata().attempts(), attempts);
+    }
+
+    #[test]
+    fn deadline_expires_during_connection_without_starting_attempt() {
+        let task = TimedTask::new("connect");
+        let starts = Arc::clone(&task.starts);
+        let resolver = TimedResolver {
+            initial_delay: Duration::from_millis(80),
+            replacement_delay: Duration::ZERO,
+            replacements: Arc::new(AtomicUsize::new(0)),
+        };
+        let results = run_task(
+            &TaskDefinition::new(task),
+            Some(&resolver),
+            Some(Duration::from_millis(20)),
+        );
+        assert_timeout(&results, "connection_setup", 0);
+        assert_eq!(starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn deadline_expires_during_async_attempt_and_convergence_check() {
+        let mut task = TimedTask::new("attempt");
+        task.start_delay = Duration::from_millis(80);
+        let results = run_task(
+            &TaskDefinition::new(task),
+            None,
+            Some(Duration::from_millis(20)),
+        );
+        assert_timeout(&results, "task_attempt", 1);
+        assert!(
+            results
+                .host_result("router1")
+                .and_then(HostTaskResult::failure)
+                .and_then(TaskFailure::details)
+                .and_then(|details| details.get("change_may_have_been_applied"))
+                .is_none()
+        );
+
+        let mut task = TimedTask::new("check");
+        task.idempotency = IdempotencyMode::Check;
+        task.check_delay = Duration::from_millis(80);
+        let starts = Arc::clone(&task.starts);
+        let results = run_task(
+            &TaskDefinition::new(task),
+            None,
+            Some(Duration::from_millis(20)),
+        );
+        assert_timeout(&results, "convergence_check", 1);
+        assert_eq!(starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn retry_wait_consumes_deadline_without_starting_another_attempt() {
+        let mut task = TimedTask::new("retry");
+        task.retry = Some(
+            TaskRetryConfig::builder()
+                .allow(true)
+                .max_attempts(3)
+                .delay_ms(80)
+                .build(),
+        );
+        task.result = HostTaskResult::failed(
+            TaskFailure::new(crate::GenjaError::Message("retry".into())).with_retryable(true),
+        );
+        let starts = Arc::clone(&task.starts);
+        let results = run_task(
+            &TaskDefinition::new(task),
+            None,
+            Some(Duration::from_millis(20)),
+        );
+        assert_timeout(&results, "retry_wait", 1);
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn deadline_expires_during_fresh_session_verification() {
+        let mut task = TimedTask::new("verify");
+        task.verification = Some(SessionVerificationConfig::new(1, 0));
+        task.result = HostTaskResult::passed(TaskSuccess::new().with_changed(true));
+        let starts = Arc::clone(&task.starts);
+        let replacements = Arc::new(AtomicUsize::new(0));
+        let resolver = TimedResolver {
+            initial_delay: Duration::ZERO,
+            replacement_delay: Duration::from_millis(80),
+            replacements: Arc::clone(&replacements),
+        };
+        let results = run_task(
+            &TaskDefinition::new(task),
+            Some(&resolver),
+            Some(Duration::from_millis(20)),
+        );
+        assert_timeout(&results, "fresh_session_verification", 1);
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert_eq!(replacements.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn blocking_attempt_finishes_locally_before_timeout_is_reported() {
+        let mut task = TimedTask::new("blocking");
+        task.mode = TaskExecutionMode::Blocking;
+        task.start_delay = Duration::from_millis(80);
+        let starts = Arc::clone(&task.starts);
+        let started = WallInstant::now();
+        let results = run_task(
+            &TaskDefinition::new(task),
+            None,
+            Some(Duration::from_millis(20)),
+        );
+        assert!(started.elapsed() >= Duration::from_millis(80));
+        assert_timeout(&results, "task_attempt", 1);
+        assert_eq!(starts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            results
+                .host_result("router1")
+                .and_then(HostTaskResult::failure)
+                .and_then(TaskFailure::details)
+                .and_then(|d| d.get("local_completion_observed"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn absent_deadline_preserves_successful_result() {
+        let mut task = TimedTask::new("unbounded");
+        task.start_delay = Duration::from_millis(30);
+        let results = run_task(&TaskDefinition::new(task), None, None);
+        assert!(
+            results
+                .host_result("router1")
+                .is_some_and(HostTaskResult::is_passed)
+        );
+    }
+
+    #[test]
+    fn authored_timeout_failure_without_deadline_keeps_existing_subtask_flow() {
+        let child = TimedTask::new("child");
+        let child_starts = Arc::clone(&child.starts);
+        let mut parent = TimedTask::new("parent");
+        parent.result = HostTaskResult::failed(
+            TaskFailure::new(crate::GenjaError::Message("authored timeout".into()))
+                .with_kind(TaskFailureKind::Timeout),
+        );
+        parent.children.push(Arc::new(child));
+        let results = run_task(&TaskDefinition::new(parent), None, None);
+
+        assert!(
+            results
+                .host_result("router1")
+                .is_some_and(HostTaskResult::is_failed)
+        );
+        assert_eq!(child_starts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn expired_parent_does_not_start_its_subtask() {
+        let child = TimedTask::new("child");
+        let child_starts = Arc::clone(&child.starts);
+        let mut parent = TimedTask::new("parent");
+        parent.start_delay = Duration::from_millis(80);
+        parent.children.push(Arc::new(child));
+        let results = run_task(
+            &TaskDefinition::new(parent),
+            None,
+            Some(Duration::from_millis(20)),
+        );
+
+        assert_timeout(&results, "task_attempt", 1);
+        assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+        assert!(results.sub_task("child").is_none());
+    }
+
+    #[test]
+    fn each_host_and_root_task_gets_a_new_deadline() {
+        let mut first = TimedTask::new("first");
+        first.start_delay = Duration::from_millis(30);
+        let first = TaskDefinition::new(first);
+        let mut second = TimedTask::new("second");
+        second.start_delay = Duration::from_millis(30);
+        let second = TaskDefinition::new(second);
+        let options = TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(60));
+        let host1 = Host::builder().hostname("router1").build();
+        let host2 = Host::builder().hostname("router2").build();
+        let mut first_results = TaskResults::new("first");
+        let mut second_results = TaskResults::new("second");
+
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                first
+                    .start_with_options("router1", &host1, &mut first_results, options)
+                    .await?;
+                first
+                    .start_with_options("router2", &host2, &mut first_results, options)
+                    .await?;
+                second
+                    .start_with_options("router1", &host1, &mut second_results, options)
+                    .await
+            })
+            .unwrap();
+
+        assert!(
+            first_results
+                .host_result("router1")
+                .is_some_and(HostTaskResult::is_passed)
+        );
+        assert!(
+            first_results
+                .host_result("router2")
+                .is_some_and(HostTaskResult::is_passed)
+        );
+        assert!(
+            second_results
+                .host_result("router1")
+                .is_some_and(HostTaskResult::is_passed)
+        );
+    }
+
+    #[test]
+    fn subtask_uses_its_own_timeout_instead_of_parent_budget() {
+        let mut child = TimedTask::new("child");
+        child.start_delay = Duration::from_millis(90);
+        child.timeout = Some(Duration::from_millis(150));
+        let mut parent = TimedTask::new("parent");
+        parent.start_delay = Duration::from_millis(30);
+        parent.children.push(Arc::new(child));
+        let results = run_task(
+            &TaskDefinition::new(parent),
+            None,
+            Some(Duration::from_millis(60)),
+        );
+
+        assert!(
+            results
+                .host_result("router1")
+                .is_some_and(HostTaskResult::is_passed)
+        );
+        assert!(
+            results
+                .sub_task("child")
+                .and_then(|child| child.host_result("router1"))
+                .is_some_and(HostTaskResult::is_passed)
+        );
     }
 }

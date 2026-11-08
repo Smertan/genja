@@ -57,7 +57,12 @@ For `task_timeout`, a value declared by the task takes precedence over an
 explicit `TaskRunOptions` invocation value, which overrides
 `runner.task_timeout`. Each subtask resolves its own value and does not inherit
 a timeout declared by its parent. Without any value, no timeout is configured.
-Deadline enforcement follows in the next implementation phase.
+The selected limit starts when that task begins on a host and covers connection
+setup, checks, attempts, retry waits, and verification. Retry attempts share
+the same deadline. An expired task reports a host-scoped timeout failure and
+does not start another attempt or subtask.
+In an ordered task list, each later root gets a fresh deadline on each host,
+including a host where an earlier root or subtask timed out.
 
 `task_retry.allow`, `task_retry.max_attempts`, and `task_retry.delay_ms` define default retry
 policy for task execution. Tasks may override these defaults through task

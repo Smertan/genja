@@ -4359,6 +4359,195 @@ mod tests {
 
         assert!(matches!(error, GenjaError::PluginNotFound(name) if name == "missing-runner"));
     }
+
+    struct DeadlineListTask {
+        name: &'static str,
+        delay: Duration,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl TaskInfo for DeadlineListTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+    }
+
+    #[async_trait]
+    impl Task for DeadlineListTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(self.delay).await;
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    struct DeadlineParentTask {
+        child: Arc<dyn Task>,
+    }
+
+    impl TaskInfo for DeadlineParentTask {
+        fn name(&self) -> &str {
+            "parent"
+        }
+    }
+
+    #[async_trait]
+    impl Task for DeadlineParentTask {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            vec![Arc::clone(&self.child)]
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    #[test]
+    fn ordered_tasks_get_independent_deadlines_in_both_runners() {
+        for runner in ["serial", "threaded"] {
+            let settings = Settings::builder()
+                .runner(RunnerConfig::builder().plugin(runner).build())
+                .build();
+            let genja = Genja::builder(single_host_inventory())
+                .with_settings(settings)
+                .build()
+                .expect("runner should build");
+            let mut tasks = Tasks::new();
+            for name in ["first", "second"] {
+                tasks.add_task(DeadlineListTask {
+                    name,
+                    delay: Duration::from_millis(30),
+                    calls: Arc::new(AtomicUsize::new(0)),
+                });
+            }
+
+            let results = genja
+                .run_tasks_with_options(
+                    tasks,
+                    TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(60)),
+                )
+                .expect("both roots should run");
+            assert_eq!(results.len(), 2);
+            assert!(
+                results[0]
+                    .host_result("router1")
+                    .is_some_and(HostTaskResult::is_passed)
+            );
+            assert!(
+                results[1]
+                    .host_result("router1")
+                    .is_some_and(HostTaskResult::is_passed)
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_tasks_continue_after_earlier_deadline_expiry() {
+        for runner in ["serial", "threaded"] {
+            let settings = Settings::builder()
+                .runner(RunnerConfig::builder().plugin(runner).build())
+                .build();
+            let genja = Genja::builder(single_host_inventory())
+                .with_settings(settings)
+                .build()
+                .expect("runner should build");
+            let second_calls = Arc::new(AtomicUsize::new(0));
+            let mut tasks = Tasks::new();
+            tasks.add_task(DeadlineListTask {
+                name: "first",
+                delay: Duration::from_millis(80),
+                calls: Arc::new(AtomicUsize::new(0)),
+            });
+            tasks.add_task(DeadlineListTask {
+                name: "second",
+                delay: Duration::ZERO,
+                calls: Arc::clone(&second_calls),
+            });
+
+            let results = genja
+                .run_tasks_with_options(
+                    tasks,
+                    TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20)),
+                )
+                .expect("expiry should be recorded");
+            assert!(matches!(
+                results[0]
+                    .host_result("router1")
+                    .and_then(HostTaskResult::failure)
+                    .map(TaskFailure::kind),
+                Some(TaskFailureKind::Timeout)
+            ));
+            assert!(
+                results[1]
+                    .host_result("router1")
+                    .is_some_and(HostTaskResult::is_passed)
+            );
+            assert_eq!(second_calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn ordered_tasks_continue_after_nested_subtask_deadline_expiry() {
+        for runner in ["serial", "threaded"] {
+            let settings = Settings::builder()
+                .runner(RunnerConfig::builder().plugin(runner).build())
+                .build();
+            let genja = Genja::builder(single_host_inventory())
+                .with_settings(settings)
+                .build()
+                .expect("runner should build");
+            let second_calls = Arc::new(AtomicUsize::new(0));
+            let mut tasks = Tasks::new();
+            tasks.add_task(DeadlineParentTask {
+                child: Arc::new(DeadlineListTask {
+                    name: "child",
+                    delay: Duration::from_millis(80),
+                    calls: Arc::new(AtomicUsize::new(0)),
+                }),
+            });
+            tasks.add_task(DeadlineListTask {
+                name: "second",
+                delay: Duration::ZERO,
+                calls: Arc::clone(&second_calls),
+            });
+
+            let results = genja
+                .run_tasks_with_options(
+                    tasks,
+                    TaskRunOptions::new(1).with_task_timeout(Duration::from_millis(20)),
+                )
+                .expect("nested expiry should be recorded");
+            assert!(
+                results[0]
+                    .sub_task("child")
+                    .and_then(|child| child.host_result("router1"))
+                    .and_then(HostTaskResult::failure)
+                    .is_some_and(|failure| matches!(failure.kind(), TaskFailureKind::Timeout))
+            );
+            assert!(
+                results[1]
+                    .host_result("router1")
+                    .is_some_and(HostTaskResult::is_passed)
+            );
+            assert_eq!(second_calls.load(Ordering::SeqCst), 1);
+        }
+    }
 }
 
 /// Builder for constructing `Genja` instances with required inventory.

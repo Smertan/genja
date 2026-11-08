@@ -159,6 +159,12 @@ The common macro options are:
 - `idempotency`: opt into task-authored convergence checks with
   `IdempotencyMode::Check` or `IdempotencyMode::CheckAndVerify`
 
+A task timeout starts separately for each task on each host. It covers the
+connection, convergence checks, attempts, retry waits, and verification. A
+subtask can declare a different limit; its clock begins when that subtask
+starts. Expiry is reported as a non-retryable host timeout with the phase and
+attempt in the failure details.
+
 **Grouped metadata** is written as nested macro arguments, not dotted keys:
 
 ```rust
