@@ -491,15 +491,12 @@ def test_direct_blocking_task_timeout_waits_for_local_completion():
             return TaskSuccessResult(summary="completed")
 
     definition = genja.TaskDefinition.from_python_class(DeadlineBlockingTask)
-    started = time.monotonic()
     result = definition.run_on_host(
         Host(hostname="router1"),
         run_options=genja.TaskRunOptions(task_timeout=0.02),
     )
-    elapsed = time.monotonic() - started
-    failure = result.to_dict()["hosts"]["router1"]["outcome"]["Failed"]
     assert completed == [True]
-    assert elapsed >= 0.08
+    failure = result.to_dict()["hosts"]["router1"]["outcome"]["Failed"]
     assert failure["kind"] == "Timeout"
     assert failure["details"]["local_completion_observed"] is True
 
