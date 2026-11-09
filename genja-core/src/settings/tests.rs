@@ -5,7 +5,7 @@ use super::env_defaults::{
     raise_on_error,
 };
 use super::{OptionsConfig, RunnerConfig, SSHConfig};
-use crate::task::{TaskRetryConfig, TaskRetryPolicyKind};
+use crate::task::{TaskRetryConfig, TaskRetryPolicyKind, TaskRunOptions};
 use regex::Regex;
 use serde_json::json;
 use std::env;
@@ -213,6 +213,7 @@ fn runner_config_default_values() {
     assert_eq!(runner.worker_count(), None);
     assert_eq!(runner.max_task_depth(), 10);
     assert_eq!(runner.max_connection_attempts(), 3);
+    assert_eq!(runner.task_timeout(), None);
     assert_eq!(runner.task_retry().allow(), Some(false));
     assert_eq!(runner.task_retry().max_attempts(), Some(1));
     assert_eq!(runner.task_retry().delay_ms(), Some(0));
@@ -226,6 +227,7 @@ fn runner_config_deserializes_empty_object_to_defaults() {
     assert_eq!(runner.worker_count(), None);
     assert_eq!(runner.max_task_depth(), 10);
     assert_eq!(runner.max_connection_attempts(), 3);
+    assert_eq!(runner.task_timeout(), None);
     assert_eq!(runner.task_retry().allow(), Some(false));
     assert_eq!(runner.task_retry().max_attempts(), Some(1));
     assert_eq!(runner.task_retry().delay_ms(), Some(0));
@@ -282,6 +284,50 @@ fn runner_config_serializes_task_retry_key() {
 
     assert_eq!(value["task_retry"]["allow"], true);
     assert!(value.get("retry").is_none());
+    assert!(value.get("task_timeout").is_none());
+}
+
+#[test]
+fn runner_task_timeout_round_trips_in_seconds() {
+    let runner = RunnerConfig::builder()
+        .task_timeout(std::time::Duration::from_millis(1500))
+        .build();
+    let value = serde_json::to_value(&runner).unwrap();
+    assert_eq!(value["task_timeout"], 1.5);
+    let restored: RunnerConfig = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        restored.task_timeout(),
+        Some(std::time::Duration::from_millis(1500))
+    );
+}
+
+#[test]
+fn runner_task_timeout_rejects_non_positive_seconds() {
+    for value in [json!({"task_timeout": 0}), json!({"task_timeout": -1})] {
+        assert!(serde_json::from_value::<RunnerConfig>(value).is_err());
+    }
+}
+
+#[test]
+fn invocation_task_timeout_overrides_runner_default() {
+    let runner = RunnerConfig::builder()
+        .task_timeout(std::time::Duration::from_secs(5))
+        .build();
+    let options = TaskRunOptions::new(2);
+    assert_eq!(
+        options.effective_task_timeout(&runner),
+        runner.task_timeout()
+    );
+
+    let options = options.with_task_timeout(std::time::Duration::from_secs(2));
+    assert_eq!(
+        options.effective_task_timeout(&runner),
+        Some(std::time::Duration::from_secs(2))
+    );
+    assert_eq!(
+        TaskRunOptions::new(2).effective_task_timeout(&RunnerConfig::default()),
+        None
+    );
 }
 
 #[test]

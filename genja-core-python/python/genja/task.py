@@ -129,6 +129,7 @@ Task metadata comes from ``@task(...)``:
 - ``sub_tasks``: optional list of decorated task classes
 - ``processors``: optional list of processor plugin names
 - ``retry``: optional grouped retry metadata
+- ``task_timeout``: optional timeout for this task in seconds
 - ``session_verification``: optional post-change new-session verification metadata
 - ``idempotency``: optional task-authored convergence check mode
 - ``options``: optional JSON-serializable task options payload
@@ -151,6 +152,7 @@ from enum import Enum
 import inspect
 from importlib import metadata as importlib_metadata
 import json
+import math
 from types import MappingProxyType
 from typing import Any, Awaitable, Literal, Protocol, TypeAlias, TypeVar, cast
 
@@ -836,6 +838,8 @@ class TaskInfo(_GenjaModel):
             processors are specified.
         retry (TaskRetryConfig | None): Optional task-level retry overrides. If
             None, runner defaults apply.
+        task_timeout (float | None): Optional timeout for this task in seconds.
+            A sub-task may declare a different timeout from its parent.
         session_verification (SessionVerificationConfig | None): Optional
             post-change new-session verification configuration. If None,
             session verification is disabled.
@@ -864,6 +868,10 @@ class TaskInfo(_GenjaModel):
     retry: TaskRetryConfig | None = Field(
         default=None,
         description="Optional grouped task retry overrides.",
+    )
+    task_timeout: float | None = Field(
+        default=None,
+        description="Optional timeout for this task in seconds.",
     )
     session_verification: SessionVerificationConfig | None = Field(
         default=None,
@@ -1343,6 +1351,7 @@ def task(
     sub_tasks: list[type[GenjaTaskProtocol]] | None = None,
     processors: list[str] | None = None,
     retry: TaskRetryConfig | None = None,
+    task_timeout: float | None = None,
     session_verification: SessionVerificationConfig | None = None,
     supports_dry_run: bool = False,
     idempotency: IdempotencyMode = IdempotencyMode.DISABLED,
@@ -1376,6 +1385,9 @@ def task(
             overrides. This setting does not force retries by itself; the task
             must still return ``TaskFailureResult(..., retryable=True)``. Omitted
             retry fields fall back to runner defaults field by field.
+        task_timeout (float | None): Optional timeout for this task in
+            seconds. It overrides invocation and runner values and is not
+            inherited by sub-tasks.
         session_verification (SessionVerificationConfig | None): Optional
             post-change replacement session verification. When provided, the
             task must also declare ``connection_plugin_name``. Defaults to None.
@@ -1550,6 +1562,15 @@ def task(
             raise TypeError(
                 f"@task-decorated class '{cls.__name__}' retry must be TaskRetryConfig or None"
             )
+        if task_timeout is not None and (
+            isinstance(task_timeout, bool)
+            or not isinstance(task_timeout, (int, float))
+            or not math.isfinite(task_timeout)
+            or not 0 < task_timeout < 2**64
+        ):
+            raise TypeError(
+                f"@task-decorated class '{cls.__name__}' task_timeout must be a positive finite number of seconds or None"
+            )
         if session_verification is not None and not isinstance(
             session_verification, SessionVerificationConfig
         ):
@@ -1568,6 +1589,7 @@ def task(
             "connection_plugin_name": connection_plugin_name,
             "processors": list(processors or []),
             "retry": retry.to_dict() if retry is not None else None,
+            "task_timeout": task_timeout,
             "session_verification": session_verification,
             "supports_dry_run": supports_dry_run,
             "idempotency": idempotency,

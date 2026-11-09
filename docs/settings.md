@@ -16,7 +16,7 @@ Example files:
 Supported settings file extensions are `.json`, `.yaml`, and `.yml`.
 Settings files are strict: unknown top-level sections and unknown fields inside
 typed settings sections fail loading instead of being ignored. Correct
-misspelled keys or remove unused keys when `Settings::from_file(...)` reports an
+misspelled keys or remove unused keys when settings loading reports an
 unknown field. Plugin-specific free-form values remain supported in explicit
 option maps such as `runner.options` and `inventory.transform_function_options`.
 
@@ -37,16 +37,20 @@ The same mistake in JSON also fails:
 }
 ```
 
-Genja reports the section, unknown field, expected fields, and a suggestion when
-there is a close match:
+Both Rust and Python show the same settings diagnostic for the section, unknown
+field, expected fields, and a close-match suggestion:
 
 ```text
 unknown settings field
   section: `runner`
   field: `worker_counts`
-  expected fields: `plugin`, `options`, `worker_count`, `max_task_depth`, `max_connection_attempts`, `task_retry`
+  expected fields: `plugin`, `options`, `worker_count`, `max_task_depth`, `max_connection_attempts`, `task_timeout`, `task_retry`
   suggestion: did you mean `worker_count`?
 ```
+
+The complete Rust error starts with `failed to deserialize settings from
+<path>:`. Python raises a `ValueError` that also starts with `failed to load
+settings from <path>:` before the Rust error text.
 
 Change the key to `worker_count`, remove unused keys, or move plugin-specific
 values into a supported free-form object such as `runner.options`.
@@ -84,8 +88,8 @@ used by file-loaded settings. Construction itself does not perform filesystem
 validation, but runtime creation validates supplied settings before building the
 runtime.
 
-Use `Genja::from_settings(...)` or `Genja.from_settings(...)` when the runtime
-should load inventory from `settings.inventory`:
+Use the language's `from_settings` constructor when the runtime should load
+inventory from `settings.inventory`:
 
 === ":fontawesome-brands-rust: Rust"
 
@@ -127,11 +131,10 @@ should load inventory from `settings.inventory`:
     runtime = genja.Genja.from_settings(settings)
     ```
 
-Use `Genja::from_settings_async(...)` / `Genja.from_settings_async(...)` for
-programmatic settings, or `Genja.from_settings_file_async(...)` for Python
-settings files, when the selected inventory plugin is async. Async construction
-is strict: the selected plugin must be async-capable; use the sync constructors
-for sync-only inventory plugins such as `FileInventoryPlugin`.
+Use async runtime construction when the selected inventory plugin is async.
+Async construction is strict: the selected plugin must be async-capable; use
+the sync constructors for sync-only inventory plugins such as
+`FileInventoryPlugin`.
 
 === ":fontawesome-brands-rust: Rust"
 
@@ -140,15 +143,15 @@ for sync-only inventory plugins such as `FileInventoryPlugin`.
     use genja::genja_core::Settings;
     use genja::genja_core::settings::InventoryConfig;
 
-    # async fn build_runtime() -> Result<(), Box<dyn std::error::Error>> {
-    // Assumes `api_inventory` is available through runtime plugin discovery.
-    let settings = Settings::builder()
-        .inventory(InventoryConfig::builder().plugin("api_inventory").build())
-        .build();
+    async fn build_runtime() -> Result<Genja, Box<dyn std::error::Error>> {
+        // Assumes `api_inventory` is available through runtime plugin discovery.
+        let settings = Settings::builder()
+            .inventory(InventoryConfig::builder().plugin("api_inventory").build())
+            .build();
 
-    let runtime = Genja::from_settings_async(settings).await?;
-    # Ok(())
-    # }
+        let runtime = Genja::from_settings_async(settings).await?;
+        Ok(runtime)
+    }
     ```
 
 === ":fontawesome-brands-python: Python"
@@ -185,34 +188,60 @@ for sync-only inventory plugins such as `FileInventoryPlugin`.
 
 ### With Explicit Inventory
 
-When hosts or a full inventory are supplied explicitly, `from_hosts(...)` and
-`from_inventory(...)` continue to use that explicit inventory instead of loading
-from `settings.inventory`:
+When an inventory is supplied explicitly, runtime construction uses it instead
+of loading from `settings.inventory`:
 
-```python
-import genja
+=== ":fontawesome-brands-rust: Rust"
 
-settings = genja.Settings(
-    runner=genja.RunnerConfig(
-        plugin="serial",
-        task_retry=genja.RunnerTaskRetryConfig(
-            allow=True,
-            max_attempts=3,
-            delay_ms=250,
+    ```rust
+    use genja::Genja;
+    use genja::genja_core::inventory::{Hosts, Inventory};
+
+    let inventory = Inventory::builder().hosts(Hosts::new()).build();
+    let runtime = Genja::from_inventory(inventory);
+    ```
+
+    `from_inventory(...)` starts with default settings. Configure the runtime
+    separately if you need other settings.
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja
+
+    hosts = {"router1": {"hostname": "10.0.0.1", "platform": "ios"}}
+
+    settings = genja.Settings(
+        runner=genja.RunnerConfig(
+            plugin="serial",
+            task_retry=genja.RunnerTaskRetryConfig(
+                allow=True,
+                max_attempts=3,
+                delay_ms=250,
+            ),
         ),
-    ),
-)
+    )
 
-runtime = genja.Genja.from_hosts(hosts, settings=settings)
-```
+    runtime = genja.Genja.from_hosts(hosts, settings=settings)
+    ```
+
+    `from_hosts(...)` and `from_inventory(...)` accept explicit settings.
 
 ### Validation Only
 
-To validate programmatic settings explicitly before runtime construction, call:
+To validate programmatic settings explicitly before runtime construction:
 
-```python
-settings.validate()
-```
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    settings.validate()?;
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    settings.validate()
+    ```
 
 ## Complete Example
 
@@ -241,6 +270,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
+  task_timeout: null # optional seconds per task and host
   task_retry:
     allow: false
     max_attempts: 1
@@ -275,11 +305,11 @@ These top-level sections are supported:
 
 | Section | Type | Default when omitted |
 | --- | --- | --- |
-| `core` | object | `CoreConfig::default()` |
-| `inventory` | object | `InventoryConfig::default()` |
-| `ssh` | object | `SSHConfig::default()` |
-| `runner` | object | `RunnerConfig::default()` |
-| `logging` | object | `LoggingConfig::default()` |
+| `core` | object | Core defaults listed below |
+| `inventory` | object | Inventory defaults listed below |
+| `ssh` | object | SSH defaults listed below |
+| `runner` | object | Runner defaults listed below |
+| `logging` | object | Logging defaults listed below |
 
 Top-level sections are optional. Nested fields have the defaults listed below,
 including when only part of a section is configured. Unknown top-level sections
@@ -298,10 +328,10 @@ core:
 
 `raise_on_error` is currently parsed and exposed through settings, including its
 environment fallback, but task execution does not branch on this value. Task
-entrypoint errors are recorded as failed host results, and `run_task(...)` /
-`run_tasks(...)` can still return `Ok(...)` when hosts failed. Outer runtime
-errors such as invalid plugins, processor hook errors, runner errors, and config
-loading errors still return errors regardless of this field.
+entrypoint errors are recorded as failed host results, so inspect host results
+even when a task-running call succeeds. Outer runtime errors such as invalid
+plugins, processor hook errors, runner errors, and config loading errors still
+surface regardless of this field.
 
 ## Inventory
 
@@ -387,12 +417,20 @@ ssh:
 | --- | --- | --- | --- |
 | `config_file` | string or null | `null` | none |
 
-When `config_file` is set, `Settings::from_file(...)` checks that the file
-exists, can be opened, and parses as strict OpenSSH-style config. Programmatic
-settings can be checked with `Settings::validate()` in Rust, `settings.validate()`
-in Python, or `settings.ssh.validate()` in Python for the SSH section only.
-Python runtime creation also validates supplied settings before building the
-runtime. If the field is omitted or `null`, SSH config validation is skipped.
+When `config_file` is set, loading settings from a file checks that the SSH
+config exists, can be opened, and parses as strict OpenSSH-style config. If the
+field is omitted or `null`, SSH config validation is skipped.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    Call `settings.validate()` to check programmatic settings before building
+    the runtime.
+
+=== ":fontawesome-brands-python: Python"
+
+    Call `settings.validate()` for programmatic settings or
+    `settings.ssh.validate()` for the SSH section only. Python runtime creation
+    also validates supplied settings.
 
 ## Runner
 
@@ -403,6 +441,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
+  task_timeout: null # optional seconds per task and host
   task_retry:
     allow: false
     max_attempts: 1
@@ -416,6 +455,7 @@ runner:
 | `worker_count` | number or null | `null` | none |
 | `max_task_depth` | number | `10` | none |
 | `max_connection_attempts` | number | `3` | none |
+| `task_timeout` | positive seconds or null | `null` | none |
 | `task_retry.allow` | boolean | `false` | none |
 | `task_retry.max_attempts` | number | `1` | none |
 | `task_retry.delay_ms` | number | `0` | none |
@@ -440,6 +480,80 @@ use this setting.
 
 `max_connection_attempts` is part of shared runner configuration. Connection
 plugins or connection layers are responsible for interpreting retry behavior.
+
+`task_timeout` sets the runner default for one task on one host. A task's
+declared timeout takes precedence, followed by the invocation value and then
+the runner value. When all three are omitted, no timeout is configured. A child
+task can declare its own value; it does not inherit a timeout declared only by
+its parent. Deadline enforcement uses one monotonic budget for connection
+setup, checks, attempts, retry waits, and verification for each task on each
+host. A retry does not reset that budget. Expiry produces a non-retryable host
+timeout with structured `configured_limit_seconds`, `elapsed_seconds`, `phase`,
+and `attempt` details.
+An expiry before the first task attempt reports zero attempts. Blocking work
+is observed to finish locally before another task step is started; the timeout
+result does not claim that remote work was terminated.
+In an ordered task list, later roots get fresh deadlines on every host,
+including hosts where an earlier root or subtask timed out. The optional
+[list timeout control](runners.md#list-timeout-control) can instead skip later
+roots on a host after its deadline expires.
+
+Timeout values may include fractions of a second, such as `task_timeout: 0.5`.
+
+### Task timeout entry points
+
+Select a language to see its entry points. The precedence is the same for
+each task on each host.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```mermaid
+    flowchart TD
+        TASK["#[genja_task(task_timeout = ...)]"] --> HAS_TASK{"Task timeout set?"}
+        HAS_TASK -- Yes --> USE_TASK["Use task timeout"]
+        HAS_TASK -- No --> OPTIONS["TaskRunOptions::new(...).with_task_timeout(...)"]
+        OPTIONS --> HAS_OPTIONS{"Invocation timeout set?"}
+        HAS_OPTIONS -- Yes --> USE_OPTIONS["Use invocation timeout"]
+        HAS_OPTIONS -- No --> RUNNER["RunnerConfig::builder().task_timeout(...)<br/>or settings.yaml runner.task_timeout"]
+        RUNNER --> HAS_RUNNER{"Runner timeout set?"}
+        HAS_RUNNER -- Yes --> USE_RUNNER["Use runner timeout"]
+        HAS_RUNNER -- No --> NO_DEADLINE["No deadline"]
+        USE_TASK --> DEADLINE["New deadline for this task and host"]
+        USE_OPTIONS --> DEADLINE
+        USE_RUNNER --> DEADLINE
+        DEADLINE --> LIFECYCLE["Connection → checks → attempts → retry waits → verification"]
+    ```
+
+    Pass `TaskRunOptions` to `run_task_with_options(...)` or
+    `run_tasks_with_options(...)`. The simpler methods that accept `max_depth`
+    create options without a timeout, leaving the runner value available as a
+    fallback. Runner and invocation APIs take a `Duration`; for example,
+    `Duration::from_secs_f64(0.5)` sets half a second. The task attribute takes
+    a number of seconds, such as `#[genja_task(task_timeout = 0.5)]`.
+
+=== ":fontawesome-brands-python: Python"
+
+    ```mermaid
+    flowchart TD
+        TASK["@task(task_timeout=...)"] --> HAS_TASK{"Task timeout set?"}
+        HAS_TASK -- Yes --> USE_TASK["Use task timeout"]
+        HAS_TASK -- No --> OPTIONS["TaskRunOptions(task_timeout=...)"]
+        OPTIONS --> HAS_OPTIONS{"Invocation timeout set?"}
+        HAS_OPTIONS -- Yes --> USE_OPTIONS["Use invocation timeout"]
+        HAS_OPTIONS -- No --> RUNNER["RunnerConfig(task_timeout=...)<br/>or settings.yaml runner.task_timeout"]
+        RUNNER --> HAS_RUNNER{"Runner timeout set?"}
+        HAS_RUNNER -- Yes --> USE_RUNNER["Use runner timeout"]
+        HAS_RUNNER -- No --> NO_DEADLINE["No deadline"]
+        USE_TASK --> DEADLINE["New deadline for this task and host"]
+        USE_OPTIONS --> DEADLINE
+        USE_RUNNER --> DEADLINE
+        DEADLINE --> LIFECYCLE["Connection → checks → attempts → retry waits → verification"]
+    ```
+
+    Pass `TaskRunOptions` as `run_options=` to `run_task(...)`,
+    `run_task_async(...)`, or their task-list equivalents. Timeout arguments
+    take seconds, including fractions such as `@task(task_timeout=0.5)` or
+    `RunnerConfig(task_timeout=0.5)`.
 
 `task_retry.allow` controls whether retries are allowed by default for task
 execution. `task_retry.max_attempts` controls the default total attempt count for a
@@ -467,46 +581,81 @@ runner:
     max_delay_ms: 60000
 ```
 
-In Rust, place `TaskRetryConfig::builder().policy(TaskRetryPolicyKind::Exponential)`
-inside `RunnerConfig::builder().task_retry(...)` to set runner defaults. The
-same Rust `TaskRetryConfig` type is also used for task metadata; its placement
-determines its scope. Python uses `RunnerTaskRetryConfig` for runner defaults:
+The equivalent programmatic runner defaults are:
 
-```python
-import genja
+=== ":fontawesome-brands-rust: Rust"
 
-runner = genja.RunnerConfig(
-    task_retry=genja.RunnerTaskRetryConfig(
-        allow=True,
-        max_attempts=6,
-        delay_ms=1000,
-        policy=genja.TaskRetryPolicyKind.EXPONENTIAL,
-        factor=3,
-        max_delay_ms=60000,
+    ```rust
+    use genja::genja_core::settings::RunnerConfig;
+    use genja::genja_core::task::{TaskRetryConfig, TaskRetryPolicyKind};
+
+    let runner = RunnerConfig::builder()
+        .task_retry(
+            TaskRetryConfig::builder()
+                .allow(true)
+                .max_attempts(6)
+                .delay_ms(1000)
+                .policy(TaskRetryPolicyKind::Exponential)
+                .factor(3)
+                .max_delay_ms(60000)
+                .build(),
+        )
+        .build();
+    ```
+
+    `TaskRetryConfig` is also used for task metadata; placing it in
+    `RunnerConfig::builder().task_retry(...)` sets runner defaults.
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja
+
+    runner = genja.RunnerConfig(
+        task_retry=genja.RunnerTaskRetryConfig(
+            allow=True,
+            max_attempts=6,
+            delay_ms=1000,
+            policy=genja.TaskRetryPolicyKind.EXPONENTIAL,
+            factor=3,
+            max_delay_ms=60000,
+        )
     )
-)
-```
+    ```
+
+    `RunnerTaskRetryConfig` sets runner defaults in Python.
 
 ### Migrating task retry names from v0.5.x
 
 The task retry names change in v0.6.0. Replace the old names directly; there
 are no compatibility aliases.
 
-| v0.5.x | v0.6.0 |
-| --- | --- |
-| YAML/JSON `runner.retry` | `runner.task_retry` |
-| Rust `RetryConfig` | `TaskRetryConfig` |
-| Rust `RetryConfigBuilder` | `TaskRetryConfigBuilder` |
-| Rust `RunnerConfig::retry()` | `RunnerConfig::task_retry()` |
-| Rust `RunnerConfigBuilder::retry(...)` | `RunnerConfigBuilder::task_retry(...)` |
-| Python task `RetryConfig` | `TaskRetryConfig` |
-| Python `RunnerRetryConfig` | `RunnerTaskRetryConfig` |
-| Python `RunnerConfig(retry=...)` | `RunnerConfig(task_retry=...)` |
-| Python `RunnerConfig.retry` | `RunnerConfig.task_retry` |
+In YAML and JSON settings, rename `runner.retry` to `runner.task_retry`.
 
-Rust task macro `retry(...)`, Python task decorator `retry=TaskRetryConfig(...)`,
-and `TaskSpec.overrides.retry` keep their task-scoped names. Task descriptor and
-execution-result field names also stay the same.
+=== ":fontawesome-brands-rust: Rust"
+
+    | v0.5.x | v0.6.0 |
+    | --- | --- |
+    | `RetryConfig` | `TaskRetryConfig` |
+    | `RetryConfigBuilder` | `TaskRetryConfigBuilder` |
+    | `RunnerConfig::retry()` | `RunnerConfig::task_retry()` |
+    | `RunnerConfigBuilder::retry(...)` | `RunnerConfigBuilder::task_retry(...)` |
+
+    The task macro `retry(...)` and `TaskSpec.overrides.retry` keep their
+    task-scoped names.
+
+=== ":fontawesome-brands-python: Python"
+
+    | v0.5.x | v0.6.0 |
+    | --- | --- |
+    | Task `RetryConfig` | `TaskRetryConfig` |
+    | `RunnerRetryConfig` | `RunnerTaskRetryConfig` |
+    | `RunnerConfig(retry=...)` | `RunnerConfig(task_retry=...)` |
+    | `RunnerConfig.retry` | `RunnerConfig.task_retry` |
+
+    The task decorator `retry=TaskRetryConfig(...)` keeps its task-scoped name.
+
+Task descriptor and execution-result field names also stay the same.
 
 See [Runners](runners.md) for execution behavior and ordering details.
 
@@ -532,25 +681,32 @@ logging:
 | `max_file_count` | number | `10` | none |
 
 Genja parses the `logging` section but does not install output handlers,
-formats, colors, or log rotation automatically. Rust applications own global
-logger setup. Python applications receive Rust-side Genja records through
-Python's standard `logging` system and should configure Python handlers and
-levels before running tasks.
+formats, colors, or log rotation automatically.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    The application owns global logger setup. Initialize it before running
+    tasks if you need to capture Genja records.
+
+=== ":fontawesome-brands-python: Python"
+
+    Rust-side Genja records flow through Python's standard `logging` system.
+    Configure Python handlers and levels before running tasks. Configure
+    logging before loading settings if you also need warnings from settings
+    loading.
 
 A typical application startup flow is:
 
-1. Load settings with `Settings::from_file(...)`.
+1. Load settings from a file or construct them programmatically.
 2. Read the `logging` section.
 3. Initialize the application's logger.
 4. Build and run `Genja`.
 
-Because settings must be loaded before `settings.logging()` is available, logs
-emitted during settings loading may occur before a logger is initialized. Genja
-keeps normal default fallbacks silent for this reason. Invalid config file values
-fail settings loading. Invalid environment variable values may fall back to
-defaults and emit a warning only if logging has already been initialized. In
-Python, configure logging before loading settings if you need to capture
-warnings emitted during settings loading.
+Because logging settings are available only after settings load, records
+emitted during loading may precede logger initialization. Genja keeps normal
+default fallbacks silent for this reason. Invalid config file values fail
+settings loading. Invalid environment variable values may fall back to defaults
+and emit a warning only if logging has already been initialized.
 
 ## Environment Variables
 

@@ -6,13 +6,15 @@ use super::env_defaults::{
 use crate::task::TaskRetryConfig;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// Task runner configuration.
 ///
 /// The plugin name defaults from `GENJA_RUNNER_PLUGIN`. `worker_count`,
 /// `max_task_depth`, and `max_connection_attempts` control built-in runner
 /// behavior. `task_retry` carries runner-level task retry defaults and `options`
-/// carries plugin-specific JSON for custom runners.
+/// carries plugin-specific JSON for custom runners. `task_timeout` is an optional
+/// per-task, per-host limit in seconds.
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default, deny_unknown_fields)]
 pub struct RunnerConfig {
@@ -21,6 +23,12 @@ pub struct RunnerConfig {
     worker_count: Option<usize>,
     max_task_depth: usize,
     max_connection_attempts: usize,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_task_timeout"
+    )]
+    task_timeout: Option<f64>,
     #[serde(
         default = "default_retry_config",
         deserialize_with = "deserialize_retry_config"
@@ -36,6 +44,7 @@ impl Default for RunnerConfig {
             worker_count: None,
             max_task_depth: get_runner_max_task_depth_default(),
             max_connection_attempts: get_runner_max_connection_attempts_default(),
+            task_timeout: None,
             task_retry: default_retry_config(),
         }
     }
@@ -64,6 +73,11 @@ impl RunnerConfig {
 
     pub fn max_connection_attempts(&self) -> usize {
         self.max_connection_attempts
+    }
+
+    /// Return the optional per-task, per-host timeout.
+    pub fn task_timeout(&self) -> Option<Duration> {
+        self.task_timeout.map(Duration::from_secs_f64)
     }
 
     /// Return normalized default task retry settings for this runner.
@@ -98,6 +112,7 @@ pub struct RunnerConfigBuilder {
     worker_count: Option<usize>,
     max_task_depth: Option<usize>,
     max_connection_attempts: Option<usize>,
+    task_timeout: Option<Duration>,
     task_retry: Option<TaskRetryConfig>,
 }
 
@@ -127,6 +142,16 @@ impl RunnerConfigBuilder {
         self
     }
 
+    /// Set the optional per-task, per-host timeout.
+    pub fn task_timeout(mut self, task_timeout: Duration) -> Self {
+        assert!(
+            !task_timeout.is_zero(),
+            "task_timeout must be greater than zero"
+        );
+        self.task_timeout = Some(task_timeout);
+        self
+    }
+
     /// Set default task retry settings for this runner.
     pub fn task_retry(mut self, task_retry: TaskRetryConfig) -> Self {
         self.task_retry = Some(normalize_retry_config(task_retry));
@@ -144,6 +169,7 @@ impl RunnerConfigBuilder {
             max_connection_attempts: self
                 .max_connection_attempts
                 .unwrap_or_else(get_runner_max_connection_attempts_default),
+            task_timeout: self.task_timeout.map(|timeout| timeout.as_secs_f64()),
             task_retry: self.task_retry.unwrap_or_else(default_retry_config),
         }
     }
@@ -187,4 +213,22 @@ where
     D: Deserializer<'de>,
 {
     TaskRetryConfig::deserialize(deserializer).map(normalize_retry_config)
+}
+
+fn deserialize_task_timeout<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let timeout = Option::<f64>::deserialize(deserializer)?;
+    if timeout.is_some_and(|seconds| {
+        !seconds.is_finite()
+            || seconds <= 0.0
+            || seconds >= u64::MAX as f64
+            || Duration::from_secs_f64(seconds).is_zero()
+    }) {
+        return Err(serde::de::Error::custom(
+            "task_timeout must be a positive finite number of seconds",
+        ));
+    }
+    Ok(timeout)
 }

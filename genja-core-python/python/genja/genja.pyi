@@ -120,6 +120,7 @@ class RunnerConfig:
         max_task_depth: int | None = None,
         max_connection_attempts: int | None = None,
         task_retry: RunnerTaskRetryConfig | None = None,
+        task_timeout: float | None = None,
     ) -> None:
         """Create runner configuration."""
         ...
@@ -142,6 +143,10 @@ class RunnerConfig:
     @property
     def task_retry(self) -> RunnerTaskRetryConfig:
         """Default retry behavior for task execution."""
+        ...
+    @property
+    def task_timeout(self) -> float | None:
+        """Default per-task, per-host timeout in seconds, if configured."""
         ...
 
 class RunnerTaskRetryConfig:
@@ -477,6 +482,7 @@ class TaskRunOptions:
         self,
         max_depth: int | None = None,
         dry_run: bool = False,
+        task_timeout: float | None = None,
     ) -> None:
         """Create runtime options for task execution."""
         ...
@@ -488,14 +494,75 @@ class TaskRunOptions:
     def dry_run(self) -> bool:
         """Whether the runtime should call dry-run task entrypoints."""
         ...
+    @property
+    def task_timeout(self) -> float | None:
+        """Per-invocation task timeout in seconds, if configured."""
+        ...
     def with_max_depth(self, max_depth: int) -> TaskRunOptions:
         """Return a copy with a different maximum nested sub-task depth."""
         ...
     def with_dry_run(self, dry_run: bool) -> TaskRunOptions:
         """Return a copy with dry-run execution enabled or disabled."""
         ...
+    def with_task_timeout(self, task_timeout: float) -> TaskRunOptions:
+        """Return a copy with a task timeout in seconds."""
+        ...
     def to_dict(self) -> dict[str, Any]:
         """Return the runtime options as a dictionary."""
+        ...
+
+class TaskListTimeoutControl:
+    """Action for later list tasks after a host deadline expires."""
+
+    CONTINUE: ClassVar[TaskListTimeoutControl]
+    SKIP_REMAINING_FOR_HOST: ClassVar[TaskListTimeoutControl]
+
+    @property
+    def value(self) -> str:
+        """Return the stable string value of this control."""
+        ...
+    def __str__(self) -> str:
+        """Return the stable string value for display."""
+        ...
+    def __repr__(self) -> str:
+        """Return the qualified enum constant name."""
+        ...
+    def __copy__(self) -> TaskListTimeoutControl:
+        """Return this immutable value for shallow copies."""
+        ...
+    def __deepcopy__(self, memo: dict[int, Any]) -> TaskListTimeoutControl:
+        """Return this immutable value for deep copies."""
+        ...
+
+class TaskListRunOptions:
+    """List execution controls with per-task options and timeout handling."""
+
+    def __init__(
+        self,
+        task_options: TaskRunOptions | None = None,
+        timeout_control: TaskListTimeoutControl | None = None,
+    ) -> None:
+        """Create list options; later tasks continue by default."""
+        ...
+
+    @property
+    def task_options(self) -> TaskRunOptions | None:
+        """Options applied to each task, or None for runner depth defaults."""
+        ...
+
+    @property
+    def timeout_control(self) -> TaskListTimeoutControl:
+        """Action for later tasks after a host deadline expires."""
+        ...
+
+    def with_task_options(self, task_options: TaskRunOptions) -> TaskListRunOptions:
+        """Return a copy with different per-task options."""
+        ...
+
+    def with_timeout_control(
+        self, timeout_control: TaskListTimeoutControl
+    ) -> TaskListRunOptions:
+        """Return a copy with different timeout handling."""
         ...
 
 class TaskDefinition:
@@ -516,6 +583,10 @@ class TaskDefinition:
     @property
     def retry(self) -> dict[str, Any] | None:
         """Task retry metadata, if configured."""
+        ...
+    @property
+    def task_timeout(self) -> float | None:
+        """Timeout declared by this task in seconds, if configured."""
         ...
     @property
     def session_verification(self) -> SessionVerificationConfig | None:
@@ -1073,7 +1144,7 @@ class Genja:
     def run_tasks(
         self,
         tasks: Tasks,
-        run_options: TaskRunOptions | None = None,
+        run_options: TaskRunOptions | TaskListRunOptions | None = None,
     ) -> list[TaskResults]:
         """Execute an ordered task collection against selected hosts.
 
@@ -1085,7 +1156,7 @@ class Genja:
     def run_tasks_async(
         self,
         tasks: Tasks,
-        run_options: TaskRunOptions | None = None,
+        run_options: TaskRunOptions | TaskListRunOptions | None = None,
     ) -> Awaitable[list[TaskResults]]:
         """Asynchronously execute an ordered task collection against selected hosts.
 

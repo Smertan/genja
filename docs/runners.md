@@ -28,6 +28,7 @@ runner:
   worker_count: 10
   max_task_depth: 10
   max_connection_attempts: 3
+  task_timeout: null # optional seconds per task and host
   task_retry:
     allow: false
     max_attempts: 1
@@ -41,6 +42,7 @@ Runner settings:
 - `worker_count`: optional concurrency limit for runners that support it.
 - `max_task_depth`: maximum nested task depth. Defaults to `10`.
 - `max_connection_attempts`: maximum connection attempts. Defaults to `3`.
+- `task_timeout`: optional task timeout in positive seconds for each host; fractional values such as `0.5` are accepted. Defaults to `null`.
 - `task_retry.allow`: whether task retries are allowed by default. Defaults to `false`.
 - `task_retry.max_attempts`: total number of task attempts allowed by default. Defaults to `1`.
 - `task_retry.delay_ms`: base delay in milliseconds between retry attempts. Defaults to `0`.
@@ -50,6 +52,17 @@ Runner settings:
 `max_connection_attempts` is part of the shared runner configuration. The
 built-in runners pass the task connection resolver into task execution; the
 connection layer is responsible for interpreting connection retry behavior.
+
+For `task_timeout`, a value declared by the task takes precedence over an
+explicit `TaskRunOptions` invocation value, which overrides
+`runner.task_timeout`. Each subtask resolves its own value and does not inherit
+a timeout declared by its parent. Without any value, no timeout is configured.
+The selected limit starts when that task begins on a host and covers connection
+setup, checks, attempts, retry waits, and verification. Retry attempts share
+the same deadline. An expired task reports a host-scoped timeout failure and
+does not start another attempt or subtask.
+In an ordered task list, each later root gets a fresh deadline on each host,
+including a host where an earlier root or subtask timed out.
 
 `task_retry.allow`, `task_retry.max_attempts`, and `task_retry.delay_ms` define default retry
 policy for task execution. Tasks may override these defaults through task
@@ -218,6 +231,57 @@ depth limit.
 
 This means the built-in threaded runner parallelizes hosts within a root task;
 it does not run separate root tasks from the same `Tasks` list at the same time.
+
+### List timeout control
+
+By default, a timed-out root or subtask does not prevent later roots from
+running on that host. Each later task starts its own deadline. To skip later
+roots on a host after a task deadline expires there, use list options. Other
+hosts continue, and ordinary task failures do not trigger this rule.
+
+Deadline timeout details report the configured limit and elapsed seconds, the
+phase, and the number of attempts that actually started. An expiry before the
+first attempt reports attempt `0`. `local_completion_observed` says whether
+the awaited local work finished before the result was recorded; it does not
+confirm the outcome of a remote operation. Blocking task work is awaited to
+completion before the runner returns a timeout result, so later list tasks
+cannot overlap that worker on the same host. Cancellation and cleanup grace
+periods are separate from task deadlines.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::{TaskListRunOptions, TaskListTimeoutControl, TaskRunOptions};
+    use std::time::Duration;
+
+    let options = TaskListRunOptions::new(
+        TaskRunOptions::new(1).with_task_timeout(Duration::from_secs(30)),
+    )
+    .with_timeout_control(TaskListTimeoutControl::SkipRemainingForHost);
+    let results = genja.run_tasks_with_options(tasks, options)?;
+    ```
+
+    Existing calls that pass `TaskRunOptions` continue with the default
+    `Continue` control. The async and custom-retry-policy list methods accept
+    `TaskListRunOptions` too.
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja
+
+    options = genja.TaskListRunOptions(
+        task_options=genja.TaskRunOptions(task_timeout=30),
+        timeout_control=genja.TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST,
+    )
+    results = runtime.run_tasks(tasks, run_options=options)
+    ```
+
+    `run_tasks_async(...)` accepts the same options. Omitting `task_options`
+    uses the runner's default depth and timeout settings.
+
+The opt-in skip mode calls the runner's single-task method for each root, so
+custom runners' `run_tasks` batching overrides are not used in that mode.
 
 ## Empty Host Selections
 

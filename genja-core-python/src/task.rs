@@ -3,9 +3,9 @@ use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
     HostTaskResult, IdempotencyCheck, IdempotencyMode, MessageLevel, SessionVerificationConfig,
     Task, TaskConnectionResolver, TaskDefinition, TaskError, TaskExecutionMode, TaskFailure,
-    TaskFailureKind, TaskInfo, TaskMessage, TaskResults, TaskResultsSummary, TaskRetryConfig,
-    TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks, validate_explicit_task_id,
-    validate_task_version,
+    TaskFailureKind, TaskInfo, TaskListRunOptions, TaskListTimeoutControl, TaskMessage,
+    TaskResults, TaskResultsSummary, TaskRetryConfig, TaskRunOptions, TaskRuntimeContext, TaskSkip,
+    TaskSuccess, Tasks, validate_explicit_task_id, validate_task_version,
 };
 use async_trait::async_trait;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -164,6 +164,16 @@ py_string_enum! {
         Disabled => DISABLED => "disabled",
         Check => CHECK => "check",
         CheckAndVerify => CHECK_AND_VERIFY => "check_and_verify",
+    }
+}
+
+py_string_enum! {
+    py: PyTaskListTimeoutControl,
+    rust: TaskListTimeoutControl,
+    python_name: "TaskListTimeoutControl",
+    variants: {
+        Continue => CONTINUE => "continue",
+        SkipRemainingForHost => SKIP_REMAINING_FOR_HOST => "skip_remaining_for_host",
     }
 }
 
@@ -589,6 +599,7 @@ struct PythonTaskSpec {
     connection_plugin_name: Option<String>,
     processor_names: Vec<String>,
     retry_config: Option<TaskRetryConfig>,
+    task_timeout: Option<Duration>,
     session_verification_config: Option<SessionVerificationConfig>,
     options: Option<Value>,
     supports_dry_run: bool,
@@ -664,6 +675,10 @@ impl TaskInfo for PythonBackedTask {
 
     fn retry_config(&self) -> Option<&TaskRetryConfig> {
         self.spec.retry_config.as_ref()
+    }
+
+    fn task_timeout(&self) -> Option<Duration> {
+        self.spec.task_timeout
     }
 
     fn session_verification_config(&self) -> Option<&SessionVerificationConfig> {
@@ -1021,11 +1036,23 @@ pub struct PyTaskConnectionResolver {
 /// Python wrapper for runtime task execution options.
 ///
 /// `TaskRunOptions` carries operator-selected execution controls such as
-/// maximum sub-task depth and dry-run mode. It is separate from task decorator
-/// `options`, which are task-authored metadata.
+/// maximum sub-task depth, dry-run mode, and an optional task timeout. It is
+/// separate from task decorator `options`, which are task-authored metadata.
 pub struct PyTaskRunOptions {
     pub(crate) max_depth: Option<usize>,
     pub(crate) dry_run: bool,
+    pub(crate) task_timeout: Option<Duration>,
+}
+
+/// Python options for an ordered task list.
+///
+/// `task_options` apply to each task. `timeout_control` chooses whether later
+/// roots continue or skip a host after one task deadline expires there.
+#[pyclass(name = "TaskListRunOptions", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyTaskListRunOptions {
+    task_options: Option<PyTaskRunOptions>,
+    timeout_control: TaskListTimeoutControl,
 }
 
 #[pymethods]
@@ -1077,6 +1104,14 @@ impl PyTaskDefinition {
     #[getter]
     fn retry(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         retry_config_to_py_object(py, self.inner.retry_config())
+    }
+
+    /// Timeout declared by this task in seconds, if configured.
+    #[getter]
+    fn task_timeout(&self) -> Option<f64> {
+        self.inner
+            .task_timeout()
+            .map(|timeout| timeout.as_secs_f64())
     }
 
     #[getter]
@@ -1152,13 +1187,25 @@ impl PyTaskDefinition {
 impl PyTaskRunOptions {
     /// Create runtime task execution options.
     #[new]
-    #[pyo3(signature = (max_depth=None, dry_run=false))]
-    fn new(max_depth: Option<Bound<'_, PyAny>>, dry_run: bool) -> PyResult<Self> {
+    #[pyo3(signature = (max_depth=None, dry_run=false, task_timeout=None))]
+    fn new(
+        max_depth: Option<Bound<'_, PyAny>>,
+        dry_run: bool,
+        task_timeout: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
         let max_depth = match max_depth {
             Some(value) => Some(extract_task_run_options_max_depth(&value)?),
             None => None,
         };
-        Ok(Self { max_depth, dry_run })
+        let task_timeout = task_timeout
+            .filter(|value| !value.is_none())
+            .map(|value| extract_task_timeout_seconds(&value))
+            .transpose()?;
+        Ok(Self {
+            max_depth,
+            dry_run,
+            task_timeout,
+        })
     }
 
     /// Return the maximum nested sub-task depth override, if configured.
@@ -1173,11 +1220,18 @@ impl PyTaskRunOptions {
         self.dry_run
     }
 
+    /// Return the per-invocation task timeout in seconds, if configured.
+    #[getter]
+    fn task_timeout(&self) -> Option<f64> {
+        self.task_timeout.map(|timeout| timeout.as_secs_f64())
+    }
+
     /// Return a copy with a different maximum nested sub-task depth.
     fn with_max_depth(&self, max_depth: usize) -> Self {
         Self {
             max_depth: Some(max_depth),
             dry_run: self.dry_run,
+            task_timeout: self.task_timeout,
         }
     }
 
@@ -1186,7 +1240,16 @@ impl PyTaskRunOptions {
         Self {
             max_depth: self.max_depth,
             dry_run,
+            task_timeout: self.task_timeout,
         }
+    }
+
+    /// Return a copy with a per-invocation task timeout in seconds.
+    fn with_task_timeout(&self, task_timeout: Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            task_timeout: Some(extract_task_timeout_seconds(&task_timeout)?),
+            ..self.clone()
+        })
     }
 
     /// Convert the runtime options to a Python dictionary.
@@ -1197,13 +1260,69 @@ impl PyTaskRunOptions {
             None => payload.set_item("max_depth", py.None())?,
         }
         payload.set_item("dry_run", self.dry_run)?;
+        payload.set_item("task_timeout", self.task_timeout())?;
         Ok(payload.unbind().into())
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "TaskRunOptions(max_depth={:?}, dry_run={})",
-            self.max_depth, self.dry_run
+            "TaskRunOptions(max_depth={:?}, dry_run={}, task_timeout={:?})",
+            self.max_depth,
+            self.dry_run,
+            self.task_timeout()
+        )
+    }
+}
+
+#[pymethods]
+impl PyTaskListRunOptions {
+    /// Create list options. The default continues later tasks on every host.
+    #[new]
+    #[pyo3(signature = (task_options=None, timeout_control=None))]
+    fn new(
+        task_options: Option<PyRef<'_, PyTaskRunOptions>>,
+        timeout_control: Option<PyRef<'_, PyTaskListTimeoutControl>>,
+    ) -> Self {
+        Self {
+            task_options: task_options.map(|options| options.clone()),
+            timeout_control: timeout_control
+                .map(|control| (*control).into())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Return the options applied to each task, if provided.
+    #[getter]
+    fn task_options(&self) -> Option<PyTaskRunOptions> {
+        self.task_options.clone()
+    }
+
+    /// Return the action for later roots after a host deadline expires.
+    #[getter]
+    fn timeout_control(&self) -> PyTaskListTimeoutControl {
+        self.timeout_control.into()
+    }
+
+    /// Return a copy with different per-task options.
+    fn with_task_options(&self, task_options: PyRef<'_, PyTaskRunOptions>) -> Self {
+        Self {
+            task_options: Some(task_options.clone()),
+            ..self.clone()
+        }
+    }
+
+    /// Return a copy with a different action after a host deadline expires.
+    fn with_timeout_control(&self, timeout_control: PyRef<'_, PyTaskListTimeoutControl>) -> Self {
+        Self {
+            timeout_control: (*timeout_control).into(),
+            ..self.clone()
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TaskListRunOptions(timeout_control={:?})",
+            self.timeout_control
         )
     }
 }
@@ -1471,7 +1590,7 @@ pub fn run_tasks(
         .map_err(|_| PyValueError::new_err("tasks must be a genja.Tasks instance"))?
         .to_runtime_tasks();
 
-    let run_options = resolve_task_run_options(
+    let run_options = resolve_task_list_run_options(
         run_options.as_ref(),
         runtime.settings().runner().max_task_depth(),
     )?;
@@ -1498,7 +1617,7 @@ pub fn run_tasks_async(
         .to_runtime_tasks();
 
     let runtime = runtime.clone();
-    let run_options = resolve_task_run_options(
+    let run_options = resolve_task_list_run_options(
         run_options.as_ref(),
         runtime.settings().runner().max_task_depth(),
     )?;
@@ -1522,6 +1641,23 @@ fn task_run_options_max_depth_type_error(type_name: &str) -> PyErr {
     PyValueError::new_err(format!(
         "TaskRunOptions(max_depth=...) expected int | None, got {type_name}"
     ))
+}
+
+pub(crate) fn extract_task_timeout_seconds(value: &Bound<'_, PyAny>) -> PyResult<Duration> {
+    let error =
+        || PyValueError::new_err("task_timeout must be a positive finite number of seconds");
+    if value.is_instance_of::<PyBool>() {
+        return Err(error());
+    }
+    let seconds = value.extract::<f64>().map_err(|_| error())?;
+    if !seconds.is_finite() || seconds <= 0.0 || seconds >= u64::MAX as f64 {
+        return Err(error());
+    }
+    let timeout = Duration::from_secs_f64(seconds);
+    if timeout.is_zero() {
+        return Err(error());
+    }
+    Ok(timeout)
 }
 
 fn extract_task_run_options_max_depth(value: &Bound<'_, PyAny>) -> PyResult<usize> {
@@ -1554,10 +1690,10 @@ fn resolve_task_run_options(
         if run_options.is_none() {
             // Explicit None is equivalent to omitting run_options.
         } else if let Ok(run_options) = run_options.extract::<PyRef<'_, PyTaskRunOptions>>() {
-            return Ok(
-                TaskRunOptions::new(run_options.max_depth.unwrap_or(default_max_depth))
-                    .with_dry_run(run_options.dry_run),
-            );
+            return Ok(task_run_options_from_python(
+                &run_options,
+                default_max_depth,
+            ));
         } else {
             return Err(PyValueError::new_err(
                 "run_options must be a genja.TaskRunOptions instance",
@@ -1566,6 +1702,36 @@ fn resolve_task_run_options(
     }
 
     Ok(TaskRunOptions::new(default_max_depth))
+}
+
+fn task_run_options_from_python(
+    options: &PyTaskRunOptions,
+    default_max_depth: usize,
+) -> TaskRunOptions {
+    let mut task_options = TaskRunOptions::new(options.max_depth.unwrap_or(default_max_depth))
+        .with_dry_run(options.dry_run);
+    if let Some(task_timeout) = options.task_timeout {
+        task_options = task_options.with_task_timeout(task_timeout);
+    }
+    task_options
+}
+
+fn resolve_task_list_run_options(
+    run_options: Option<&Bound<'_, PyAny>>,
+    default_max_depth: usize,
+) -> PyResult<TaskListRunOptions> {
+    if let Some(run_options) = run_options {
+        if let Ok(list_options) = run_options.extract::<PyRef<'_, PyTaskListRunOptions>>() {
+            let task_options = list_options
+                .task_options
+                .as_ref()
+                .map(|options| task_run_options_from_python(options, default_max_depth))
+                .unwrap_or_else(|| TaskRunOptions::new(default_max_depth));
+            return Ok(TaskListRunOptions::new(task_options)
+                .with_timeout_control(list_options.timeout_control));
+        }
+    }
+    resolve_task_run_options(run_options, default_max_depth).map(TaskListRunOptions::new)
 }
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1580,6 +1746,8 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTasks>()?;
     module.add_class::<PyTaskConnectionResolver>()?;
     module.add_class::<PyTaskRunOptions>()?;
+    module.add_class::<PyTaskListTimeoutControl>()?;
+    module.add_class::<PyTaskListRunOptions>()?;
     module.add_class::<PyTaskResults>()?;
     module.add_function(wrap_pyfunction!(validate_registered_task_id, module)?)?;
     module.add_function(wrap_pyfunction!(validate_registered_task_version, module)?)?;
@@ -1870,7 +2038,7 @@ fn task_definition_to_json(task_definition: &TaskDefinition) -> Value {
 }
 
 fn task_to_json(task: &dyn Task) -> Value {
-    json!({
+    let mut value = json!({
         "name": task.name(),
         "connection_plugin_name": task.connection_plugin_name(),
         "processors": task.processor_names(),
@@ -1880,7 +2048,11 @@ fn task_to_json(task: &dyn Task) -> Value {
         "supports_dry_run": task.supports_dry_run(),
         "idempotency": PyIdempotencyMode::from(task.idempotency_mode()).value_str(),
         "sub_tasks": task.sub_tasks().into_iter().map(|sub_task| task_to_json(sub_task.as_ref())).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(timeout) = task.task_timeout() {
+        value["task_timeout"] = json!(timeout.as_secs_f64());
+    }
+    value
 }
 
 fn retry_config_to_json(retry_config: Option<&TaskRetryConfig>) -> Value {
@@ -2006,6 +2178,10 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
     };
     reject_misplaced_retry_metadata(&info)?;
     let retry_config = extract_retry_config_from_metadata(&info)?;
+    let task_timeout = match info.get_item("task_timeout")? {
+        Some(value) if !value.is_none() => Some(extract_task_timeout_seconds(&value)?),
+        _ => None,
+    };
     let session_verification_config = extract_session_verification_config_from_metadata(
         &info,
         connection_plugin_name.as_deref(),
@@ -2109,6 +2285,7 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
         connection_plugin_name,
         processor_names,
         retry_config,
+        task_timeout,
         session_verification_config,
         options,
         supports_dry_run,
@@ -2135,7 +2312,7 @@ fn task_definition_from_spec(spec: &PythonTaskSpec) -> TaskDefinition {
 }
 
 fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
-    json!({
+    let mut value = json!({
         "name": spec.name,
         "connection_plugin_name": spec.connection_plugin_name,
         "processors": spec.processor_names,
@@ -2145,7 +2322,11 @@ fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
         "supports_dry_run": spec.supports_dry_run,
         "idempotency": PyIdempotencyMode::from(spec.idempotency_mode).value_str(),
         "sub_tasks": spec.sub_tasks.iter().map(python_task_spec_to_json).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(timeout) = spec.task_timeout {
+        value["task_timeout"] = json!(timeout.as_secs_f64());
+    }
+    value
 }
 
 fn python_task_spec_to_py_dict<'py>(
@@ -2165,6 +2346,9 @@ fn python_task_spec_to_py_dict<'py>(
         "retry",
         retry_config_to_py_object(py, spec.retry_config.as_ref())?,
     )?;
+    if let Some(timeout) = spec.task_timeout {
+        task.set_item("task_timeout", timeout.as_secs_f64())?;
+    }
     task.set_item(
         "session_verification",
         session_verification_config_to_py_object(py, spec.session_verification_config.as_ref())?,
@@ -2510,6 +2694,10 @@ impl TaskInfo for RuntimeTaskWrapper {
         self.inner.retry_config()
     }
 
+    fn task_timeout(&self) -> Option<Duration> {
+        self.inner.task_timeout()
+    }
+
     fn supports_dry_run(&self) -> bool {
         self.inner.supports_dry_run()
     }
@@ -2712,6 +2900,7 @@ mod tests {
             None => info.set_item("connection_plugin_name", py.None())?,
         }
         info.set_item("retry", py.None())?;
+        info.set_item("task_timeout", py.None())?;
         info.set_item("processors", Vec::<String>::new())?;
         info.set_item("session_verification", py.None())?;
         info.set_item("supports_dry_run", false)?;
@@ -2818,7 +3007,7 @@ mod tests {
         init_python();
         Python::attach(|py| {
             let value = PyBool::new(py, true).to_owned().into_any();
-            let err = match PyTaskRunOptions::new(Some(value), false) {
+            let err = match PyTaskRunOptions::new(Some(value), false, None) {
                 Ok(_) => panic!("bool max_depth should fail"),
                 Err(err) => err,
             };
@@ -2839,10 +3028,15 @@ mod tests {
                 PyTaskRunOptions {
                     max_depth: Some(1),
                     dry_run: false,
+                    task_timeout: None,
                 },
             )
             .expect("nested run options should build");
-            let err = match PyTaskRunOptions::new(Some(nested.bind(py).clone().into_any()), false) {
+            let err = match PyTaskRunOptions::new(
+                Some(nested.bind(py).clone().into_any()),
+                false,
+                None,
+            ) {
                 Ok(_) => panic!("nested TaskRunOptions max_depth should fail"),
                 Err(err) => err,
             };

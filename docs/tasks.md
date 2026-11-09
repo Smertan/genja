@@ -152,11 +152,18 @@ The common macro options are:
 - `retry.delay_ms`: optional base delay in milliseconds between retry attempts
 - `retry.policy`: optional `TaskRetryPolicyKind` algorithm selection
 - `retry.factor` and `retry.max_delay_ms`: optional exponential multiplier and per-wait cap
+- `task_timeout`: optional timeout for this task in seconds, including fractions
 - `session_verification.max_attempts`: optional post-change new-session attempt count
 - `session_verification.delay_ms`: optional fixed delay in milliseconds between new-session attempts
 - `supports_dry_run`: opt into runtime dry-run dispatch
 - `idempotency`: opt into task-authored convergence checks with
   `IdempotencyMode::Check` or `IdempotencyMode::CheckAndVerify`
+
+A task timeout starts separately for each task on each host. It covers the
+connection, convergence checks, attempts, retry waits, and verification. A
+subtask can declare a different limit; its clock begins when that subtask
+starts. Expiry is reported as a non-retryable host timeout with the phase and
+attempt in the failure details.
 
 **Grouped metadata** is written as nested macro arguments, not dotted keys:
 
@@ -321,6 +328,7 @@ Common decorator options:
 - `processors`: processor plugin names to run around task execution
 - `sub_tasks`: child tasks to execute beneath the current task
 - `retry`: optional grouped task-level retry overrides
+- `task_timeout`: optional timeout for this task in seconds, including fractions
 - `session_verification`: optional post-change new-session verification metadata
 - `supports_dry_run`: opt into runtime dry-run dispatch
 - `idempotency`: opt into task-authored convergence checks with

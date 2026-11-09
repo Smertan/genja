@@ -1188,6 +1188,57 @@ def test_session_verification_config_rejects_invalid_values():
         SessionVerificationConfig(attempts=1)
 
 
+def test_task_timeout_metadata_is_independent_for_parent_and_child():
+    @task(name="timed_child", task_timeout=0.5)
+    class TimedChild:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="child")
+
+    @task(name="timed_parent", task_timeout=5, sub_tasks=[TimedChild])
+    class TimedParent:
+        def start(self, task, host, context):
+            return TaskSuccessResult(summary="parent")
+
+    parent = genja.TaskDefinition.from_python_class(TimedParent)
+    assert parent.task_timeout == 5
+    assert parent.sub_tasks[0].task_timeout == 0.5
+    assert parent.to_dict()["task_timeout"] == 5
+    assert parent.to_dict()["sub_tasks"][0]["task_timeout"] == 0.5
+
+
+def test_python_timeout_options_accept_fractional_seconds():
+    runner = genja.RunnerConfig(task_timeout=1.5)
+    options = genja.TaskRunOptions(task_timeout=0.25)
+
+    assert runner.task_timeout == 1.5
+    assert options.task_timeout == 0.25
+    assert options.with_task_timeout(0.5).task_timeout == 0.5
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), True])
+def test_python_timeout_options_reject_invalid_values(timeout):
+    with pytest.raises(
+        ValueError, match="task_timeout must be a positive finite number"
+    ):
+        genja.RunnerConfig(task_timeout=timeout)
+    with pytest.raises(
+        ValueError, match="task_timeout must be a positive finite number"
+    ):
+        genja.TaskRunOptions(task_timeout=timeout)
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), True])
+def test_task_decorator_rejects_invalid_timeout(timeout):
+    with pytest.raises(
+        TypeError, match="task_timeout must be a positive finite number"
+    ):
+
+        @task(name="invalid_timeout", task_timeout=timeout)
+        class InvalidTask:
+            def start(self, task, host, context):
+                return TaskSuccessResult(summary="noop")
+
+
 def test_task_decorator_stores_session_verification_metadata():
     @task(
         name="verified_backup",

@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import pytest
 import genja
@@ -408,6 +409,96 @@ def test_runtime_run_task_async_with_timeout():
 
     result = asyncio.run(run_case())
     assert result == "timeout"
+
+
+def test_runtime_task_timeout_reports_structured_async_failure():
+    @task(name="deadline_async")
+    class DeadlineAsyncTask:
+        async def start_async(self, task, host, context):
+            await asyncio.sleep(0.1)
+            return TaskSuccessResult(summary="completed")
+
+    async def run_case():
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
+        return await runtime.run_task_async(
+            DeadlineAsyncTask,
+            run_options=genja.TaskRunOptions(task_timeout=0.02),
+        )
+
+    result = asyncio.run(run_case())
+    host_result = result.to_dict()["hosts"]["router1"]
+    failure = host_result["outcome"]["Failed"]
+    assert failure["kind"] == "Timeout"
+    assert failure["retryable"] is False
+    assert failure["details"]["phase"] == "task_attempt"
+    assert failure["details"]["attempt"] == 1
+
+
+def test_runtime_task_list_timeout_control_skips_later_root():
+    calls = []
+
+    @task(name="list_deadline_slow")
+    class SlowTask:
+        async def start_async(self, task, host, context):
+            await asyncio.sleep(0.1)
+            return TaskSuccessResult(summary="finished")
+
+    @task(name="list_deadline_next")
+    class NextTask:
+        async def start_async(self, task, host, context):
+            calls.append(host.hostname)
+            return TaskSuccessResult(summary="finished")
+
+    async def run_case():
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
+        tasks = genja.Tasks()
+        tasks.add_task(SlowTask)
+        tasks.add_task(NextTask)
+        defaults = genja.TaskListRunOptions(
+            task_options=genja.TaskRunOptions(task_timeout=0.02),
+        )
+        assert defaults.timeout_control == genja.TaskListTimeoutControl.CONTINUE
+        options = defaults.with_timeout_control(
+            genja.TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST
+        )
+        assert (
+            options.timeout_control
+            == genja.TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST
+        )
+        return await runtime.run_tasks_async(tasks, run_options=options)
+
+    results = asyncio.run(run_case())
+    assert (
+        results[0].to_dict()["hosts"]["router1"]["outcome"]["Failed"]["kind"]
+        == "Timeout"
+    )
+    assert results[1].skipped_hosts == ["router1"]
+    assert calls == []
+
+
+def test_direct_blocking_task_timeout_waits_for_local_completion():
+    completed = []
+
+    @task(name="deadline_blocking")
+    class DeadlineBlockingTask:
+        def start(self, task, host, context):
+            time.sleep(0.08)
+            completed.append(True)
+            return TaskSuccessResult(summary="completed")
+
+    definition = genja.TaskDefinition.from_python_class(DeadlineBlockingTask)
+    result = definition.run_on_host(
+        Host(hostname="router1"),
+        run_options=genja.TaskRunOptions(task_timeout=0.02),
+    )
+    assert completed == [True]
+    failure = result.to_dict()["hosts"]["router1"]["outcome"]["Failed"]
+    assert failure["kind"] == "Timeout"
+    assert failure["details"]["local_completion_observed"] is True
 
 
 def test_runtime_run_task_async_returns_immediately():

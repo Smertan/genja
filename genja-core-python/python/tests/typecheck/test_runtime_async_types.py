@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 
-from genja import Genja, TaskResults, Tasks
+from genja import (
+    Genja,
+    TaskListRunOptions,
+    TaskListTimeoutControl,
+    TaskResults,
+    TaskRunOptions,
+    Tasks,
+)
 from genja.task import Host, TaskSuccessResult, task
 
 
@@ -21,6 +28,14 @@ def check_runtime_async_types() -> None:
 
     one: Awaitable[TaskResults] = runtime.run_task_async(RuntimeAsyncTypecheckTask)
     many: Awaitable[list[TaskResults]] = runtime.run_tasks_async(tasks)
+    list_options = TaskListRunOptions(
+        TaskRunOptions(task_timeout=0.5),
+        TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST,
+    )
+    controlled: Awaitable[list[TaskResults]] = runtime.run_tasks_async(
+        tasks, run_options=list_options
+    )
 
     _ = one
     _ = many
+    _ = controlled

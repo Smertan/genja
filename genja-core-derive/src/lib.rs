@@ -165,6 +165,9 @@ pub fn derive_deref_mut(input: TokenStream) -> TokenStream {
 /// - `retry(allow = ..., max_attempts = ..., delay_ms = ..., policy = TaskRetryPolicyKind::...,
 ///   factor = ..., max_delay_ms = ...)`; omitted fields
 ///   fall back to runner retry defaults, then built-in retry defaults.
+/// - `task_timeout = 30` or `task_timeout = 0.5`; optional timeout for this
+///   task in seconds.
+///   It overrides invocation and runner values and is not inherited by sub-tasks.
 /// - `idempotency = IdempotencyMode::...`; defaults to
 ///   `IdempotencyMode::Disabled`.
 /// - `supports_dry_run = true`; defaults to `false`.
@@ -414,6 +417,7 @@ struct GenjaTaskArgs {
     idempotency: Option<IdempotencyModeArg>,
     processors: Vec<LitStr>,
     retry: Option<RetryArgs>,
+    task_timeout: Option<f64>,
     registration: Option<RegistrationArgs>,
     session_verification: Option<SessionVerificationArgs>,
 }
@@ -534,6 +538,34 @@ impl Parse for GenjaTaskArgs {
                     parenthesized!(content in input);
                     args.retry = Some(content.parse()?);
                 }
+                "task_timeout" => {
+                    input.parse::<Token![=]>()?;
+                    if args.task_timeout.is_some() {
+                        return Err(syn::Error::new_spanned(key, "duplicate `task_timeout`"));
+                    }
+                    let timeout: Lit = input.parse()?;
+                    let seconds = match &timeout {
+                        Lit::Int(value) => value.base10_parse::<f64>()?,
+                        Lit::Float(value) => value.base10_parse::<f64>()?,
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                timeout,
+                                "`task_timeout` must be a number of seconds",
+                            ));
+                        }
+                    };
+                    if !seconds.is_finite()
+                        || seconds <= 0.0
+                        || seconds >= u64::MAX as f64
+                        || std::time::Duration::from_secs_f64(seconds).is_zero()
+                    {
+                        return Err(syn::Error::new_spanned(
+                            timeout,
+                            "`task_timeout` must be a positive number of seconds",
+                        ));
+                    }
+                    args.task_timeout = Some(seconds);
+                }
                 "registration" => {
                     if args.registration.is_some() {
                         return Err(syn::Error::new_spanned(key, "duplicate `registration`"));
@@ -556,7 +588,7 @@ impl Parse for GenjaTaskArgs {
                 _ => {
                     return Err(syn::Error::new_spanned(
                         key,
-                        "unsupported key; expected `name`, `connection_plugin_name`, `supports_dry_run`, `idempotency`, `processors`, `retry(...)`, `registration(...)`, or `session_verification(...)`",
+                        "unsupported key; expected `name`, `connection_plugin_name`, `supports_dry_run`, `idempotency`, `processors`, `retry(...)`, `task_timeout`, `registration(...)`, or `session_verification(...)`",
                     ));
                 }
             }
@@ -1200,6 +1232,7 @@ fn expand_genja_task(
     let connection_plugin_name = args.connection_plugin_name;
     let processors = args.processors;
     let retry = args.retry;
+    let task_timeout = args.task_timeout;
     let registration = args.registration;
     let session_verification = args.session_verification;
 
@@ -1291,6 +1324,14 @@ fn expand_genja_task(
     } else {
         quote! {}
     };
+
+    let task_timeout_impl = task_timeout.map(|timeout| {
+        quote! {
+            fn task_timeout(&self) -> Option<std::time::Duration> {
+                Some(std::time::Duration::from_secs_f64(#timeout))
+            }
+        }
+    });
 
     let supports_dry_run_impl = if supports_dry_run {
         quote! {
@@ -1592,6 +1633,8 @@ fn expand_genja_task(
             #processor_names_impl
 
             #retry_config_impl
+
+            #task_timeout_impl
 
             #supports_dry_run_impl
 
