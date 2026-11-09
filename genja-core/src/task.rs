@@ -9858,11 +9858,30 @@ mod deadline_tests {
         let mut task = TimedTask::new("unbounded");
         task.start_delay = Duration::from_millis(30);
         let results = run_task(&TaskDefinition::new(task), None, None);
-        assert!(
-            results
-                .host_result("router1")
-                .is_some_and(HostTaskResult::is_passed)
+        let result = results.host_result("router1").expect("host result");
+        assert!(result.is_passed());
+
+        let serialized = serde_json::to_value(result).expect("host result should serialize");
+        let baseline = serde_json::to_value(HostTaskResult::passed(TaskSuccess::new()))
+            .expect("baseline host result should serialize");
+        assert_eq!(serialized["outcome"], baseline["outcome"]);
+        assert_eq!(
+            serialized.as_object().unwrap().keys().collect::<Vec<_>>(),
+            baseline.as_object().unwrap().keys().collect::<Vec<_>>()
         );
+        assert_eq!(
+            serialized["execution_metadata"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            baseline["execution_metadata"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(serialized["execution_metadata"]["attempts"], 1);
     }
 
     #[test]
