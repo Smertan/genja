@@ -310,7 +310,7 @@ class TaskRunOptions:
 
     @property
     def task_timeout(self) -> float | None:
-        """Per-invocation task timeout in seconds, if configured."""
+        """Async-task timeout in seconds; blocking tasks reject it."""
         ...
 
     def with_max_depth(self, max_depth: int) -> TaskRunOptions:
@@ -322,7 +322,7 @@ class TaskRunOptions:
         ...
 
     def with_task_timeout(self, task_timeout: float) -> TaskRunOptions:
-        """Return a copy with a task timeout in seconds."""
+        """Return a copy with an async-task timeout in seconds."""
         ...
 
     def to_dict(self) -> dict[str, Any]:
@@ -408,7 +408,7 @@ class TaskDefinition:
 
     @property
     def task_timeout(self) -> float | None:
-        """Timeout declared by this task in seconds, if configured."""
+        """Task timeout in seconds; blocking tasks reject it at execution."""
         ...
 
     @property

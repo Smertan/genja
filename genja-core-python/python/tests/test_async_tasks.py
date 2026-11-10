@@ -480,7 +480,7 @@ def test_runtime_task_list_timeout_control_skips_later_root():
     assert calls == []
 
 
-def test_direct_blocking_task_timeout_waits_for_local_completion():
+def test_direct_blocking_task_timeout_is_rejected_before_execution():
     completed = []
 
     @task(name="deadline_blocking")
@@ -491,14 +491,12 @@ def test_direct_blocking_task_timeout_waits_for_local_completion():
             return TaskSuccessResult(summary="completed")
 
     definition = genja.TaskDefinition.from_python_class(DeadlineBlockingTask)
-    result = definition.run_on_host(
-        Host(hostname="router1"),
-        run_options=genja.TaskRunOptions(task_timeout=0.02),
-    )
-    assert completed == [True]
-    failure = result.to_dict()["hosts"]["router1"]["outcome"]["Failed"]
-    assert failure["kind"] == "Timeout"
-    assert failure["details"]["local_completion_observed"] is True
+    with pytest.raises(ValueError, match="cannot use task_timeout"):
+        definition.run_on_host(
+            Host(hostname="router1"),
+            run_options=genja.TaskRunOptions(task_timeout=0.02),
+        )
+    assert completed == []
 
 
 def test_runtime_run_task_async_returns_immediately():

@@ -4,7 +4,8 @@ This note records the execution baseline and the retry, deadline, verification,
 API, and validation contracts from design phases 2-5. Some proposals have since
 been implemented. The [#174 async deadline revision](#async-deadline-revision-for-174)
 below supersedes this note's earlier blocking-task deadline and cancellation
-proposal; it describes planned behavior until #174 is implemented.
+proposal. Its explicit blocking-task timeout rejection is implemented; cancellation and
+cleanup behavior remains planned for later phases of #174.
 The relevant paths are `Genja::run_task*_with_options` and
 `Genja::run_tasks*_with_options` in
 `genja/src/lib.rs`, `PluginRunner` in
@@ -14,18 +15,19 @@ in `genja-core/src/task.rs`.
 ## Async deadline revision for #174
 
 This contract supersedes the blocking-task timeout and cooperative cancellation
-parts of the original phase 3 proposal. It does not describe the behavior of
-the current #173 implementation, which still waits for blocking task work to
-finish before reporting a timeout.
+parts of the original phase 3 proposal. Blocking tasks with an explicit
+timeout are now rejected before connection setup; the async cancellation and
+cleanup behavior below remains the implementation target.
 
 ### Eligibility and cutoff
 
 An effective Genja `task_timeout` applies only when the task body's
 `TaskExecutionMode` is `Async`. The synchronous Rust invocation methods may
 run an async task and retain its deadline. Resolve task, invocation, and runner
-timeout settings as before, including for each subtask, then reject a blocking
-task with an effective timeout before its connection setup or task execution.
-This includes a timeout inherited from a runner default. A blocking task may
+timeout settings as before, including for each subtask. Reject a blocking
+task with a task-declared or invocation timeout before its connection setup
+or execution. Ignore runner-default timeouts for blocking tasks, so mixed
+task lists can set a global async deadline. A blocking task may
 use timeouts supplied by its own connection library; those are separate from
 Genja's `task_timeout`.
 
@@ -85,7 +87,7 @@ timeout diagnostics when no relevant interruption occurred.
 | --- | --- |
 | Async Rust task at its deadline | Its future stops being polled immediately; cleanup is bounded, and no later attempt, verification, or subtask starts on that host. Do not infer that spawned work or device activity stopped. |
 | Python async task at its deadline | The bridge requests coroutine cancellation and observes its completion or reports that local completion remains unconfirmed. |
-| Blocking Rust or Python task with an effective timeout | Configuration is rejected before connection setup or task execution, including when the timeout came from a runner default. |
+| Blocking Rust or Python task with an explicit timeout | Task-declared and invocation timeouts are rejected before connection setup or task execution; a runner default is ignored. |
 | Connection close completes within the observation period | Report both the close request and observed completion, with cleanup elapsed time distinct from the task deadline. |
 | Connection close or Python work remains active after five seconds | Return with local completion unconfirmed, keep the host unavailable for the invocation, and allow independent hosts to progress. |
 | Synchronous Rust invocation of an async task | The temporary runtime returns within the deadline plus bounded cleanup; runtime shutdown does not wait indefinitely for cleanup work. |

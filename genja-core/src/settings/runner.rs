@@ -75,7 +75,9 @@ impl RunnerConfig {
         self.max_connection_attempts
     }
 
-    /// Return the optional per-task, per-host timeout.
+    /// Return the optional per-task, per-host timeout for async tasks.
+    ///
+    /// Blocking tasks ignore this default.
     pub fn task_timeout(&self) -> Option<Duration> {
         self.task_timeout.map(Duration::from_secs_f64)
     }

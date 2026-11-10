@@ -1106,7 +1106,7 @@ impl PyTaskDefinition {
         retry_config_to_py_object(py, self.inner.retry_config())
     }
 
-    /// Timeout declared by this task in seconds, if configured.
+    /// Task timeout in seconds; blocking tasks reject it at execution.
     #[getter]
     fn task_timeout(&self) -> Option<f64> {
         self.inner
@@ -1220,7 +1220,8 @@ impl PyTaskRunOptions {
         self.dry_run
     }
 
-    /// Return the per-invocation task timeout in seconds, if configured.
+    /// Return the per-invocation async-task timeout in seconds, if configured.
+    /// Blocking tasks reject an explicit timeout before connection setup.
     #[getter]
     fn task_timeout(&self) -> Option<f64> {
         self.task_timeout.map(|timeout| timeout.as_secs_f64())
@@ -1244,7 +1245,7 @@ impl PyTaskRunOptions {
         }
     }
 
-    /// Return a copy with a per-invocation task timeout in seconds.
+    /// Return a copy with a per-invocation async-task timeout in seconds.
     fn with_task_timeout(&self, task_timeout: Bound<'_, PyAny>) -> PyResult<Self> {
         Ok(Self {
             task_timeout: Some(extract_task_timeout_seconds(&task_timeout)?),

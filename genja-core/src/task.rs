@@ -4342,7 +4342,8 @@ pub trait TaskInfo {
     /// Return this task's own timeout, if declared.
     ///
     /// This value takes precedence over invocation and runner defaults and is
-    /// not inherited by sub-tasks.
+    /// not inherited by sub-tasks. Blocking tasks with a declared timeout
+    /// are rejected before connection setup.
     fn task_timeout(&self) -> Option<Duration> {
         None
     }
@@ -4568,7 +4569,7 @@ struct TaskNodeContext<'a> {
 /// Retry and timeout inputs inherited or overridden by a task node.
 struct TaskPolicyInputs {
     retry_defaults: RetryDefaults,
-    task_timeout: Option<Duration>,
+    runner_task_timeout: Option<Duration>,
     root_policy_override: Option<Arc<dyn TaskRetryPolicy>>,
     root_retry_config_override: Option<TaskRetryConfig>,
 }
@@ -4578,7 +4579,7 @@ struct SubTaskContext {
     parent_depth: usize,
     run_options: TaskRunOptions,
     retry_defaults: RetryDefaults,
-    task_timeout: Option<Duration>,
+    runner_task_timeout: Option<Duration>,
 }
 
 impl TaskRunOptions {
@@ -4601,7 +4602,7 @@ impl TaskRunOptions {
         self.dry_run
     }
 
-    /// Return the per-invocation task timeout override, if set.
+    /// Return the per-invocation timeout override for async tasks, if set.
     pub fn task_timeout(&self) -> Option<Duration> {
         self.task_timeout
     }
@@ -4609,12 +4610,13 @@ impl TaskRunOptions {
     /// Resolve the task timeout for this invocation against the runner default.
     ///
     /// The invocation value takes precedence. With neither value set, no timeout
-    /// is configured.
+    /// is configured. Blocking tasks reject an invocation timeout and ignore
+    /// the runner default.
     pub fn effective_task_timeout(&self, runner: &RunnerConfig) -> Option<Duration> {
         self.task_timeout.or_else(|| runner.task_timeout())
     }
 
-    /// Set the per-invocation task timeout override.
+    /// Set the per-invocation timeout override for async tasks.
     pub fn with_task_timeout(mut self, task_timeout: Duration) -> Self {
         assert!(
             !task_timeout.is_zero(),
@@ -5450,7 +5452,7 @@ impl TaskDefinition {
             None,
             run_options,
             RetryDefaults::default(),
-            run_options.task_timeout(),
+            None,
         )
         .await
     }
@@ -5490,7 +5492,7 @@ impl TaskDefinition {
             connection_resolver,
             run_options,
             RetryDefaults::default(),
-            run_options.task_timeout(),
+            None,
         )
         .await
     }
@@ -5533,7 +5535,7 @@ impl TaskDefinition {
             connection_resolver,
             run_options,
             RetryDefaults::from(runner_config),
-            run_options.effective_task_timeout(runner_config),
+            runner_config.task_timeout(),
         )
         .await
     }
@@ -5547,7 +5549,7 @@ impl TaskDefinition {
         connection_resolver: Option<&dyn TaskConnectionResolver>,
         run_options: TaskRunOptions,
         mut retry_defaults: RetryDefaults,
-        task_timeout: Option<Duration>,
+        runner_task_timeout: Option<Duration>,
     ) -> Result<(), crate::GenjaError> {
         if let Some(policy) = &self.retry_policy_fallback {
             retry_defaults =
@@ -5570,7 +5572,7 @@ impl TaskDefinition {
             },
             TaskPolicyInputs {
                 retry_defaults,
-                task_timeout,
+                runner_task_timeout,
                 root_policy_override: self.retry_policy_override.as_ref().map(Arc::clone),
                 root_retry_config_override: self.retry_config_override,
             },
@@ -5661,7 +5663,7 @@ impl TaskDefinition {
         } = node;
         let TaskPolicyInputs {
             retry_defaults,
-            task_timeout,
+            runner_task_timeout,
             root_policy_override,
             root_retry_config_override,
         } = policy;
@@ -5692,7 +5694,20 @@ impl TaskDefinition {
             return Ok(());
         }
 
-        let deadline = task.task_timeout().or(task_timeout).map(TaskDeadline::new);
+        let explicit_timeout = task.task_timeout().or(run_options.task_timeout());
+        if explicit_timeout.is_some() && task.execution_mode() == TaskExecutionMode::Blocking {
+            return Err(crate::GenjaError::Message(format!(
+                "task '{}' is blocking and cannot use task_timeout; configure a timeout in its connection plugin instead",
+                task.name()
+            )));
+        }
+        let deadline = if task.execution_mode() == TaskExecutionMode::Async {
+            explicit_timeout
+                .or(runner_task_timeout)
+                .map(TaskDeadline::new)
+        } else {
+            None
+        };
         let started_at = SystemTime::now();
         if let Some(deadline) = deadline {
             trace!(
@@ -5907,7 +5922,7 @@ impl TaskDefinition {
                 parent_depth: depth,
                 run_options,
                 retry_defaults: retry_defaults.with_policy(retry_policy),
-                task_timeout,
+                runner_task_timeout,
             },
         )
         .await?;
@@ -5930,7 +5945,7 @@ impl TaskDefinition {
             parent_depth,
             run_options,
             retry_defaults,
-            task_timeout,
+            runner_task_timeout,
         } = sub_task_context;
         let child_depth = parent_depth + 1;
         for sub in task.sub_tasks() {
@@ -5972,7 +5987,7 @@ impl TaskDefinition {
                 },
                 TaskPolicyInputs {
                     retry_defaults: retry_defaults.clone(),
-                    task_timeout,
+                    runner_task_timeout,
                     root_policy_override: None,
                     root_retry_config_override: None,
                 },
@@ -9511,7 +9526,6 @@ mod deadline_tests {
     use crate::inventory::{BaseBuilderHost, ConnectionKey, ResolvedConnectionParams};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Instant as WallInstant;
     use tokio::runtime::Builder;
 
     struct TimedTask {
@@ -9642,6 +9656,19 @@ mod deadline_tests {
         replacements: Arc<AtomicUsize>,
     }
 
+    struct UnexpectedResolver;
+
+    #[async_trait]
+    impl TaskConnectionResolver for UnexpectedResolver {
+        async fn resolve_task_connection(
+            &self,
+            _task: &dyn Task,
+            _hostname: &str,
+        ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError> {
+            panic!("blocking task timeout must be rejected before connection setup")
+        }
+    }
+
     #[async_trait]
     impl TaskConnectionResolver for TimedResolver {
         async fn resolve_task_connection(
@@ -9672,6 +9699,14 @@ mod deadline_tests {
         resolver: Option<&dyn TaskConnectionResolver>,
         timeout: Option<Duration>,
     ) -> TaskResults {
+        run_task_result(task, resolver, timeout).unwrap()
+    }
+
+    fn run_task_result(
+        task: &TaskDefinition,
+        resolver: Option<&dyn TaskConnectionResolver>,
+        timeout: Option<Duration>,
+    ) -> Result<TaskResults, crate::GenjaError> {
         let host = Host::builder().hostname("router1").build();
         let mut results = TaskResults::new(task.name());
         let mut options = TaskRunOptions::new(1);
@@ -9688,9 +9723,8 @@ mod deadline_tests {
                 &mut results,
                 resolver,
                 options,
-            ))
-            .unwrap();
-        results
+            ))?;
+        Ok(results)
     }
 
     fn assert_timeout(results: &TaskResults, phase: &str, attempts: usize) {
@@ -9811,46 +9845,33 @@ mod deadline_tests {
     }
 
     #[test]
-    fn blocking_attempt_finishes_locally_before_timeout_is_reported() {
+    fn blocking_task_rejects_invocation_timeout_before_start() {
         let mut task = TimedTask::new("blocking");
         task.mode = TaskExecutionMode::Blocking;
-        task.start_delay = Duration::from_millis(80);
         let starts = Arc::clone(&task.starts);
-        let started = WallInstant::now();
-        let results = run_task(
+        let error = run_task_result(
             &TaskDefinition::new(task),
-            None,
+            Some(&UnexpectedResolver),
             Some(Duration::from_millis(20)),
-        );
-        assert!(started.elapsed() >= Duration::from_millis(80));
-        assert_timeout(&results, "task_attempt", 1);
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            results
-                .host_result("router1")
-                .and_then(HostTaskResult::failure)
-                .and_then(TaskFailure::details)
-                .and_then(|d| d.get("local_completion_observed"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
+        )
+        .expect_err("blocking task timeout must be rejected");
+        assert!(error.to_string().contains("cannot use task_timeout"));
+        assert_eq!(starts.load(Ordering::SeqCst), 0);
     }
 
     #[test]
-    fn blocking_convergence_timeout_reports_the_check_phase() {
+    fn blocking_task_rejects_declared_timeout_before_check() {
         let mut task = TimedTask::new("blocking_check");
         task.mode = TaskExecutionMode::Blocking;
         task.idempotency = IdempotencyMode::Check;
-        task.check_delay = Duration::from_millis(80);
+        task.timeout = Some(Duration::from_millis(20));
         let starts = Arc::clone(&task.starts);
-        let results = run_task(
-            &TaskDefinition::new(task),
-            None,
-            Some(Duration::from_millis(20)),
-        );
-
-        assert_timeout(&results, "convergence_check", 1);
+        let checks = Arc::clone(&task.checks);
+        let error = run_task_result(&TaskDefinition::new(task), None, None)
+            .expect_err("declared blocking task timeout must be rejected");
+        assert!(error.to_string().contains("cannot use task_timeout"));
         assert_eq!(starts.load(Ordering::SeqCst), 0);
+        assert_eq!(checks.load(Ordering::SeqCst), 0);
     }
 
     #[test]

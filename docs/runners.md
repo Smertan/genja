@@ -57,20 +57,21 @@ For `task_timeout`, a value declared by the task takes precedence over an
 explicit `TaskRunOptions` invocation value, which overrides
 `runner.task_timeout`. Each subtask resolves its own value and does not inherit
 a timeout declared by its parent. Without any value, no timeout is configured.
-The selected limit starts when that task begins on a host and covers connection
-setup, checks, attempts, retry waits, and verification. Retry attempts share
+An explicit `task_timeout` on a blocking task, declared by the task or supplied
+through `TaskRunOptions`, is rejected before connection setup or execution.
+The `runner.task_timeout` default is ignored for blocking tasks, so one runner
+can execute both async and blocking tasks. Use the connection plugin's own
+timeout settings for blocking work. A synchronous Rust invocation can still
+run an async task with a deadline.
+For async task bodies, the selected limit starts when that task begins on a
+host and covers connection setup, checks, attempts, retry waits, and
+verification. Retry attempts share
 the same deadline. An expired task reports a host-scoped timeout failure and
 does not start another attempt or subtask.
 In an ordered task list, each later root gets a fresh deadline on each host,
 including a host where an earlier root or subtask timed out.
 
-!!! note "Planned async-only deadline behavior in #174"
-
-    The current behavior above remains in place until #174 is implemented.
-    That change will apply Genja `task_timeout` only to async task bodies and
-    reject an effective timeout on a blocking task before connection setup,
-    including a timeout inherited from `runner.task_timeout`. A synchronous
-    Rust invocation can still run an async task with a deadline.
+!!! note "Planned cancellation and cleanup behavior in #174"
 
     On an async deadline, Genja will stop polling the task future immediately,
     then attempt to close its managed connection after releasing the connection

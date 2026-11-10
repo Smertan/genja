@@ -4650,45 +4650,52 @@ mod tests {
     }
 
     #[test]
-    fn ordered_tasks_wait_for_timed_out_blocking_work_on_the_same_host() {
+    fn blocking_tasks_reject_explicit_timeout_but_ignore_runner_default() {
         for runner in ["serial", "threaded"] {
-            let settings = Settings::builder()
-                .runner(RunnerConfig::builder().plugin(runner).build())
-                .build();
-            let genja = Genja::builder(single_host_inventory())
-                .with_settings(settings)
-                .build()
-                .expect("runner should build");
-            let first_finished = Arc::new(AtomicBool::new(false));
-            let observed_finished = Arc::new(AtomicBool::new(false));
-            let mut tasks = Tasks::new();
-            tasks.add_task(BlockingDeadlineListTask {
-                finished: Arc::clone(&first_finished),
-            });
-            tasks.add_task(ObserveBlockingCompletionTask {
-                first_finished,
-                observed_finished: Arc::clone(&observed_finished),
-            });
+            for inherited in [false, true] {
+                let mut runner_config = RunnerConfig::builder().plugin(runner);
+                if inherited {
+                    runner_config = runner_config.task_timeout(Duration::from_millis(20));
+                }
+                let settings = Settings::builder().runner(runner_config.build()).build();
+                let genja = Genja::builder(single_host_inventory())
+                    .with_settings(settings)
+                    .build()
+                    .expect("runner should build");
+                let first_finished = Arc::new(AtomicBool::new(false));
+                let observed_finished = Arc::new(AtomicBool::new(false));
+                let mut tasks = Tasks::new();
+                tasks.add_task(BlockingDeadlineListTask {
+                    finished: Arc::clone(&first_finished),
+                });
+                tasks.add_task(ObserveBlockingCompletionTask {
+                    first_finished,
+                    observed_finished: Arc::clone(&observed_finished),
+                });
 
-            let results = genja
-                .run_tasks_with_options(
-                    tasks,
-                    TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20)),
-                )
-                .expect("blocking timeout should be recorded");
-            let failure = results[0]
-                .host_result("router1")
-                .and_then(HostTaskResult::failure)
-                .expect("first task should time out");
-            assert!(matches!(failure.kind(), TaskFailureKind::Timeout));
-            assert_eq!(
-                failure
-                    .details()
-                    .and_then(|details| details.get("local_completion_observed"))
-                    .and_then(serde_json::Value::as_bool),
-                Some(true)
-            );
-            assert!(observed_finished.load(Ordering::SeqCst));
+                let options = if inherited {
+                    TaskRunOptions::new(0)
+                } else {
+                    TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20))
+                };
+                if inherited {
+                    let results = genja
+                        .run_tasks_with_options(tasks, options)
+                        .expect("runner default should not time out blocking work");
+                    assert!(
+                        results[0]
+                            .host_result("router1")
+                            .is_some_and(HostTaskResult::is_passed)
+                    );
+                    assert!(observed_finished.load(Ordering::SeqCst));
+                } else {
+                    let error = genja
+                        .run_tasks_with_options(tasks, options)
+                        .expect_err("explicit blocking timeout must be rejected");
+                    assert!(error.to_string().contains("cannot use task_timeout"));
+                    assert!(!observed_finished.load(Ordering::SeqCst));
+                }
+            }
         }
     }
 
