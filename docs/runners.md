@@ -64,6 +64,22 @@ does not start another attempt or subtask.
 In an ordered task list, each later root gets a fresh deadline on each host,
 including a host where an earlier root or subtask timed out.
 
+!!! note "Planned async-only deadline behavior in #174"
+
+    The current behavior above remains in place until #174 is implemented.
+    That change will apply Genja `task_timeout` only to async task bodies and
+    reject an effective timeout on a blocking task before connection setup,
+    including a timeout inherited from `runner.task_timeout`. A synchronous
+    Rust invocation can still run an async task with a deadline.
+
+    On an async deadline, Genja will stop polling the task future immediately,
+    then attempt to close its managed connection after releasing the connection
+    lock. Connection cleanup has a maximum **5-second observation period** per
+    affected task-host, separate from the task deadline; it is not a fixed
+    delay. Timeout diagnostics will distinguish future polling stopped,
+    connection closure requested and observed, and unknown external state.
+    Connection closure will not establish that a device operation stopped.
+
 `task_retry.allow`, `task_retry.max_attempts`, and `task_retry.delay_ms` define default retry
 policy for task execution. Tasks may override these defaults through task
 metadata. Retries are only attempted when the effective policy allows them and

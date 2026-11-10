@@ -1,14 +1,95 @@
 # Execution policy design: baseline, retry, deadline, and verification
 
-This note records the current execution behavior and the proposed retry,
-deadline, verification, API, and validation contracts from design phases 2-5. The
-baseline describes the current implementation; the proposals are not yet
-implemented.
+This note records the execution baseline and the retry, deadline, verification,
+API, and validation contracts from design phases 2-5. Some proposals have since
+been implemented. The [#174 async deadline revision](#async-deadline-revision-for-174)
+below supersedes this note's earlier blocking-task deadline and cancellation
+proposal; it describes planned behavior until #174 is implemented.
 The relevant paths are `Genja::run_task*_with_options` and
 `Genja::run_tasks*_with_options` in
 `genja/src/lib.rs`, `PluginRunner` in
 `genja-plugin-manager/src/plugin_types.rs`, and `TaskDefinition::start_with_depth`
 in `genja-core/src/task.rs`.
+
+## Async deadline revision for #174
+
+This contract supersedes the blocking-task timeout and cooperative cancellation
+parts of the original phase 3 proposal. It does not describe the behavior of
+the current #173 implementation, which still waits for blocking task work to
+finish before reporting a timeout.
+
+### Eligibility and cutoff
+
+An effective Genja `task_timeout` applies only when the task body's
+`TaskExecutionMode` is `Async`. The synchronous Rust invocation methods may
+run an async task and retain its deadline. Resolve task, invocation, and runner
+timeout settings as before, including for each subtask, then reject a blocking
+task with an effective timeout before its connection setup or task execution.
+This includes a timeout inherited from a runner default. A blocking task may
+use timeouts supplied by its own connection library; those are separate from
+Genja's `task_timeout`.
+
+For eligible tasks, start the existing monotonic, per-task, per-host deadline
+when that host job begins. It covers connection setup, checks, attempts, retry
+waits, and verification without resetting between retries. Expiry stops the
+current async task future immediately; Genja does not wait for task completion
+during cleanup and starts no further attempt, verification, or subtask on that
+host. If a result completes before expiry is observed, retain that result.
+
+The Python async bridge must provide observable coroutine cancellation for a
+deadline-aware task. If a bridge path cannot do so, reject the effective
+timeout before connection setup or task execution. Dropping the Rust-side
+future alone does not establish that a Python coroutine stopped.
+
+### Connection cleanup and host safety
+
+After stopping the async task future and releasing its connection lock, Genja
+attempts to close its managed connection and makes that connection unavailable
+for reuse. Cleanup has a **5-second maximum observation period per affected
+task-host**, measured separately from the task deadline. This is a limit, not
+a delay: return as soon as cleanup finishes. No connection means connection
+cleanup is not applicable.
+
+The existing connection `close()` operation is synchronous and may itself
+block. The implementation must keep the caller's wait bounded without claiming
+that a still-running close operation finished. Temporary Tokio runtime
+shutdown in synchronous invocation methods must not reintroduce an unbounded
+wait. Keep the host unavailable for subsequent roots or subtasks until all
+relevant connection cleanup and Python work are confirmed finished. If either
+remains unconfirmed after the observation period, leave that host unavailable
+for the rest of the invocation and report the unfinished local work. Other
+hosts continue normally.
+
+### Timeout reporting
+
+Keep these facts separate in optional, host-scoped timeout diagnostics:
+
+| Fact | Meaning |
+| --- | --- |
+| `deadline_expired` | The monotonic task-host cutoff was reached. |
+| Cancellation method | How Genja stopped polling an async Rust future or requested Python coroutine cancellation. |
+| Future polling stopped | Genja dropped the Rust future; this does not confirm spawned work stopped. |
+| Local termination confirmed | Genja observed completion or cancellation acknowledgement for the relevant local work; do not infer it solely from dropping a future. |
+| Connection closure | Distinguish a close request from observed completion of `close()`. |
+| Cleanup elapsed time | Time spent observing cleanup after the deadline, up to the 5-second limit. |
+| External state | Unknown unless a completed result or later safe verification establishes it. |
+
+An interrupted active task produces a non-retryable host timeout. Connection
+closure is local cleanup and does not prove that a device operation stopped or
+rolled back. Keep ordinary execution-result serialization unchanged: omit
+timeout diagnostics when no relevant interruption occurred.
+
+### Validation for the revised contract
+
+| Case | Required observation |
+| --- | --- |
+| Async Rust task at its deadline | Its future stops being polled immediately; cleanup is bounded, and no later attempt, verification, or subtask starts on that host. Do not infer that spawned work or device activity stopped. |
+| Python async task at its deadline | The bridge requests coroutine cancellation and observes its completion or reports that local completion remains unconfirmed. |
+| Blocking Rust or Python task with an effective timeout | Configuration is rejected before connection setup or task execution, including when the timeout came from a runner default. |
+| Connection close completes within the observation period | Report both the close request and observed completion, with cleanup elapsed time distinct from the task deadline. |
+| Connection close or Python work remains active after five seconds | Return with local completion unconfirmed, keep the host unavailable for the invocation, and allow independent hosts to progress. |
+| Synchronous Rust invocation of an async task | The temporary runtime returns within the deadline plus bounded cleanup; runtime shutdown does not wait indefinitely for cleanup work. |
+| Ordinary successful execution | Existing result serialization has no timeout diagnostics. |
 
 ## Invocation and runner boundary
 
@@ -319,6 +400,11 @@ decisions. Processor hooks and final result recording remain in their
 current positions.
 
 ## Proposed deadline and verification contract (phase 3)
+
+The deadline and cancellation discussion in this historical phase 3 proposal
+is superseded by the [#174 async deadline revision](#async-deadline-revision-for-174).
+Its verification concepts remain relevant, subject to async-only task
+deadlines and blocking-task timeout rejection.
 
 ### One monotonic deadline per task on each host
 
@@ -851,6 +937,10 @@ not by their run-specific values. Include a root `TaskDefinition` retry override
 current precedence and the new single-definition helper.
 
 ### Deadline, verification, and compatibility cases
+
+The original deadline rows below describe the historical design. Replace
+their blocking-timeout assertions with the [#174 async deadline revision](#async-deadline-revision-for-174)
+when implementing or testing the revised contract.
 
 | Boundary | Follow-up assertion |
 | --- | --- |
