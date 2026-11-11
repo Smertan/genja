@@ -146,7 +146,7 @@ class RunnerConfig:
         ...
     @property
     def task_timeout(self) -> float | None:
-        """Default async-task timeout in seconds; blocking tasks ignore it."""
+        """Default timeout in seconds; Python async tasks currently reject it."""
         ...
 
 class RunnerTaskRetryConfig:
@@ -496,7 +496,7 @@ class TaskRunOptions:
         ...
     @property
     def task_timeout(self) -> float | None:
-        """Async-task timeout in seconds; blocking tasks reject it."""
+        """Async timeout in seconds; Python tasks currently reject it."""
         ...
     def with_max_depth(self, max_depth: int) -> TaskRunOptions:
         """Return a copy with a different maximum nested sub-task depth."""
@@ -586,7 +586,7 @@ class TaskDefinition:
         ...
     @property
     def task_timeout(self) -> float | None:
-        """Task timeout in seconds; blocking tasks reject it at execution."""
+        """Task timeout in seconds; Python tasks currently reject it."""
         ...
     @property
     def session_verification(self) -> SessionVerificationConfig | None:

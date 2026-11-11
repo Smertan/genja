@@ -920,6 +920,32 @@ impl ConnectionManager {
         }
     }
 
+    /// Close a cached connection only if it is the expected instance.
+    ///
+    /// The per-key lifecycle lock remains held from cache removal through
+    /// `close()`, so a later open for this key waits for local cleanup. Returns
+    /// `false` if a newer connection replaced it or no cached entry exists.
+    pub fn close_connection_if_current(
+        &self,
+        key: &ConnectionKey,
+        expected: &Arc<Mutex<dyn Connection>>,
+    ) -> bool {
+        let lifecycle_lock = self.connection_lifecycle_lock(key);
+        let _lifecycle_guard = lifecycle_lock.blocking_lock();
+        let connection = match self.connections_map.entry(key.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(entry)
+                if Arc::ptr_eq(entry.get(), expected) =>
+            {
+                entry.remove()
+            }
+            _ => return false,
+        };
+        let mut connection = connection.blocking_lock();
+        connection.close();
+        self.increment_close(&key.plugin_name);
+        true
+    }
+
     /// Close all connections in `connections_map` and then clear the map.
     pub fn close_all_connections(&self) {
         self.connections_map.iter().for_each(|entry| {

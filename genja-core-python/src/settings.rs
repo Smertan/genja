@@ -451,7 +451,8 @@ impl PyRunnerConfig {
         }
     }
 
-    /// Default async-task timeout in seconds; blocking tasks ignore it.
+    /// Default async-task timeout in seconds. Python async tasks currently
+    /// reject it until coroutine cancellation can be observed.
     #[getter]
     pub(crate) fn task_timeout(&self) -> Option<f64> {
         self.inner

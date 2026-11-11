@@ -159,11 +159,14 @@ The common macro options are:
 - `idempotency`: opt into task-authored convergence checks with
   `IdempotencyMode::Check` or `IdempotencyMode::CheckAndVerify`
 
-A task timeout starts separately for each task on each host. It covers the
+A Rust async task timeout starts separately for each task on each host. It covers the
 connection, convergence checks, attempts, retry waits, and verification. A
 subtask can declare a different limit; its clock begins when that subtask
 starts. Expiry is reported as a non-retryable host timeout with the phase and
-attempt in the failure details.
+attempt in the failure details. Blocking tasks reject a declared timeout before
+connection setup. After async expiry, Genja observes local connection cleanup
+for at most five seconds without extending the task deadline. A timed-out
+subtask skips later sibling subtasks on that host.
 
 **Grouped metadata** is written as nested macro arguments, not dotted keys:
 
@@ -335,6 +338,10 @@ Common decorator options:
   `IdempotencyMode.CHECK` or `IdempotencyMode.CHECK_AND_VERIFY`
 - `registration`: optional stable task catalog metadata; see
   [Task Registration](task-registration.md)
+
+Python blocking tasks reject a declared timeout. Python async tasks currently
+reject an effective timeout until the bridge can confirm coroutine
+cancellation. Use connection-plugin timeouts for blocking connection work.
 
 ### Python Retry Overrides
 

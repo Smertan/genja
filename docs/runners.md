@@ -65,21 +65,23 @@ timeout settings for blocking work. A synchronous Rust invocation can still
 run an async task with a deadline.
 For async task bodies, the selected limit starts when that task begins on a
 host and covers connection setup, checks, attempts, retry waits, and
-verification. Retry attempts share
-the same deadline. An expired task reports a host-scoped timeout failure and
-does not start another attempt or subtask.
-In an ordered task list, each later root gets a fresh deadline on each host,
-including a host where an earlier root or subtask timed out.
+verification. Retry attempts share the same deadline. An expired task reports
+a host-scoped timeout failure and starts no further attempt or subtask.
+In an ordered task list, each later root gets a fresh deadline unless cleanup
+from a timed-out task remains unconfirmed on that host.
 
-!!! note "Planned cancellation and cleanup behavior in #174"
+On a Rust async deadline, Genja stops polling the task future immediately,
+then requests closure of its managed connection after releasing the connection
+lock. Connection cleanup has a maximum **five-second observation period** per
+affected task-host, separate from the task deadline; it ends as soon as close
+returns. Timeout diagnostics distinguish the close request from observed close
+completion and leave external state unknown. If close remains unconfirmed,
+Genja skips later work on that host for the invocation; other hosts continue.
+Closing a connection does not establish that device work stopped.
 
-    On an async deadline, Genja will stop polling the task future immediately,
-    then attempt to close its managed connection after releasing the connection
-    lock. Connection cleanup has a maximum **5-second observation period** per
-    affected task-host, separate from the task deadline; it is not a fixed
-    delay. Timeout diagnostics will distinguish future polling stopped,
-    connection closure requested and observed, and unknown external state.
-    Connection closure will not establish that a device operation stopped.
+Python async tasks currently reject an effective `task_timeout` before
+execution. Their bridge cannot yet confirm coroutine cancellation when its
+Rust waiter stops polling.
 
 `task_retry.allow`, `task_retry.max_attempts`, and `task_retry.delay_ms` define default retry
 policy for task execution. Tasks may override these defaults through task

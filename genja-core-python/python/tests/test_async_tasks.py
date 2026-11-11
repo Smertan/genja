@@ -411,10 +411,13 @@ def test_runtime_run_task_async_with_timeout():
     assert result == "timeout"
 
 
-def test_runtime_task_timeout_reports_structured_async_failure():
+def test_runtime_task_timeout_rejects_unobservable_python_async_cancellation():
+    calls = []
+
     @task(name="deadline_async")
     class DeadlineAsyncTask:
         async def start_async(self, task, host, context):
+            calls.append(host.hostname)
             await asyncio.sleep(0.1)
             return TaskSuccessResult(summary="completed")
 
@@ -427,16 +430,12 @@ def test_runtime_task_timeout_reports_structured_async_failure():
             run_options=genja.TaskRunOptions(task_timeout=0.02),
         )
 
-    result = asyncio.run(run_case())
-    host_result = result.to_dict()["hosts"]["router1"]
-    failure = host_result["outcome"]["Failed"]
-    assert failure["kind"] == "Timeout"
-    assert failure["retryable"] is False
-    assert failure["details"]["phase"] == "task_attempt"
-    assert failure["details"]["attempt"] == 1
+    with pytest.raises(ValueError, match="cannot confirm cancellation"):
+        asyncio.run(run_case())
+    assert calls == []
 
 
-def test_runtime_task_list_timeout_control_skips_later_root():
+def test_runtime_task_list_rejects_python_async_timeout_before_execution():
     calls = []
 
     @task(name="list_deadline_slow")
@@ -471,12 +470,8 @@ def test_runtime_task_list_timeout_control_skips_later_root():
         )
         return await runtime.run_tasks_async(tasks, run_options=options)
 
-    results = asyncio.run(run_case())
-    assert (
-        results[0].to_dict()["hosts"]["router1"]["outcome"]["Failed"]["kind"]
-        == "Timeout"
-    )
-    assert results[1].skipped_hosts == ["router1"]
+    with pytest.raises(ValueError, match="cannot confirm cancellation"):
+        asyncio.run(run_case())
     assert calls == []
 
 

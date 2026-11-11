@@ -4,8 +4,9 @@ This note records the execution baseline and the retry, deadline, verification,
 API, and validation contracts from design phases 2-5. Some proposals have since
 been implemented. The [#174 async deadline revision](#async-deadline-revision-for-174)
 below supersedes this note's earlier blocking-task deadline and cancellation
-proposal. Its explicit blocking-task timeout rejection is implemented; cancellation and
-cleanup behavior remains planned for later phases of #174.
+proposal. Explicit blocking-task timeout rejection and the Rust async cleanup
+path are implemented. Python async deadline requests are rejected until their
+coroutine cancellation can be observed.
 The relevant paths are `Genja::run_task*_with_options` and
 `Genja::run_tasks*_with_options` in
 `genja/src/lib.rs`, `PluginRunner` in
@@ -16,8 +17,9 @@ in `genja-core/src/task.rs`.
 
 This contract supersedes the blocking-task timeout and cooperative cancellation
 parts of the original phase 3 proposal. Blocking tasks with an explicit
-timeout are now rejected before connection setup; the async cancellation and
-cleanup behavior below remains the implementation target.
+timeout are now rejected before connection setup. Rust async future cutoff and
+bounded connection cleanup are implemented; Python async deadlines await a
+bridge with observable coroutine cancellation.
 
 ### Eligibility and cutoff
 
@@ -38,10 +40,10 @@ current async task future immediately; Genja does not wait for task completion
 during cleanup and starts no further attempt, verification, or subtask on that
 host. If a result completes before expiry is observed, retain that result.
 
-The Python async bridge must provide observable coroutine cancellation for a
-deadline-aware task. If a bridge path cannot do so, reject the effective
-timeout before connection setup or task execution. Dropping the Rust-side
-future alone does not establish that a Python coroutine stopped.
+The current Python async bridge cannot confirm coroutine cancellation when its
+Rust waiter is dropped. Python async tasks therefore reject an effective
+timeout before connection setup or task execution. A later bridge can enable
+deadlines only when it requests cancellation and observes completion.
 
 ### Connection cleanup and host safety
 
@@ -86,7 +88,7 @@ timeout diagnostics when no relevant interruption occurred.
 | Case | Required observation |
 | --- | --- |
 | Async Rust task at its deadline | Its future stops being polled immediately; cleanup is bounded, and no later attempt, verification, or subtask starts on that host. Do not infer that spawned work or device activity stopped. |
-| Python async task at its deadline | The bridge requests coroutine cancellation and observes its completion or reports that local completion remains unconfirmed. |
+| Python async task with an effective timeout | Reject before connection setup until bridge cancellation and completion are observable. |
 | Blocking Rust or Python task with an explicit timeout | Task-declared and invocation timeouts are rejected before connection setup or task execution; a runner default is ignored. |
 | Connection close completes within the observation period | Report both the close request and observed completion, with cleanup elapsed time distinct from the task deadline. |
 | Connection close or Python work remains active after five seconds | Return with local completion unconfirmed, keep the host unavailable for the invocation, and allow independent hosts to progress. |

@@ -310,7 +310,7 @@ class TaskRunOptions:
 
     @property
     def task_timeout(self) -> float | None:
-        """Async-task timeout in seconds; blocking tasks reject it."""
+        """Async timeout in seconds; Python tasks currently reject it."""
         ...
 
     def with_max_depth(self, max_depth: int) -> TaskRunOptions:
@@ -408,7 +408,7 @@ class TaskDefinition:
 
     @property
     def task_timeout(self) -> float | None:
-        """Task timeout in seconds; blocking tasks reject it at execution."""
+        """Task timeout in seconds; Python tasks currently reject it."""
         ...
 
     @property

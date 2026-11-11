@@ -820,6 +820,10 @@ impl Task for PythonBackedTask {
             PythonTaskExecutionMode::Async => TaskExecutionMode::Async,
         }
     }
+
+    fn supports_async_deadline(&self) -> bool {
+        false
+    }
 }
 
 impl PythonBackedTask {
@@ -1106,7 +1110,8 @@ impl PyTaskDefinition {
         retry_config_to_py_object(py, self.inner.retry_config())
     }
 
-    /// Task timeout in seconds; blocking tasks reject it at execution.
+    /// Task timeout in seconds. Python tasks currently reject this value at
+    /// execution until async coroutine cancellation can be observed.
     #[getter]
     fn task_timeout(&self) -> Option<f64> {
         self.inner
@@ -1221,7 +1226,7 @@ impl PyTaskRunOptions {
     }
 
     /// Return the per-invocation async-task timeout in seconds, if configured.
-    /// Blocking tasks reject an explicit timeout before connection setup.
+    /// Python tasks currently reject an effective timeout before execution.
     #[getter]
     fn task_timeout(&self) -> Option<f64> {
         self.task_timeout.map(|timeout| timeout.as_secs_f64())

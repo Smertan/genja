@@ -123,7 +123,7 @@ use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
 use log::info;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::runtime::Builder;
 
 // GenjaError is re-exported from genja-core.
@@ -170,6 +170,7 @@ pub mod plugins;
 #[derive(Debug, Clone)]
 struct RuntimeTaskConnectionResolver {
     inventory: Arc<Inventory>,
+    unavailable_hosts: Arc<StdMutex<HashSet<String>>>,
 }
 
 impl RuntimeTaskConnectionResolver {
@@ -178,7 +179,10 @@ impl RuntimeTaskConnectionResolver {
     /// The resolver uses the inventory for both connection parameter resolution and
     /// access to the shared connection manager cache.
     fn new(inventory: Arc<Inventory>) -> Self {
-        Self { inventory }
+        Self {
+            inventory,
+            unavailable_hosts: Arc::new(StdMutex::new(HashSet::new())),
+        }
     }
 
     /// Resolve the task's connection key and current inventory parameters.
@@ -250,6 +254,37 @@ impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
             .replace_connection(&key, &params)
             .await
             .map_err(GenjaError::Message)
+    }
+
+    fn request_task_connection_close(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+        connection: Option<Arc<tokio::sync::Mutex<dyn Connection>>>,
+    ) -> Option<tokio::sync::oneshot::Receiver<bool>> {
+        let key = task.get_connection_key(hostname)?;
+        let connection = connection?;
+        let inventory = Arc::clone(&self.inventory);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let closed = inventory
+                .connections()
+                .close_connection_if_current(&key, &connection);
+            let _ = sender.send(closed);
+        });
+        Some(receiver)
+    }
+
+    fn host_unavailable_after_timeout(&self, hostname: &str) -> bool {
+        self.unavailable_hosts
+            .lock()
+            .is_ok_and(|hosts| hosts.contains(hostname))
+    }
+
+    fn mark_host_unavailable_after_timeout(&self, hostname: &str) {
+        if let Ok(mut hosts) = self.unavailable_hosts.lock() {
+            hosts.insert(hostname.to_owned());
+        }
     }
 }
 
