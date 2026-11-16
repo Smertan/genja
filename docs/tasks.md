@@ -208,47 +208,6 @@ dynamic JSON options or child tasks in a task tree.
 For stable discovery and JSON construction by task ID, see
 [Task Registration](task-registration.md).
 
-### Rust Retry Overrides
-
-Use task metadata when a Rust task should opt into retries or override the
-runner defaults for retry count:
-
-```rust
-use genja::genja_core::inventory::Host;
-use genja::genja_core::task::{
-    HostTaskResult, TaskError, TaskFailure, TaskFailureKind, TaskRuntimeContext,
-};
-use genja::genja_task;
-
-struct RetryableBackup;
-
-#[genja_task(
-    name = "retryable_backup",
-    connection_plugin_name = "ssh",
-    retry(
-        allow = true,
-        max_attempts = 3,
-        delay_ms = 500
-    )
-)]
-impl RetryableBackup {
-    async fn start_async(
-        &self,
-        _host: &Host,
-        _context: &TaskRuntimeContext,
-    ) -> Result<HostTaskResult, TaskError> {
-        Ok(HostTaskResult::failed(
-            TaskFailure::new(std::io::Error::other("temporary rate limit"))
-                .with_kind(TaskFailureKind::External)
-                .with_retryable(true),
-        ))
-    }
-}
-```
-
-These values override runner defaults for that task only. Retries still happen
-only when the returned failure is explicitly marked `retryable`.
-
 ### Custom Retry Policies (Rust only)
 
 **Rust only:** Python tasks can select the built-in retry policies, but cannot
@@ -339,64 +298,90 @@ Common decorator options:
 - `registration`: optional stable task catalog metadata; see
   [Task Registration](task-registration.md)
 
-Python blocking tasks reject a declared timeout. Python async tasks currently
-reject an effective timeout until the bridge can confirm coroutine
-cancellation. Use connection-plugin timeouts for blocking connection work.
+Python blocking tasks reject a declared timeout. Python async tasks without a
+Genja-managed connection can use an effective timeout through
+`run_task_async()` or `run_tasks_async()`, where Genja can request coroutine
+cancellation and observe its completion. Python async tasks requiring connection
+setup, and synchronous Python invocation methods, reject that deadline before
+execution until their bridge paths can observe cancellation.
+Use connection-plugin timeouts for blocking connection work.
 
-### Python Retry Overrides
+## Task Retry Overrides
 
-Use `TaskRetryConfig` when a Python task should opt into retries or override the
-runner defaults for retry count, base delay, or algorithm. For v0.5.x names, see
-[Migrating task retry names from v0.5.x](settings.md#migrating-task-retry-names-from-v05x).
-Python supports built-in policy selection; custom retry policy implementations
-are available to Rust callers only.
+Task retry metadata overrides runner defaults for that task, field by field.
+Retries occur only when the returned failure is marked `retryable`. A subtask
+inherits its parent's selected algorithm unless it selects its own; its retry
+count and delay still resolve from its own metadata and runner defaults.
 
-```python
-from genja.task import (
-    Host,
-    TaskRetryConfig,
-    TaskRetryPolicyKind,
-    TaskFailureResult,
-    TaskFailureKind,
-    TaskInfo,
-    TaskRuntimeContext,
-    task,
-)
+=== ":fontawesome-brands-rust: Rust"
 
+    Use `retry(...)` in the task macro:
 
-@task(
-    name="retryable_backup",
-    connection_plugin_name="ssh",
-    retry=TaskRetryConfig(
-        allow=True,
-        max_attempts=3,
-        delay_ms=500,
-        policy=TaskRetryPolicyKind.EXPONENTIAL,
-        factor=3,
-        max_delay_ms=60000,
-    ),
-)
-class RetryableBackup:
-    def start(
-        self,
-        task: TaskInfo,
-        host: Host,
-        context: TaskRuntimeContext,
-    ) -> TaskFailureResult:
-        return TaskFailureResult(
-            message=f"temporary rate limit on {host.hostname}",
-            kind=TaskFailureKind.EXTERNAL,
-            retryable=True,
-        )
-```
+    ```rust
+    use genja::genja_core::inventory::Host;
+    use genja::genja_core::task::{
+        HostTaskResult, TaskError, TaskFailure, TaskFailureKind, TaskRuntimeContext,
+    };
+    use genja::genja_task;
 
-These values override runner defaults for that task only, field by field.
-Retries still happen only when the returned failure result is explicitly marked
-`retryable`. `delay_ms` is the base delay; the selected algorithm determines
-later waits. A subtask inherits its parent's selected algorithm unless it
-selects its own, while its `allow`, `max_attempts`, and `delay_ms` resolve from
-its own metadata and runner defaults. A `TaskSpec.overrides.retry` selection
-replaces authored retry metadata for that root only.
+    struct RetryableBackup;
+
+    #[genja_task(
+        name = "retryable_backup",
+        connection_plugin_name = "ssh",
+        retry(allow = true, max_attempts = 3, delay_ms = 500)
+    )]
+    impl RetryableBackup {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::failed(
+                TaskFailure::new(std::io::Error::other("temporary rate limit"))
+                    .with_kind(TaskFailureKind::External)
+                    .with_retryable(true),
+            ))
+        }
+    }
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    Use `TaskRetryConfig` in the task decorator. For v0.5.x names, see
+    [Migrating task retry names from v0.5.x](settings.md#migrating-task-retry-names-from-v05x).
+
+    ```python
+    from genja.task import (
+        Host, TaskRetryConfig, TaskRetryPolicyKind, TaskFailureResult,
+        TaskFailureKind, TaskInfo, TaskRuntimeContext, task,
+    )
+
+    @task(
+        name="retryable_backup",
+        connection_plugin_name="ssh",
+        retry=TaskRetryConfig(
+            allow=True, max_attempts=3, delay_ms=500,
+            policy=TaskRetryPolicyKind.EXPONENTIAL,
+            factor=3, max_delay_ms=60000,
+        ),
+    )
+    class RetryableBackup:
+        def start(
+            self, task: TaskInfo, host: Host, context: TaskRuntimeContext,
+        ) -> TaskFailureResult:
+            return TaskFailureResult(
+                message=f"temporary rate limit on {host.hostname}",
+                kind=TaskFailureKind.EXTERNAL,
+                retryable=True,
+            )
+    ```
+
+    Python supports the built-in retry policies. Custom `TaskRetryPolicy`
+    implementations are available to Rust callers only.
+
+`delay_ms` is the base delay; the selected algorithm determines later waits.
+`TaskSpec.overrides.retry` replaces authored retry metadata for that root only.
 
 ## Session Verification
 

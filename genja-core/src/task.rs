@@ -29,6 +29,8 @@
 //!   per-task, per-host deadline. One monotonic budget covers connection setup,
 //!   attempts, retry waits, and verification; expiry records a host-scoped
 //!   [`TaskFailureKind::Timeout`] without resetting the budget for retries.
+//!   Async language bridges can use [`AsyncWorkState`] to distinguish a dropped
+//!   Rust waiter from observed completion of independently scheduled work.
 //! - **Summaries and Serialization**: Task results can be aggregated with
 //!   [`TaskResults::host_summary`] and [`TaskResults::task_summary`], then exported in
 //!   either human-readable or raw JSON forms.
@@ -3722,8 +3724,12 @@ async fn run_replacement_idempotency_post_check(
     replacement_connection: Option<Arc<Mutex<dyn Connection>>>,
     execution_context: TaskExecutionContext,
     attempt: usize,
-    deadline: Option<TaskDeadline>,
+    control: AsyncTaskControl,
 ) -> HostTaskResult {
+    let AsyncTaskControl {
+        deadline,
+        work_state: async_work_state,
+    } = control;
     if let Some(timeout_result) =
         deadline_failure_if_expired(deadline, "verification_post_check", attempt, true)
     {
@@ -3737,9 +3743,12 @@ async fn run_replacement_idempotency_post_check(
     }
     let check_result = match task.execution_mode() {
         TaskExecutionMode::Async => {
-            let runtime_context =
+            let mut runtime_context =
                 TaskRuntimeContext::new(execution_context, replacement_connection)
                     .with_current_attempt(attempt);
+            if let Some(state) = async_work_state {
+                runtime_context = runtime_context.with_async_work_state(state);
+            }
             match within_deadline(deadline, task.check_async(host, &runtime_context)).await {
                 Ok(result) => result,
                 Err(()) => {
@@ -3797,6 +3806,7 @@ struct VerificationContext<'a> {
     dry_run: bool,
     attempts: usize,
     deadline: Option<TaskDeadline>,
+    async_work_state: Option<Arc<AsyncWorkState>>,
 }
 
 /// Verify a changed task on a fresh connection after task retries finish.
@@ -3817,6 +3827,7 @@ async fn verify_after_retries(
         dry_run,
         attempts,
         deadline,
+        async_work_state,
     } = context;
     if is_deadline_timeout_result(&host_result) {
         return host_result;
@@ -3860,7 +3871,10 @@ async fn verify_after_retries(
                     replacement_connection,
                     execution,
                     attempts,
-                    deadline,
+                    AsyncTaskControl {
+                        deadline,
+                        work_state: async_work_state,
+                    },
                 )
                 .await;
                 host_result = with_session_verification_metadata(host_result, metadata);
@@ -4007,8 +4021,12 @@ async fn run_task_attempt(
     execution_context: TaskExecutionContext,
     attempt: usize,
     dry_run: bool,
-    deadline: Option<TaskDeadline>,
+    control: AsyncTaskControl,
 ) -> HostTaskResult {
+    let AsyncTaskControl {
+        deadline,
+        work_state: async_work_state,
+    } = control;
     if let Some(deadline) = deadline {
         trace!(
             "task attempt {attempt} starts with {}ms remaining",
@@ -4019,9 +4037,12 @@ async fn run_task_attempt(
         TaskExecutionMode::Async => {
             let phase = std::sync::atomic::AtomicU8::new(if dry_run { 3 } else { 0 });
             let work = async {
-                let runtime_context = TaskRuntimeContext::new(execution_context, connection)
+                let mut runtime_context = TaskRuntimeContext::new(execution_context, connection)
                     .with_current_attempt(attempt)
                     .with_dry_run(dry_run);
+                if let Some(state) = async_work_state {
+                    runtime_context = runtime_context.with_async_work_state(state);
+                }
                 if dry_run {
                     task.dry_run_async(host, &runtime_context).await
                 } else {
@@ -4213,6 +4234,7 @@ struct TaskRetryLoop<'a> {
     settings: RetrySettings,
     policy: ResolvedRetryPolicy,
     deadline: Option<TaskDeadline>,
+    async_work_state: Option<Arc<AsyncWorkState>>,
 }
 
 impl TaskRetryLoop<'_> {
@@ -4249,7 +4271,10 @@ impl TaskRetryLoop<'_> {
                 TaskExecutionContext::new(self.depth, self.run_options.max_depth()),
                 attempts,
                 self.run_options.dry_run(),
-                self.deadline,
+                AsyncTaskControl {
+                    deadline: self.deadline,
+                    work_state: self.async_work_state.clone(),
+                },
             )
             .await;
             if is_deadline_timeout_result(&host_result) {
@@ -4458,8 +4483,66 @@ struct TaskDeadline {
     limit: Duration,
 }
 
+#[derive(Clone)]
+struct AsyncTaskControl {
+    deadline: Option<TaskDeadline>,
+    work_state: Option<Arc<AsyncWorkState>>,
+}
+
 /// Maximum time spent observing local cleanup after a task deadline expires.
 const TASK_TIMEOUT_CLEANUP_GRACE: Duration = Duration::from_secs(5);
+
+/// Completion signal for async work scheduled outside the Rust task future.
+///
+/// A bridge registers before scheduling work and marks completion only after
+/// that work has actually returned or acknowledged cancellation.
+#[derive(Debug)]
+pub struct AsyncWorkState {
+    started: std::sync::atomic::AtomicBool,
+    finished: tokio::sync::watch::Sender<bool>,
+}
+
+impl Default for AsyncWorkState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AsyncWorkState {
+    /// Create an idle completion signal.
+    pub fn new() -> Self {
+        let (finished, _) = tokio::sync::watch::channel(true);
+        Self {
+            started: std::sync::atomic::AtomicBool::new(false),
+            finished,
+        }
+    }
+
+    /// Record that independently scheduled work is now active.
+    pub fn mark_started(&self) {
+        self.finished.send_replace(false);
+        self.started
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Record observed completion of the independently scheduled work.
+    pub fn mark_finished(&self) {
+        self.finished.send_replace(true);
+    }
+
+    fn was_started(&self) -> bool {
+        self.started.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    async fn wait_finished(&self) {
+        let mut finished = self.finished.subscribe();
+        while !*finished.borrow_and_update() {
+            if finished.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+}
 
 impl TaskDeadline {
     fn new(limit: Duration) -> Self {
@@ -4570,6 +4653,7 @@ async fn observe_timeout_cleanup(
     hostname: &str,
     resolver: Option<&dyn TaskConnectionResolver>,
     connection: Option<Arc<Mutex<dyn Connection>>>,
+    async_work_state: Option<&AsyncWorkState>,
 ) {
     if !is_deadline_timeout_result(result) {
         return;
@@ -4583,16 +4667,33 @@ async fn observe_timeout_cleanup(
         return;
     }
     let cleanup_started = Instant::now();
-    let close_receiver = resolver
-        .and_then(|resolver| resolver.request_task_connection_close(task, hostname, connection));
+    let external_work_started = async_work_state.is_some_and(AsyncWorkState::was_started);
+    let external_work_finished = match async_work_state.filter(|state| state.was_started()) {
+        Some(state) => timeout(TASK_TIMEOUT_CLEANUP_GRACE, state.wait_finished())
+            .await
+            .is_ok(),
+        None => true,
+    };
+    // Closing a connection while its Python coroutine is still running could
+    // race with that coroutine's own connection use.
+    let close_receiver = external_work_finished
+        .then(|| {
+            resolver.and_then(|resolver| {
+                resolver.request_task_connection_close(task, hostname, connection)
+            })
+        })
+        .flatten();
     let close_requested = close_receiver.is_some();
     let close_observed = match close_receiver {
-        Some(receiver) => timeout(TASK_TIMEOUT_CLEANUP_GRACE, receiver)
-            .await
-            .is_ok_and(|result| result.unwrap_or(false)),
+        Some(receiver) => timeout(
+            TASK_TIMEOUT_CLEANUP_GRACE.saturating_sub(cleanup_started.elapsed()),
+            receiver,
+        )
+        .await
+        .is_ok_and(|result| result.unwrap_or(false)),
         None => false,
     };
-    if !close_observed && task.get_connection_key(hostname).is_some() {
+    if !external_work_finished || (!close_observed && task.get_connection_key(hostname).is_some()) {
         if let Some(resolver) = resolver {
             resolver.mark_host_unavailable_after_timeout(hostname);
         }
@@ -4601,11 +4702,20 @@ async fn observe_timeout_cleanup(
         if let Some(details) = &mut failure.details {
             let completed_before_timeout = details["local_completion_observed"] == true;
             if !completed_before_timeout {
-                details["cancellation_method"] = json!("future_drop");
+                details["cancellation_method"] = json!(if external_work_started {
+                    "python_task_cancel"
+                } else {
+                    "future_drop"
+                });
                 details["cancellation_requested"] = json!(true);
                 details["future_polling_stopped"] = json!(true);
             }
-            details["local_termination_confirmed"] = json!(completed_before_timeout);
+            details["local_termination_confirmed"] = json!(
+                completed_before_timeout || (external_work_started && external_work_finished)
+            );
+            if external_work_started {
+                details["python_coroutine_completion_observed"] = json!(external_work_finished);
+            }
             details["connection_close_requested"] = json!(close_requested);
             details["connection_close_observed"] = json!(close_observed);
             details["cleanup_grace_seconds"] = json!(TASK_TIMEOUT_CLEANUP_GRACE.as_secs_f64());
@@ -4839,6 +4949,13 @@ pub trait Task: TaskInfo + Send + Sync {
     fn supports_async_deadline(&self) -> bool {
         true
     }
+
+    /// Return whether async work may outlive the Rust future that awaits it.
+    ///
+    /// Language bridges use this to request an observable completion signal.
+    fn uses_external_async_work(&self) -> bool {
+        false
+    }
 }
 
 /// Execution context passed into task implementations.
@@ -4870,6 +4987,7 @@ impl TaskExecutionContext {
 pub struct TaskRuntimeContext {
     execution: TaskExecutionContext,
     connection: Option<Arc<Mutex<dyn Connection>>>,
+    async_work_state: Option<Arc<AsyncWorkState>>,
     current_attempt: usize,
     dry_run: bool,
 }
@@ -4882,6 +5000,7 @@ impl TaskRuntimeContext {
         Self {
             execution,
             connection,
+            async_work_state: None,
             current_attempt: 1,
             dry_run: false,
         }
@@ -4921,6 +5040,17 @@ impl TaskRuntimeContext {
 
     pub fn connection(&self) -> Option<&Arc<Mutex<dyn Connection>>> {
         self.connection.as_ref()
+    }
+
+    /// Return the completion signal for externally scheduled async work.
+    pub fn async_work_state(&self) -> Option<&Arc<AsyncWorkState>> {
+        self.async_work_state.as_ref()
+    }
+
+    /// Attach the completion signal used by an async language bridge.
+    pub fn with_async_work_state(mut self, state: Arc<AsyncWorkState>) -> Self {
+        self.async_work_state = Some(state);
+        self
     }
 
     pub fn has_connection(&self) -> bool {
@@ -5834,6 +5964,8 @@ impl TaskDefinition {
         } else {
             None
         };
+        let async_work_state = (deadline.is_some() && task.uses_external_async_work())
+            .then(|| Arc::new(AsyncWorkState::new()));
         let started_at = SystemTime::now();
         if let Some(deadline) = deadline {
             trace!(
@@ -5881,6 +6013,7 @@ impl TaskDefinition {
                 hostname,
                 connection_resolver,
                 None,
+                async_work_state.as_deref(),
             )
             .await;
             record_host_result(
@@ -5907,6 +6040,7 @@ impl TaskDefinition {
                 hostname,
                 connection_resolver,
                 None,
+                async_work_state.as_deref(),
             )
             .await;
             let completion = if is_deadline_timeout_result(&host_result) {
@@ -5941,6 +6075,7 @@ impl TaskDefinition {
                         hostname,
                         Some(connection_resolver),
                         None,
+                        async_work_state.as_deref(),
                     )
                     .await;
                     record_host_result(
@@ -5974,6 +6109,7 @@ impl TaskDefinition {
                         hostname,
                         Some(connection_resolver),
                         None,
+                        async_work_state.as_deref(),
                     )
                     .await;
                     let completion = if is_deadline_timeout_result(&host_result) {
@@ -5999,6 +6135,7 @@ impl TaskDefinition {
                 hostname,
                 connection_resolver,
                 connection.clone(),
+                async_work_state.as_deref(),
             )
             .await;
             record_host_result(
@@ -6043,6 +6180,7 @@ impl TaskDefinition {
             settings: retry_settings,
             policy: retry_policy.clone(),
             deadline,
+            async_work_state: async_work_state.clone(),
         }
         .run()
         .await?;
@@ -6058,6 +6196,7 @@ impl TaskDefinition {
                 dry_run: run_options.dry_run(),
                 attempts,
                 deadline,
+                async_work_state: async_work_state.clone(),
             },
         )
         .await;
@@ -6068,6 +6207,7 @@ impl TaskDefinition {
             hostname,
             connection_resolver,
             connection_for_cleanup.clone(),
+            async_work_state.as_deref(),
         )
         .await;
 
@@ -6089,6 +6229,7 @@ impl TaskDefinition {
                 hostname,
                 connection_resolver,
                 connection_for_cleanup,
+                async_work_state.as_deref(),
             )
             .await;
         }

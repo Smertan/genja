@@ -70,18 +70,31 @@ a host-scoped timeout failure and starts no further attempt or subtask.
 In an ordered task list, each later root gets a fresh deadline unless cleanup
 from a timed-out task remains unconfirmed on that host.
 
-On a Rust async deadline, Genja stops polling the task future immediately,
-then requests closure of its managed connection after releasing the connection
-lock. Connection cleanup has a maximum **five-second observation period** per
-affected task-host, separate from the task deadline; it ends as soon as close
-returns. Timeout diagnostics distinguish the close request from observed close
-completion and leave external state unknown. If close remains unconfirmed,
-Genja skips later work on that host for the invocation; other hosts continue.
-Closing a connection does not establish that device work stopped.
+Cleanup has a maximum **five-second observation period** per affected task-host,
+separate from the task deadline. Timeout details distinguish cancellation
+requested, local completion, connection closure requested and observed, and
+unknown external state. Closing a connection does not establish that device
+work stopped. Other hosts continue normally.
 
-Python async tasks currently reject an effective `task_timeout` before
-execution. Their bridge cannot yet confirm coroutine cancellation when its
-Rust waiter stops polling.
+=== ":fontawesome-brands-rust: Rust"
+
+    On an async task deadline, Genja stops polling the task future immediately.
+    After releasing its connection lock, Genja requests closure of the managed
+    connection. If closure remains unconfirmed, later work on that host is
+    skipped for the invocation. A synchronous Rust `run_task()` call can run an
+    async task with the same deadline behavior.
+
+=== ":fontawesome-brands-python: Python"
+
+    `run_task_async()` and `run_tasks_async()` capture the running Python event
+    loop. A Python async task without a Genja-managed connection can use a
+    deadline: Genja requests coroutine cancellation and observes whether it
+    actually exits. This does not confirm that child tasks it spawned stopped.
+    If it stays active, the host is unavailable for later work
+    in the invocation. Python async tasks that require connection setup reject
+    deadlines until that setup bridge can also report cancellation completion.
+    Synchronous Python invocation methods reject an effective deadline on a
+    Python async task because that bridge path cannot observe cancellation.
 
 `task_retry.allow`, `task_retry.max_attempts`, and `task_retry.delay_ms` define default retry
 policy for task execution. Tasks may override these defaults through task

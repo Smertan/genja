@@ -17,7 +17,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::plugin_manager::{
-    python_connection_from_runtime_connection, resolve_python_maybe_awaitable_async,
+    python_connection_from_runtime_connection, resolve_python_cancellable_awaitable_async,
+    resolve_python_maybe_awaitable_async,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -612,6 +613,7 @@ struct PythonTaskSpec {
 struct PythonBackedTask {
     spec: PythonTaskSpec,
     sub_tasks: Vec<Arc<dyn Task>>,
+    async_loop: Option<Arc<Py<PyAny>>>,
 }
 
 struct PythonTaskRunContext {
@@ -620,6 +622,7 @@ struct PythonTaskRunContext {
     current_attempt: usize,
     dry_run: bool,
     connection: Option<Py<PyAny>>,
+    async_work_state: Option<Arc<::genja_core::task::AsyncWorkState>>,
 }
 
 impl PythonTaskRunContext {
@@ -633,6 +636,7 @@ impl PythonTaskRunContext {
             current_attempt: context.current_attempt(),
             dry_run: context.dry_run(),
             connection,
+            async_work_state: None,
         }
     }
 
@@ -643,6 +647,7 @@ impl PythonTaskRunContext {
             current_attempt: context.current_attempt(),
             dry_run: context.dry_run(),
             connection,
+            async_work_state: context.async_work_state().cloned(),
         }
     }
 }
@@ -822,7 +827,11 @@ impl Task for PythonBackedTask {
     }
 
     fn supports_async_deadline(&self) -> bool {
-        false
+        self.async_loop.is_some() && self.spec.connection_plugin_name.is_none()
+    }
+
+    fn uses_external_async_work(&self) -> bool {
+        true
     }
 }
 
@@ -883,6 +892,7 @@ impl PythonBackedTask {
         context: PythonTaskRunContext,
         method_name: &str,
     ) -> Result<HostTaskResult, TaskError> {
+        let async_work_state = context.async_work_state.clone();
         let result = Python::attach(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
             let instance = class.call0().map_err(python_task_error)?;
@@ -913,9 +923,13 @@ impl PythonBackedTask {
                 .map(Bound::unbind)
                 .map_err(python_task_error)
         })?;
-        let result = resolve_python_maybe_awaitable_async(result)
-            .await
-            .map_err(python_task_error)?;
+        let result = match (self.async_loop.as_deref(), async_work_state) {
+            (Some(event_loop), Some(state)) => {
+                resolve_python_cancellable_awaitable_async(result, event_loop, state).await
+            }
+            _ => resolve_python_maybe_awaitable_async(result).await,
+        }
+        .map_err(python_task_error)?;
         Python::attach(|py| {
             python_result_to_host_task_result(result.bind(py).clone()).map_err(python_task_error)
         })
@@ -977,6 +991,7 @@ impl PythonBackedTask {
         context: PythonTaskRunContext,
         method_name: &str,
     ) -> Result<IdempotencyCheck, TaskError> {
+        let async_work_state = context.async_work_state.clone();
         let result = Python::attach(|py| {
             let class = self.spec.py_task_class.as_ref().bind(py);
             let instance = class.call0().map_err(python_task_error)?;
@@ -1007,9 +1022,13 @@ impl PythonBackedTask {
                 .map(Bound::unbind)
                 .map_err(python_task_error)
         })?;
-        let result = resolve_python_maybe_awaitable_async(result)
-            .await
-            .map_err(python_task_error)?;
+        let result = match (self.async_loop.as_deref(), async_work_state) {
+            (Some(event_loop), Some(state)) => {
+                resolve_python_cancellable_awaitable_async(result, event_loop, state).await
+            }
+            _ => resolve_python_maybe_awaitable_async(result).await,
+        }
+        .map_err(python_task_error)?;
         Python::attach(|py| {
             python_result_to_idempotency_check(result.bind(py).clone()).map_err(python_task_error)
         })
@@ -1110,8 +1129,9 @@ impl PyTaskDefinition {
         retry_config_to_py_object(py, self.inner.retry_config())
     }
 
-    /// Task timeout in seconds. Python tasks currently reject this value at
-    /// execution until async coroutine cancellation can be observed.
+    /// Task timeout in seconds. Python async invocations without managed
+    /// connection setup can observe coroutine cancellation; other bridge paths
+    /// reject this value before execution.
     #[getter]
     fn task_timeout(&self) -> Option<f64> {
         self.inner
@@ -1226,7 +1246,8 @@ impl PyTaskRunOptions {
     }
 
     /// Return the per-invocation async-task timeout in seconds, if configured.
-    /// Python tasks currently reject an effective timeout before execution.
+    /// Python async invocations without managed connection setup observe
+    /// coroutine cancellation; other bridge paths reject an effective timeout.
     #[getter]
     fn task_timeout(&self) -> Option<f64> {
         self.task_timeout.map(|timeout| timeout.as_secs_f64())
@@ -1399,9 +1420,16 @@ impl PyTasks {
 
 impl PyTasks {
     fn to_runtime_tasks(&self) -> Tasks {
+        self.to_runtime_tasks_with_loop(None)
+    }
+
+    fn to_runtime_tasks_with_loop(&self, event_loop: Option<Arc<Py<PyAny>>>) -> Tasks {
         let mut tasks = Tasks::new();
         for spec in &self.specs {
-            tasks.push(task_definition_from_spec(spec));
+            tasks.push(TaskDefinition::new(task_from_spec_with_loop(
+                spec,
+                event_loop.clone(),
+            )));
         }
         tasks
     }
@@ -1566,8 +1594,15 @@ pub fn run_task_async(
     run_options: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
     let spec = extract_python_task_spec(task_class)?;
+    let event_loop = Python::attach(|py| {
+        PyModule::import(py, "asyncio")?
+            .call_method0("get_running_loop")
+            .map(Bound::unbind)
+    })
+    .ok()
+    .map(Arc::new);
     let runtime = runtime.clone();
-    let task = task_from_spec(&spec);
+    let task = task_from_spec_with_loop(&spec, event_loop);
     let run_options = resolve_task_run_options(
         run_options.as_ref(),
         runtime.settings().runner().max_task_depth(),
@@ -1617,10 +1652,17 @@ pub fn run_tasks_async(
     task_input: Bound<'_, PyAny>,
     run_options: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Py<PyAny>> {
+    let event_loop = Python::attach(|py| {
+        PyModule::import(py, "asyncio")?
+            .call_method0("get_running_loop")
+            .map(Bound::unbind)
+    })
+    .ok()
+    .map(Arc::new);
     let tasks = task_input
         .extract::<PyRef<'_, PyTasks>>()
         .map_err(|_| PyValueError::new_err("tasks must be a genja.Tasks instance"))?
-        .to_runtime_tasks();
+        .to_runtime_tasks_with_loop(event_loop);
 
     let runtime = runtime.clone();
     let run_options = resolve_task_list_run_options(
@@ -2303,13 +2345,21 @@ fn extract_python_task_spec(py_task_class: Bound<'_, PyAny>) -> PyResult<PythonT
 }
 
 fn task_from_spec(spec: &PythonTaskSpec) -> PythonBackedTask {
+    task_from_spec_with_loop(spec, None)
+}
+
+fn task_from_spec_with_loop(
+    spec: &PythonTaskSpec,
+    event_loop: Option<Arc<Py<PyAny>>>,
+) -> PythonBackedTask {
     PythonBackedTask {
         spec: spec.clone(),
         sub_tasks: spec
             .sub_tasks
             .iter()
-            .map(|sub| Arc::new(task_from_spec(sub)) as Arc<dyn Task>)
+            .map(|sub| Arc::new(task_from_spec_with_loop(sub, event_loop.clone())) as Arc<dyn Task>)
             .collect(),
+        async_loop: event_loop,
     }
 }
 

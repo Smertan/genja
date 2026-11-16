@@ -411,15 +411,19 @@ def test_runtime_run_task_async_with_timeout():
     assert result == "timeout"
 
 
-def test_runtime_task_timeout_rejects_unobservable_python_async_cancellation():
+def test_runtime_task_timeout_observes_python_async_cancellation():
     calls = []
+    cancelled = []
 
     @task(name="deadline_async")
     class DeadlineAsyncTask:
         async def start_async(self, task, host, context):
             calls.append(host.hostname)
-            await asyncio.sleep(0.1)
-            return TaskSuccessResult(summary="completed")
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                cancelled.append(host.hostname)
+                raise
 
     async def run_case():
         runtime = Genja.from_hosts({
@@ -430,12 +434,60 @@ def test_runtime_task_timeout_rejects_unobservable_python_async_cancellation():
             run_options=genja.TaskRunOptions(task_timeout=0.02),
         )
 
+    results = asyncio.run(run_case())
+    details = results.to_dict()["hosts"]["router1"]["outcome"]["Failed"]["details"]
+    assert calls == ["10.0.0.1"]
+    assert cancelled == ["10.0.0.1"]
+    assert details["deadline_expired"] is True
+    assert details["cancellation_method"] == "python_task_cancel"
+    assert details["python_coroutine_completion_observed"] is True
+    assert details["local_termination_confirmed"] is True
+
+
+def test_sync_invocation_rejects_python_async_deadline_before_start():
+    calls = []
+
+    @task(name="sync_bridge_deadline")
+    class AsyncTask:
+        async def start_async(self, task, host, context):
+            calls.append(host.hostname)
+            return TaskSuccessResult(summary="completed")
+
+    runtime = Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
+    with pytest.raises(ValueError, match="cannot confirm cancellation"):
+        runtime.run_task(
+            AsyncTask,
+            run_options=genja.TaskRunOptions(task_timeout=0.02),
+        )
+    assert calls == []
+
+
+def test_python_async_deadline_rejects_unobservable_connection_setup():
+    calls = []
+
+    @task(name="connection_bridge_deadline", connection_plugin_name="ssh")
+    class AsyncTask:
+        async def start_async(self, task, host, context):
+            calls.append(host.hostname)
+            return TaskSuccessResult(summary="completed")
+
+    async def run_case():
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
+        return await runtime.run_task_async(
+            AsyncTask,
+            run_options=genja.TaskRunOptions(task_timeout=0.02),
+        )
+
     with pytest.raises(ValueError, match="cannot confirm cancellation"):
         asyncio.run(run_case())
     assert calls == []
 
 
-def test_runtime_task_list_rejects_python_async_timeout_before_execution():
+def test_runtime_task_list_skips_later_python_async_work_after_timeout():
     calls = []
 
     @task(name="list_deadline_slow")
@@ -470,9 +522,48 @@ def test_runtime_task_list_rejects_python_async_timeout_before_execution():
         )
         return await runtime.run_tasks_async(tasks, run_options=options)
 
-    with pytest.raises(ValueError, match="cannot confirm cancellation"):
-        asyncio.run(run_case())
+    results = asyncio.run(run_case())
+    assert results[0].failed_hosts == ["router1"]
+    assert results[1].skipped_hosts == ["router1"]
     assert calls == []
+
+
+def test_python_coroutine_still_running_after_grace_blocks_later_host_work():
+    later_calls = []
+
+    @task(name="ignores_cancellation")
+    class SlowTask:
+        async def start_async(self, task, host, context):
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                await asyncio.sleep(10)
+            return TaskSuccessResult(summary="finished late")
+
+    @task(name="later_work")
+    class LaterTask:
+        async def start_async(self, task, host, context):
+            later_calls.append(host.hostname)
+            return TaskSuccessResult(summary="started")
+
+    async def run_case():
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
+        tasks = genja.Tasks()
+        tasks.add_task(SlowTask)
+        tasks.add_task(LaterTask)
+        return await runtime.run_tasks_async(
+            tasks,
+            run_options=genja.TaskRunOptions(task_timeout=0.02),
+        )
+
+    results = asyncio.run(run_case())
+    details = results[0].to_dict()["hosts"]["router1"]["outcome"]["Failed"]["details"]
+    assert details["python_coroutine_completion_observed"] is False
+    assert details["local_termination_confirmed"] is False
+    assert results[1].skipped_hosts == ["router1"]
+    assert later_calls == []
 
 
 def test_direct_blocking_task_timeout_is_rejected_before_execution():
