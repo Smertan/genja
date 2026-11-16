@@ -11,6 +11,8 @@ structured result for that host.
     Rust tasks use `#[genja_task(...)]` to define metadata and execution in one
     place.
 
+    **Async task body**
+
     ```rust
     use genja::genja_core::inventory::Host;
     use genja::genja_core::task::{
@@ -39,34 +41,41 @@ structured result for that host.
     }
     ```
 
+    **Blocking task body**
+
+    A synchronous task body uses `start(...)` and
+    `BlockingTaskRuntimeContext`. Genja runs it on a blocking worker;
+    Genja's `task_timeout` does not apply to blocking task bodies.
+
+    ```rust
+    use genja::genja_core::inventory::Host;
+    use genja::genja_core::task::{
+        BlockingTaskRuntimeContext, HostTaskResult, TaskError, TaskSuccess,
+    };
+    use genja::genja_task;
+
+    struct CollectFactsBlocking;
+
+    #[genja_task(name = "collect_facts_blocking")]
+    impl CollectFactsBlocking {
+        fn start(
+            &self,
+            host: &Host,
+            _context: &BlockingTaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(TaskSuccess::new().with_summary(
+                format!("collected facts from {}", host.hostname().unwrap_or(host.id())),
+            )))
+        }
+    }
+    ```
+
 === ":fontawesome-brands-python: Python"
 
     Python tasks use the `@task(...)` decorator and define exactly one of
     `start(...)` or `start_async(...)`.
 
-    ```python
-    from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
-
-
-    @task(name="collect_facts")
-    class CollectFacts:
-        def start(
-            self,
-            task: TaskInfo,
-            host: Host,
-            context: TaskRuntimeContext,
-        ) -> TaskSuccessResult:
-            return TaskSuccessResult(
-                summary=f"collected facts from {host.hostname}",
-                metadata={
-                    "hostname": host.hostname,
-                    "platform": host.platform,
-                    "facts_collected": True,
-                },
-            )
-    ```
-
-    ### Async Variant
+    **Async task body**
 
     ```python
     from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
@@ -95,120 +104,173 @@ structured result for that host.
             )
     ```
 
-## Rust Task Macro
+    **Blocking task body**
 
-Rust tasks are usually defined with `#[genja_task(...)]`. The macro is
-re-exported from the `genja` crate, so application code should normally import
-it from there:
+    ```python
+    from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
 
-```rust
-use genja::genja_task;
-```
 
-The macro applies to an inherent `impl` block. It generates the task metadata
-and the `Task` implementation from the methods and attributes on that block.
-Most task authors work with the task struct and `#[genja_task]` implementation
-directly. `TaskDefinition` is Genja's runtime wrapper around a task instance; it
-is mainly used by registry, task-list, and lower-level runtime APIs rather than
-ordinary task authoring code.
+    @task(name="collect_facts")
+    class CollectFacts:
+        def start(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskSuccessResult:
+            return TaskSuccessResult(
+                summary=f"collected facts from {host.hostname}",
+                metadata={
+                    "hostname": host.hostname,
+                    "platform": host.platform,
+                    "facts_collected": True,
+                },
+            )
+    ```
 
-```rust
-use genja::genja_core::inventory::Host;
-use genja::genja_core::task::{
-    HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
-};
-use genja::genja_task;
+### Task Metadata
 
-struct BackupConfig;
+=== ":fontawesome-brands-rust: Rust"
 
-#[genja_task(
-    name = "backup_config",
-    connection_plugin_name = "ssh",
-    processors = ["audit"]
-)]
-impl BackupConfig {
-    async fn start_async(
-        &self,
-        host: &Host,
-        _context: &TaskRuntimeContext,
-    ) -> Result<HostTaskResult, TaskError> {
-        Ok(HostTaskResult::passed(
-            TaskSuccess::new().with_summary(format!(
-                "backed up {}",
-                host.hostname().unwrap_or(host.id())
-            )),
-        ))
+    Rust tasks are usually defined with `#[genja_task(...)]`. The macro is
+    re-exported from the `genja` crate, so application code should normally import
+    it from there:
+
+    ```rust
+    use genja::genja_task;
+    ```
+
+    The macro applies to an inherent `impl` block. It generates the task metadata
+    and the `Task` implementation from the methods and attributes on that block.
+    Most task authors work with the task struct and `#[genja_task]` implementation
+    directly. `TaskDefinition` is Genja's runtime wrapper around a task instance; it
+    is mainly used by registry, task-list, and lower-level runtime APIs rather than
+    ordinary task authoring code.
+
+    ```rust
+    use genja::genja_core::inventory::Host;
+    use genja::genja_core::task::{
+        HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
+    };
+    use genja::genja_task;
+
+    struct BackupConfig;
+
+    #[genja_task(
+        name = "backup_config",
+        connection_plugin_name = "ssh",
+        processors = ["audit"]
+    )]
+    impl BackupConfig {
+        async fn start_async(
+            &self,
+            host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new().with_summary(format!(
+                    "backed up {}",
+                    host.hostname().unwrap_or(host.id())
+                )),
+            ))
+        }
     }
-}
-```
+    ```
 
-The common macro options are:
+    The common macro options are:
 
-- `name`: task name shown in results and task trees
-- `connection_plugin_name`: connection plugin to open before task execution
-- `processors`: processor plugin names to run around task execution
-- `retry.allow`: optional task-level override for whether retries are allowed
-- `retry.max_attempts`: optional task-level override for total task attempts
-- `retry.delay_ms`: optional base delay in milliseconds between retry attempts
-- `retry.policy`: optional `TaskRetryPolicyKind` algorithm selection
-- `retry.factor` and `retry.max_delay_ms`: optional exponential multiplier and per-wait cap
-- `task_timeout`: optional timeout for this task in seconds, including fractions
-- `session_verification.max_attempts`: optional post-change new-session attempt count
-- `session_verification.delay_ms`: optional fixed delay in milliseconds between new-session attempts
-- `supports_dry_run`: opt into runtime dry-run dispatch
-- `idempotency`: opt into task-authored convergence checks with
-  `IdempotencyMode::Check` or `IdempotencyMode::CheckAndVerify`
+    - `name`: task name shown in results and task trees
+    - `connection_plugin_name`: connection plugin to open before task execution
+    - `processors`: processor plugin names to run around task execution
+    - `retry.allow`: optional task-level override for whether retries are allowed
+    - `retry.max_attempts`: optional task-level override for total task attempts
+    - `retry.delay_ms`: optional base delay in milliseconds between retry attempts
+    - `retry.policy`: optional `TaskRetryPolicyKind` algorithm selection
+    - `retry.factor` and `retry.max_delay_ms`: optional exponential multiplier and per-wait cap
+    - `task_timeout`: optional timeout for this task in seconds, including fractions
+    - `session_verification.max_attempts`: optional post-change new-session attempt count
+    - `session_verification.delay_ms`: optional fixed delay in milliseconds between new-session attempts
+    - `supports_dry_run`: opt into runtime dry-run dispatch
+    - `idempotency`: opt into task-authored convergence checks with
+      `IdempotencyMode::Check` or `IdempotencyMode::CheckAndVerify`
 
-A Rust async task timeout starts separately for each task on each host. It covers the
-connection, convergence checks, attempts, retry waits, and verification. A
-subtask can declare a different limit; its clock begins when that subtask
-starts. Expiry is reported as a non-retryable host timeout with the phase and
-attempt in the failure details. Blocking tasks reject a declared timeout before
-connection setup. After async expiry, Genja observes local connection cleanup
-for at most five seconds without extending the task deadline. A timed-out
-subtask skips later sibling subtasks on that host.
+    A Rust async task timeout starts separately for each task on each host. It covers the
+    connection, convergence checks, attempts, retry waits, and verification. A
+    subtask can declare a different limit; its clock begins when that subtask
+    starts. Expiry is reported as a non-retryable host timeout with the phase and
+    attempt in the failure details. Blocking tasks reject a declared timeout before
+    connection setup. After async expiry, Genja observes local connection cleanup
+    for at most five seconds without extending the task deadline. A timed-out
+    subtask skips later sibling subtasks on that host.
 
-**Grouped metadata** is written as nested macro arguments, not dotted keys:
+    **Grouped metadata** is written as nested macro arguments, not dotted keys:
 
-```rust
-#[genja_task(
-    name = "backup_config",
-    connection_plugin_name = "ssh",
-    retry(
-        allow = true,
-        max_attempts = 3,
-        delay_ms = 500
-    ),
-    session_verification(
-        max_attempts = 3,
-        delay_ms = 5000
-    )
-)]
-impl BackupConfig {
-    // task methods
-}
-```
+    ```rust
+    #[genja_task(
+        name = "backup_config",
+        connection_plugin_name = "ssh",
+        retry(
+            allow = true,
+            max_attempts = 3,
+            delay_ms = 500
+        ),
+        session_verification(
+            max_attempts = 3,
+            delay_ms = 5000
+        )
+    )]
+    impl BackupConfig {
+        // task methods
+    }
+    ```
 
-To select exponential retry for a Rust task, add
-`policy = TaskRetryPolicyKind::Exponential`, `factor = 3`, and
-`max_delay_ms = 60000` inside `retry(...)`. Import
-`genja_core::task::TaskRetryPolicyKind`; the factor and cap are optional when
-using the defaults of 2 and 86,400,000 ms. The Rust builder uses
-`TaskRetryConfig::builder().policy(TaskRetryPolicyKind::Exponential)`.
+    To select exponential retry for a Rust task, add
+    `policy = TaskRetryPolicyKind::Exponential`, `factor = 3`, and
+    `max_delay_ms = 60000` inside `retry(...)`. Import
+    `genja_core::task::TaskRetryPolicyKind`; the factor and cap are optional when
+    using the defaults of 2 and 86,400,000 ms. The Rust builder uses
+    `TaskRetryConfig::builder().policy(TaskRetryPolicyKind::Exponential)`.
 
-Define exactly one task entrypoint in the macro `impl` block:
+    Define exactly one task entrypoint in the macro `impl` block:
 
-- `async fn start_async(...)` for async task bodies
-- `fn start(...)` for blocking task bodies
+    - `async fn start_async(...)` for async task bodies
+    - `fn start(...)` for blocking task bodies
 
-The macro can also read optional helper methods from the same `impl` block, such
-as `options(...)` and `sub_tasks(...)`. Use those helpers when a task needs
-dynamic JSON options or child tasks in a task tree.
+    The macro can also read optional helper methods from the same `impl` block, such
+    as `options(...)` and `sub_tasks(...)`. Use those helpers when a task needs
+    dynamic JSON options or child tasks in a task tree.
 
-For stable discovery and JSON construction by task ID, see
-[Task Registration](task-registration.md).
+    For stable discovery and JSON construction by task ID, see
+    [Task Registration](task-registration.md).
 
-### Custom Retry Policies (Rust only)
+=== ":fontawesome-brands-python: Python"
+
+    Python tasks use the `@task(...)` decorator for static task metadata.
+
+    Common decorator options:
+
+    - `name`: task name shown in results and task trees
+    - `connection_plugin_name`: connection plugin to open before task execution
+    - `processors`: processor plugin names to run around task execution
+    - `sub_tasks`: child tasks to execute beneath the current task
+    - `retry`: optional grouped task-level retry overrides
+    - `task_timeout`: optional timeout for this task in seconds, including fractions
+    - `session_verification`: optional post-change new-session verification metadata
+    - `supports_dry_run`: opt into runtime dry-run dispatch
+    - `idempotency`: opt into task-authored convergence checks with
+      `IdempotencyMode.CHECK` or `IdempotencyMode.CHECK_AND_VERIFY`
+    - `registration`: optional stable task catalog metadata; see
+      [Task Registration](task-registration.md)
+
+    Python blocking tasks reject a declared timeout. Python async tasks without a
+    Genja-managed connection can use an effective timeout through
+    `run_task_async()` or `run_tasks_async()`, where Genja can request coroutine
+    cancellation and observe its completion. Python async tasks requiring connection
+    setup, and synchronous Python invocation methods, reject that deadline before
+    execution until their bridge paths can observe cancellation.
+    Use connection-plugin timeouts for blocking connection work.
+
+## Custom Retry Policies (Rust only)
 
 **Rust only:** Python tasks can select the built-in retry policies, but cannot
 provide a custom `TaskRetryPolicy` implementation.
@@ -278,33 +340,6 @@ when a caller already has a task definition to customize.
 Subtasks inherit their parent's algorithm unless they select a built-in
 policy themselves. Each task retains its own `allow`, `max_attempts`, and
 `delay_ms` values and tracks attempts separately for each host.
-
-## Python Task Decorator
-
-Python tasks use the `@task(...)` decorator for static task metadata.
-
-Common decorator options:
-
-- `name`: task name shown in results and task trees
-- `connection_plugin_name`: connection plugin to open before task execution
-- `processors`: processor plugin names to run around task execution
-- `sub_tasks`: child tasks to execute beneath the current task
-- `retry`: optional grouped task-level retry overrides
-- `task_timeout`: optional timeout for this task in seconds, including fractions
-- `session_verification`: optional post-change new-session verification metadata
-- `supports_dry_run`: opt into runtime dry-run dispatch
-- `idempotency`: opt into task-authored convergence checks with
-  `IdempotencyMode.CHECK` or `IdempotencyMode.CHECK_AND_VERIFY`
-- `registration`: optional stable task catalog metadata; see
-  [Task Registration](task-registration.md)
-
-Python blocking tasks reject a declared timeout. Python async tasks without a
-Genja-managed connection can use an effective timeout through
-`run_task_async()` or `run_tasks_async()`, where Genja can request coroutine
-cancellation and observe its completion. Python async tasks requiring connection
-setup, and synchronous Python invocation methods, reject that deadline before
-execution until their bridge paths can observe cancellation.
-Use connection-plugin timeouts for blocking connection work.
 
 ## Task Retry Overrides
 
