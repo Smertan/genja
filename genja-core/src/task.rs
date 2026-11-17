@@ -2621,6 +2621,10 @@ impl TaskSuccess {
 ///
 /// The failure information includes structured details about the error, and the
 /// ability to downcast to specific error types for specialized error handling.
+/// Deadline timeouts add optional facts to `details`, including cancellation
+/// requested, whether local cleanup was observed, and cleanup elapsed time.
+/// `connection_close_observed` means the local `close()` call returned; the
+/// [`Connection`] API cannot confirm that a remote session or operation stopped.
 ///
 /// # Fields
 ///
@@ -10013,6 +10017,8 @@ mod deadline_tests {
 
     struct UnexpectedResolver;
 
+    struct RefusedCloseResolver;
+
     #[async_trait]
     impl TaskConnectionResolver for UnexpectedResolver {
         async fn resolve_task_connection(
@@ -10021,6 +10027,34 @@ mod deadline_tests {
             _hostname: &str,
         ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError> {
             panic!("blocking task timeout must be rejected before connection setup")
+        }
+    }
+
+    #[async_trait]
+    impl TaskConnectionResolver for RefusedCloseResolver {
+        async fn resolve_task_connection(
+            &self,
+            task: &dyn Task,
+            hostname: &str,
+        ) -> Result<Option<Arc<Mutex<dyn Connection>>>, crate::GenjaError> {
+            Ok(task.get_connection_key(hostname).map(|key| {
+                Arc::new(Mutex::new(TimedConnection {
+                    key,
+                    close_delay: Duration::ZERO,
+                })) as Arc<Mutex<dyn Connection>>
+            }))
+        }
+
+        fn request_task_connection_close(
+            &self,
+            _task: &dyn Task,
+            _hostname: &str,
+            connection: Option<Arc<Mutex<dyn Connection>>>,
+        ) -> Option<tokio::sync::oneshot::Receiver<bool>> {
+            connection?;
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let _ = sender.send(false);
+            Some(receiver)
         }
     }
 
@@ -10283,6 +10317,29 @@ mod deadline_tests {
         assert_eq!(details["local_termination_confirmed"], false);
         assert_eq!(details["connection_close_requested"], true);
         assert_eq!(details["connection_close_observed"], true);
+        assert!(details["cleanup_elapsed_seconds"].as_f64().unwrap() < 5.0);
+    }
+
+    #[test]
+    fn async_timeout_reports_close_refusal_without_claiming_closure() {
+        let mut task = TimedTask::new("refused_close_on_timeout");
+        task.verification = Some(SessionVerificationConfig::new(1, 0));
+        task.start_delay = Duration::from_millis(80);
+        let results = run_task(
+            &TaskDefinition::new(task),
+            Some(&RefusedCloseResolver),
+            Some(Duration::from_millis(10)),
+        );
+        let details = results
+            .host_result("router1")
+            .unwrap()
+            .failure()
+            .unwrap()
+            .details()
+            .unwrap();
+        assert_eq!(details["connection_close_requested"], true);
+        assert_eq!(details["connection_close_observed"], false);
+        assert_eq!(details["external_state_known"], false);
         assert!(details["cleanup_elapsed_seconds"].as_f64().unwrap() < 5.0);
     }
 

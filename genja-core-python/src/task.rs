@@ -1507,6 +1507,8 @@ impl PyTaskResults {
         )
     }
 
+    /// Return task results as a dictionary. Deadline diagnostics, when present,
+    /// remain in the failed host's `details` object in both output modes.
     #[pyo3(signature = (*, raw=false))]
     fn to_dict(&self, py: Python<'_>, raw: bool) -> PyResult<Py<PyAny>> {
         let dumped = if raw {

@@ -71,15 +71,24 @@ In an ordered task list, each later root gets a fresh deadline unless cleanup
 from a timed-out task remains unconfirmed on that host.
 
 Cleanup has a maximum **five-second observation period** per affected task-host,
-separate from the task deadline. Timeout details distinguish cancellation
-requested, local completion, connection closure requested and observed, and
-unknown external state. Closing a connection does not establish that device
-work stopped. Other hosts continue normally. A host with unconfirmed local
+separate from the task deadline. Timeout details in the failed host result's
+`details` distinguish deadline expiry, cancellation requested, local completion,
+connection close requested, and whether `close()` returned. The
+`connection_close_observed` field records that the local close method returned;
+the connection API cannot confirm that the network socket closed successfully.
+Neither that field nor future polling stopped establishes the device outcome.
+Other hosts continue normally. A host with unconfirmed local
 cleanup remains unavailable to later invocations on the same `Genja` runtime
 and its filtered views. This guard is separate from the connection cache;
 closing or evicting a cached connection does not clear an unconfirmed host.
 If cleanup is still unconfirmed when the grace period ends, that runtime keeps
 the host unavailable; it does not infer completion from elapsed time.
+
+Timeout details include `cleanup_elapsed_seconds`, measured after the task
+deadline, and `external_state_known: false`. The Python bridge also reports
+`python_coroutine_completion_observed` when it schedules a coroutine. These
+diagnostics appear only on deadline timeout results; ordinary result JSON has
+the same shape as before.
 
 === ":fontawesome-brands-rust: Rust"
 

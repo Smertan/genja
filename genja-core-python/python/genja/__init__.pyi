@@ -516,7 +516,7 @@ class TaskResults:
         ...
 
     def to_dict(self, *, raw: bool = False) -> dict[str, Any]:
-        """Return task results as a dictionary."""
+        """Return results; deadline diagnostics appear in failed-host details."""
         ...
 
     def to_json(self, *, raw: bool = False, pretty: bool = False) -> str:
@@ -529,7 +529,7 @@ class Genja:
     A `Genja` runtime owns the loaded inventory, runtime settings, plugin registry,
     selected runner, and the current host selection. Filtering and runner selection
     are immutable operations: they return a new runtime and leave the original
-    runtime unchanged.
+    runtime unchanged. Views share timeout cleanup guards and the connection cache.
     """
 
     @staticmethod
