@@ -4666,6 +4666,9 @@ async fn observe_timeout_cleanup(
     {
         return;
     }
+    if let Some(resolver) = resolver {
+        resolver.mark_host_unavailable_after_timeout(hostname);
+    }
     let cleanup_started = Instant::now();
     let external_work_started = async_work_state.is_some_and(AsyncWorkState::was_started);
     let external_work_finished = match async_work_state.filter(|state| state.was_started()) {
@@ -4693,9 +4696,9 @@ async fn observe_timeout_cleanup(
         .is_ok_and(|result| result.unwrap_or(false)),
         None => false,
     };
-    if !external_work_finished || (!close_observed && task.get_connection_key(hostname).is_some()) {
+    if external_work_finished && (close_observed || task.get_connection_key(hostname).is_none()) {
         if let Some(resolver) = resolver {
-            resolver.mark_host_unavailable_after_timeout(hostname);
+            resolver.clear_host_unavailable_after_timeout(hostname);
         }
     }
     if let HostTaskOutcome::Failed(failure) = &mut result.outcome {
@@ -5377,7 +5380,7 @@ pub trait TaskConnectionResolver: Send + Sync {
 
     /// Return whether local cleanup left this host unsafe for further work.
     ///
-    /// Resolvers reused across task roots should track hosts marked by
+    /// Resolvers shared across invocations should track hosts marked by
     /// [`Self::mark_host_unavailable_after_timeout`].
     fn host_unavailable_after_timeout(&self, _hostname: &str) -> bool {
         false
@@ -5385,8 +5388,11 @@ pub trait TaskConnectionResolver: Send + Sync {
 
     /// Keep a host unavailable when timed-out local cleanup is unconfirmed.
     ///
-    /// The runtime resolver implements this for the rest of its invocation.
+    /// The runtime resolver keeps this state across invocations sharing the runtime.
     fn mark_host_unavailable_after_timeout(&self, _hostname: &str) {}
+
+    /// Clear a timeout cleanup guard after local cleanup is confirmed.
+    fn clear_host_unavailable_after_timeout(&self, _hostname: &str) {}
 }
 
 impl fmt::Debug for dyn TaskProcessorResolver {
@@ -10057,6 +10063,10 @@ mod deadline_tests {
                 .lock()
                 .unwrap()
                 .insert(hostname.to_owned());
+        }
+
+        fn clear_host_unavailable_after_timeout(&self, hostname: &str) {
+            self.unavailable_hosts.lock().unwrap().remove(hostname);
         }
     }
 

@@ -553,16 +553,19 @@ def test_python_coroutine_still_running_after_grace_blocks_later_host_work():
         tasks = genja.Tasks()
         tasks.add_task(SlowTask)
         tasks.add_task(LaterTask)
-        return await runtime.run_tasks_async(
+        results = await runtime.run_tasks_async(
             tasks,
             run_options=genja.TaskRunOptions(task_timeout=0.02),
         )
+        later_result = await runtime.run_task_async(LaterTask)
+        return results, later_result
 
-    results = asyncio.run(run_case())
+    results, later_result = asyncio.run(run_case())
     details = results[0].to_dict()["hosts"]["router1"]["outcome"]["Failed"]["details"]
     assert details["python_coroutine_completion_observed"] is False
     assert details["local_termination_confirmed"] is False
     assert results[1].skipped_hosts == ["router1"]
+    assert later_result.skipped_hosts == ["router1"]
     assert later_calls == []
 
 

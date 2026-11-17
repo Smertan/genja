@@ -234,6 +234,8 @@ Check these in order:
 5. The task selected a connection plugin that failed to resolve or open.
 6. You called a sync Rust API inside Tokio and got an outer error before task
    execution started.
+7. Timeout cleanup left the host unavailable; see
+   [Concurrent invocations on the same host](runners.md#concurrent-invocations-on-the-same-host).
 
 Empty host selections are reportable, not fatal. Runners can return a task
 result object with no host results.
