@@ -381,7 +381,8 @@ impl PyRunnerConfig {
     /// * `max_task_depth` - Optional maximum nested sub-task depth.
     /// * `max_connection_attempts` - Optional maximum connection attempts per host.
     /// * `task_retry` - Optional default retry behavior for task execution.
-    /// * `task_timeout` - Optional per-task, per-host timeout in seconds.
+    /// * `task_timeout` - Optional per-task, per-host async timeout in seconds;
+    ///   blocking tasks ignore this default.
     #[new]
     #[pyo3(signature = (plugin=None, worker_count=None, max_task_depth=None, max_connection_attempts=None, task_retry=None, task_timeout=None))]
     fn new(
@@ -450,7 +451,9 @@ impl PyRunnerConfig {
         }
     }
 
-    /// Default per-task, per-host timeout in seconds, if configured.
+    /// Default async-task timeout in seconds. Python async invocations without
+    /// managed connection setup can observe coroutine cancellation; other
+    /// bridge paths reject it.
     #[getter]
     pub(crate) fn task_timeout(&self) -> Option<f64> {
         self.inner

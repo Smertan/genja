@@ -713,6 +713,17 @@ mod tests {
         assert_eq!(closes.load(Ordering::SeqCst), 1);
         assert!(manager.get(&key).is_none());
 
+        let replacement = Arc::new(Mutex::new(TestConnection {
+            closes: Arc::clone(&closes),
+            key: key.clone(),
+        })) as Arc<Mutex<dyn Connection>>;
+        manager.insert(key.clone(), Arc::clone(&replacement));
+        assert!(!manager.close_connection_if_current(&key, &connection));
+        assert!(Arc::ptr_eq(&manager.get(&key).unwrap(), &replacement));
+        assert!(manager.close_connection_if_current(&key, &replacement));
+        assert_eq!(closes.load(Ordering::SeqCst), 2);
+        assert!(manager.get(&key).is_none());
+
         let key2 = ConnectionKey::new("h2", "netconf");
         let connection2 = Arc::new(Mutex::new(TestConnection {
             closes: Arc::clone(&closes),
@@ -721,7 +732,7 @@ mod tests {
         manager.insert(key.clone(), connection);
         manager.insert(key2.clone(), connection2);
         manager.close_all_connections();
-        assert_eq!(closes.load(Ordering::SeqCst), 3);
+        assert_eq!(closes.load(Ordering::SeqCst), 4);
         assert!(manager.get(&key).is_none());
         assert!(manager.get(&key2).is_none());
     }

@@ -40,6 +40,8 @@
 //! - `Arc<Py<PyAny>>` for shared ownership of Python objects across threads
 //! - Mutex-based synchronization for mutable state access
 //! - Explicit error conversion between Python and Rust error types
+//! - Python coroutine completion acknowledgement after a Rust deadline drops
+//!   its waiter; cancellation requests alone are not treated as completion
 
 use async_trait::async_trait;
 use genja::plugins::built_in_plugin_manager;
@@ -50,8 +52,8 @@ use genja_core::inventory::{
 };
 use genja_core::settings::{RunnerConfig, Settings};
 use genja_core::task::{
-    HostTaskResult, TaskConnectionResolver, TaskDefinition, TaskProcessor, TaskProcessorContext,
-    TaskResults, Tasks,
+    AsyncWorkState, HostTaskResult, TaskConnectionResolver, TaskDefinition, TaskProcessor,
+    TaskProcessorContext, TaskResults, Tasks,
 };
 use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::PluginConnectionAdapter;
@@ -59,7 +61,7 @@ use genja_plugin_manager::plugin_types::{
     AsyncPluginInventory, Plugin, PluginConnection, PluginInventory, PluginProcessor, PluginRunner,
     PluginTransformFunction, Plugins,
 };
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 use pyo3_async_runtimes::tokio::into_future;
@@ -67,6 +69,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
 
 use crate::runtime::python_inventory_to_rust_inventory;
 use crate::settings::{PyRunnerConfig, PySettings};
@@ -1560,6 +1563,83 @@ pub(crate) async fn resolve_python_maybe_awaitable_async(value: Py<PyAny>) -> Py
             let asyncio = PyModule::import(py, "asyncio")?;
             Ok(asyncio.call_method1("run", (value.bind(py),))?.unbind())
         })
+    }
+}
+
+/// Await a Python coroutine while retaining a cancellation and completion handle.
+///
+/// The Python completion callback runs only when the coroutine actually exits.
+/// Dropping the Rust waiter requests cancellation but does not mark it finished.
+pub(crate) async fn resolve_python_cancellable_awaitable_async(
+    value: Py<PyAny>,
+    event_loop: &Py<PyAny>,
+    state: Arc<AsyncWorkState>,
+) -> PyResult<Py<PyAny>> {
+    let (sender, receiver) = oneshot::channel();
+    state.mark_started();
+    let scheduled = Python::attach(|py| -> PyResult<Py<PyAny>> {
+        let callback = Py::new(
+            py,
+            PythonCompletionCallback {
+                sender: Mutex::new(Some(sender)),
+                state: Arc::clone(&state),
+            },
+        )?;
+        let helper = PyModule::import(py, "genja._cancellable")?;
+        let coroutine = helper.call_method1("run_with_completion", (value.bind(py), callback))?;
+        let asyncio = PyModule::import(py, "asyncio")?;
+        asyncio
+            .call_method1("run_coroutine_threadsafe", (coroutine, event_loop.bind(py)))
+            .map(Bound::unbind)
+    });
+    let scheduled = match scheduled {
+        Ok(scheduled) => scheduled,
+        Err(error) => {
+            state.mark_finished();
+            return Err(error);
+        }
+    };
+    let mut guard = PythonCancellationGuard(Some(scheduled));
+    let (success, result) = receiver
+        .await
+        .map_err(|_| PyRuntimeError::new_err("Python coroutine completion was not observed"))?;
+    guard.0 = None;
+    if success {
+        Ok(result)
+    } else {
+        Err(Python::attach(|py| {
+            PyErr::from_value(result.bind(py).clone())
+        }))
+    }
+}
+
+#[pyclass]
+struct PythonCompletionCallback {
+    sender: Mutex<Option<PythonCompletionSender>>,
+    state: Arc<AsyncWorkState>,
+}
+
+type PythonCompletionSender = oneshot::Sender<(bool, Py<PyAny>)>;
+
+#[pymethods]
+impl PythonCompletionCallback {
+    fn __call__(&self, success: bool, value: Py<PyAny>) {
+        self.state.mark_finished();
+        if let Some(sender) = self.sender.lock().expect("completion lock poisoned").take() {
+            let _ = sender.send((success, value));
+        }
+    }
+}
+
+struct PythonCancellationGuard(Option<Py<PyAny>>);
+
+impl Drop for PythonCancellationGuard {
+    fn drop(&mut self) {
+        if let Some(future) = self.0.take() {
+            Python::attach(|py| {
+                let _ = future.bind(py).call_method0("cancel");
+            });
+        }
     }
 }
 

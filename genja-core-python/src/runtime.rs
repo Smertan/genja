@@ -431,6 +431,10 @@ use crate::task::{self, PyTaskResults};
 /// - **Filtering**: Chain filters to select specific hosts for task execution
 /// - **Thread Safety**: Safe to share across Python threads
 ///
+/// Filtered views share timeout cleanup guards with the original runtime. A
+/// host whose local cleanup remains unconfirmed is skipped in later calls on
+/// either view; this guard is separate from the connection cache.
+///
 /// # Examples
 ///
 /// ```python

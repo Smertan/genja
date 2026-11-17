@@ -146,7 +146,7 @@ class RunnerConfig:
         ...
     @property
     def task_timeout(self) -> float | None:
-        """Default per-task, per-host timeout in seconds, if configured."""
+        """Default async-task timeout in seconds; unsupported bridges reject it."""
         ...
 
 class RunnerTaskRetryConfig:
@@ -496,7 +496,7 @@ class TaskRunOptions:
         ...
     @property
     def task_timeout(self) -> float | None:
-        """Per-invocation task timeout in seconds, if configured."""
+        """Async timeout in seconds; unsupported Python bridges reject it."""
         ...
     def with_max_depth(self, max_depth: int) -> TaskRunOptions:
         """Return a copy with a different maximum nested sub-task depth."""
@@ -505,7 +505,7 @@ class TaskRunOptions:
         """Return a copy with dry-run execution enabled or disabled."""
         ...
     def with_task_timeout(self, task_timeout: float) -> TaskRunOptions:
-        """Return a copy with a task timeout in seconds."""
+        """Return a copy with an async-task timeout in seconds."""
         ...
     def to_dict(self) -> dict[str, Any]:
         """Return the runtime options as a dictionary."""
@@ -586,7 +586,7 @@ class TaskDefinition:
         ...
     @property
     def task_timeout(self) -> float | None:
-        """Timeout declared by this task in seconds, if configured."""
+        """Task timeout in seconds; unsupported Python bridges reject it."""
         ...
     @property
     def session_verification(self) -> SessionVerificationConfig | None:
@@ -675,7 +675,7 @@ class TaskResults:
         """Merge another TaskResults object into this one."""
         ...
     def to_dict(self, *, raw: bool = False) -> dict[str, Any]:
-        """Return task results as a dictionary."""
+        """Return results; deadline diagnostics appear in failed-host details."""
         ...
     def to_json(self, *, raw: bool = False, pretty: bool = False) -> str:
         """Return task results as JSON."""
@@ -687,7 +687,7 @@ class Genja:
     A `Genja` runtime owns the loaded inventory, runtime settings, plugin registry,
     selected runner, and the current host selection. Filtering and runner selection
     are immutable operations: they return a new runtime and leave the original
-    runtime unchanged.
+    runtime unchanged. Views share timeout cleanup guards and the connection cache.
     """
 
     @staticmethod

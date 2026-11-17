@@ -121,9 +121,10 @@ use genja_plugin_manager::PluginManager;
 use genja_plugin_manager::connection_factory::build_connection_factory;
 use genja_plugin_manager::plugin_types::{PluginRunner, Plugins};
 use log::info;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 use tokio::runtime::Builder;
 
 // GenjaError is re-exported from genja-core.
@@ -139,6 +140,7 @@ mod filter;
 /// # Fields
 ///
 /// * `inventory` - Optional runtime inventory. Set by `load_inventory(...)`.
+/// * `unavailable_hosts` - Shared timeout cleanup guards for this runtime and its views.
 /// * `host_ids` - Cached host identifiers derived from the loaded inventory.
 /// * `settings` - Active settings used by the runtime.
 /// * `plugins` - Plugin manager responsible for plugin discovery and execution.
@@ -159,6 +161,7 @@ mod filter;
 #[derive(Debug, Clone)]
 pub struct Genja {
     inventory: Option<Arc<Inventory>>,
+    unavailable_hosts: Arc<StdMutex<HashMap<String, usize>>>,
     host_ids: Arc<Vec<NatString>>,
     settings: Arc<Settings>,
     plugins: Arc<PluginManager>,
@@ -170,6 +173,7 @@ pub mod plugins;
 #[derive(Debug, Clone)]
 struct RuntimeTaskConnectionResolver {
     inventory: Arc<Inventory>,
+    unavailable_hosts: Arc<StdMutex<HashMap<String, usize>>>,
 }
 
 impl RuntimeTaskConnectionResolver {
@@ -177,8 +181,14 @@ impl RuntimeTaskConnectionResolver {
     ///
     /// The resolver uses the inventory for both connection parameter resolution and
     /// access to the shared connection manager cache.
-    fn new(inventory: Arc<Inventory>) -> Self {
-        Self { inventory }
+    fn new(
+        inventory: Arc<Inventory>,
+        unavailable_hosts: Arc<StdMutex<HashMap<String, usize>>>,
+    ) -> Self {
+        Self {
+            inventory,
+            unavailable_hosts,
+        }
     }
 
     /// Resolve the task's connection key and current inventory parameters.
@@ -251,6 +261,48 @@ impl TaskConnectionResolver for RuntimeTaskConnectionResolver {
             .await
             .map_err(GenjaError::Message)
     }
+
+    fn request_task_connection_close(
+        &self,
+        task: &dyn Task,
+        hostname: &str,
+        connection: Option<Arc<tokio::sync::Mutex<dyn Connection>>>,
+    ) -> Option<tokio::sync::oneshot::Receiver<bool>> {
+        let key = task.get_connection_key(hostname)?;
+        let connection = connection?;
+        let inventory = Arc::clone(&self.inventory);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let closed = inventory
+                .connections()
+                .close_connection_if_current(&key, &connection);
+            let _ = sender.send(closed);
+        });
+        Some(receiver)
+    }
+
+    fn host_unavailable_after_timeout(&self, hostname: &str) -> bool {
+        self.unavailable_hosts
+            .lock()
+            .is_ok_and(|hosts| hosts.contains_key(hostname))
+    }
+
+    fn mark_host_unavailable_after_timeout(&self, hostname: &str) {
+        if let Ok(mut hosts) = self.unavailable_hosts.lock() {
+            *hosts.entry(hostname.to_owned()).or_default() += 1;
+        }
+    }
+
+    fn clear_host_unavailable_after_timeout(&self, hostname: &str) {
+        if let Ok(mut hosts) = self.unavailable_hosts.lock() {
+            if let Some(count) = hosts.get_mut(hostname) {
+                *count -= 1;
+                if *count == 0 {
+                    hosts.remove(hostname);
+                }
+            }
+        }
+    }
 }
 
 impl Genja {
@@ -278,6 +330,7 @@ impl Genja {
     pub fn new() -> Self {
         Self {
             inventory: None,
+            unavailable_hosts: Arc::new(StdMutex::new(HashMap::new())),
             host_ids: Arc::new(Vec::new()),
             settings: Arc::new(Settings::default()),
             plugins: Arc::new(crate::plugins::built_in_plugin_manager()),
@@ -307,6 +360,7 @@ impl Genja {
         let host_ids = inventory.hosts().keys().cloned().collect();
         Self {
             inventory: Some(Arc::new(inventory)),
+            unavailable_hosts: Arc::new(StdMutex::new(HashMap::new())),
             host_ids: Arc::new(host_ids),
             settings: Arc::new(Settings::default()),
             plugins: Arc::new(crate::plugins::built_in_plugin_manager()),
@@ -579,6 +633,7 @@ impl Genja {
         inventory.connections().set_connection_factory(factory);
         let host_ids = inventory.hosts().keys().cloned().collect();
         self.inventory = Some(Arc::new(inventory));
+        self.unavailable_hosts = Arc::new(StdMutex::new(HashMap::new()));
         self.host_ids = Arc::new(host_ids);
     }
 
@@ -659,6 +714,7 @@ impl Genja {
 
         Ok(Self {
             inventory: self.inventory.clone(),
+            unavailable_hosts: Arc::clone(&self.unavailable_hosts),
             host_ids: Arc::clone(&self.host_ids),
             settings: Arc::new(settings),
             plugins: Arc::clone(&self.plugins),
@@ -826,6 +882,7 @@ impl Genja {
 
         Ok(Self {
             inventory: Some(Arc::clone(inventory)),
+            unavailable_hosts: Arc::clone(&self.unavailable_hosts),
             host_ids: Arc::new(host_ids),
             settings: Arc::clone(&self.settings),
             plugins: Arc::clone(&self.plugins),
@@ -1080,7 +1137,9 @@ impl Genja {
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_task_with_options_async(task, run_options))
+        let result = runtime.block_on(self.run_task_with_options_async(task, run_options));
+        runtime.shutdown_timeout(Duration::ZERO);
+        result
     }
 
     /// Executes a task against the currently selected hosts using the configured runner plugin.
@@ -1155,11 +1214,13 @@ impl Genja {
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_task_with_retry_policy_and_options_async(
+        let result = runtime.block_on(self.run_task_with_retry_policy_and_options_async(
             task,
             run_options,
             policy,
-        ))
+        ));
+        runtime.shutdown_timeout(Duration::ZERO);
+        result
     }
 
     /// Asynchronously runs a single task tree with a custom Rust retry policy.
@@ -1217,7 +1278,10 @@ impl Genja {
             .ok_or(GenjaError::InventoryNotLoaded)?;
         let processor_resolver: Arc<dyn TaskProcessorResolver> = self.plugins.clone();
         let connection_resolver: Arc<dyn TaskConnectionResolver> =
-            Arc::new(RuntimeTaskConnectionResolver::new(Arc::clone(inventory)));
+            Arc::new(RuntimeTaskConnectionResolver::new(
+                Arc::clone(inventory),
+                Arc::clone(&self.unavailable_hosts),
+            ));
         let task_definition = task_definition.with_processor_resolver(processor_resolver);
         let runner_name = self.settings.runner().plugin();
         info!(
@@ -1284,7 +1348,9 @@ impl Genja {
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_tasks_with_options_async(tasks, run_options))
+        let result = runtime.block_on(self.run_tasks_with_options_async(tasks, run_options));
+        runtime.shutdown_timeout(Duration::ZERO);
+        result
     }
 
     /// Executes an ordered list of root task trees using the configured runner plugin.
@@ -1339,11 +1405,13 @@ impl Genja {
             .enable_all()
             .build()
             .map_err(|err| GenjaError::Message(format!("failed to build async runtime: {err}")))?;
-        runtime.block_on(self.run_tasks_with_retry_policy_and_options_async(
+        let result = runtime.block_on(self.run_tasks_with_retry_policy_and_options_async(
             tasks,
             run_options,
             policy,
-        ))
+        ));
+        runtime.shutdown_timeout(Duration::ZERO);
+        result
     }
 
     /// Asynchronously runs a task list with a custom fallback retry policy.
@@ -1402,7 +1470,10 @@ impl Genja {
             .ok_or(GenjaError::InventoryNotLoaded)?;
         let processor_resolver: Arc<dyn TaskProcessorResolver> = self.plugins.clone();
         let connection_resolver: Arc<dyn TaskConnectionResolver> =
-            Arc::new(RuntimeTaskConnectionResolver::new(Arc::clone(inventory)));
+            Arc::new(RuntimeTaskConnectionResolver::new(
+                Arc::clone(inventory),
+                Arc::clone(&self.unavailable_hosts),
+            ));
         for task_definition in tasks.iter_mut() {
             *task_definition = task_definition
                 .clone()
@@ -3918,7 +3989,10 @@ mod tests {
                     as Arc<tokio::sync::Mutex<dyn Connection>>)
             }));
 
-        let resolver = RuntimeTaskConnectionResolver::new(Arc::clone(&inventory));
+        let resolver = RuntimeTaskConnectionResolver::new(
+            Arc::clone(&inventory),
+            Arc::new(Mutex::new(HashMap::new())),
+        );
         let task = ConnectionAwareTask {
             saw_connection: Arc::new(AtomicBool::new(false)),
         };
@@ -4432,6 +4506,44 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct DeadlineWithLingeringWorker {
+        started: Arc<AtomicBool>,
+        release: Arc<AtomicBool>,
+    }
+
+    impl TaskInfo for DeadlineWithLingeringWorker {
+        fn name(&self) -> &str {
+            "deadline-with-lingering-worker"
+        }
+    }
+
+    #[async_trait]
+    impl Task for DeadlineWithLingeringWorker {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let started = Arc::clone(&self.started);
+            let release = Arc::clone(&self.release);
+            let _worker = tokio::task::spawn_blocking(move || {
+                started.store(true, Ordering::SeqCst);
+                while !release.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            });
+            while !self.started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok(HostTaskResult::passed(TaskSuccess::new()))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
     struct BlockingDeadlineListTask {
         finished: Arc<AtomicBool>,
     }
@@ -4650,45 +4762,117 @@ mod tests {
     }
 
     #[test]
-    fn ordered_tasks_wait_for_timed_out_blocking_work_on_the_same_host() {
+    fn timeout_quarantine_spans_invocations_and_filtered_views() {
         for runner in ["serial", "threaded"] {
-            let settings = Settings::builder()
-                .runner(RunnerConfig::builder().plugin(runner).build())
-                .build();
-            let genja = Genja::builder(single_host_inventory())
-                .with_settings(settings)
-                .build()
-                .expect("runner should build");
-            let first_finished = Arc::new(AtomicBool::new(false));
-            let observed_finished = Arc::new(AtomicBool::new(false));
-            let mut tasks = Tasks::new();
-            tasks.add_task(BlockingDeadlineListTask {
-                finished: Arc::clone(&first_finished),
-            });
-            tasks.add_task(ObserveBlockingCompletionTask {
-                first_finished,
-                observed_finished: Arc::clone(&observed_finished),
-            });
+            let genja = Genja::from_inventory(test_inventory())
+                .with_runner(runner)
+                .expect("runner should be available");
+            let filtered = genja
+                .filter_hosts(|host| host.hostname() == Some("10.0.0.1"))
+                .expect("filter should succeed");
+            let resolver = RuntimeTaskConnectionResolver::new(
+                Arc::clone(genja.inventory.as_ref().unwrap()),
+                Arc::clone(&genja.unavailable_hosts),
+            );
+            resolver.mark_host_unavailable_after_timeout("router1");
 
-            let results = genja
-                .run_tasks_with_options(
-                    tasks,
-                    TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20)),
-                )
-                .expect("blocking timeout should be recorded");
-            let failure = results[0]
+            let calls = Arc::new(AtomicUsize::new(0));
+            let task = || DeadlineListTask {
+                name: "after-timeout",
+                delay: Duration::ZERO,
+                calls: Arc::clone(&calls),
+            };
+            let first = filtered.run_task(task(), 0).expect("run should finish");
+            assert!(first.host_result("router1").unwrap().is_skipped());
+            let second = genja.run_task(task(), 0).expect("run should finish");
+            assert!(second.host_result("router1").unwrap().is_skipped());
+            assert!(second.host_result("router2").unwrap().is_passed());
+            resolver.clear_host_unavailable_after_timeout("router1");
+            let third = filtered.run_task(task(), 0).expect("run should finish");
+            assert!(third.host_result("router1").unwrap().is_passed());
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn sync_invocation_returns_without_waiting_for_lingering_worker() {
+        let genja = Genja::from_inventory(single_host_inventory());
+        let started = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let task = DeadlineWithLingeringWorker {
+            started: Arc::clone(&started),
+            release: Arc::clone(&release),
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = genja.run_task_with_options(
+                task,
+                TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(50)),
+            );
+            let _ = sender.send(result);
+        });
+        let result = receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("sync invocation should return after timeout")
+            .expect("timeout should be reported as a host result");
+        release.store(true, Ordering::SeqCst);
+        assert!(started.load(Ordering::SeqCst));
+        assert!(matches!(
+            result
                 .host_result("router1")
                 .and_then(HostTaskResult::failure)
-                .expect("first task should time out");
-            assert!(matches!(failure.kind(), TaskFailureKind::Timeout));
-            assert_eq!(
-                failure
-                    .details()
-                    .and_then(|details| details.get("local_completion_observed"))
-                    .and_then(serde_json::Value::as_bool),
-                Some(true)
-            );
-            assert!(observed_finished.load(Ordering::SeqCst));
+                .map(TaskFailure::kind),
+            Some(TaskFailureKind::Timeout)
+        ));
+    }
+
+    #[test]
+    fn blocking_tasks_reject_explicit_timeout_but_ignore_runner_default() {
+        for runner in ["serial", "threaded"] {
+            for inherited in [false, true] {
+                let mut runner_config = RunnerConfig::builder().plugin(runner);
+                if inherited {
+                    runner_config = runner_config.task_timeout(Duration::from_millis(20));
+                }
+                let settings = Settings::builder().runner(runner_config.build()).build();
+                let genja = Genja::builder(single_host_inventory())
+                    .with_settings(settings)
+                    .build()
+                    .expect("runner should build");
+                let first_finished = Arc::new(AtomicBool::new(false));
+                let observed_finished = Arc::new(AtomicBool::new(false));
+                let mut tasks = Tasks::new();
+                tasks.add_task(BlockingDeadlineListTask {
+                    finished: Arc::clone(&first_finished),
+                });
+                tasks.add_task(ObserveBlockingCompletionTask {
+                    first_finished,
+                    observed_finished: Arc::clone(&observed_finished),
+                });
+
+                let options = if inherited {
+                    TaskRunOptions::new(0)
+                } else {
+                    TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20))
+                };
+                if inherited {
+                    let results = genja
+                        .run_tasks_with_options(tasks, options)
+                        .expect("runner default should not time out blocking work");
+                    assert!(
+                        results[0]
+                            .host_result("router1")
+                            .is_some_and(HostTaskResult::is_passed)
+                    );
+                    assert!(observed_finished.load(Ordering::SeqCst));
+                } else {
+                    let error = genja
+                        .run_tasks_with_options(tasks, options)
+                        .expect_err("explicit blocking timeout must be rejected");
+                    assert!(error.to_string().contains("cannot use task_timeout"));
+                    assert!(!observed_finished.load(Ordering::SeqCst));
+                }
+            }
         }
     }
 

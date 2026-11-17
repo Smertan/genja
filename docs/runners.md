@@ -57,12 +57,61 @@ For `task_timeout`, a value declared by the task takes precedence over an
 explicit `TaskRunOptions` invocation value, which overrides
 `runner.task_timeout`. Each subtask resolves its own value and does not inherit
 a timeout declared by its parent. Without any value, no timeout is configured.
-The selected limit starts when that task begins on a host and covers connection
-setup, checks, attempts, retry waits, and verification. Retry attempts share
-the same deadline. An expired task reports a host-scoped timeout failure and
-does not start another attempt or subtask.
-In an ordered task list, each later root gets a fresh deadline on each host,
-including a host where an earlier root or subtask timed out.
+An explicit `task_timeout` on a blocking task, declared by the task or supplied
+through `TaskRunOptions`, is rejected before connection setup or execution.
+The `runner.task_timeout` default is ignored for blocking tasks, so one runner
+can execute both async and blocking tasks. Use the connection plugin's own
+timeout settings for blocking work. A synchronous Rust invocation can still
+run an async task with a deadline.
+For async task bodies, the selected limit starts when that task begins on a
+host and covers connection setup, checks, attempts, retry waits, and
+verification. Retry attempts share the same deadline. An expired task reports
+a host-scoped timeout failure and starts no further attempt or subtask.
+In an ordered task list, each later root gets a fresh deadline unless cleanup
+from a timed-out task remains unconfirmed on that host.
+
+Cleanup has a maximum **five-second observation period** per affected task-host,
+separate from the task deadline. Timeout details in the failed host result's
+`details` distinguish deadline expiry, cancellation requested, local completion,
+connection close requested, and whether `close()` returned. The
+`connection_close_observed` field records that the local close method returned;
+the connection API cannot confirm that the network socket closed successfully.
+Neither that field nor future polling stopped establishes the device outcome.
+Other hosts continue normally. A host with unconfirmed local
+cleanup remains unavailable to later invocations on the same `Genja` runtime
+and its filtered views. This guard is separate from the connection cache;
+closing or evicting a cached connection does not clear an unconfirmed host.
+If cleanup is still unconfirmed when the grace period ends, that runtime keeps
+the host unavailable; it does not infer completion from elapsed time.
+
+Timeout details include `cleanup_elapsed_seconds`, measured after the task
+deadline, and `external_state_known: false`. The Python bridge also reports
+`python_coroutine_completion_observed` when it schedules a coroutine. These
+diagnostics appear only on deadline timeout results; ordinary result JSON has
+the same shape as before.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    On an async task deadline, Genja stops polling the task future immediately.
+    After releasing its connection lock, Genja requests closure of the managed
+    connection. If closure remains unconfirmed, later work on that host is
+    skipped, including in later invocations on the same runtime. A synchronous
+    Rust `run_task()` call can run an async task with the same deadline behavior.
+    Its temporary Tokio runtime shuts down without waiting indefinitely for
+    unrelated blocking workers.
+
+=== ":fontawesome-brands-python: Python"
+
+    `run_task_async()` and `run_tasks_async()` capture the running Python event
+    loop. A Python async task without a Genja-managed connection can use a
+    deadline: Genja requests coroutine cancellation and observes whether it
+    actually exits. This does not confirm that child tasks it spawned stopped.
+    If it stays active beyond the cleanup grace, the host remains unavailable
+    on the same runtime and its filtered views. Python async tasks that require
+    connection setup reject deadlines until that setup bridge can also report
+    cancellation completion.
+    Synchronous Python invocation methods reject an effective deadline on a
+    Python async task because that bridge path cannot observe cancellation.
 
 `task_retry.allow`, `task_retry.max_attempts`, and `task_retry.delay_ms` define default retry
 policy for task execution. Tasks may override these defaults through task
@@ -232,6 +281,103 @@ depth limit.
 This means the built-in threaded runner parallelizes hosts within a root task;
 it does not run separate root tasks from the same `Tasks` list at the same time.
 
+### Concurrent invocations on the same host
+
+Each `run_task` or `run_tasks` call schedules work independently. Runner worker
+limits and the `serial` runner apply within one invocation; they do not
+serialize separate invocations. Concurrent async calls or calls from separate
+OS threads can run task bodies on the same host at the same time. The connection
+cache protects individual connection operations, not the full task. Steps may
+interleave, and timeout cleanup in one invocation may affect a connection used
+by another. Genja does not guarantee ordering or isolation between concurrent
+invocations on the same host.
+
+These examples assume both tasks select the same host. The first pair in each
+tab can overlap; run potentially conflicting work sequentially as shown after
+them.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    Separate OS threads can overlap synchronous calls:
+
+    ```rust
+    use std::{sync::Arc, thread};
+
+    let shared = Arc::new(genja);
+    let first_runtime = Arc::clone(&shared);
+    let first = thread::spawn(move || first_runtime.run_task(FirstTask, 0));
+    let second_runtime = Arc::clone(&shared);
+    let second = thread::spawn(move || second_runtime.run_task(SecondTask, 0));
+    first.join().unwrap()?;
+    second.join().unwrap()?;
+    ```
+
+    Starting two async calls together can also overlap:
+
+    ```rust
+    let (first, second) = tokio::join!(
+        genja.run_task_async(FirstTask, 0),
+        genja.run_task_async(SecondTask, 0),
+    );
+    first?;
+    second?;
+    ```
+
+    Await or finish the first invocation before starting the second:
+
+    ```rust
+    // Synchronous caller
+    genja.run_task(FirstTask, 0)?;
+    genja.run_task(SecondTask, 0)?;
+
+    // Inside an async function
+    genja.run_task_async(FirstTask, 0).await?;
+    genja.run_task_async(SecondTask, 0).await?;
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    Separate OS threads can overlap synchronous calls:
+
+    ```python
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(runtime.run_task, FirstTask)
+        second = pool.submit(runtime.run_task, SecondTask)
+        first.result()
+        second.result()
+    ```
+
+    Starting two async calls together can also overlap:
+
+    ```python
+    import asyncio
+
+    await asyncio.gather(
+        runtime.run_task_async(FirstTask),
+        runtime.run_task_async(SecondTask),
+    )
+    ```
+
+    Await or finish the first invocation before starting the second:
+
+    ```python
+    # Synchronous caller
+    runtime.run_task(FirstTask)
+    runtime.run_task(SecondTask)
+
+    # Inside an async function
+    await runtime.run_task_async(FirstTask)
+    await runtime.run_task_async(SecondTask)
+    ```
+
+If timeout cleanup remains unconfirmed, later work that reaches the host check
+is skipped, including in separate invocations sharing the runtime. This does
+not stop another invocation's work that had already started. Sequential calls
+order the invocations, but a timeout result does not establish the outcome of
+remote work. Inspect timeout results before starting another task on that host.
+
 ### List timeout control
 
 By default, a timed-out root or subtask does not prevent later roots from
@@ -243,10 +389,9 @@ Deadline timeout details report the configured limit and elapsed seconds, the
 phase, and the number of attempts that actually started. An expiry before the
 first attempt reports attempt `0`. `local_completion_observed` says whether
 the awaited local work finished before the result was recorded; it does not
-confirm the outcome of a remote operation. Blocking task work is awaited to
-completion before the runner returns a timeout result, so later list tasks
-cannot overlap that worker on the same host. Cancellation and cleanup grace
-periods are separate from task deadlines.
+confirm the outcome of a remote operation. Genja task deadlines are unsupported
+for blocking task bodies. Cancellation and cleanup grace periods are separate
+from async task deadlines.
 
 === ":fontawesome-brands-rust: Rust"
 
