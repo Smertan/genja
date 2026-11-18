@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- **Breaking:** Rust and Python task descriptors now include task-authored `idempotency` and `session_verification` fields. Add these fields to Rust `TaskDescriptor` and `TaskDescriptorMetadata` struct literals; consumers with strict serialized schemas should accept the new fields. Older serialized descriptors default to disabled idempotency and no session verification when read. Refs: #175
 - Added `TaskListRunOptions` for ordered task lists, with an opt-in timeout control that skips later roots on a host after a task deadline expires there; the default continues with independent deadlines. Available in Rust and Python. Refs: #173
 - Added task-declared timeout values for Rust and Python tasks, including subtasks with different limits from their parents; task values take precedence over invocation and runner defaults. Refs: #173
 - Added optional per-task, per-host timeout configuration in positive seconds to Rust and Python runner settings and invocation options, including fractional values; invocation values take precedence over runner defaults. Refs: #173

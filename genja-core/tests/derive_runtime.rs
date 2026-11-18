@@ -643,6 +643,8 @@ fn genja_task_compiled_descriptor_serializes_to_json_contract() {
             "connection_plugin_name": null,
             "processor_names": ["audit"],
             "retry": null,
+            "idempotency": "disabled",
+            "session_verification": null,
             "input_schema": null,
             "constructible": true
         })
@@ -755,6 +757,12 @@ fn genja_task_submits_generated_discovery_descriptor() {
     assert_eq!(descriptor.execution_mode, TaskExecutionMode::Async);
     assert_eq!(descriptor.connection_plugin_name.as_deref(), Some("ssh"));
     assert_eq!(descriptor.processor_names, vec!["audit", "metrics"]);
+    assert_eq!(descriptor.idempotency, IdempotencyMode::Disabled);
+    let session_verification = descriptor
+        .session_verification
+        .expect("authored session verification should be included");
+    assert_eq!(session_verification.max_attempts(), 2);
+    assert_eq!(session_verification.delay_ms(), 1000);
     assert_eq!(descriptor.input_schema, None);
     assert!(!descriptor.constructible);
 
@@ -793,6 +801,12 @@ fn genja_task_generates_idempotency_mode_metadata() {
     let task = IdempotentTask;
 
     assert_eq!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify);
+    let descriptor = get_compiled_task_descriptor(
+        &format!("auto:{}", std::any::type_name::<IdempotentTask>()),
+        Some(env!("CARGO_PKG_VERSION")),
+    )
+    .expect("generated descriptor should be registered");
+    assert_eq!(descriptor.idempotency, IdempotencyMode::CheckAndVerify);
 
     let host = Host::builder().hostname("router1").build();
     let context = TaskRuntimeContext::new(genja_core::task::TaskExecutionContext::new(0, 0), None);

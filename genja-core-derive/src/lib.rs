@@ -1236,6 +1236,30 @@ fn expand_genja_task(
     let registration = args.registration;
     let session_verification = args.session_verification;
 
+    let descriptor_idempotency = match idempotency.unwrap_or(IdempotencyModeArg::Disabled) {
+        IdempotencyModeArg::Disabled => quote! { genja_core::task::IdempotencyMode::Disabled },
+        IdempotencyModeArg::Check => quote! { genja_core::task::IdempotencyMode::Check },
+        IdempotencyModeArg::CheckAndVerify => {
+            quote! { genja_core::task::IdempotencyMode::CheckAndVerify }
+        }
+    };
+    let descriptor_session_verification = match &session_verification {
+        Some(config) => {
+            let max_attempts = config
+                .max_attempts
+                .as_ref()
+                .map_or_else(|| quote! { 1 }, |value| quote! { #value });
+            let delay_ms = config
+                .delay_ms
+                .as_ref()
+                .map_or_else(|| quote! { 0 }, |value| quote! { #value });
+            quote! {
+                Some(genja_core::task::SessionVerificationConfig::new(#max_attempts, #delay_ms))
+            }
+        }
+        None => quote! { None },
+    };
+
     if session_verification.is_some() && connection_plugin_name.is_none() {
         return Err(syn::Error::new_spanned(
             &item_impl.self_ty,
@@ -1471,6 +1495,8 @@ fn expand_genja_task(
                             connection_plugin_name: #descriptor_connection_plugin_name,
                             processor_names: vec![#(#processors.to_string()),*],
                             retry: #descriptor_retry,
+                            idempotency: #descriptor_idempotency,
+                            session_verification: #descriptor_session_verification,
                         },
                         #registration_input_schema,
                         true,
@@ -1505,6 +1531,8 @@ fn expand_genja_task(
                             connection_plugin_name: #descriptor_connection_plugin_name,
                             processor_names: vec![#(#processors.to_string()),*],
                             retry: #descriptor_retry,
+                            idempotency: #descriptor_idempotency,
+                            session_verification: #descriptor_session_verification,
                         },
                     )
                 }

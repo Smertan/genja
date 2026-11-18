@@ -387,7 +387,9 @@ class TaskDescriptor(_GenjaModel):
 
     The JSON representation matches the Rust ``TaskDescriptor`` contract so
     task catalogs can consume Python and Rust task metadata with the same
-    shape.
+    shape. Verification fields report declarations, not successful checks or
+    connections. Older descriptors without these fields default to disabled
+    idempotency and no fresh-session verification.
     """
 
     model_config = ConfigDict(
@@ -421,6 +423,14 @@ class TaskDescriptor(_GenjaModel):
         default=None,
         description="Task-specific retry metadata, if configured.",
     )
+    idempotency: IdempotencyMode = Field(
+        default=IdempotencyMode.DISABLED,
+        description="Task-authored convergence check mode.",
+    )
+    session_verification: SessionVerificationConfig | None = Field(
+        default=None,
+        description="Optional post-change fresh-session verification configuration.",
+    )
     input_schema: dict[str, Any] | None = Field(
         default=None,
         description="Optional JSON Schema describing accepted construction input.",
@@ -428,6 +438,47 @@ class TaskDescriptor(_GenjaModel):
     constructible: bool = Field(
         description="Whether this process can construct the task from JSON-compatible input."
     )
+
+    @field_validator("idempotency", mode="before")
+    @classmethod
+    def _parse_idempotency(cls, value: Any) -> IdempotencyMode:
+        """Accept the shared descriptor wire values and the Python enum."""
+        if isinstance(value, IdempotencyMode):
+            return value
+        modes = {
+            "disabled": IdempotencyMode.DISABLED,
+            "check": IdempotencyMode.CHECK,
+            "check_and_verify": IdempotencyMode.CHECK_AND_VERIFY,
+        }
+        if isinstance(value, str) and value in modes:
+            return modes[value]
+        raise ValueError("idempotency must be disabled, check, or check_and_verify")
+
+    @field_serializer("idempotency")
+    def _serialize_idempotency(self, value: IdempotencyMode) -> str:
+        """Serialize the task-authored mode using the descriptor wire value."""
+        return value.value
+
+    @field_validator("session_verification", mode="before")
+    @classmethod
+    def _parse_session_verification(
+        cls, value: Any
+    ) -> SessionVerificationConfig | None:
+        """Accept a configuration instance or its serialized object."""
+        if value is None or isinstance(value, SessionVerificationConfig):
+            return value
+        if isinstance(value, dict) and set(value) == {"max_attempts", "delay_ms"}:
+            return SessionVerificationConfig(
+                max_attempts=value["max_attempts"], delay_ms=value["delay_ms"]
+            )
+        raise ValueError("session_verification must contain max_attempts and delay_ms")
+
+    @field_serializer("session_verification")
+    def _serialize_session_verification(
+        self, value: SessionVerificationConfig | None
+    ) -> dict[str, Any] | None:
+        """Serialize the task-authored session configuration as an object."""
+        return value.to_dict() if value is not None else None
 
     @property
     def identity(self) -> str:
@@ -1213,6 +1264,10 @@ def _register_python_task(
         connection_plugin_name=cast(str | None, info.get("connection_plugin_name")),
         processor_names=list(cast(list[str], info.get("processors", []))),
         retry=retry_payload,
+        idempotency=cast(IdempotencyMode, info["idempotency"]),
+        session_verification=cast(
+            SessionVerificationConfig | None, info["session_verification"]
+        ),
         input_schema=input_schema,
         constructible=True,
     )

@@ -727,6 +727,8 @@ mod tests {
                 connection_plugin_name: Some("ssh".to_string()),
                 processor_names,
                 retry,
+                idempotency: genja_core::task::IdempotencyMode::Disabled,
+                session_verification: None,
             },
             input_schema,
             constructible,
@@ -769,6 +771,8 @@ mod tests {
                 connection_plugin_name: None,
                 processor_names: Vec::new(),
                 retry: None,
+                idempotency: genja_core::task::IdempotencyMode::Disabled,
+                session_verification: None,
             },
         )
     }

@@ -150,6 +150,8 @@ mod tests {
                     connection_plugin_name: None,
                     processor_names: Vec::new(),
                     retry: None,
+                    idempotency: genja_core::task::IdempotencyMode::Disabled,
+                    session_verification: None,
                 },
                 None,
                 false,
