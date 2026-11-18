@@ -1577,6 +1577,28 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_only_catalog_preserves_authored_verification_metadata() {
+        let mut metadata = descriptor_metadata();
+        metadata.idempotency = IdempotencyMode::CheckAndVerify;
+        metadata.session_verification = Some(SessionVerificationConfig::new(2, 750));
+        let authored =
+            TaskDescriptor::explicit("acme.verification", "1.0.0", metadata, None, false);
+        let registry = InMemoryTaskRegistry::from_descriptors([authored.clone()])
+            .expect("descriptor-only registration should succeed");
+
+        assert_eq!(
+            registry.list().expect("list should succeed"),
+            vec![authored.clone()]
+        );
+        assert_eq!(
+            registry
+                .get("acme.verification", Some("1.0.0"))
+                .expect("descriptor should be discoverable"),
+            authored
+        );
+    }
+
+    #[test]
     fn in_memory_registry_get_without_version_succeeds_for_single_match() {
         let registry = InMemoryTaskRegistry::from_descriptors([
             explicit_descriptor("acme.task", "1.0.0", false),
