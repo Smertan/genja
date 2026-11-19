@@ -2,7 +2,10 @@
 
 use clap::ValueEnum;
 use comfy_table::{Table, presets};
-use genja_core::task::{TaskDescriptor, TaskExecutionMode, TaskIdSource, TaskRetryConfig};
+use genja_core::task::{
+    IdempotencyMode, SessionVerificationConfig, TaskDescriptor, TaskExecutionMode, TaskIdSource,
+    TaskRetryConfig,
+};
 use serde::Serialize;
 use std::error::Error;
 use std::fmt;
@@ -462,6 +465,14 @@ fn render_task_descriptor_table(
         processors_label(&descriptor.processor_names),
     ]);
     table.add_row([
+        "Idempotency".to_string(),
+        idempotency_label(descriptor.idempotency).to_string(),
+    ]);
+    table.add_row([
+        "Session verification".to_string(),
+        session_verification_label(descriptor.session_verification.as_ref())?,
+    ]);
+    table.add_row([
         "Constructible".to_string(),
         constructible_label(descriptor.constructible).to_string(),
     ]);
@@ -536,6 +547,14 @@ fn render_task_descriptor_markdown_section(
         processors_markdown_label(&descriptor.processor_names),
     ]);
     table.add_row([
+        "Idempotency".to_string(),
+        markdown_code(idempotency_label(descriptor.idempotency)),
+    ]);
+    table.add_row([
+        "Session verification".to_string(),
+        session_verification_markdown_label(descriptor.session_verification.as_ref())?,
+    ]);
+    table.add_row([
         "Constructible".to_string(),
         constructible_label(descriptor.constructible).to_string(),
     ]);
@@ -603,6 +622,14 @@ fn execution_mode_label(mode: TaskExecutionMode) -> &'static str {
     }
 }
 
+fn idempotency_label(mode: IdempotencyMode) -> &'static str {
+    match mode {
+        IdempotencyMode::Disabled => "disabled",
+        IdempotencyMode::Check => "check",
+        IdempotencyMode::CheckAndVerify => "check_and_verify",
+    }
+}
+
 fn constructible_label(constructible: bool) -> &'static str {
     if constructible { "yes" } else { "no" }
 }
@@ -640,6 +667,27 @@ fn retry_label(retry: Option<&TaskRetryConfig>) -> Result<String, OutputError> {
 
 fn retry_markdown_label(retry: Option<&TaskRetryConfig>) -> Result<String, OutputError> {
     retry_label(retry).map(|label| {
+        if label == "-" {
+            label
+        } else {
+            markdown_code(&label)
+        }
+    })
+}
+
+fn session_verification_label(
+    config: Option<&SessionVerificationConfig>,
+) -> Result<String, OutputError> {
+    config.map_or_else(
+        || Ok("-".to_string()),
+        |config| serde_json::to_string(config).map_err(OutputError::Json),
+    )
+}
+
+fn session_verification_markdown_label(
+    config: Option<&SessionVerificationConfig>,
+) -> Result<String, OutputError> {
+    session_verification_label(config).map(|label| {
         if label == "-" {
             label
         } else {
@@ -760,6 +808,13 @@ mod tests {
         )
     }
 
+    fn verification_descriptor() -> TaskDescriptor {
+        let mut descriptor = schema_descriptor();
+        descriptor.idempotency = IdempotencyMode::CheckAndVerify;
+        descriptor.session_verification = Some(SessionVerificationConfig::new(2, 1000));
+        descriptor
+    }
+
     fn generated_descriptor() -> TaskDescriptor {
         TaskDescriptor::generated(
             "auto:use_genja::tasks::DeployChangesTask",
@@ -817,6 +872,8 @@ mod tests {
         assert!(output.contains("yes"));
         assert!(output.contains("async"));
         assert!(output.contains("no"));
+        assert!(!output.contains("Idempotency"));
+        assert!(!output.contains("Session verification"));
     }
 
     #[test]
@@ -886,6 +943,80 @@ mod tests {
         assert!(output.contains("| `blocking`"));
         assert!(output.contains("| yes"));
         assert!(!output.contains("Backs up selected paths from a network device"));
+        assert!(!output.contains("Idempotency"));
+        assert!(!output.contains("Session verification"));
+    }
+
+    #[test]
+    fn structured_list_and_detail_output_keep_verification_fields() {
+        let descriptor = verification_descriptor();
+        let list = vec![descriptor.clone()];
+
+        for format in [OutputFormat::Json, OutputFormat::Yaml] {
+            let list_output = render_task_list(&list, format).expect("list should render");
+            let detail_output =
+                render_task_descriptor(&descriptor, format).expect("detail should render");
+            let (list_value, detail_value): (serde_json::Value, serde_json::Value) = match format {
+                OutputFormat::Json => (
+                    serde_json::from_str::<Vec<serde_json::Value>>(&list_output)
+                        .expect("JSON list should parse")
+                        .remove(0),
+                    serde_json::from_str(&detail_output).expect("JSON detail should parse"),
+                ),
+                OutputFormat::Yaml => (
+                    yaml_serde::from_str::<Vec<serde_json::Value>>(&list_output)
+                        .expect("YAML list should parse")
+                        .remove(0),
+                    yaml_serde::from_str(&detail_output).expect("YAML detail should parse"),
+                ),
+                _ => unreachable!("only structured formats are tested"),
+            };
+            for value in [list_value, detail_value] {
+                assert_eq!(value["idempotency"], "check_and_verify");
+                assert_eq!(value["session_verification"]["max_attempts"], 2);
+                assert_eq!(value["session_verification"]["delay_ms"], 1000);
+            }
+        }
+    }
+
+    #[test]
+    fn detailed_human_output_shows_authored_verification() {
+        let descriptor = verification_descriptor();
+        let table = render_task_descriptor(&descriptor, OutputFormat::Table)
+            .expect("detail table should render");
+        assert!(table.contains("Idempotency"));
+        assert!(table.contains("check_and_verify"));
+        assert!(table.contains("Session verification"));
+        assert!(table.contains("\"max_attempts\":2"));
+        assert!(table.contains("\"delay_ms\":1000"));
+
+        let markdown = render_task_descriptor(&descriptor, OutputFormat::Markdown)
+            .expect("detail Markdown should render");
+        assert!(markdown.contains("| Idempotency"));
+        assert!(markdown.contains("| `check_and_verify`"));
+        assert!(markdown.contains("| Session verification"));
+        assert!(markdown.contains("`{\"max_attempts\":2,\"delay_ms\":1000}`"));
+
+        let docs = render_task_docs(&[descriptor], TaskDocsOutputFormat::Markdown)
+            .expect("task documentation should render");
+        assert!(docs.contains("| Idempotency"));
+        assert!(docs.contains("| Session verification"));
+        assert!(docs.contains("`check_and_verify`"));
+        let summary = docs.split("## Tasks").next().expect("summary should exist");
+        assert!(!summary.contains("Idempotency"));
+        assert!(!summary.contains("Session verification"));
+    }
+
+    #[test]
+    fn implementation_list_keeps_human_summaries_compact() {
+        let implementation =
+            TaskImplementation::new(verification_descriptor(), Some(TaskLanguage::Rust));
+        for format in [OutputFormat::Table, OutputFormat::Markdown] {
+            let output = render_task_implementation_list(&[implementation.clone()], format)
+                .expect("implementation list should render");
+            assert!(!output.contains("Idempotency"));
+            assert!(!output.contains("Session verification"));
+        }
     }
 
     #[test]
@@ -1049,6 +1180,12 @@ mod tests {
         assert!(output.contains("Connection plugin"));
         assert!(output.contains("Processors"));
         assert!(output.contains("Retry"));
+        assert!(output.lines().any(|line| {
+            line.trim_start().starts_with("Idempotency") && line.contains("disabled")
+        }));
+        assert!(output.lines().any(|line| {
+            line.trim_start().starts_with("Session verification") && line.trim_end().ends_with('-')
+        }));
         assert!(output.contains("Input schema"));
         assert!(output.contains("no"));
         assert!(!output.contains("Input schema:\n"));
@@ -1120,7 +1257,7 @@ mod tests {
 
     #[test]
     fn implementation_views_show_language_beside_id_source() {
-        let rust = TaskImplementation::new(schema_descriptor(), Some(TaskLanguage::Rust));
+        let rust = TaskImplementation::new(verification_descriptor(), Some(TaskLanguage::Rust));
         let unknown = TaskImplementation::new(schema_descriptor(), None);
 
         let list =
@@ -1137,18 +1274,26 @@ mod tests {
         assert!(detail.contains("| Language"));
         assert!(detail.contains("| `Rust`"));
         assert!(detail.contains("| ID source"));
+        assert!(detail.contains("| Idempotency"));
+        assert!(detail.contains("| `check_and_verify`"));
+        assert!(detail.contains("| Session verification"));
     }
 
     #[test]
     fn implementation_json_and_yaml_include_origin_outside_descriptor() {
         let implementation =
-            TaskImplementation::new(schema_descriptor(), Some(TaskLanguage::Python));
+            TaskImplementation::new(verification_descriptor(), Some(TaskLanguage::Python));
 
         let json = render_task_implementation_list(&[implementation.clone()], OutputFormat::Json)
             .expect("JSON should render");
         let value: Value = serde_json::from_str(&json).expect("JSON should parse");
         assert_eq!(value[0]["descriptor"]["id"], "acme.examples.backup_config");
         assert_eq!(value[0]["language"], "python");
+        assert_eq!(value[0]["descriptor"]["idempotency"], "check_and_verify");
+        assert_eq!(
+            value[0]["descriptor"]["session_verification"]["max_attempts"],
+            2
+        );
         assert!(value[0]["descriptor"].get("language").is_none());
         let nested: TaskDescriptor = serde_json::from_value(value[0]["descriptor"].clone())
             .expect("nested descriptor should use the canonical shape");
@@ -1159,6 +1304,11 @@ mod tests {
         let value: yaml_serde::Value = yaml_serde::from_str(&yaml).expect("YAML should parse");
         assert_eq!(value["descriptor"]["id"], "acme.examples.backup_config");
         assert_eq!(value["language"], "python");
+        assert_eq!(value["descriptor"]["idempotency"], "check_and_verify");
+        assert_eq!(
+            value["descriptor"]["session_verification"]["delay_ms"],
+            1000
+        );
         assert!(value["descriptor"].get("language").is_none());
     }
 
