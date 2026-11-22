@@ -7,7 +7,9 @@ from genja.task import (
     CustomTaskFactory,
     ExplicitInputSchema,
     Host,
+    IdempotencyMode,
     PydanticInputSchema,
+    SessionVerificationConfig,
     TaskDescriptor,
     TaskFactory,
     TaskRegistration,
@@ -90,6 +92,10 @@ def check_task_registration_types() -> None:
     descriptor_by_identity: TaskDescriptor = get_registered_task_descriptor_by_identity(
         "acme.typecheck.registered_kwargs@1.0.0"
     )
+    idempotency: IdempotencyMode = descriptor.idempotency
+    session_verification: SessionVerificationConfig | None = (
+        descriptor.session_verification
+    )
     key: TaskRegistrationKey = parse_task_identity(
         "acme.typecheck.registered_kwargs@1.0.0"
     )
@@ -107,6 +113,8 @@ def check_task_registration_types() -> None:
     _ = descriptors
     _ = descriptor
     _ = descriptor_by_identity
+    _ = idempotency
+    _ = session_verification
     _ = key
     _ = kwargs_task
     _ = custom_task

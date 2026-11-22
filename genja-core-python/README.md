@@ -153,6 +153,12 @@ Python task authoring rules:
   `connection_plugin_name` when a changed task should prove that a new
   authenticated management session can be established after the change.
 
+Registered task descriptors expose these authored settings as `idempotency`
+and `session_verification`. Older descriptor JSON without either field reads
+as disabled idempotency and no session verification. See the
+[task registration guide](../docs/task-registration.md#verification-metadata-in-descriptors)
+for the shared Rust and Python descriptor values.
+
 ```python
 from genja.task import (
     Host,

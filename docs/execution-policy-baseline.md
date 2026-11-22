@@ -8,6 +8,12 @@ proposal. Explicit blocking-task timeout rejection and the Rust async cleanup
 path are implemented. Python async invocations without managed connection setup
 can observe coroutine completion after cancellation; other Python bridge paths
 reject Python async deadlines.
+The invocation-wide verification requirement proposed below was superseded by
+[#175](https://github.com/Smertan/genja/issues/175). Task descriptors now
+expose task-authored `idempotency` and `session_verification` metadata for
+inspection. No invocation verification requirement was added; the proposal
+below is retained only as historical design context.
+
 The relevant paths are `Genja::run_task*_with_options` and
 `Genja::run_tasks*_with_options` in
 `genja/src/lib.rs`, `PluginRunner` in
@@ -237,16 +243,15 @@ exponential parameters.
 ### Selection and configuration
 
 Select an `ExecutionPolicy` once for a single-task or ordered-list invocation.
-It groups retry, an invocation-selected task timeout, and verification
-requirements.
-Phase 2 defines its retry selection; phase 3 defines the other fields. The
+It groups retry and an invocation-selected task timeout. The original
+verification-requirement field was superseded by #175.
+Phase 2 defines its retry selection; phase 3 defines the timeout. The
 proposed shape is:
 
 ```rust
 pub struct ExecutionPolicy {
     pub retry: Option<Arc<dyn RetryPolicy>>,
     pub task_timeout: Option<f64>, // positive seconds, including fractions
-    pub verification: VerificationRequirement,
 }
 ```
 
@@ -588,7 +593,7 @@ timeout failure with explicit uncertainty metadata; the existing
 first task attempt, do not fabricate `attempts = 1`: the policy-aware result
 must report zero task attempts. An interrupted parent with unconfirmed work
 must also make its unstarted subtasks distinguishable from completed ones.
-Expiry after an application result but before a required post-check or fresh
+Expiry after an application result but before a task-authored post-check or fresh
 session completes records verification as incomplete and preserves the fact
 that the change may already have been applied; it must not turn that result
 into an ordinary verified success or retry the application.
@@ -600,7 +605,13 @@ deadline or interruption retain their raw and human JSON shape; Python
 result conversion must expose the same interruption facts when a deadline
 is selected.
 
-### Verification is a requirement over existing checks
+### Superseded proposal: invocation-wide verification requirement
+
+The following requirement setting was not implemented. The revised #175
+instead exposes each task's authored verification declarations in its
+descriptor. See [Verification Metadata in Descriptors](task-registration.md#verification-metadata-in-descriptors)
+for the current contract. The paragraphs below preserve the original design
+discussion and are not implementation guidance.
 
 Start with a value setting, not a public verification trait:
 
@@ -718,9 +729,9 @@ genja.run_tasks_with_policy(tasks, run_options, policy)?;
 
 Keep all existing `Genja::run_task*` and `Genja::run_tasks*` invocation
 signatures and behavior. The `PluginRunner` signatures change below.
-`ExecutionPolicy::default()` selects no custom retry algorithm, no timeout,
-and no verification requirement, and must produce the same results as the
-current methods. A selected policy handle is shared through an invocation;
+`ExecutionPolicy::default()` selects no custom retry algorithm or timeout and
+must produce the same results as the current methods. A selected policy handle
+is shared through an invocation;
 the runner passes it to each root and the core recursion passes it to each
 subtask. Task-host retry settings, attempt counters, and deadlines are
 resolved locally as described above.
@@ -774,8 +785,8 @@ overridden `run_tasks` method. Existing invocation methods pass
 shape. An implementation may initially leave its existing execution logic
 unchanged for that default value. The defaulted capability method above
 means the runtime rejects a non-default invocation policy before any task
-starts unless the runner opts in. Non-default means a custom retry algorithm,
-an invocation timeout, or a verification requirement was selected. Runners
+starts unless the runner opts in. Non-default means a custom retry algorithm
+or an invocation timeout was selected. Runners
 that forward and enforce all selected policy features opt in. Accepting the
 new argument without support must never silently ignore a selected policy.
 
@@ -820,7 +831,7 @@ classes and `Tasks`, respectively. Add an optional policy keyword to those
 entrypoints and to direct `TaskDefinition.run_on_host(s)` execution. When
 omitted, Python follows the existing Rust path and returns the same result
 shape. Expose a Python `ExecutionPolicy` value with a `task_timeout` in
-seconds and the verification requirement. A Python-selected custom
+seconds. A Python-selected custom
 retry algorithm requires a synchronous adapter for the object-safe Rust
 `RetryPolicy::decide`; async policy callbacks are outside the initial
 interface. Update the Python `.pyi` stubs and top-level re-exports with
@@ -886,7 +897,7 @@ variant becomes necessary for caller cancellation, record that source
 break and migration guidance before implementation.
 
 The declarative helper additions are independently implementable from
-retry refactoring, deadline enforcement, and verification integration.
+retry refactoring, deadline enforcement, and descriptor metadata work.
 They should be a focused first follow-up: add the Rust methods, document
 them, and verify that a `TaskSpec`-constructed single task reaches the
 same runner and returns one `TaskResults`.
@@ -895,8 +906,8 @@ Remaining follow-ups have separate boundaries: refactor the existing retry
 decision behind the built-in and custom `RetryPolicy` path; enforce the
 task-host timeout across async, blocking, and Python work; add cancellation
 reporting that distinguishes requested from confirmed local termination;
-and integrate verification requirements over the existing checks. Each
-follow-up must preserve the no-policy compatibility baseline above.
+and expose task-authored verification declarations through descriptors (#175).
+Each follow-up must preserve the no-policy compatibility baseline above.
 
 ## Validation walkthrough and test matrix (phase 5)
 
@@ -960,7 +971,7 @@ when implementing or testing the revised contract.
 | Attempt domains | Expiry before the first task call reports zero task attempts. Initial connection failures do not enter the task retry loop. Replacement retries retain their own count and never rerun the applied task. |
 | Rust async and blocking | Async work that acknowledges cancellation may report confirmed local termination. A still-running `spawn_blocking` closure reports cancellation requested with termination unconfirmed; it cannot start another task attempt or an unsafe subtask while work remains active. |
 | Python async and blocking | Test both `start_async` through the asyncio bridge and blocking `start` through the Rust adapter. A timed-out Python coroutine or blocking call is not reported as stopped until Genja observes completion or acknowledgement. Direct Python `TaskDefinition.run_on_host(s)` uses the same policy semantics. |
-| Verification | A required post-check or fresh session fails validation before applying a task that lacks the needed hook, connection, or configuration. With both requirements available, preserve the existing replacement-session post-check order. Reject dry-run plus a verification requirement before execution. |
+| Verification metadata | Rust and Python descriptors report the authored idempotency mode and optional session verification configuration. Existing missing-hook checks and replacement-session post-check ordering remain task-authored. Older serialized descriptors read with disabled idempotency and no session verification. |
 | Outcome and serialization | Preserve `PassedWithWarnings`, retry metadata, processor ordering, and exact raw/human JSON for existing no-policy calls. When a deadline applies, omit interruption metadata if none occurred; otherwise distinguish trigger, cancellation request, local termination, and unknown external state without changing the outer `TaskResults` type. |
 | Runner migration | A Rust runner updated only to accept the new argument still runs default-policy calls; a selected policy is rejected before any task if its capability method remains false. Check the same boundary through the Python runner adapter and callback. An opted-in runner must pass policy to the core host entry point. |
 

@@ -103,3 +103,9 @@ verification by returning `Some(SessionVerificationConfig::new(...))` from
 `session_verification(...)` in the `#[genja_task(...)]` macro. Session
 verification is independent from idempotency; when both are enabled, the
 post-application idempotency check runs through the replacement session.
+
+`TaskDescriptor` exposes the authored `idempotency` mode and optional
+`session_verification` configuration for discovery. Older descriptor JSON
+without these fields reads as disabled idempotency and no session verification.
+See the [task registration guide](../docs/task-registration.md#verification-metadata-in-descriptors)
+for the shared Rust and Python descriptor values.
