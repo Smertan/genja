@@ -31,6 +31,9 @@
 //!   [`TaskFailureKind::Timeout`] without resetting the budget for retries.
 //!   Async language bridges can use [`AsyncWorkState`] to distinguish a dropped
 //!   Rust waiter from observed completion of independently scheduled work.
+//! - **Subtask Continuation**: [`TaskRunOptions`] carries a
+//!   [`SubtaskContinuation`] choice for each parent-subtask boundary. Its default
+//!   is [`SubtaskContinuation::OnParentSuccess`].
 //! - **Summaries and Serialization**: Task results can be aggregated with
 //!   [`TaskResults::host_summary`] and [`TaskResults::task_summary`], then exported in
 //!   either human-readable or raw JSON forms.
@@ -4407,12 +4410,29 @@ pub enum TaskExecutionMode {
 /// invocation. Task metadata declares what a task supports; run options declare
 /// what the runtime should request. Use [`TaskRunOptions::with_dry_run`] to
 /// request dry-run execution for tasks that declare dry-run support. An optional
-/// task timeout overrides the runner default for this invocation.
+/// task timeout overrides the runner default for this invocation. Subtask
+/// continuation defaults to [`SubtaskContinuation::OnParentSuccess`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TaskRunOptions {
     max_depth: usize,
     dry_run: bool,
     task_timeout: Option<Duration>,
+    subtask_continuation: SubtaskContinuation,
+}
+
+/// Whether a task's subtasks continue after that task completes on a host.
+///
+/// This choice applies independently at each parent-subtask boundary and does
+/// not control later root tasks in an ordered task list. Deadline and cleanup
+/// safeguards take precedence over either mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SubtaskContinuation {
+    /// Continue to subtasks after any parent result.
+    Always,
+    /// Continue only after a final `Passed` or `PassedWithWarnings` parent result.
+    /// This is the default; retries or recovery finish before this decision.
+    #[default]
+    OnParentSuccess,
 }
 
 /// How an ordered task list treats a host after one of its task deadlines expires.
@@ -4772,6 +4792,7 @@ impl TaskRunOptions {
             max_depth,
             dry_run: false,
             task_timeout: None,
+            subtask_continuation: SubtaskContinuation::OnParentSuccess,
         }
     }
 
@@ -4790,6 +4811,11 @@ impl TaskRunOptions {
         self.task_timeout
     }
 
+    /// Return the subtask continuation mode for this invocation.
+    pub fn subtask_continuation(&self) -> SubtaskContinuation {
+        self.subtask_continuation
+    }
+
     /// Resolve the task timeout for this invocation against the runner default.
     ///
     /// The invocation value takes precedence. With neither value set, no timeout
@@ -4806,6 +4832,16 @@ impl TaskRunOptions {
             "task_timeout must be greater than zero"
         );
         self.task_timeout = Some(task_timeout);
+        self
+    }
+
+    /// Set when subtasks may continue after their parent completes on a host.
+    ///
+    /// [`SubtaskContinuation::OnParentSuccess`] accepts `Passed` and
+    /// `PassedWithWarnings` parent results. This setting does not affect
+    /// ordered root tasks or override deadline and cleanup safeguards.
+    pub fn with_subtask_continuation(mut self, continuation: SubtaskContinuation) -> Self {
+        self.subtask_continuation = continuation;
         self
     }
 
