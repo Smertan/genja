@@ -8038,6 +8038,80 @@ mod tests {
     }
 
     #[test]
+    fn parent_success_after_retry_allows_subtasks_by_default() {
+        struct RetryingParent {
+            attempts: Arc<AtomicUsize>,
+            child: Arc<dyn Task>,
+            retry: TaskRetryConfig,
+        }
+
+        impl TaskInfo for RetryingParent {
+            fn name(&self) -> &str {
+                "retrying_parent"
+            }
+
+            fn retry_config(&self) -> Option<&TaskRetryConfig> {
+                Some(&self.retry)
+            }
+        }
+
+        #[async_trait]
+        impl Task for RetryingParent {
+            async fn start_async(
+                &self,
+                _host: &Host,
+                _context: &TaskRuntimeContext,
+            ) -> Result<HostTaskResult, TaskError> {
+                let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                if attempt == 1 {
+                    Ok(HostTaskResult::failed(
+                        TaskFailure::new(TestTaskFailureError).with_retryable(true),
+                    ))
+                } else {
+                    Ok(HostTaskResult::passed(TaskSuccess::new()))
+                }
+            }
+
+            fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+                vec![Arc::clone(&self.child)]
+            }
+
+            fn execution_mode(&self) -> TaskExecutionMode {
+                TaskExecutionMode::Async
+            }
+        }
+
+        let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+        let child_starts = Arc::clone(&child.starts);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = TaskDefinition::new(RetryingParent {
+            attempts: Arc::clone(&attempts),
+            child: Arc::new(child),
+            retry: TaskRetryConfig::builder()
+                .allow(true)
+                .max_attempts(2)
+                .build(),
+        });
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("retrying_parent");
+
+        run_async(task.start_with_options("router1", &host, &mut results, TaskRunOptions::new(1)))
+            .expect("parent should succeed after retry");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        let parent = results.host_result("router1").expect("parent result");
+        assert!(parent.is_passed());
+        assert_eq!(parent.execution_metadata().attempts(), 2);
+        assert_eq!(child_starts.load(Ordering::SeqCst), 1);
+        assert!(
+            results
+                .sub_task("child")
+                .and_then(|child| child.host_result("router1"))
+                .is_some_and(HostTaskResult::is_passed)
+        );
+    }
+
+    #[test]
     fn early_parent_failure_records_policy_skips_without_starting_children() {
         let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
         let child_starts = Arc::clone(&child.starts);
@@ -8096,6 +8170,71 @@ mod tests {
                 .is_some_and(is_deadline_timeout_result)
         );
         assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn unconfirmed_cleanup_guard_skips_subtasks_in_both_modes() {
+        struct CleanupGuardResolver {
+            unavailable: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl TaskConnectionResolver for CleanupGuardResolver {
+            async fn resolve_task_connection(
+                &self,
+                _task: &dyn Task,
+                _hostname: &str,
+            ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError>
+            {
+                self.unavailable.store(1, Ordering::SeqCst);
+                Ok(None)
+            }
+
+            fn host_unavailable_after_timeout(&self, _hostname: &str) -> bool {
+                self.unavailable.load(Ordering::SeqCst) != 0
+            }
+        }
+
+        for mode in [
+            SubtaskContinuation::OnParentSuccess,
+            SubtaskContinuation::Always,
+        ] {
+            let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+            let child_starts = Arc::clone(&child.starts);
+            let mut parent =
+                ContinuationTask::new("parent", HostTaskResult::passed(TaskSuccess::new()));
+            parent.children.push(Arc::new(child));
+            let task = TaskDefinition::new(parent);
+            let resolver = CleanupGuardResolver {
+                unavailable: AtomicUsize::new(0),
+            };
+            let host = Host::builder().hostname("router1").build();
+            let mut results = TaskResults::new("parent");
+
+            run_async(task.start_with_connection_resolver_and_options(
+                "router1",
+                &host,
+                &mut results,
+                Some(&resolver),
+                TaskRunOptions::new(1).with_subtask_continuation(mode),
+            ))
+            .expect("cleanup guard should skip the child");
+
+            assert!(
+                results
+                    .host_result("router1")
+                    .is_some_and(HostTaskResult::is_passed)
+            );
+            assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                results
+                    .sub_task("child")
+                    .and_then(|child| child.host_result("router1"))
+                    .and_then(HostTaskResult::skipped_detail)
+                    .and_then(TaskSkip::reason),
+                Some("timeout_cleanup_unconfirmed")
+            );
+        }
     }
 
     #[test]
@@ -10607,12 +10746,20 @@ mod deadline_tests {
         resolver: Option<&dyn TaskConnectionResolver>,
         timeout: Option<Duration>,
     ) -> Result<TaskResults, crate::GenjaError> {
-        let host = Host::builder().hostname("router1").build();
-        let mut results = TaskResults::new(task.name());
         let mut options = TaskRunOptions::new(1);
         if let Some(timeout) = timeout {
             options = options.with_task_timeout(timeout);
         }
+        run_task_with_options(task, resolver, options)
+    }
+
+    fn run_task_with_options(
+        task: &TaskDefinition,
+        resolver: Option<&dyn TaskConnectionResolver>,
+        options: TaskRunOptions,
+    ) -> Result<TaskResults, crate::GenjaError> {
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new(task.name());
         Builder::new_current_thread()
             .enable_all()
             .build()
@@ -11014,29 +11161,42 @@ mod deadline_tests {
 
     #[test]
     fn expired_subtask_skips_later_siblings_on_the_same_host() {
-        let mut slow = TimedTask::new("slow_child");
-        slow.start_delay = Duration::from_millis(80);
-        slow.timeout = Some(Duration::from_millis(20));
-        let later = TimedTask::new("later_child");
-        let later_starts = Arc::clone(&later.starts);
-        let mut parent = TimedTask::new("parent");
-        parent.children.push(Arc::new(slow));
-        parent.children.push(Arc::new(later));
+        for mode in [
+            SubtaskContinuation::OnParentSuccess,
+            SubtaskContinuation::Always,
+        ] {
+            let mut slow = TimedTask::new("slow_child");
+            slow.start_delay = Duration::from_millis(80);
+            slow.timeout = Some(Duration::from_millis(20));
+            let later = TimedTask::new("later_child");
+            let later_starts = Arc::clone(&later.starts);
+            let mut parent = TimedTask::new("parent");
+            parent.children.push(Arc::new(slow));
+            parent.children.push(Arc::new(later));
+            let task = TaskDefinition::new(parent);
+            let results = run_task_with_options(
+                &task,
+                None,
+                TaskRunOptions::new(1).with_subtask_continuation(mode),
+            )
+            .expect("task tree should record the child deadline");
 
-        let results = run_task(&TaskDefinition::new(parent), None, None);
-        assert!(
-            results
-                .sub_task("slow_child")
-                .and_then(|subtask| subtask.host_result("router1"))
-                .is_some_and(is_deadline_timeout_result)
-        );
-        assert!(
-            results
-                .sub_task("later_child")
-                .and_then(|subtask| subtask.host_result("router1"))
-                .is_some_and(HostTaskResult::is_skipped)
-        );
-        assert_eq!(later_starts.load(Ordering::SeqCst), 0);
+            assert!(
+                results
+                    .sub_task("slow_child")
+                    .and_then(|subtask| subtask.host_result("router1"))
+                    .is_some_and(is_deadline_timeout_result)
+            );
+            assert_eq!(
+                results
+                    .sub_task("later_child")
+                    .and_then(|subtask| subtask.host_result("router1"))
+                    .and_then(HostTaskResult::skipped_detail)
+                    .and_then(TaskSkip::reason),
+                Some("previous_subtask_deadline_expired")
+            );
+            assert_eq!(later_starts.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[test]
