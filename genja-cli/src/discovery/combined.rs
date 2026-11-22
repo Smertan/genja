@@ -150,6 +150,8 @@ mod tests {
                     connection_plugin_name: None,
                     processor_names: Vec::new(),
                     retry: None,
+                    idempotency: genja_core::task::IdempotencyMode::Disabled,
+                    session_verification: None,
                 },
                 None,
                 false,
@@ -318,11 +320,16 @@ mod tests {
         #[cfg(windows)]
         fs::copy(&fixture, &interpreter).expect("fixture interpreter should be copied");
 
-        let python_descriptor = implementation(ID, "1.0.0", TaskLanguage::Python);
+        let mut python_descriptor = implementation(ID, "1.0.0", TaskLanguage::Python)
+            .descriptor()
+            .clone();
+        python_descriptor.connection_plugin_name = Some("ssh".to_string());
+        python_descriptor.idempotency = genja_core::task::IdempotencyMode::CheckAndVerify;
+        python_descriptor.session_verification =
+            Some(genja_core::task::SessionVerificationConfig::new(2, 500));
         fs::write(
             directory.path().join("helper_stdout.txt"),
-            serde_json::to_vec(&vec![python_descriptor.descriptor()])
-                .expect("descriptor should serialize"),
+            serde_json::to_vec(&vec![&python_descriptor]).expect("descriptor should serialize"),
         )
         .expect("helper output should be written");
         let combined = CombinedTaskDescriptorSource::new(
@@ -341,6 +348,33 @@ mod tests {
         assert_eq!(
             languages,
             vec![Some(TaskLanguage::Rust), Some(TaskLanguage::Python)]
+        );
+        let discovered_python = implementations
+            .iter()
+            .find(|implementation| {
+                implementation.descriptor().id == ID
+                    && implementation.language() == Some(TaskLanguage::Python)
+            })
+            .expect("Python implementation should be discovered");
+        assert_eq!(discovered_python.descriptor(), &python_descriptor);
+        assert_eq!(
+            serde_json::to_value(discovered_python.descriptor())
+                .expect("discovered descriptor should serialize"),
+            serde_json::json!({
+                "id": ID,
+                "id_source": "explicit",
+                "name": ID.replace('.', "_"),
+                "version": "1.0.0",
+                "description": null,
+                "execution_mode": "async",
+                "connection_plugin_name": "ssh",
+                "processor_names": [],
+                "retry": null,
+                "idempotency": "check_and_verify",
+                "session_verification": {"max_attempts": 2, "delay_ms": 500},
+                "input_schema": null,
+                "constructible": false
+            })
         );
 
         let expected_error = DiscoveryError::AmbiguousImplementation {

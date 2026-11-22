@@ -13,6 +13,8 @@
 //! it. A [`RegisteredTaskFactory`] is optional local code that can construct a
 //! [`TaskDefinition`] from JSON-compatible input. [`TaskCatalog`] covers the
 //! descriptor-only side; [`TaskFactoryRegistry`] covers local construction.
+//! Descriptors report task-authored idempotency and fresh-session verification
+//! declarations. They do not establish that a check or connection will succeed.
 //!
 //! Rust tasks normally enter the compiled registry through the
 //! `#[genja_task]` macro. A task without `registration(...)` is still
@@ -125,8 +127,10 @@
 //! }
 //! ```
 
-use super::{TaskDefinition, TaskExecutionMode, TaskRetryConfig};
-use serde::{Deserialize, Serialize};
+use super::{
+    IdempotencyMode, SessionVerificationConfig, TaskDefinition, TaskExecutionMode, TaskRetryConfig,
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -865,6 +869,8 @@ pub enum TaskIdSource {
 /// higher-level catalog APIs. Generated IDs should be treated as local-only;
 /// explicit IDs are the stable form intended for provider and remote catalog
 /// workflows.
+/// Older serialized descriptors without verification fields deserialize with
+/// disabled idempotency and no fresh-session verification.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskDescriptor {
@@ -886,6 +892,16 @@ pub struct TaskDescriptor {
     pub processor_names: Vec<String>,
     /// Task-specific retry metadata, if configured.
     pub retry: Option<TaskRetryConfig>,
+    /// Task-authored convergence check mode; disabled for older descriptors.
+    #[serde(
+        default,
+        serialize_with = "serialize_descriptor_idempotency",
+        deserialize_with = "deserialize_descriptor_idempotency"
+    )]
+    pub idempotency: IdempotencyMode,
+    /// Optional task-authored post-change fresh-session verification configuration.
+    #[serde(default)]
+    pub session_verification: Option<SessionVerificationConfig>,
     /// Optional JSON Schema describing accepted construction input.
     pub input_schema: Option<Value>,
     /// Whether this process can construct the task from JSON-compatible input.
@@ -946,6 +962,8 @@ impl TaskDescriptor {
             connection_plugin_name: metadata.connection_plugin_name,
             processor_names: metadata.processor_names,
             retry: metadata.retry,
+            idempotency: metadata.idempotency,
+            session_verification: metadata.session_verification,
             input_schema,
             constructible,
         }
@@ -972,6 +990,39 @@ pub struct TaskDescriptorMetadata {
     pub processor_names: Vec<String>,
     /// Task-specific retry metadata, if configured.
     pub retry: Option<TaskRetryConfig>,
+    /// Task-authored convergence check mode.
+    pub idempotency: IdempotencyMode,
+    /// Optional task-authored post-change fresh-session verification configuration.
+    pub session_verification: Option<SessionVerificationConfig>,
+}
+
+fn serialize_descriptor_idempotency<S>(
+    mode: &IdempotencyMode,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(match mode {
+        IdempotencyMode::Disabled => "disabled",
+        IdempotencyMode::Check => "check",
+        IdempotencyMode::CheckAndVerify => "check_and_verify",
+    })
+}
+
+fn deserialize_descriptor_idempotency<'de, D>(deserializer: D) -> Result<IdempotencyMode, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match String::deserialize(deserializer)?.as_str() {
+        "disabled" => Ok(IdempotencyMode::Disabled),
+        "check" => Ok(IdempotencyMode::Check),
+        "check_and_verify" => Ok(IdempotencyMode::CheckAndVerify),
+        other => Err(serde::de::Error::unknown_variant(
+            other,
+            &["disabled", "check", "check_and_verify"],
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -998,6 +1049,8 @@ mod tests {
                     .max_attempts(3)
                     .build(),
             ),
+            idempotency: IdempotencyMode::Disabled,
+            session_verification: None,
         }
     }
 
@@ -1107,6 +1160,8 @@ mod tests {
                     "max_attempts": 3,
                     "delay_ms": null
                 },
+                "idempotency": "disabled",
+                "session_verification": null,
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -1130,6 +1185,8 @@ mod tests {
                 connection_plugin_name: None,
                 processor_names: Vec::new(),
                 retry: None,
+                idempotency: IdempotencyMode::Disabled,
+                session_verification: None,
             },
         );
 
@@ -1147,10 +1204,72 @@ mod tests {
                 "connection_plugin_name": null,
                 "processor_names": [],
                 "retry": null,
+                "idempotency": "disabled",
+                "session_verification": null,
                 "input_schema": null,
                 "constructible": false
             })
         );
+    }
+
+    #[test]
+    fn descriptor_round_trips_authored_verification_metadata() {
+        for mode in [
+            IdempotencyMode::Disabled,
+            IdempotencyMode::Check,
+            IdempotencyMode::CheckAndVerify,
+        ] {
+            let mut metadata = descriptor_metadata();
+            metadata.idempotency = mode;
+            metadata.session_verification = Some(SessionVerificationConfig::new(3, 500));
+            let descriptor = TaskDescriptor::generated("auto:verification", "1.0.0", metadata);
+            let value = serde_json::to_value(&descriptor).expect("descriptor serializes");
+
+            assert_eq!(
+                value["idempotency"],
+                json!(match mode {
+                    IdempotencyMode::Disabled => "disabled",
+                    IdempotencyMode::Check => "check",
+                    IdempotencyMode::CheckAndVerify => "check_and_verify",
+                })
+            );
+            assert_eq!(
+                value["session_verification"],
+                json!({"max_attempts": 3, "delay_ms": 500})
+            );
+            assert_eq!(
+                serde_json::from_value::<TaskDescriptor>(value).expect("descriptor deserializes"),
+                descriptor
+            );
+        }
+    }
+
+    #[test]
+    fn descriptor_reads_older_serialized_shape_with_verification_defaults() {
+        let descriptor = generated_descriptor("auto:legacy", "1.0.0");
+        let mut value = serde_json::to_value(descriptor).expect("descriptor serializes");
+        let object = value.as_object_mut().expect("descriptor is an object");
+        object.remove("idempotency");
+        object.remove("session_verification");
+
+        let restored: TaskDescriptor =
+            serde_json::from_value(value).expect("older descriptor deserializes");
+        assert_eq!(restored.idempotency, IdempotencyMode::Disabled);
+        assert_eq!(restored.session_verification, None);
+    }
+
+    #[test]
+    fn descriptor_yaml_round_trips_authored_verification_metadata() {
+        let mut metadata = descriptor_metadata();
+        metadata.idempotency = IdempotencyMode::CheckAndVerify;
+        metadata.session_verification = Some(SessionVerificationConfig::new(2, 500));
+        let descriptor =
+            TaskDescriptor::explicit("acme.verification", "1.0.0", metadata, None, false);
+
+        let yaml = serde_yaml::to_string(&descriptor).expect("descriptor serializes to YAML");
+        let restored: TaskDescriptor =
+            serde_yaml::from_str(&yaml).expect("descriptor deserializes from YAML");
+        assert_eq!(restored, descriptor);
     }
 
     #[test]
@@ -1171,6 +1290,11 @@ mod tests {
         assert_eq!(descriptor.name, metadata.name);
         assert_eq!(descriptor.description, metadata.description);
         assert_eq!(descriptor.execution_mode, metadata.execution_mode);
+        assert_eq!(descriptor.idempotency, metadata.idempotency);
+        assert_eq!(
+            descriptor.session_verification,
+            metadata.session_verification
+        );
         assert_eq!(
             descriptor.connection_plugin_name,
             metadata.connection_plugin_name
@@ -1224,6 +1348,8 @@ mod tests {
             connection_plugin_name: Some("ssh".to_string()),
             processor_names: vec!["audit".to_string()],
             retry: None,
+            idempotency: IdempotencyMode::Disabled,
+            session_verification: None,
         };
 
         assert_eq!(
@@ -1462,6 +1588,28 @@ mod tests {
 
         assert_eq!(descriptor.id, "acme.task");
         assert_eq!(descriptor.version, "2.0.0");
+    }
+
+    #[test]
+    fn descriptor_only_catalog_preserves_authored_verification_metadata() {
+        let mut metadata = descriptor_metadata();
+        metadata.idempotency = IdempotencyMode::CheckAndVerify;
+        metadata.session_verification = Some(SessionVerificationConfig::new(2, 750));
+        let authored =
+            TaskDescriptor::explicit("acme.verification", "1.0.0", metadata, None, false);
+        let registry = InMemoryTaskRegistry::from_descriptors([authored.clone()])
+            .expect("descriptor-only registration should succeed");
+
+        assert_eq!(
+            registry.list().expect("list should succeed"),
+            vec![authored.clone()]
+        );
+        assert_eq!(
+            registry
+                .get("acme.verification", Some("1.0.0"))
+                .expect("descriptor should be discoverable"),
+            authored
+        );
     }
 
     #[test]

@@ -330,6 +330,7 @@ struct RegisteredOverrideMetadataTask {
     name = "registered_override_metadata_task",
     connection_plugin_name = "ssh",
     retry(allow = true, max_attempts = 3, delay_ms = 500),
+    idempotency = IdempotencyMode::CheckAndVerify,
     session_verification(max_attempts = 3, delay_ms = 2000),
     registration(
         id = "acme.tests.derive_runtime.registered_override_metadata_task",
@@ -344,6 +345,14 @@ impl RegisteredOverrideMetadataTask {
         _context: &TaskRuntimeContext,
     ) -> Result<HostTaskResult, genja_core::task::TaskError> {
         Ok(HostTaskResult::passed(TaskSuccess::new()))
+    }
+
+    async fn check_async(
+        &self,
+        _host: &Host,
+        _context: &TaskRuntimeContext,
+    ) -> Result<IdempotencyCheck, genja_core::task::TaskError> {
+        Ok(IdempotencyCheck::change_required_without_diff())
     }
 
     fn options(&self) -> Option<&Value> {
@@ -540,6 +549,18 @@ overrides:
 
 #[test]
 fn genja_task_compiled_registry_preserves_authored_metadata_without_spec_overrides() {
+    let descriptor = get_compiled_task_descriptor(
+        "acme.tests.derive_runtime.registered_override_metadata_task",
+        Some("1.0.0"),
+    )
+    .expect("explicit descriptor should be registered");
+    assert_eq!(descriptor.idempotency, IdempotencyMode::CheckAndVerify);
+    let descriptor_session_verification = descriptor
+        .session_verification
+        .expect("authored session verification should be discoverable");
+    assert_eq!(descriptor_session_verification.max_attempts(), 3);
+    assert_eq!(descriptor_session_verification.delay_ms(), 2000);
+
     let task = create_compiled_task_from_spec_str(
         r#"
 task: acme.tests.derive_runtime.registered_override_metadata_task@1.0.0
@@ -550,6 +571,7 @@ input:
     )
     .expect("task spec without runtime overrides should construct task");
 
+    assert_eq!(task.idempotency_mode(), descriptor.idempotency);
     let retry = task
         .retry_config()
         .expect("authored retry config should be present");
@@ -643,6 +665,8 @@ fn genja_task_compiled_descriptor_serializes_to_json_contract() {
             "connection_plugin_name": null,
             "processor_names": ["audit"],
             "retry": null,
+            "idempotency": "disabled",
+            "session_verification": null,
             "input_schema": null,
             "constructible": true
         })
@@ -755,6 +779,12 @@ fn genja_task_submits_generated_discovery_descriptor() {
     assert_eq!(descriptor.execution_mode, TaskExecutionMode::Async);
     assert_eq!(descriptor.connection_plugin_name.as_deref(), Some("ssh"));
     assert_eq!(descriptor.processor_names, vec!["audit", "metrics"]);
+    assert_eq!(descriptor.idempotency, IdempotencyMode::Disabled);
+    let session_verification = descriptor
+        .session_verification
+        .expect("authored session verification should be included");
+    assert_eq!(session_verification.max_attempts(), 2);
+    assert_eq!(session_verification.delay_ms(), 1000);
     assert_eq!(descriptor.input_schema, None);
     assert!(!descriptor.constructible);
 
@@ -793,6 +823,12 @@ fn genja_task_generates_idempotency_mode_metadata() {
     let task = IdempotentTask;
 
     assert_eq!(task.idempotency_mode(), IdempotencyMode::CheckAndVerify);
+    let descriptor = get_compiled_task_descriptor(
+        &format!("auto:{}", std::any::type_name::<IdempotentTask>()),
+        Some(env!("CARGO_PKG_VERSION")),
+    )
+    .expect("generated descriptor should be registered");
+    assert_eq!(descriptor.idempotency, IdempotencyMode::CheckAndVerify);
 
     let host = Host::builder().hostname("router1").build();
     let context = TaskRuntimeContext::new(genja_core::task::TaskExecutionContext::new(0, 0), None);

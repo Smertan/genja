@@ -138,6 +138,8 @@ def test_registered_python_task_descriptor_matches_rust_contract_shape():
         connection_plugin_name="ssh",
         processors=["audit"],
         retry=TaskRetryConfig(allow=True, max_attempts=3, delay_ms=500),
+        idempotency=IdempotencyMode.CHECK_AND_VERIFY,
+        session_verification=SessionVerificationConfig(max_attempts=2, delay_ms=1000),
         registration=TaskRegistration(
             id="acme.tests.registered_descriptor_shape",
             version="1.0.0",
@@ -154,6 +156,9 @@ def test_registered_python_task_descriptor_matches_rust_contract_shape():
     class RegisteredDescriptorShapeTask:
         def start(self, task, host, context):
             return TaskSuccessResult(summary="registered")
+
+        def check(self, task, host, context):
+            return IdempotencyCheckResult.change_required()
 
     descriptor = get_registered_task_descriptor_by_identity(
         "acme.tests.registered_descriptor_shape@1.0.0"
@@ -174,6 +179,8 @@ def test_registered_python_task_descriptor_matches_rust_contract_shape():
             "max_attempts": 3,
             "delay_ms": 500,
         },
+        "idempotency": "check_and_verify",
+        "session_verification": {"max_attempts": 2, "delay_ms": 1000},
         "input_schema": {
             "type": "object",
             "additionalProperties": False,
@@ -184,6 +191,36 @@ def test_registered_python_task_descriptor_matches_rust_contract_shape():
         RegisteredDescriptorShapeTask.__genja_task_registration__["descriptor"]
         == descriptor.to_dict()
     )
+
+
+def test_descriptor_reads_authored_and_older_verification_fields():
+    original = TaskDescriptor(
+        id="acme.tests.verification",
+        id_source="explicit",
+        name="verification",
+        version="1.0.0",
+        execution_mode="blocking",
+        constructible=False,
+    ).to_dict()
+    for mode in ("disabled", "check", "check_and_verify"):
+        payload = {
+            **original,
+            "idempotency": mode,
+            "session_verification": {"max_attempts": 3, "delay_ms": 500},
+        }
+        restored = TaskDescriptor.model_validate(payload)
+        assert restored.idempotency.value == mode
+        assert restored.session_verification == SessionVerificationConfig(
+            max_attempts=3, delay_ms=500
+        )
+        assert restored.to_dict() == payload
+
+    older = original.copy()
+    older.pop("idempotency")
+    older.pop("session_verification")
+    restored = TaskDescriptor.model_validate(older)
+    assert restored.idempotency == IdempotencyMode.DISABLED
+    assert restored.session_verification is None
 
 
 def test_registered_python_tasks_can_be_listed_and_looked_up():

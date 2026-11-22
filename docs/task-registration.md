@@ -72,6 +72,58 @@ has JSON-compatible input:
     )
     ```
 
+## Verification Metadata in Descriptors
+
+Rust and Python task descriptors report the verification behavior declared by
+the task author. Inspect these fields before choosing a task:
+
+| Field | Serialized value | Meaning |
+| --- | --- | --- |
+| `idempotency` | `disabled` | No automatic convergence check is declared. |
+| `idempotency` | `check` | A pre-execution convergence check is declared. |
+| `idempotency` | `check_and_verify` | Pre-execution and post-change convergence checks are declared. |
+| `session_verification` | `null` or `{ "max_attempts": 2, "delay_ms": 500 }` | An optional post-change fresh-session check is declared, with its configured attempts and delay. |
+
+The Rust `#[genja_task(...)]` macro and Python `@task(...)` decorator supply
+these values from their `idempotency` and `session_verification` arguments.
+The Rust macro and Python decorator still require the matching check hook for
+an enabled idempotency mode and a connection plugin for session verification.
+The descriptor reports the declaration; it cannot establish that a check is
+logically correct or that a connection resolver can open a fresh session.
+Runtime behavior remains task-authored: session replacement and a post-change
+check run only when the task outcome calls for them.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja_core::task::get_compiled_task_descriptor_by_identity;
+
+    let descriptor = get_compiled_task_descriptor_by_identity(
+        "acme.configure_access@1.0.0",
+    )?;
+    println!("{:?}", descriptor.idempotency);
+    println!("{:?}", descriptor.session_verification);
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    from genja.task import get_registered_task_descriptor_by_identity
+
+    descriptor = get_registered_task_descriptor_by_identity(
+        "acme.configure_access@1.0.0"
+    )
+    print(descriptor.idempotency.value)
+    print(descriptor.session_verification)
+    ```
+
+`task describe <identity>` shows these fields in table and Markdown detail
+views. JSON and YAML list and detail output include the canonical descriptor;
+human-readable list summaries remain compact. Older serialized descriptors
+without these fields read as `idempotency: disabled` and
+`session_verification: null`. Newly serialized descriptors always include both
+fields, so consumers with strict schemas must accept them.
+
 ## Constructible Descriptor Field
 
 In the Rust `TaskDescriptor` struct, `constructible: bool` reports whether the

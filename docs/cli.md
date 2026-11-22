@@ -1,4 +1,4 @@
-# Command Line Interface
+# Command Line Interface (CLI)
 
 Genja provides a first-party CLI crate, `genja-cli`, for listing, describing,
 and documenting registered task descriptors. It discovers compiled Rust tasks
@@ -247,7 +247,7 @@ for the sample binary's CLI commands.
 The default format is `table`. Table and Markdown lists are compact summaries
 containing task ID, version, name, ID source, implementation language, execution mode, and
 constructibility. They omit descriptions, connection plugins, processors,
-retry metadata, and input schemas.
+retry metadata, verification metadata, and input schemas.
 
 **Language** is assigned by discovery (`Rust` or `Python`) and is separate from
 **Source**, which says whether the descriptor ID was generated or explicit.
@@ -326,9 +326,12 @@ contain `:`, and custom sources should avoid IDs beginning `rust:` or `python:`
 because those prefixes are reserved for CLI selection.
 
 The default table view displays ID, version, name, description, ID source, language,
-execution mode, connection plugin, processors, constructibility, retry metadata,
-and input schema availability. Missing optional metadata is shown as `-`.
-Retry metadata is shown as compact JSON when present.
+execution mode, connection plugin, processors, idempotency mode, session
+verification configuration, constructibility, retry metadata, and input schema
+availability. Missing optional metadata is shown as `-`. Idempotency is
+`disabled`, `check`, or `check_and_verify`; session verification and retry
+configurations are shown as compact JSON when present. These are task-authored
+declarations, not proof that a check or fresh connection will succeed.
 
 When an input schema is available, the table view includes pretty-printed JSON
 below the field summary. Markdown includes the same metadata and a fenced JSON
@@ -345,12 +348,16 @@ schema block. JSON and YAML include the schema within their nested descriptor.
 | `yaml` | Sequence of implementation records | One implementation record |
 | `markdown` | Compact task summary table | Task heading, metadata table, and input schema block when available |
 
-JSON and YAML wrap the existing `TaskDescriptor` serialization contract as
+JSON and YAML wrap the canonical `TaskDescriptor` serialization contract as
 `{ descriptor, language }`. The descriptor retains optional metadata and input
 schemas without a language field. The outer `language` is `rust`, `python`, or
 `null` when a custom source cannot identify it. Read descriptor fields through
-the `descriptor` key, for example `descriptor.id`. Markdown output is raw
-Markdown text, not a rendered terminal view.
+the `descriptor` key, for example `descriptor.id` or
+`descriptor.session_verification`. Descriptors now include `idempotency` and
+`session_verification` in both list and detail output. Strict-schema consumers
+must accept these fields; older descriptors without them read as `disabled`
+and `null`, respectively. Markdown output is raw Markdown text, not a rendered
+terminal view.
 
 ### Generate A Task Catalogue
 
@@ -440,31 +447,35 @@ language-qualified lookup when both implementations share an ID and version.
     ```text
     Task: python:acme.examples.backup_config@1.0.0
 
-     Field             | Value
-    ===================================================================
-     ID                | acme.examples.backup_config
-    -------------------+-----------------------------------------------
-     Version           | 1.0.0
-    -------------------+-----------------------------------------------
-     Name              | backup_config
-    -------------------+-----------------------------------------------
-     Description       | Backs up selected paths from a network device
-    -------------------+-----------------------------------------------
-     ID source         | explicit
-    -------------------+-----------------------------------------------
-     Language          | Python
-    -------------------+-----------------------------------------------
-     Execution mode    | blocking
-    -------------------+-----------------------------------------------
-     Connection plugin | ssh
-    -------------------+-----------------------------------------------
-     Processors        | -
-    -------------------+-----------------------------------------------
-     Constructible     | yes
-    -------------------+-----------------------------------------------
-     Retry             | -
-    -------------------+-----------------------------------------------
-     Input schema      | available
+     Field                | Value
+    ======================================================================
+     ID                   | acme.examples.backup_config
+    ----------------------+-----------------------------------------------
+     Version              | 1.0.0
+    ----------------------+-----------------------------------------------
+     Name                 | backup_config
+    ----------------------+-----------------------------------------------
+     Description          | Backs up selected paths from a network device
+    ----------------------+-----------------------------------------------
+     ID source            | explicit
+    ----------------------+-----------------------------------------------
+     Language             | Python
+    ----------------------+-----------------------------------------------
+     Execution mode       | blocking
+    ----------------------+-----------------------------------------------
+     Connection plugin    | ssh
+    ----------------------+-----------------------------------------------
+     Processors           | -
+    ----------------------+-----------------------------------------------
+     Idempotency          | disabled
+    ----------------------+-----------------------------------------------
+     Session verification | -
+    ----------------------+-----------------------------------------------
+     Constructible        | yes
+    ----------------------+-----------------------------------------------
+     Retry                | -
+    ----------------------+-----------------------------------------------
+     Input schema         | available
 
     Input schema:
     {
@@ -504,6 +515,8 @@ language-qualified lookup when both implementations share an ID and version.
         "connection_plugin_name": "ssh",
         "processor_names": [],
         "retry": null,
+        "idempotency": "disabled",
+        "session_verification": null,
         "input_schema": {
           "properties": {
             "backup_path": {
@@ -544,6 +557,8 @@ language-qualified lookup when both implementations share an ID and version.
       connection_plugin_name: ssh
       processor_names: []
       retry: null
+      idempotency: disabled
+      session_verification: null
       input_schema:
         properties:
           backup_path:
@@ -589,20 +604,22 @@ language-qualified lookup when both implementations share an ID and version.
 
     ### python:acme.examples.backup_config@1.0.0
 
-    | Field             | Value                                         |
-    |-------------------|-----------------------------------------------|
-    | ID                | `acme.examples.backup_config`                 |
-    | Version           | `1.0.0`                                       |
-    | Name              | `backup_config`                               |
-    | Description       | Backs up selected paths from a network device |
-    | ID source         | `explicit`                                    |
-    | Language          | `Python`                                      |
-    | Execution mode    | `blocking`                                    |
-    | Connection plugin | `ssh`                                         |
-    | Processors        | -                                             |
-    | Constructible     | yes                                           |
-    | Retry             | -                                             |
-    | Input schema      | available                                     |
+    | Field                | Value                                         |
+    |----------------------|-----------------------------------------------|
+    | ID                   | `acme.examples.backup_config`                 |
+    | Version              | `1.0.0`                                       |
+    | Name                 | `backup_config`                               |
+    | Description          | Backs up selected paths from a network device |
+    | ID source            | `explicit`                                    |
+    | Language             | `Python`                                      |
+    | Execution mode       | `blocking`                                    |
+    | Connection plugin    | `ssh`                                         |
+    | Processors           | -                                             |
+    | Idempotency          | `disabled`                                    |
+    | Session verification | -                                             |
+    | Constructible        | yes                                           |
+    | Retry                | -                                             |
+    | Input schema         | available                                     |
 
     #### Input Schema
 
@@ -704,31 +721,35 @@ language-qualified lookup when both implementations share an ID and version.
     ```text
     Task: rust:acme.examples.backup_config@1.0.0
 
-     Field             | Value
-    ====================================================================
-     ID                | acme.examples.backup_config
-    -------------------+------------------------------------------------
-     Version           | 1.0.0
-    -------------------+------------------------------------------------
-     Name              | backup_config
-    -------------------+------------------------------------------------
-     Description       | Backs up selected paths from a network device
-    -------------------+------------------------------------------------
-     ID source         | explicit
-    -------------------+------------------------------------------------
-     Language          | Rust
-    -------------------+------------------------------------------------
-     Execution mode    | async
-    -------------------+------------------------------------------------
-     Connection plugin | ssh
-    -------------------+------------------------------------------------
-     Processors        | -
-    -------------------+------------------------------------------------
-     Constructible     | yes
-    -------------------+------------------------------------------------
-     Retry             | {"allow":true,"max_attempts":3,"delay_ms":250}
-    -------------------+------------------------------------------------
-     Input schema      | available
+     Field                | Value
+    =======================================================================
+     ID                   | acme.examples.backup_config
+    ----------------------+------------------------------------------------
+     Version              | 1.0.0
+    ----------------------+------------------------------------------------
+     Name                 | backup_config
+    ----------------------+------------------------------------------------
+     Description          | Backs up selected paths from a network device
+    ----------------------+------------------------------------------------
+     ID source            | explicit
+    ----------------------+------------------------------------------------
+     Language             | Rust
+    ----------------------+------------------------------------------------
+     Execution mode       | async
+    ----------------------+------------------------------------------------
+     Connection plugin    | ssh
+    ----------------------+------------------------------------------------
+     Processors           | -
+    ----------------------+------------------------------------------------
+     Idempotency          | disabled
+    ----------------------+------------------------------------------------
+     Session verification | -
+    ----------------------+------------------------------------------------
+     Constructible        | yes
+    ----------------------+------------------------------------------------
+     Retry                | {"allow":true,"max_attempts":3,"delay_ms":250}
+    ----------------------+------------------------------------------------
+     Input schema         | available
 
     Input schema:
     {
@@ -774,6 +795,8 @@ language-qualified lookup when both implementations share an ID and version.
           "max_attempts": 3,
           "delay_ms": 250
         },
+        "idempotency": "disabled",
+        "session_verification": null,
         "input_schema": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "properties": {
@@ -819,6 +842,8 @@ language-qualified lookup when both implementations share an ID and version.
         allow: true
         max_attempts: 3
         delay_ms: 250
+      idempotency: disabled
+      session_verification: null
       input_schema:
         $schema: https://json-schema.org/draft/2020-12/schema
         properties:
@@ -864,20 +889,22 @@ language-qualified lookup when both implementations share an ID and version.
 
     ### rust:acme.examples.backup_config@1.0.0
 
-    | Field             | Value                                            |
-    |-------------------|--------------------------------------------------|
-    | ID                | `acme.examples.backup_config`                    |
-    | Version           | `1.0.0`                                          |
-    | Name              | `backup_config`                                  |
-    | Description       | Backs up selected paths from a network device    |
-    | ID source         | `explicit`                                       |
-    | Language          | `Rust`                                           |
-    | Execution mode    | `async`                                          |
-    | Connection plugin | `ssh`                                            |
-    | Processors        | -                                                |
-    | Constructible     | yes                                              |
-    | Retry             | `{"allow":true,"max_attempts":3,"delay_ms":250}` |
-    | Input schema      | available                                        |
+    | Field                | Value                                            |
+    |----------------------|--------------------------------------------------|
+    | ID                   | `acme.examples.backup_config`                    |
+    | Version              | `1.0.0`                                          |
+    | Name                 | `backup_config`                                  |
+    | Description          | Backs up selected paths from a network device    |
+    | ID source            | `explicit`                                       |
+    | Language             | `Rust`                                           |
+    | Execution mode       | `async`                                          |
+    | Connection plugin    | `ssh`                                            |
+    | Processors           | -                                                |
+    | Idempotency          | `disabled`                                       |
+    | Session verification | -                                                |
+    | Constructible        | yes                                              |
+    | Retry                | `{"allow":true,"max_attempts":3,"delay_ms":250}` |
+    | Input schema         | available                                        |
 
     #### Input Schema
 
@@ -1045,7 +1072,7 @@ Choose the command according to how much detail the document needs:
 | Command | Document contents |
 | --- | --- |
 | `task list --output markdown` | Compact summary table without descriptions or input schemas |
-| `task describe <identity> --output markdown` | One task's metadata and input schema, when available |
+| `task describe <identity> --output markdown` | One task's metadata, including verification declarations, and input schema when available |
 | `task docs` | Catalogue index, summary including descriptions, and detailed sections for all tasks |
 
 === ":fontawesome-brands-python: Python"

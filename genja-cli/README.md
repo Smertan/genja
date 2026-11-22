@@ -59,6 +59,11 @@ same ID and version; an unqualified identity works when unique. Custom sources
 without language metadata display `Unknown`. CLI JSON and YAML output uses
 `{ descriptor, language }` records, with `language: null` when unknown; the
 nested descriptor retains its canonical shape.
+That shape includes task-authored `idempotency` and optional
+`session_verification` fields. Detailed `task describe` table and Markdown
+views show them; human-readable `task list` summaries remain compact. See the
+[task registration guide](../docs/task-registration.md#verification-metadata-in-descriptors)
+for their values and compatibility behavior.
 
 ## Terminal User Interface (TUI)
 

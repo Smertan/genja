@@ -43,6 +43,11 @@ def test_discovery_command_imports_declared_project_module(tmp_path):
     assert len(descriptors) == 1
     assert descriptors[0]["id"] == "acme.discovered"
     assert descriptors[0]["version"] == "1.0.0"
+    assert descriptors[0]["idempotency"] == "check_and_verify"
+    assert descriptors[0]["session_verification"] == {
+        "max_attempts": 2,
+        "delay_ms": 500,
+    }
 
 
 def test_discovery_command_imports_multiple_declared_modules(tmp_path):
