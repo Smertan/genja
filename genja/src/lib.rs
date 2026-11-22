@@ -108,11 +108,11 @@ use genja_core::inventory::{
     Connection, ConnectionKey, Host, Hosts, Inventory, ResolvedConnectionParams,
 };
 use genja_core::settings::RunnerConfig;
-pub use genja_core::task::TaskRunOptions;
 use genja_core::task::{
     HostTaskResult, Task, TaskConnectionResolver, TaskDefinition, TaskFailureKind, TaskInfo,
     TaskProcessorResolver, TaskResults, TaskResultsSummary, TaskRetryPolicy, Tasks,
 };
+pub use genja_core::task::{SubtaskContinuation, TaskRunOptions};
 pub use genja_core::task::{TaskListRunOptions, TaskListTimeoutControl};
 use genja_core::{ConfigLoadError, NatString, Settings};
 pub use genja_core_derive::genja_task;

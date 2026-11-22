@@ -8,6 +8,7 @@ from genja.task import (
     Host,
     TaskMessage,
     TaskMessageLevel,
+    TaskFailureResult,
     TaskSuccessResult,
     task,
 )
@@ -361,6 +362,44 @@ def test_genja_runtime_runs_ordered_task_list_with_nested_subtasks():
     assert parent_data["sub_tasks"]["runtime_child"]["hosts"]["router1"]["outcome"][
         "Passed"
     ]["metadata"] == {"has_connection": False}
+
+
+def test_python_invocation_can_select_subtask_continuation():
+    child_starts = []
+
+    @task(name="continuation_child")
+    class Child:
+        def start(self, task, host, context):
+            child_starts.append(host.hostname)
+            return TaskSuccessResult(summary="child ran")
+
+    @task(name="continuation_parent", sub_tasks=[Child])
+    class Parent:
+        def start(self, task, host, context):
+            return TaskFailureResult(message="parent failed")
+
+    runtime = genja.Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
+
+    default = runtime.run_task(Parent, run_options=genja.TaskRunOptions(max_depth=1))
+    default_child = default.to_dict(raw=True)["sub_tasks"]["continuation_child"]
+    assert (
+        default_child["hosts"]["router1"]["outcome"]["Skipped"]["reason"]
+        == "parent_not_successful"
+    )
+    assert child_starts == []
+
+    always = runtime.run_task(
+        Parent,
+        run_options=genja.TaskRunOptions(
+            max_depth=1,
+            subtask_continuation=genja.SubtaskContinuation.ALWAYS,
+        ),
+    )
+    always_child = always.to_dict(raw=True)["sub_tasks"]["continuation_child"]
+    assert "Passed" in always_child["hosts"]["router1"]["outcome"]
+    assert child_starts == ["10.0.0.1"]
 
 
 def test_genja_runtime_run_tasks_rejects_plain_task_iterable():

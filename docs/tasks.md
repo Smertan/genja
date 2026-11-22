@@ -203,22 +203,6 @@ structured result for that host.
     for at most five seconds without extending the task deadline. A timed-out
     subtask skips later sibling subtasks on that host.
 
-    Subtasks run on each host only after their parent's final result is `Passed`
-    or `PassedWithWarnings`. A final `Failed` or `Skipped` result records a
-    `Skipped` result for each omitted subtask on that host, without calling its
-    execution or start hooks. The decision repeats at each depth; ordered root
-    tasks have separate continuation rules. For Rust callers that need the
-    previous behavior, select `SubtaskContinuation::Always` explicitly:
-
-    ```rust
-    use genja::TaskRunOptions;
-    use genja::genja_core::task::SubtaskContinuation;
-
-    let options = TaskRunOptions::new(2)
-        .with_subtask_continuation(SubtaskContinuation::Always);
-    let results = genja.run_task_with_options(my_task, options)?;
-    ```
-
     **Grouped metadata** is written as nested macro arguments, not dotted keys:
 
     ```rust
@@ -285,6 +269,37 @@ structured result for that host.
     setup, and synchronous Python invocation methods, reject that deadline before
     execution until their bridge paths can observe cancellation.
     Use connection-plugin timeouts for blocking connection work.
+
+### Subtask Continuation
+
+Subtasks run on each host only after their parent's final result is `Passed`
+or `PassedWithWarnings`. A final `Failed` or `Skipped` result records a
+`Skipped` result for each omitted subtask on that host, without calling its
+execution or start hooks. The decision repeats at each depth; ordered root
+tasks have separate continuation rules. To keep the previous behavior, select
+`Always` explicitly for the invocation.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::{SubtaskContinuation, TaskRunOptions};
+
+    let options = TaskRunOptions::new(2)
+        .with_subtask_continuation(SubtaskContinuation::Always);
+    let results = genja.run_task_with_options(my_task, options)?;
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import genja
+
+    options = genja.TaskRunOptions(
+        max_depth=2,
+        subtask_continuation=genja.SubtaskContinuation.ALWAYS,
+    )
+    results = runtime.run_task(MyTask, run_options=options)
+    ```
 
 ## Custom Retry Policies (Rust only)
 
@@ -527,6 +542,80 @@ Use task metadata for values that belong to the task definition. Use host data
 for values that vary by inventory target. Use runtime context for values the
 runner resolves while executing, such as the current retry attempt or an
 optional task connection.
+
+## Task-Authored Options
+
+Task-authored `options` is JSON-serializable metadata supplied by the task
+author and passed into task execution. It does not set runtime invocation
+controls such as dry-run, deadlines, or subtask continuation.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    Rust tasks expose dynamic options by defining an `options()` helper method
+    inside the `#[genja_task(...)]` impl.
+
+    ```rust
+    use genja::genja_core::inventory::Host;
+    use genja::genja_core::task::{
+        HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
+    };
+    use genja::genja_task;
+    use serde_json::json;
+
+    struct BackupConfig {
+        options: serde_json::Value,
+    }
+
+    #[genja_task(name = "backup_config")]
+    impl BackupConfig {
+        async fn start_async(
+            &self,
+            _host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            let backup_path = self
+                .options()
+                .and_then(|options| options.get("backup_path"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("/tmp/configs");
+
+            Ok(HostTaskResult::passed(
+                TaskSuccess::new()
+                    .with_summary(format!("backup path is {backup_path}")),
+            ))
+        }
+
+        fn options(&self) -> Option<&serde_json::Value> {
+            Some(&self.options)
+        }
+    }
+
+    let task = BackupConfig {
+        options: json!({"backup_path": "/tmp/configs", "compress": true}),
+    };
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
+
+
+    @task(
+        name="backup_config",
+        options={"backup_path": "/tmp/configs", "compress": True},
+    )
+    class BackupConfig:
+        def start(
+            self,
+            task: TaskInfo,
+            host: Host,
+            context: TaskRuntimeContext,
+        ) -> TaskSuccessResult:
+            return TaskSuccessResult(
+                summary=f"backup path is {task.options['backup_path']}",
+            )
+    ```
 
 ## Sync And Async Execution
 
@@ -793,6 +882,32 @@ different depth limits depending on the workflow.
 
 The maximum depth controls nested sub-task execution. Use `0` when only the
 top-level task should run, and a higher value when sub-tasks are expected.
+
+## Runtime Invocation Options
+
+`TaskRunOptions` controls how a task or task list runs for one invocation.
+It is separate from the task-authored `options` payload described in
+[Task-Authored Options](#task-authored-options). Its controls are:
+
+- `max_depth`: maximum subtask depth, starting at 0 for the root task. Rust
+  callers provide it in `TaskRunOptions::new(...)`; Python callers may omit it
+  to use the runner setting.
+- `dry_run`: request dry-run entrypoints on tasks that support them. Defaults
+  to `false`.
+- `task_timeout`: optional deadline for each async task on each host. A
+  task-declared limit takes precedence over this invocation value, which takes
+  precedence over the runner default. An explicit limit on a blocking task is
+  rejected before it begins.
+- `subtask_continuation`: choose `OnParentSuccess` / `ON_PARENT_SUCCESS`
+  (the default) or `Always` / `ALWAYS`. See [Subtask Continuation](#subtask-continuation).
+
+For ordered root-task lists, `TaskListRunOptions` wraps `TaskRunOptions` and
+adds `timeout_control`. Its default, `Continue` / `CONTINUE`, allows later
+roots to proceed with independent deadlines when timeout cleanup is confirmed;
+`SkipRemainingForHost` /
+`SKIP_REMAINING_FOR_HOST` skips later roots on a host after a task deadline
+expires there. This control applies to root tasks, not parent-subtask
+continuation.
 
 ## Idempotency Checks
 
@@ -1361,81 +1476,6 @@ sub-tasks for execution trees such as deploy, validate, and collect logs.
             context: TaskRuntimeContext,
         ) -> TaskSuccessResult:
             return TaskSuccessResult(summary=f"deployed {host.hostname}")
-    ```
-
-## Task Options
-
-Task options are JSON-serializable metadata passed into task execution.
-They are task-authored metadata and are separate from runtime
-`TaskRunOptions`, which operators use for controls such as `max_depth` and
-`dry_run`.
-
-=== ":fontawesome-brands-rust: Rust"
-
-    Rust tasks expose dynamic options by defining an `options()` helper method
-    inside the `#[genja_task(...)]` impl.
-
-    ```rust
-    use genja::genja_core::inventory::Host;
-    use genja::genja_core::task::{
-        HostTaskResult, TaskError, TaskRuntimeContext, TaskSuccess,
-    };
-    use genja::genja_task;
-    use serde_json::json;
-
-    struct BackupConfig {
-        options: serde_json::Value,
-    }
-
-    #[genja_task(name = "backup_config")]
-    impl BackupConfig {
-        async fn start_async(
-            &self,
-            _host: &Host,
-            _context: &TaskRuntimeContext,
-        ) -> Result<HostTaskResult, TaskError> {
-            let backup_path = self
-                .options()
-                .and_then(|options| options.get("backup_path"))
-                .and_then(|value| value.as_str())
-                .unwrap_or("/tmp/configs");
-
-            Ok(HostTaskResult::passed(
-                TaskSuccess::new()
-                    .with_summary(format!("backup path is {backup_path}")),
-            ))
-        }
-
-        fn options(&self) -> Option<&serde_json::Value> {
-            Some(&self.options)
-        }
-    }
-
-    let task = BackupConfig {
-        options: json!({"backup_path": "/tmp/configs", "compress": true}),
-    };
-    ```
-
-=== ":fontawesome-brands-python: Python"
-
-    ```python
-    from genja.task import Host, TaskInfo, TaskRuntimeContext, TaskSuccessResult, task
-
-
-    @task(
-        name="backup_config",
-        options={"backup_path": "/tmp/configs", "compress": True},
-    )
-    class BackupConfig:
-        def start(
-            self,
-            task: TaskInfo,
-            host: Host,
-            context: TaskRuntimeContext,
-        ) -> TaskSuccessResult:
-            return TaskSuccessResult(
-                summary=f"backup path is {task.options['backup_path']}",
-            )
     ```
 
 ## Repository Examples

@@ -1252,6 +1252,23 @@ def test_python_timeout_options_accept_fractional_seconds():
     assert options.with_task_timeout(0.5).task_timeout == 0.5
 
 
+def test_python_subtask_continuation_options_default_and_builder():
+    default = genja.TaskRunOptions()
+    assert default.subtask_continuation == genja.SubtaskContinuation.ON_PARENT_SUCCESS
+    assert default.to_dict()["subtask_continuation"] == "on_parent_success"
+
+    always = default.with_subtask_continuation(genja.SubtaskContinuation.ALWAYS)
+    assert always.subtask_continuation == genja.SubtaskContinuation.ALWAYS
+    assert always.to_dict()["subtask_continuation"] == "always"
+    assert default.subtask_continuation == genja.SubtaskContinuation.ON_PARENT_SUCCESS
+    assert (
+        genja.TaskRunOptions(
+            subtask_continuation=genja.SubtaskContinuation.ALWAYS
+        ).subtask_continuation
+        == genja.SubtaskContinuation.ALWAYS
+    )
+
+
 @pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), True])
 def test_python_timeout_options_reject_invalid_values(timeout):
     with pytest.raises(

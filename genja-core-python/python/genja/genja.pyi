@@ -475,6 +475,17 @@ class TaskConnectionResolver:
 
     ...
 
+class SubtaskContinuation:
+    """When a task's subtasks continue after its final result on a host."""
+
+    ALWAYS: ClassVar[SubtaskContinuation]
+    ON_PARENT_SUCCESS: ClassVar[SubtaskContinuation]
+
+    @property
+    def value(self) -> str:
+        """Stable lowercase value for serialization and display."""
+        ...
+
 class TaskRunOptions:
     """Runtime execution controls for task or task-list invocations."""
 
@@ -483,8 +494,9 @@ class TaskRunOptions:
         max_depth: int | None = None,
         dry_run: bool = False,
         task_timeout: float | None = None,
+        subtask_continuation: SubtaskContinuation | None = None,
     ) -> None:
-        """Create runtime options for task execution."""
+        """Create runtime options; continuation defaults to parent success."""
         ...
     @property
     def max_depth(self) -> int | None:
@@ -498,6 +510,10 @@ class TaskRunOptions:
     def task_timeout(self) -> float | None:
         """Async timeout in seconds; unsupported Python bridges reject it."""
         ...
+    @property
+    def subtask_continuation(self) -> SubtaskContinuation:
+        """Mode applied at each parent-subtask boundary on each host."""
+        ...
     def with_max_depth(self, max_depth: int) -> TaskRunOptions:
         """Return a copy with a different maximum nested sub-task depth."""
         ...
@@ -506,6 +522,11 @@ class TaskRunOptions:
         ...
     def with_task_timeout(self, task_timeout: float) -> TaskRunOptions:
         """Return a copy with an async-task timeout in seconds."""
+        ...
+    def with_subtask_continuation(
+        self, continuation: SubtaskContinuation
+    ) -> TaskRunOptions:
+        """Return a copy with a different subtask continuation mode."""
         ...
     def to_dict(self) -> dict[str, Any]:
         """Return the runtime options as a dictionary."""

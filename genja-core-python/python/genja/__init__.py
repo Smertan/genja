@@ -33,6 +33,7 @@ from .genja import (
     TaskListRunOptions,
     TaskListTimeoutControl,
     TaskRunOptions,
+    SubtaskContinuation,
     TaskResults,
     Tasks,
 )
@@ -101,6 +102,7 @@ __all__ = [
     "TaskListRunOptions",
     "TaskListTimeoutControl",
     "TaskRunOptions",
+    "SubtaskContinuation",
     "Tasks",
     "TaskResults",
     "Genja",

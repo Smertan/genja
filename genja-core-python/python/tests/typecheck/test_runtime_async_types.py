@@ -9,6 +9,7 @@ from genja import (
     TaskResults,
     TaskRunOptions,
     Tasks,
+    SubtaskContinuation,
 )
 from genja.task import Host, TaskSuccessResult, task
 
@@ -29,7 +30,10 @@ def check_runtime_async_types() -> None:
     one: Awaitable[TaskResults] = runtime.run_task_async(RuntimeAsyncTypecheckTask)
     many: Awaitable[list[TaskResults]] = runtime.run_tasks_async(tasks)
     list_options = TaskListRunOptions(
-        TaskRunOptions(task_timeout=0.5),
+        TaskRunOptions(
+            task_timeout=0.5,
+            subtask_continuation=SubtaskContinuation.ON_PARENT_SUCCESS,
+        ),
         TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST,
     )
     controlled: Awaitable[list[TaskResults]] = runtime.run_tasks_async(
