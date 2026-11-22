@@ -2,10 +2,11 @@ use ::genja::Genja as RuntimeGenja;
 use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
     HostTaskResult, IdempotencyCheck, IdempotencyMode, MessageLevel, SessionVerificationConfig,
-    Task, TaskConnectionResolver, TaskDefinition, TaskError, TaskExecutionMode, TaskFailure,
-    TaskFailureKind, TaskInfo, TaskListRunOptions, TaskListTimeoutControl, TaskMessage,
-    TaskResults, TaskResultsSummary, TaskRetryConfig, TaskRunOptions, TaskRuntimeContext, TaskSkip,
-    TaskSuccess, Tasks, validate_explicit_task_id, validate_task_version,
+    SubtaskContinuation, Task, TaskConnectionResolver, TaskDefinition, TaskError,
+    TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskListRunOptions,
+    TaskListTimeoutControl, TaskMessage, TaskResults, TaskResultsSummary, TaskRetryConfig,
+    TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks, validate_explicit_task_id,
+    validate_task_version,
 };
 use async_trait::async_trait;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -175,6 +176,16 @@ py_string_enum! {
     variants: {
         Continue => CONTINUE => "continue",
         SkipRemainingForHost => SKIP_REMAINING_FOR_HOST => "skip_remaining_for_host",
+    }
+}
+
+py_string_enum! {
+    py: PySubtaskContinuation,
+    rust: SubtaskContinuation,
+    python_name: "SubtaskContinuation",
+    variants: {
+        Always => ALWAYS => "always",
+        OnParentSuccess => ON_PARENT_SUCCESS => "on_parent_success",
     }
 }
 
@@ -1059,12 +1070,14 @@ pub struct PyTaskConnectionResolver {
 /// Python wrapper for runtime task execution options.
 ///
 /// `TaskRunOptions` carries operator-selected execution controls such as
-/// maximum sub-task depth, dry-run mode, and an optional task timeout. It is
-/// separate from task decorator `options`, which are task-authored metadata.
+/// maximum sub-task depth, dry-run mode, an optional task timeout, and subtask
+/// continuation. It is separate from task decorator `options`, which are
+/// task-authored metadata.
 pub struct PyTaskRunOptions {
     pub(crate) max_depth: Option<usize>,
     pub(crate) dry_run: bool,
     pub(crate) task_timeout: Option<Duration>,
+    pub(crate) subtask_continuation: SubtaskContinuation,
 }
 
 /// Python options for an ordered task list.
@@ -1212,11 +1225,12 @@ impl PyTaskDefinition {
 impl PyTaskRunOptions {
     /// Create runtime task execution options.
     #[new]
-    #[pyo3(signature = (max_depth=None, dry_run=false, task_timeout=None))]
+    #[pyo3(signature = (max_depth=None, dry_run=false, task_timeout=None, subtask_continuation=None))]
     fn new(
         max_depth: Option<Bound<'_, PyAny>>,
         dry_run: bool,
         task_timeout: Option<Bound<'_, PyAny>>,
+        subtask_continuation: Option<PyRef<'_, PySubtaskContinuation>>,
     ) -> PyResult<Self> {
         let max_depth = match max_depth {
             Some(value) => Some(extract_task_run_options_max_depth(&value)?),
@@ -1230,6 +1244,9 @@ impl PyTaskRunOptions {
             max_depth,
             dry_run,
             task_timeout,
+            subtask_continuation: subtask_continuation
+                .map(|mode| (*mode).into())
+                .unwrap_or_default(),
         })
     }
 
@@ -1253,12 +1270,19 @@ impl PyTaskRunOptions {
         self.task_timeout.map(|timeout| timeout.as_secs_f64())
     }
 
+    /// Return when subtasks continue after each host's final parent result.
+    #[getter]
+    fn subtask_continuation(&self) -> PySubtaskContinuation {
+        self.subtask_continuation.into()
+    }
+
     /// Return a copy with a different maximum nested sub-task depth.
     fn with_max_depth(&self, max_depth: usize) -> Self {
         Self {
             max_depth: Some(max_depth),
             dry_run: self.dry_run,
             task_timeout: self.task_timeout,
+            subtask_continuation: self.subtask_continuation,
         }
     }
 
@@ -1268,6 +1292,7 @@ impl PyTaskRunOptions {
             max_depth: self.max_depth,
             dry_run,
             task_timeout: self.task_timeout,
+            subtask_continuation: self.subtask_continuation,
         }
     }
 
@@ -1279,6 +1304,14 @@ impl PyTaskRunOptions {
         })
     }
 
+    /// Return a copy with a different per-host subtask continuation mode.
+    fn with_subtask_continuation(&self, continuation: PyRef<'_, PySubtaskContinuation>) -> Self {
+        Self {
+            subtask_continuation: (*continuation).into(),
+            ..self.clone()
+        }
+    }
+
     /// Convert the runtime options to a Python dictionary.
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let payload = PyDict::new(py);
@@ -1288,15 +1321,20 @@ impl PyTaskRunOptions {
         }
         payload.set_item("dry_run", self.dry_run)?;
         payload.set_item("task_timeout", self.task_timeout())?;
+        payload.set_item(
+            "subtask_continuation",
+            PySubtaskContinuation::from(self.subtask_continuation).value_str(),
+        )?;
         Ok(payload.unbind().into())
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "TaskRunOptions(max_depth={:?}, dry_run={}, task_timeout={:?})",
+            "TaskRunOptions(max_depth={:?}, dry_run={}, task_timeout={:?}, subtask_continuation={:?})",
             self.max_depth,
             self.dry_run,
-            self.task_timeout()
+            self.task_timeout(),
+            self.subtask_continuation
         )
     }
 }
@@ -1759,7 +1797,8 @@ fn task_run_options_from_python(
     default_max_depth: usize,
 ) -> TaskRunOptions {
     let mut task_options = TaskRunOptions::new(options.max_depth.unwrap_or(default_max_depth))
-        .with_dry_run(options.dry_run);
+        .with_dry_run(options.dry_run)
+        .with_subtask_continuation(options.subtask_continuation);
     if let Some(task_timeout) = options.task_timeout {
         task_options = task_options.with_task_timeout(task_timeout);
     }
@@ -1796,6 +1835,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTasks>()?;
     module.add_class::<PyTaskConnectionResolver>()?;
     module.add_class::<PyTaskRunOptions>()?;
+    module.add_class::<PySubtaskContinuation>()?;
     module.add_class::<PyTaskListTimeoutControl>()?;
     module.add_class::<PyTaskListRunOptions>()?;
     module.add_class::<PyTaskResults>()?;
@@ -3065,7 +3105,7 @@ mod tests {
         init_python();
         Python::attach(|py| {
             let value = PyBool::new(py, true).to_owned().into_any();
-            let err = match PyTaskRunOptions::new(Some(value), false, None) {
+            let err = match PyTaskRunOptions::new(Some(value), false, None, None) {
                 Ok(_) => panic!("bool max_depth should fail"),
                 Err(err) => err,
             };
@@ -3087,12 +3127,14 @@ mod tests {
                     max_depth: Some(1),
                     dry_run: false,
                     task_timeout: None,
+                    subtask_continuation: SubtaskContinuation::OnParentSuccess,
                 },
             )
             .expect("nested run options should build");
             let err = match PyTaskRunOptions::new(
                 Some(nested.bind(py).clone().into_any()),
                 false,
+                None,
                 None,
             ) {
                 Ok(_) => panic!("nested TaskRunOptions max_depth should fail"),

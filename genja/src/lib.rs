@@ -108,11 +108,11 @@ use genja_core::inventory::{
     Connection, ConnectionKey, Host, Hosts, Inventory, ResolvedConnectionParams,
 };
 use genja_core::settings::RunnerConfig;
-pub use genja_core::task::TaskRunOptions;
 use genja_core::task::{
     HostTaskResult, Task, TaskConnectionResolver, TaskDefinition, TaskFailureKind, TaskInfo,
     TaskProcessorResolver, TaskResults, TaskResultsSummary, TaskRetryPolicy, Tasks,
 };
+pub use genja_core::task::{SubtaskContinuation, TaskRunOptions};
 pub use genja_core::task::{TaskListRunOptions, TaskListTimeoutControl};
 use genja_core::{ConfigLoadError, NatString, Settings};
 pub use genja_core_derive::genja_task;
@@ -1656,7 +1656,7 @@ impl Default for Genja {
 #[cfg(test)]
 mod tests {
     use super::{
-        Genja, GenjaError, RuntimeTaskConnectionResolver, TaskListRunOptions,
+        Genja, GenjaError, RuntimeTaskConnectionResolver, SubtaskContinuation, TaskListRunOptions,
         TaskListTimeoutControl, TaskRunOptions, genja_task,
     };
     use async_trait::async_trait;
@@ -4920,6 +4920,47 @@ mod tests {
                     .is_some_and(HostTaskResult::is_passed)
             );
             assert_eq!(second_calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn subtask_continuation_does_not_skip_later_root_after_failure() {
+        for runner in ["serial", "threaded"] {
+            for mode in [
+                SubtaskContinuation::OnParentSuccess,
+                SubtaskContinuation::Always,
+            ] {
+                let settings = Settings::builder()
+                    .runner(RunnerConfig::builder().plugin(runner).build())
+                    .build();
+                let genja = Genja::builder(single_host_inventory())
+                    .with_settings(settings)
+                    .build()
+                    .expect("runner should build");
+                let mut tasks = Tasks::new();
+                tasks.add_task(FailedTask);
+                tasks.add_task(TestTask {
+                    name: "second".to_string(),
+                });
+
+                let results = genja
+                    .run_tasks_with_options(
+                        tasks,
+                        TaskRunOptions::new(0).with_subtask_continuation(mode),
+                    )
+                    .expect("task list should complete");
+
+                assert!(
+                    results[0]
+                        .host_result("router1")
+                        .is_some_and(HostTaskResult::is_failed)
+                );
+                assert!(
+                    results[1]
+                        .host_result("router1")
+                        .is_some_and(HostTaskResult::is_passed)
+                );
+            }
         }
     }
 

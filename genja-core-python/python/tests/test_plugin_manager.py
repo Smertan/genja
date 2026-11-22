@@ -116,6 +116,49 @@ def test_runner_plugin_run_tasks_executes_from_python_side():
     assert batch[1].passed_hosts == ["router1", "router2"]
 
 
+def test_runner_plugin_receives_subtask_continuation_for_task_and_list():
+    seen_modes = []
+
+    class RecordingRunner(BatchRunnerPlugin):
+        name = "continuation_recording_runner"
+
+        def run_task(
+            self, task, hosts, connection_resolver, runner_config, run_options
+        ):
+            seen_modes.append(run_options.subtask_continuation)
+            return super().run_task(
+                task, hosts, connection_resolver, runner_config, run_options
+            )
+
+        def run_tasks(
+            self, tasks, hosts, connection_resolver, runner_config, run_options
+        ):
+            seen_modes.append(run_options.subtask_continuation)
+            return super().run_tasks(
+                tasks, hosts, connection_resolver, runner_config, run_options
+            )
+
+    manager = genja.PluginManager()
+    manager.register_plugin(RecordingRunner())
+    runtime = genja.Genja.from_hosts(
+        {"router1": Host(hostname="10.0.0.1", platform="ios")},
+        plugin_manager=manager,
+    ).with_runner("continuation_recording_runner")
+    options = genja.TaskRunOptions(
+        subtask_continuation=genja.SubtaskContinuation.ALWAYS,
+    )
+
+    runtime.run_task(PluginManagerRunnerTask, run_options=options)
+    tasks = genja.Tasks()
+    tasks.add_task(PluginManagerRunnerTask)
+    runtime.run_tasks(tasks, run_options=options)
+
+    assert seen_modes == [
+        genja.SubtaskContinuation.ALWAYS,
+        genja.SubtaskContinuation.ALWAYS,
+    ]
+
+
 def test_transform_plugin_with_host_only_method_still_builds_runtime():
     manager = genja.PluginManager()
     manager.register_plugin(HostOnlyTransformPlugin())

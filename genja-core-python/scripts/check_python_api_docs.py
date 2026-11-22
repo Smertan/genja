@@ -59,6 +59,7 @@ DUPLICATED_TOP_LEVEL_CLASSES = [
     "TaskListRunOptions",
     "TaskListTimeoutControl",
     "TaskRunOptions",
+    "SubtaskContinuation",
     "Tasks",
     "TaskResults",
     "Genja",

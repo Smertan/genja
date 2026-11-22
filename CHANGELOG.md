@@ -11,6 +11,7 @@ Changed packages:
 
 ### Added
 
+- **Breaking:** Subtasks now run on a host only when their parent's final result is `Passed` or `PassedWithWarnings`. Failed or skipped parents produce structured skipped results for omitted descendants without running their execution or start hooks. To retain the previous continuation behavior, select `SubtaskContinuation::Always` in Rust or `genja.SubtaskContinuation.ALWAYS` in Python invocation options. Refs: #176
 - **Breaking:** Rust and Python task descriptors now include task-authored `idempotency` and `session_verification` fields. Add these fields to Rust `TaskDescriptor` and `TaskDescriptorMetadata` struct literals; consumers with strict serialized schemas should accept the new fields. Older serialized descriptors default to disabled idempotency and no session verification when read. Refs: #175
 - Detailed `genja task describe` table and Markdown output now shows task-authored idempotency and session verification configuration; human-readable task lists remain compact. Refs: #175
 - Added `TaskListRunOptions` for ordered task lists, with an opt-in timeout control that skips later roots on a host after a task deadline expires there; the default continues with independent deadlines. Available in Rust and Python. Refs: #173
