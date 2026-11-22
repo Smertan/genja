@@ -3916,6 +3916,14 @@ struct HostResultRecording<'a> {
     deadline: Option<TaskDeadline>,
 }
 
+/// A result finalized before the task-attempt loop begins.
+struct EarlyHostResult<'a> {
+    result: HostTaskResult,
+    finished_at: SystemTime,
+    recording: HostResultRecording<'a>,
+    completion: HostResultCompletion,
+}
+
 fn record_host_result(
     results: &mut TaskResults,
     mut host_result: HostTaskResult,
@@ -4435,6 +4443,23 @@ pub enum SubtaskContinuation {
     OnParentSuccess,
 }
 
+impl SubtaskContinuation {
+    fn skip_reason(self, parent: Option<&HostTaskResult>) -> Option<&'static str> {
+        match (self, parent.map(HostTaskResult::outcome)) {
+            (Self::Always, _) => None,
+            (
+                Self::OnParentSuccess,
+                Some(HostTaskOutcome::Passed(_) | HostTaskOutcome::PassedWithWarnings(_)),
+            ) => None,
+            (
+                Self::OnParentSuccess,
+                Some(HostTaskOutcome::Failed(_) | HostTaskOutcome::Skipped(_)),
+            ) => Some("parent_not_successful"),
+            (Self::OnParentSuccess, None) => Some("parent_result_missing"),
+        }
+    }
+}
+
 /// How an ordered task list treats a host after one of its task deadlines expires.
 ///
 /// This controls later root tasks only. Each task and host retains its own
@@ -4778,6 +4803,7 @@ struct TaskPolicyInputs {
 }
 
 /// Parent position and execution defaults passed to each child task.
+#[derive(Clone)]
 struct SubTaskContext {
     parent_depth: usize,
     run_options: TaskRunOptions,
@@ -5688,9 +5714,10 @@ impl TaskDefinition {
     /// Execute this task and all its sub-tasks recursively up to a maximum depth.
     ///
     /// This method starts the task execution by calling the task's `start()` method,
-    /// then recursively executes all sub-tasks returned by `sub_tasks()`. The recursion
-    /// is limited by the `max_depth` parameter to prevent infinite loops or excessive
-    /// nesting.
+    /// then considers sub-tasks returned by `sub_tasks()`. By default, each subtask
+    /// runs on a host only after its parent's final result there is `Passed` or
+    /// `PassedWithWarnings`. The recursion is limited by the `max_depth` parameter
+    /// to prevent infinite loops or excessive nesting.
     ///
     /// # Parameters
     ///
@@ -6038,6 +6065,12 @@ impl TaskDefinition {
         let retry_policy = root_policy_override
             .map(ResolvedRetryPolicy::Custom)
             .unwrap_or_else(|| ResolvedRetryPolicy::for_config(retry_config, &retry_defaults));
+        let sub_task_context = SubTaskContext {
+            parent_depth: depth,
+            run_options,
+            retry_defaults: retry_defaults.with_policy(retry_policy.clone()),
+            runner_task_timeout,
+        };
         let processor_context =
             TaskProcessorContext::new(task.name(), parent_task_name, depth, Some(hostname));
         let processors = Self::resolve_processors(processor_resolver, &processor_names)?;
@@ -6094,7 +6127,19 @@ impl TaskDefinition {
             } else {
                 HostResultCompletion::BeforeAttempts
             };
-            record_host_result(results, host_result, finished_at, recording, completion)?;
+            Self::finish_early_result(
+                task.as_ref(),
+                host_execution,
+                results,
+                EarlyHostResult {
+                    result: host_result,
+                    finished_at,
+                    recording,
+                    completion,
+                },
+                sub_task_context.clone(),
+            )
+            .await?;
             return Ok(());
         }
 
@@ -6163,7 +6208,19 @@ impl TaskDefinition {
                     } else {
                         HostResultCompletion::BeforeAttempts
                     };
-                    record_host_result(results, host_result, finished_at, recording, completion)?;
+                    Self::finish_early_result(
+                        task.as_ref(),
+                        host_execution,
+                        results,
+                        EarlyHostResult {
+                            result: host_result,
+                            finished_at,
+                            recording,
+                            completion,
+                        },
+                        sub_task_context.clone(),
+                    )
+                    .await?;
                     return Ok(());
                 }
             }
@@ -6203,13 +6260,19 @@ impl TaskDefinition {
                 )))
                 .with_kind(TaskFailureKind::Unsupported),
             );
-            record_host_result(
+            Self::finish_early_result(
+                task.as_ref(),
+                host_execution,
                 results,
-                host_result,
-                finished_at,
-                recording,
-                HostResultCompletion::BeforeAttempts,
-            )?;
+                EarlyHostResult {
+                    result: host_result,
+                    finished_at,
+                    recording,
+                    completion: HostResultCompletion::BeforeAttempts,
+                },
+                sub_task_context.clone(),
+            )
+            .await?;
             return Ok(());
         }
 
@@ -6287,24 +6350,34 @@ impl TaskDefinition {
             return Ok(());
         }
 
-        Self::run_sub_tasks(
-            task.as_ref(),
-            HostExecution {
-                hostname,
-                host,
-                connection_resolver,
-                processor_resolver,
-            },
-            results,
-            SubTaskContext {
-                parent_depth: depth,
-                run_options,
-                retry_defaults: retry_defaults.with_policy(retry_policy),
-                runner_task_timeout,
-            },
-        )
-        .await?;
+        Self::run_sub_tasks(task.as_ref(), host_execution, results, sub_task_context).await?;
 
+        Ok(())
+    }
+
+    /// Record a pre-attempt result, then apply continuation to its final host outcome.
+    async fn finish_early_result(
+        task: &dyn Task,
+        host_execution: HostExecution<'_>,
+        results: &mut TaskResults,
+        early: EarlyHostResult<'_>,
+        sub_task_context: SubTaskContext,
+    ) -> Result<(), crate::GenjaError> {
+        let EarlyHostResult {
+            result,
+            finished_at,
+            recording,
+            completion,
+        } = early;
+        let may_continue = matches!(completion, HostResultCompletion::BeforeAttempts);
+        record_host_result(results, result, finished_at, recording, completion)?;
+        if may_continue
+            && !results
+                .host_result(host_execution.hostname)
+                .is_some_and(is_deadline_timeout_result)
+        {
+            Self::run_sub_tasks(task, host_execution, results, sub_task_context).await?;
+        }
         Ok(())
     }
 
@@ -6312,7 +6385,8 @@ impl TaskDefinition {
     ///
     /// Each child re-enters the full host execution path so it resolves its own
     /// connection, retry settings, attempt count, verification, timing, and results.
-    /// The existing aggregate processor hooks surround each recursive call.
+    /// The existing aggregate processor hooks surround each executed recursive
+    /// call. Skipped children and descendants receive results without hooks.
     async fn run_sub_tasks(
         task: &dyn Task,
         host_execution: HostExecution<'_>,
@@ -6327,6 +6401,9 @@ impl TaskDefinition {
         } = sub_task_context;
         let child_depth = parent_depth + 1;
         let mut deadline_expired = false;
+        let policy_skip_reason = run_options
+            .subtask_continuation()
+            .skip_reason(results.host_result(host_execution.hostname));
         for sub in task.sub_tasks() {
             let sub_task_name = sub.name().to_string();
             if results.sub_task(&sub_task_name).is_none() {
@@ -6336,9 +6413,37 @@ impl TaskDefinition {
                 .sub_task_mut(&sub_task_name)
                 .expect("sub task results should exist after insertion");
             if deadline_expired {
-                sub_results.insert_host_result(
+                Self::record_skipped_subtree(
+                    sub.as_ref(),
+                    sub_results,
                     host_execution.hostname,
-                    HostTaskResult::skipped_with_reason("previous_subtask_deadline_expired"),
+                    "previous_subtask_deadline_expired",
+                    child_depth,
+                    run_options.max_depth(),
+                );
+                continue;
+            }
+            if host_execution.connection_resolver.is_some_and(|resolver| {
+                resolver.host_unavailable_after_timeout(host_execution.hostname)
+            }) {
+                Self::record_skipped_subtree(
+                    sub.as_ref(),
+                    sub_results,
+                    host_execution.hostname,
+                    "timeout_cleanup_unconfirmed",
+                    child_depth,
+                    run_options.max_depth(),
+                );
+                continue;
+            }
+            if let Some(reason) = policy_skip_reason {
+                Self::record_skipped_subtree(
+                    sub.as_ref(),
+                    sub_results,
+                    host_execution.hostname,
+                    reason,
+                    child_depth,
+                    run_options.max_depth(),
                 );
                 continue;
             }
@@ -6346,10 +6451,7 @@ impl TaskDefinition {
             let sub_processors =
                 Self::resolve_processors(host_execution.processor_resolver, &sub_processor_names)?;
             let mut sub_task_started = false;
-            if !sub_processors.is_empty()
-                && sub_results.hosts().is_empty()
-                && sub_results.sub_tasks().is_empty()
-            {
+            if !sub_processors.is_empty() && sub_results.started_at().is_none() {
                 let sub_context = TaskProcessorContext::new(
                     sub_task_name.as_str(),
                     Some(task.name()),
@@ -6395,6 +6497,38 @@ impl TaskDefinition {
         }
 
         Ok(())
+    }
+
+    /// Record one omitted task tree for a host without entering task execution.
+    fn record_skipped_subtree(
+        task: &dyn Task,
+        results: &mut TaskResults,
+        hostname: &str,
+        reason: &str,
+        depth: usize,
+        max_depth: usize,
+    ) {
+        results.insert_host_result(hostname, HostTaskResult::skipped_with_reason(reason));
+        if depth > max_depth {
+            return;
+        }
+        for child in task.sub_tasks() {
+            let child_name = child.name();
+            if results.sub_task(child_name).is_none() {
+                results.insert_sub_task(child_name, TaskResults::new(child_name));
+            }
+            let child_results = results
+                .sub_task_mut(child_name)
+                .expect("subtask results should exist after insertion");
+            Self::record_skipped_subtree(
+                child.as_ref(),
+                child_results,
+                hostname,
+                reason,
+                depth + 1,
+                max_depth,
+            );
+        }
     }
 }
 
@@ -6611,6 +6745,28 @@ mod tests {
         counter: Arc<AtomicUsize>,
     }
 
+    struct ContinuationTask {
+        name: &'static str,
+        result: HostTaskResult,
+        router2_result: Option<HostTaskResult>,
+        children: Vec<Arc<dyn Task>>,
+        starts: Arc<AtomicUsize>,
+        processors: Vec<String>,
+    }
+
+    impl ContinuationTask {
+        fn new(name: &'static str, result: HostTaskResult) -> Self {
+            Self {
+                name,
+                result,
+                router2_result: None,
+                children: Vec::new(),
+                starts: Arc::new(AtomicUsize::new(0)),
+                processors: Vec::new(),
+            }
+        }
+    }
+
     struct ProcessorTask {
         name: &'static str,
         processors: Vec<String>,
@@ -6619,6 +6775,10 @@ mod tests {
     struct CountingProcessor {
         calls: Arc<AtomicUsize>,
     }
+
+    struct RecoveringProcessor;
+
+    struct SlowFinishProcessor;
 
     struct TestProcessorResolver {
         processor: Arc<dyn TaskProcessor>,
@@ -6879,6 +7039,40 @@ mod tests {
 
         fn options(&self) -> Option<&Value> {
             None
+        }
+    }
+
+    impl TaskInfo for ContinuationTask {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn processor_names(&self) -> Vec<&str> {
+            self.processors.iter().map(String::as_str).collect()
+        }
+    }
+
+    #[async_trait]
+    impl Task for ContinuationTask {
+        async fn start_async(
+            &self,
+            host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            Ok(if host.hostname() == Some("router2") {
+                self.router2_result.as_ref().unwrap_or(&self.result).clone()
+            } else {
+                self.result.clone()
+            })
+        }
+
+        fn sub_tasks(&self) -> Vec<Arc<dyn Task>> {
+            self.children.clone()
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
         }
     }
 
@@ -7320,6 +7514,30 @@ mod tests {
         }
     }
 
+    impl TaskProcessor for RecoveringProcessor {
+        fn on_instance_finish(
+            &self,
+            _context: &TaskProcessorContext,
+            result: &mut HostTaskResult,
+        ) -> Result<(), crate::GenjaError> {
+            if result.is_failed() {
+                *result = HostTaskResult::passed(TaskSuccess::new());
+            }
+            Ok(())
+        }
+    }
+
+    impl TaskProcessor for SlowFinishProcessor {
+        fn on_instance_finish(
+            &self,
+            _context: &TaskProcessorContext,
+            _result: &mut HostTaskResult,
+        ) -> Result<(), crate::GenjaError> {
+            std::thread::sleep(Duration::from_millis(20));
+            Ok(())
+        }
+    }
+
     impl TaskProcessorResolver for TestProcessorResolver {
         fn resolve_task_processor(&self, name: &str) -> Option<Arc<dyn TaskProcessor>> {
             (name == "selected").then(|| Arc::clone(&self.processor))
@@ -7642,6 +7860,242 @@ mod tests {
         assert!(node_results.started_at().is_some());
         assert!(node_results.finished_at().is_some());
         assert!(node_results.duration_display().is_some());
+    }
+
+    #[test]
+    fn subtask_continuation_uses_final_parent_outcome_and_skips_without_hooks() {
+        let cases = [
+            (HostTaskResult::passed(TaskSuccess::new()), true),
+            (
+                HostTaskResult::passed_with_warnings(TaskSuccess::new()),
+                true,
+            ),
+            (
+                HostTaskResult::failed(TaskFailure::new(TestTaskFailureError)),
+                false,
+            ),
+            (HostTaskResult::skipped_with_reason("authored_skip"), false),
+        ];
+        for (parent_result, should_continue) in cases {
+            for mode in [
+                SubtaskContinuation::OnParentSuccess,
+                SubtaskContinuation::Always,
+            ] {
+                let mut child =
+                    ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+                child.processors.push("selected".to_string());
+                let child_starts = Arc::clone(&child.starts);
+                let mut root = ContinuationTask::new("root", parent_result.clone());
+                root.children.push(Arc::new(child));
+                let processor_calls = Arc::new(AtomicUsize::new(0));
+                let resolver = Arc::new(TestProcessorResolver {
+                    processor: Arc::new(CountingProcessor {
+                        calls: Arc::clone(&processor_calls),
+                    }),
+                });
+                let task = TaskDefinition::new(root).with_processor_resolver(resolver);
+                let host = Host::builder().hostname("router1").build();
+                let mut results = TaskResults::new("root");
+                let options = TaskRunOptions::new(1).with_subtask_continuation(mode);
+                run_async(task.start_with_options("router1", &host, &mut results, options))
+                    .expect("task tree should complete");
+
+                let child_result = results
+                    .sub_task("child")
+                    .and_then(|subtask| subtask.host_result("router1"))
+                    .expect("child should have a host result");
+                let child_runs = mode == SubtaskContinuation::Always || should_continue;
+                assert_eq!(child_starts.load(Ordering::SeqCst), usize::from(child_runs));
+                assert_eq!(
+                    processor_calls.load(Ordering::SeqCst),
+                    if child_runs { 4 } else { 0 }
+                );
+                if child_runs {
+                    assert!(child_result.is_passed());
+                } else {
+                    assert_eq!(
+                        child_result.skipped_detail().and_then(TaskSkip::reason),
+                        Some("parent_not_successful")
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn subtask_continuation_is_per_host_and_recurses_into_skipped_descendants() {
+        let grandchild =
+            ContinuationTask::new("grandchild", HostTaskResult::passed(TaskSuccess::new()));
+        let grandchild_starts = Arc::clone(&grandchild.starts);
+        let mut child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+        child.processors.push("selected".to_string());
+        child.children.push(Arc::new(grandchild));
+        let child_starts = Arc::clone(&child.starts);
+        let mut root = ContinuationTask::new("root", HostTaskResult::passed(TaskSuccess::new()));
+        root.router2_result = Some(HostTaskResult::failed(TaskFailure::new(
+            TestTaskFailureError,
+        )));
+        root.children.push(Arc::new(child));
+        let processor_calls = Arc::new(AtomicUsize::new(0));
+        let task =
+            TaskDefinition::new(root).with_processor_resolver(Arc::new(TestProcessorResolver {
+                processor: Arc::new(CountingProcessor {
+                    calls: Arc::clone(&processor_calls),
+                }),
+            }));
+        let mut results = TaskResults::new("root");
+        for hostname in ["router2", "router1"] {
+            let host = Host::builder().hostname(hostname).build();
+            run_async(task.start_with_options(
+                hostname,
+                &host,
+                &mut results,
+                TaskRunOptions::new(2),
+            ))
+            .expect("host task tree should complete");
+        }
+
+        assert_eq!(child_starts.load(Ordering::SeqCst), 1);
+        assert_eq!(grandchild_starts.load(Ordering::SeqCst), 1);
+        assert_eq!(processor_calls.load(Ordering::SeqCst), 4);
+        let child_results = results.sub_task("child").expect("child results");
+        let grandchild_results = child_results
+            .sub_task("grandchild")
+            .expect("grandchild results");
+        for subtask in [child_results, grandchild_results] {
+            assert!(
+                subtask
+                    .host_result("router1")
+                    .is_some_and(HostTaskResult::is_passed)
+            );
+            assert_eq!(
+                subtask
+                    .host_result("router2")
+                    .and_then(HostTaskResult::skipped_detail)
+                    .and_then(TaskSkip::reason),
+                Some("parent_not_successful")
+            );
+        }
+    }
+
+    #[test]
+    fn subtask_continuation_applies_at_nested_boundaries() {
+        let grandchild =
+            ContinuationTask::new("grandchild", HostTaskResult::passed(TaskSuccess::new()));
+        let grandchild_starts = Arc::clone(&grandchild.starts);
+        let mut child = ContinuationTask::new(
+            "child",
+            HostTaskResult::failed(TaskFailure::new(TestTaskFailureError)),
+        );
+        child.children.push(Arc::new(grandchild));
+        let child_starts = Arc::clone(&child.starts);
+        let mut root = ContinuationTask::new("root", HostTaskResult::passed(TaskSuccess::new()));
+        root.children.push(Arc::new(child));
+        let task = TaskDefinition::new(root);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+        run_async(task.start_with_options("router1", &host, &mut results, TaskRunOptions::new(2)))
+            .expect("task tree should complete");
+
+        assert_eq!(child_starts.load(Ordering::SeqCst), 1);
+        assert_eq!(grandchild_starts.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            results
+                .sub_task("child")
+                .and_then(|child| child.sub_task("grandchild"))
+                .and_then(|grandchild| grandchild.host_result("router1"))
+                .and_then(HostTaskResult::skipped_detail)
+                .and_then(TaskSkip::reason),
+            Some("parent_not_successful")
+        );
+    }
+
+    #[test]
+    fn recovered_final_parent_result_allows_subtasks() {
+        let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+        let child_starts = Arc::clone(&child.starts);
+        let mut root = ContinuationTask::new(
+            "root",
+            HostTaskResult::failed(TaskFailure::new(TestTaskFailureError)),
+        );
+        root.processors.push("selected".to_string());
+        root.children.push(Arc::new(child));
+        let task =
+            TaskDefinition::new(root).with_processor_resolver(Arc::new(TestProcessorResolver {
+                processor: Arc::new(RecoveringProcessor),
+            }));
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+        run_async(task.start_with_options("router1", &host, &mut results, TaskRunOptions::new(1)))
+            .expect("task tree should complete");
+
+        assert!(
+            results
+                .host_result("router1")
+                .is_some_and(HostTaskResult::is_passed)
+        );
+        assert_eq!(child_starts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn early_parent_failure_records_policy_skips_without_starting_children() {
+        let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+        let child_starts = Arc::clone(&child.starts);
+        let mut root = ContinuationTask::new("root", HostTaskResult::passed(TaskSuccess::new()));
+        root.children.push(Arc::new(child));
+        let task = TaskDefinition::new(root);
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+        run_async(task.start_with_options(
+            "router1",
+            &host,
+            &mut results,
+            TaskRunOptions::new(1).with_dry_run(true),
+        ))
+        .expect("unsupported dry-run should produce a host result");
+
+        assert!(
+            results
+                .host_result("router1")
+                .is_some_and(HostTaskResult::is_failed)
+        );
+        assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            results
+                .sub_task("child")
+                .and_then(|child| child.host_result("router1"))
+                .and_then(HostTaskResult::skipped_detail)
+                .and_then(TaskSkip::reason),
+            Some("parent_not_successful")
+        );
+    }
+
+    #[test]
+    fn early_failure_deadline_prevents_always_subtask_continuation() {
+        let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+        let child_starts = Arc::clone(&child.starts);
+        let mut root = ContinuationTask::new("root", HostTaskResult::passed(TaskSuccess::new()));
+        root.processors.push("selected".to_string());
+        root.children.push(Arc::new(child));
+        let task =
+            TaskDefinition::new(root).with_processor_resolver(Arc::new(TestProcessorResolver {
+                processor: Arc::new(SlowFinishProcessor),
+            }));
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+        let options = TaskRunOptions::new(1)
+            .with_dry_run(true)
+            .with_task_timeout(Duration::from_millis(5))
+            .with_subtask_continuation(SubtaskContinuation::Always);
+        run_async(task.start_with_options("router1", &host, &mut results, options))
+            .expect("deadline should be recorded");
+
+        assert!(
+            results
+                .host_result("router1")
+                .is_some_and(is_deadline_timeout_result)
+        );
+        assert_eq!(child_starts.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -10513,7 +10967,7 @@ mod deadline_tests {
     }
 
     #[test]
-    fn authored_timeout_failure_without_deadline_keeps_existing_subtask_flow() {
+    fn authored_timeout_failure_without_deadline_skips_subtask_by_default() {
         let child = TimedTask::new("child");
         let child_starts = Arc::clone(&child.starts);
         let mut parent = TimedTask::new("parent");
@@ -10529,7 +10983,15 @@ mod deadline_tests {
                 .host_result("router1")
                 .is_some_and(HostTaskResult::is_failed)
         );
-        assert_eq!(child_starts.load(Ordering::SeqCst), 1);
+        assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            results
+                .sub_task("child")
+                .and_then(|subtask| subtask.host_result("router1"))
+                .and_then(HostTaskResult::skipped_detail)
+                .and_then(TaskSkip::reason),
+            Some("parent_not_successful")
+        );
     }
 
     #[test]

@@ -203,6 +203,22 @@ structured result for that host.
     for at most five seconds without extending the task deadline. A timed-out
     subtask skips later sibling subtasks on that host.
 
+    Subtasks run on each host only after their parent's final result is `Passed`
+    or `PassedWithWarnings`. A final `Failed` or `Skipped` result records a
+    `Skipped` result for each omitted subtask on that host, without calling its
+    execution or start hooks. The decision repeats at each depth; ordered root
+    tasks have separate continuation rules. For Rust callers that need the
+    previous behavior, select `SubtaskContinuation::Always` explicitly:
+
+    ```rust
+    use genja::TaskRunOptions;
+    use genja::genja_core::task::SubtaskContinuation;
+
+    let options = TaskRunOptions::new(2)
+        .with_subtask_continuation(SubtaskContinuation::Always);
+    let results = genja.run_task_with_options(my_task, options)?;
+    ```
+
     **Grouped metadata** is written as nested macro arguments, not dotted keys:
 
     ```rust
