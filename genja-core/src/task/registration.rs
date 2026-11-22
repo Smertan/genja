@@ -1259,6 +1259,20 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_yaml_round_trips_authored_verification_metadata() {
+        let mut metadata = descriptor_metadata();
+        metadata.idempotency = IdempotencyMode::CheckAndVerify;
+        metadata.session_verification = Some(SessionVerificationConfig::new(2, 500));
+        let descriptor =
+            TaskDescriptor::explicit("acme.verification", "1.0.0", metadata, None, false);
+
+        let yaml = serde_yaml::to_string(&descriptor).expect("descriptor serializes to YAML");
+        let restored: TaskDescriptor =
+            serde_yaml::from_str(&yaml).expect("descriptor deserializes from YAML");
+        assert_eq!(restored, descriptor);
+    }
+
+    #[test]
     fn descriptor_constructors_map_shared_metadata() {
         let metadata = descriptor_metadata();
 
