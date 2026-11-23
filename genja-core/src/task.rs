@@ -4811,6 +4811,75 @@ struct SubTaskContext {
     runner_task_timeout: Option<Duration>,
 }
 
+/// Record a depth-limit failure before processors or task attempts begin.
+fn record_depth_overflow(
+    task: &dyn Task,
+    hostname: &str,
+    results: &mut TaskResults,
+    depth: usize,
+    run_options: TaskRunOptions,
+) {
+    let max_depth = run_options.max_depth();
+    let started_at = SystemTime::now();
+    let finished_at = started_at;
+    let error = crate::GenjaError::Message(format!("max task depth exceeded: {max_depth}"));
+    warn!(
+        "max task depth exceeded for task '{}' at depth {} with max_depth {}",
+        task.name(),
+        depth,
+        max_depth
+    );
+    results.record_execution_timing(started_at, finished_at);
+    let mut host_result =
+        HostTaskResult::failed(TaskFailure::new(error).with_kind(TaskFailureKind::Internal))
+            .with_execution_timing(started_at, finished_at, 0);
+    *host_result.execution_metadata_mut() = host_result
+        .execution_metadata()
+        .clone()
+        .with_attempts(1)
+        .with_retried(false)
+        .with_retry_exhausted(false)
+        .with_dry_run(run_options.dry_run());
+    results.insert_host_result(hostname, host_result);
+}
+
+/// Validate task timeout support and start this node's deadline and work tracking.
+fn preflight_task_timeout(
+    task: &dyn Task,
+    run_options: TaskRunOptions,
+    runner_task_timeout: Option<Duration>,
+) -> Result<AsyncTaskControl, crate::GenjaError> {
+    let explicit_timeout = task.task_timeout().or(run_options.task_timeout());
+    if explicit_timeout.is_some() && task.execution_mode() == TaskExecutionMode::Blocking {
+        return Err(crate::GenjaError::Message(format!(
+            "task '{}' is blocking and cannot use task_timeout; configure a timeout in its connection plugin instead",
+            task.name()
+        )));
+    }
+    if task.execution_mode() == TaskExecutionMode::Async
+        && explicit_timeout.or(runner_task_timeout).is_some()
+        && !task.supports_async_deadline()
+    {
+        return Err(crate::GenjaError::Message(format!(
+            "task '{}' cannot use task_timeout because its async bridge cannot confirm cancellation",
+            task.name()
+        )));
+    }
+    let deadline = if task.execution_mode() == TaskExecutionMode::Async {
+        explicit_timeout
+            .or(runner_task_timeout)
+            .map(TaskDeadline::new)
+    } else {
+        None
+    };
+    let work_state = (deadline.is_some() && task.uses_external_async_work())
+        .then(|| Arc::new(AsyncWorkState::new()));
+    Ok(AsyncTaskControl {
+        deadline,
+        work_state,
+    })
+}
+
 impl TaskRunOptions {
     /// Create run options for normal task execution with the provided maximum depth.
     pub fn new(max_depth: usize) -> Self {
@@ -5989,56 +6058,14 @@ impl TaskDefinition {
         }
         let max_depth = run_options.max_depth();
         if depth > max_depth {
-            let started_at = SystemTime::now();
-            let finished_at = started_at;
-            let error = crate::GenjaError::Message(format!("max task depth exceeded: {max_depth}"));
-            warn!(
-                "max task depth exceeded for task '{}' at depth {} with max_depth {}",
-                task.name(),
-                depth,
-                max_depth
-            );
-            results.record_execution_timing(started_at, finished_at);
-            let mut host_result = HostTaskResult::failed(
-                TaskFailure::new(error).with_kind(TaskFailureKind::Internal),
-            )
-            .with_execution_timing(started_at, finished_at, 0);
-            *host_result.execution_metadata_mut() = host_result
-                .execution_metadata()
-                .clone()
-                .with_attempts(1)
-                .with_retried(false)
-                .with_retry_exhausted(false)
-                .with_dry_run(run_options.dry_run());
-            results.insert_host_result(hostname, host_result);
+            record_depth_overflow(task.as_ref(), hostname, results, depth, run_options);
             return Ok(());
         }
 
-        let explicit_timeout = task.task_timeout().or(run_options.task_timeout());
-        if explicit_timeout.is_some() && task.execution_mode() == TaskExecutionMode::Blocking {
-            return Err(crate::GenjaError::Message(format!(
-                "task '{}' is blocking and cannot use task_timeout; configure a timeout in its connection plugin instead",
-                task.name()
-            )));
-        }
-        if task.execution_mode() == TaskExecutionMode::Async
-            && explicit_timeout.or(runner_task_timeout).is_some()
-            && !task.supports_async_deadline()
-        {
-            return Err(crate::GenjaError::Message(format!(
-                "task '{}' cannot use task_timeout because its async bridge cannot confirm cancellation",
-                task.name()
-            )));
-        }
-        let deadline = if task.execution_mode() == TaskExecutionMode::Async {
-            explicit_timeout
-                .or(runner_task_timeout)
-                .map(TaskDeadline::new)
-        } else {
-            None
-        };
-        let async_work_state = (deadline.is_some() && task.uses_external_async_work())
-            .then(|| Arc::new(AsyncWorkState::new()));
+        let AsyncTaskControl {
+            deadline,
+            work_state: async_work_state,
+        } = preflight_task_timeout(task.as_ref(), run_options, runner_task_timeout)?;
         let started_at = SystemTime::now();
         if let Some(deadline) = deadline {
             trace!(
