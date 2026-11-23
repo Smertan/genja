@@ -8145,6 +8145,88 @@ mod tests {
     }
 
     #[test]
+    fn initial_connection_error_records_failure_and_applies_continuation() {
+        struct FailingInitialResolver {
+            calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl TaskConnectionResolver for FailingInitialResolver {
+            async fn resolve_task_connection(
+                &self,
+                task: &dyn Task,
+                _hostname: &str,
+            ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if task.name() == "parent" {
+                    Err(crate::GenjaError::Message(
+                        "initial connection failed".into(),
+                    ))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+
+        for mode in [
+            SubtaskContinuation::OnParentSuccess,
+            SubtaskContinuation::Always,
+        ] {
+            let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+            let child_starts = Arc::clone(&child.starts);
+            let mut parent =
+                ContinuationTask::new("parent", HostTaskResult::passed(TaskSuccess::new()));
+            let parent_starts = Arc::clone(&parent.starts);
+            parent.children.push(Arc::new(child));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let resolver = FailingInitialResolver {
+                calls: Arc::clone(&calls),
+            };
+            let task = TaskDefinition::new(parent);
+            let host = Host::builder().hostname("router1").build();
+            let mut results = TaskResults::new("parent");
+
+            run_async(task.start_with_connection_resolver_and_options(
+                "router1",
+                &host,
+                &mut results,
+                Some(&resolver),
+                TaskRunOptions::new(1).with_subtask_continuation(mode),
+            ))
+            .expect("connection failure should be recorded as a host result");
+
+            let parent_result = results.host_result("router1").expect("parent result");
+            let failure = parent_result.failure().expect("connection failure");
+            assert!(matches!(failure.kind(), TaskFailureKind::Connection));
+            assert!(failure.message().contains("initial connection failed"));
+            assert_eq!(parent_result.execution_metadata().attempts(), 1);
+            assert!(!parent_result.execution_metadata().retried());
+            assert!(!parent_result.execution_metadata().retry_exhausted());
+            assert!(parent_result.execution_metadata().started_at().is_some());
+            assert!(parent_result.execution_metadata().finished_at().is_some());
+            assert_eq!(parent_starts.load(Ordering::SeqCst), 0);
+
+            let child_result = results
+                .sub_task("child")
+                .and_then(|child| child.host_result("router1"))
+                .expect("child result");
+            if mode == SubtaskContinuation::Always {
+                assert!(child_result.is_passed());
+                assert_eq!(child_starts.load(Ordering::SeqCst), 1);
+                assert_eq!(calls.load(Ordering::SeqCst), 2);
+            } else {
+                assert_eq!(
+                    child_result.skipped_detail().and_then(TaskSkip::reason),
+                    Some("parent_not_successful")
+                );
+                assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+                assert_eq!(calls.load(Ordering::SeqCst), 1);
+            }
+        }
+    }
+
+    #[test]
     fn early_failure_deadline_prevents_always_subtask_continuation() {
         let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
         let child_starts = Arc::clone(&child.starts);
@@ -8284,6 +8366,18 @@ mod tests {
             host_result.execution_metadata().finished_at()
         );
         assert_eq!(host_result.execution_metadata().duration_ns(), Some(0));
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+        assert!(!host_result.execution_metadata().dry_run());
+        assert_eq!(
+            level_five.started_at(),
+            host_result.execution_metadata().started_at()
+        );
+        assert_eq!(
+            level_five.finished_at(),
+            host_result.execution_metadata().finished_at()
+        );
     }
 
     #[test]
