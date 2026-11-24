@@ -3924,6 +3924,14 @@ struct EarlyHostResult<'a> {
     completion: HostResultCompletion,
 }
 
+/// Inputs retained after the attempt loop for one host's final result.
+struct PostRetryFinalization<'a> {
+    verification: VerificationContext<'a>,
+    recording: HostResultRecording<'a>,
+    settings: RetrySettings,
+    connection_for_cleanup: Option<Arc<Mutex<dyn Connection>>>,
+}
+
 fn record_host_result(
     results: &mut TaskResults,
     mut host_result: HostTaskResult,
@@ -4884,7 +4892,7 @@ fn preflight_task_timeout(
 enum InitialConnectionResolution {
     Ready(Option<Arc<Mutex<dyn Connection>>>),
     Finished {
-        result: HostTaskResult,
+        result: Box<HostTaskResult>,
         finished_at: SystemTime,
         completion: HostResultCompletion,
     },
@@ -4919,7 +4927,7 @@ async fn resolve_initial_connection(
                 )
                 .await;
                 return InitialConnectionResolution::Finished {
-                    result,
+                    result: Box::new(result),
                     finished_at,
                     completion: HostResultCompletion::DeadlineBeforeAttempts,
                 };
@@ -4954,7 +4962,7 @@ async fn resolve_initial_connection(
                     HostResultCompletion::BeforeAttempts
                 };
                 return InitialConnectionResolution::Finished {
-                    result,
+                    result: Box::new(result),
                     finished_at,
                     completion,
                 };
@@ -4976,13 +4984,68 @@ async fn resolve_initial_connection(
         )
         .await;
         return InitialConnectionResolution::Finished {
-            result,
+            result: Box::new(result),
             finished_at,
             completion: HostResultCompletion::DeadlineBeforeAttempts,
         };
     }
 
     InitialConnectionResolution::Ready(connection)
+}
+
+/// Verify, observe cleanup, record, and guard the finalized post-retry host result.
+async fn finalize_after_retries(
+    task: &Arc<dyn Task>,
+    results: &mut TaskResults,
+    host_result: HostTaskResult,
+    context: PostRetryFinalization<'_>,
+) -> Result<bool, crate::GenjaError> {
+    let PostRetryFinalization {
+        verification,
+        recording,
+        settings,
+        connection_for_cleanup,
+    } = context;
+    let hostname = verification.hostname;
+    let resolver = verification.connection_resolver;
+    let attempts = verification.attempts;
+    let async_work_state = verification.async_work_state.clone();
+
+    let mut host_result = verify_after_retries(task, host_result, verification).await;
+    let finished_at = SystemTime::now();
+    observe_timeout_cleanup(
+        &mut host_result,
+        task.as_ref(),
+        hostname,
+        resolver,
+        connection_for_cleanup.clone(),
+        async_work_state.as_deref(),
+    )
+    .await;
+
+    record_host_result(
+        results,
+        host_result,
+        finished_at,
+        recording,
+        HostResultCompletion::AfterRetries { attempts, settings },
+    )?;
+
+    if let Some(host_result) = results.host_result_mut(hostname) {
+        observe_timeout_cleanup(
+            host_result,
+            task.as_ref(),
+            hostname,
+            resolver,
+            connection_for_cleanup,
+            async_work_state.as_deref(),
+        )
+        .await;
+    }
+
+    Ok(!results
+        .host_result(hostname)
+        .is_some_and(is_deadline_timeout_result))
 }
 
 impl TaskRunOptions {
@@ -6295,7 +6358,7 @@ impl TaskDefinition {
                     host_execution,
                     results,
                     EarlyHostResult {
-                        result,
+                        result: *result,
                         finished_at,
                         recording,
                         completion,
@@ -6350,63 +6413,35 @@ impl TaskDefinition {
         .run()
         .await?;
 
-        let mut host_result = verify_after_retries(
+        let may_continue = finalize_after_retries(
             &task,
-            host_result,
-            VerificationContext {
-                hostname,
-                host,
-                connection_resolver,
-                execution: TaskExecutionContext::new(depth, run_options.max_depth()),
-                dry_run: run_options.dry_run(),
-                attempts,
-                deadline,
-                async_work_state: async_work_state.clone(),
-            },
-        )
-        .await;
-        let finished_at = SystemTime::now();
-        observe_timeout_cleanup(
-            &mut host_result,
-            task.as_ref(),
-            hostname,
-            connection_resolver,
-            connection_for_cleanup.clone(),
-            async_work_state.as_deref(),
-        )
-        .await;
-
-        record_host_result(
             results,
             host_result,
-            finished_at,
-            recording,
-            HostResultCompletion::AfterRetries {
-                attempts,
+            PostRetryFinalization {
+                verification: VerificationContext {
+                    hostname,
+                    host,
+                    connection_resolver,
+                    execution: TaskExecutionContext::new(depth, run_options.max_depth()),
+                    dry_run: run_options.dry_run(),
+                    attempts,
+                    deadline,
+                    async_work_state: async_work_state.clone(),
+                },
+                recording,
                 settings: retry_settings,
-            },
-        )?;
-
-        if let Some(host_result) = results.host_result_mut(hostname) {
-            observe_timeout_cleanup(
-                host_result,
-                task.as_ref(),
-                hostname,
-                connection_resolver,
                 connection_for_cleanup,
-                async_work_state.as_deref(),
-            )
-            .await;
-        }
-
-        if results
-            .host_result(hostname)
-            .is_some_and(is_deadline_timeout_result)
-        {
-            return Ok(());
-        }
-
-        Self::run_sub_tasks(task.as_ref(), host_execution, results, sub_task_context).await?;
+            },
+        )
+        .await?;
+        Self::continue_after_host_result(
+            task.as_ref(),
+            host_execution,
+            results,
+            sub_task_context,
+            may_continue,
+        )
+        .await?;
 
         Ok(())
     }
@@ -6427,11 +6462,29 @@ impl TaskDefinition {
         } = early;
         let may_continue = matches!(completion, HostResultCompletion::BeforeAttempts);
         record_host_result(results, result, finished_at, recording, completion)?;
-        if may_continue
+        let may_continue = may_continue
             && !results
                 .host_result(host_execution.hostname)
-                .is_some_and(is_deadline_timeout_result)
-        {
+                .is_some_and(is_deadline_timeout_result);
+        Self::continue_after_host_result(
+            task,
+            host_execution,
+            results,
+            sub_task_context,
+            may_continue,
+        )
+        .await
+    }
+
+    /// Apply subtask continuation after the parent's host result is finalized.
+    async fn continue_after_host_result(
+        task: &dyn Task,
+        host_execution: HostExecution<'_>,
+        results: &mut TaskResults,
+        sub_task_context: SubTaskContext,
+        may_continue: bool,
+    ) -> Result<(), crate::GenjaError> {
+        if may_continue {
             Self::run_sub_tasks(task, host_execution, results, sub_task_context).await?;
         }
         Ok(())
@@ -8308,6 +8361,41 @@ mod tests {
                 .is_some_and(is_deadline_timeout_result)
         );
         assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn post_retry_finish_deadline_observes_cleanup_and_stops_subtasks() {
+        let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+        let child_starts = Arc::clone(&child.starts);
+        let mut root = ContinuationTask::new("root", HostTaskResult::passed(TaskSuccess::new()));
+        let root_starts = Arc::clone(&root.starts);
+        root.processors.push("selected".to_string());
+        root.children.push(Arc::new(child));
+        let task =
+            TaskDefinition::new(root).with_processor_resolver(Arc::new(TestProcessorResolver {
+                processor: Arc::new(SlowFinishProcessor),
+            }));
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+        let options = TaskRunOptions::new(1)
+            .with_task_timeout(Duration::from_millis(5))
+            .with_subtask_continuation(SubtaskContinuation::Always);
+
+        run_async(task.start_with_options("router1", &host, &mut results, options))
+            .expect("finish-hook deadline should be recorded");
+
+        let result = results.host_result("router1").expect("root result");
+        assert!(is_deadline_timeout_result(result));
+        assert_eq!(root_starts.load(Ordering::SeqCst), 1);
+        assert_eq!(result.execution_metadata().attempts(), 1);
+        let details = result
+            .failure()
+            .and_then(TaskFailure::details)
+            .expect("deadline details");
+        assert_eq!(details["phase"], "instance_finish");
+        assert!(details.get("cleanup_elapsed_seconds").is_some());
+        assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+        assert!(results.sub_task("child").is_none());
     }
 
     #[test]
