@@ -3924,6 +3924,14 @@ struct EarlyHostResult<'a> {
     completion: HostResultCompletion,
 }
 
+/// Inputs retained after the attempt loop for one host's final result.
+struct PostRetryFinalization<'a> {
+    verification: VerificationContext<'a>,
+    recording: HostResultRecording<'a>,
+    settings: RetrySettings,
+    connection_for_cleanup: Option<Arc<Mutex<dyn Connection>>>,
+}
+
 fn record_host_result(
     results: &mut TaskResults,
     mut host_result: HostTaskResult,
@@ -4809,6 +4817,235 @@ struct SubTaskContext {
     run_options: TaskRunOptions,
     retry_defaults: RetryDefaults,
     runner_task_timeout: Option<Duration>,
+}
+
+/// Record a depth-limit failure before processors or task attempts begin.
+fn record_depth_overflow(
+    task: &dyn Task,
+    hostname: &str,
+    results: &mut TaskResults,
+    depth: usize,
+    run_options: TaskRunOptions,
+) {
+    let max_depth = run_options.max_depth();
+    let started_at = SystemTime::now();
+    let finished_at = started_at;
+    let error = crate::GenjaError::Message(format!("max task depth exceeded: {max_depth}"));
+    warn!(
+        "max task depth exceeded for task '{}' at depth {} with max_depth {}",
+        task.name(),
+        depth,
+        max_depth
+    );
+    results.record_execution_timing(started_at, finished_at);
+    let mut host_result =
+        HostTaskResult::failed(TaskFailure::new(error).with_kind(TaskFailureKind::Internal))
+            .with_execution_timing(started_at, finished_at, 0);
+    *host_result.execution_metadata_mut() = host_result
+        .execution_metadata()
+        .clone()
+        .with_attempts(1)
+        .with_retried(false)
+        .with_retry_exhausted(false)
+        .with_dry_run(run_options.dry_run());
+    results.insert_host_result(hostname, host_result);
+}
+
+/// Validate task timeout support and start this node's deadline and work tracking.
+fn preflight_task_timeout(
+    task: &dyn Task,
+    run_options: TaskRunOptions,
+    runner_task_timeout: Option<Duration>,
+) -> Result<AsyncTaskControl, crate::GenjaError> {
+    let explicit_timeout = task.task_timeout().or(run_options.task_timeout());
+    if explicit_timeout.is_some() && task.execution_mode() == TaskExecutionMode::Blocking {
+        return Err(crate::GenjaError::Message(format!(
+            "task '{}' is blocking and cannot use task_timeout; configure a timeout in its connection plugin instead",
+            task.name()
+        )));
+    }
+    if task.execution_mode() == TaskExecutionMode::Async
+        && explicit_timeout.or(runner_task_timeout).is_some()
+        && !task.supports_async_deadline()
+    {
+        return Err(crate::GenjaError::Message(format!(
+            "task '{}' cannot use task_timeout because its async bridge cannot confirm cancellation",
+            task.name()
+        )));
+    }
+    let deadline = if task.execution_mode() == TaskExecutionMode::Async {
+        explicit_timeout
+            .or(runner_task_timeout)
+            .map(TaskDeadline::new)
+    } else {
+        None
+    };
+    let work_state = (deadline.is_some() && task.uses_external_async_work())
+        .then(|| Arc::new(AsyncWorkState::new()));
+    Ok(AsyncTaskControl {
+        deadline,
+        work_state,
+    })
+}
+
+/// Outcome of initial connection setup before task attempts begin.
+enum InitialConnectionResolution {
+    Ready(Option<Arc<Mutex<dyn Connection>>>),
+    Finished {
+        result: Box<HostTaskResult>,
+        finished_at: SystemTime,
+        completion: HostResultCompletion,
+    },
+}
+
+/// Resolve one initial connection and finish deadline or resolver failures.
+async fn resolve_initial_connection(
+    task: &dyn Task,
+    hostname: &str,
+    resolver: Option<&dyn TaskConnectionResolver>,
+    deadline: Option<TaskDeadline>,
+    async_work_state: Option<&AsyncWorkState>,
+) -> InitialConnectionResolution {
+    let connection = if let Some(resolver) = resolver {
+        match within_deadline(deadline, resolver.resolve_task_connection(task, hostname)).await {
+            Ok(Ok(connection)) => connection,
+            Err(()) => {
+                let mut result = task_deadline_failure(
+                    deadline.expect("expired connection requires a deadline"),
+                    "connection_setup",
+                    0,
+                    false,
+                );
+                let finished_at = SystemTime::now();
+                observe_timeout_cleanup(
+                    &mut result,
+                    task,
+                    hostname,
+                    Some(resolver),
+                    None,
+                    async_work_state,
+                )
+                .await;
+                return InitialConnectionResolution::Finished {
+                    result: Box::new(result),
+                    finished_at,
+                    completion: HostResultCompletion::DeadlineBeforeAttempts,
+                };
+            }
+            Ok(Err(error)) => {
+                let finished_at = SystemTime::now();
+                warn!(
+                    "task '{}' failed to open connection for host '{}': {}",
+                    task.name(),
+                    hostname,
+                    error
+                );
+
+                let mut result = deadline_failure_if_expired(deadline, "connection_setup", 0, true)
+                    .unwrap_or_else(|| {
+                        HostTaskResult::failed(
+                            TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
+                        )
+                    });
+                observe_timeout_cleanup(
+                    &mut result,
+                    task,
+                    hostname,
+                    Some(resolver),
+                    None,
+                    async_work_state,
+                )
+                .await;
+                let completion = if is_deadline_timeout_result(&result) {
+                    HostResultCompletion::DeadlineBeforeAttempts
+                } else {
+                    HostResultCompletion::BeforeAttempts
+                };
+                return InitialConnectionResolution::Finished {
+                    result: Box::new(result),
+                    finished_at,
+                    completion,
+                };
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(mut result) = deadline_failure_if_expired(deadline, "connection_setup", 0, true) {
+        let finished_at = SystemTime::now();
+        observe_timeout_cleanup(
+            &mut result,
+            task,
+            hostname,
+            resolver,
+            connection.clone(),
+            async_work_state,
+        )
+        .await;
+        return InitialConnectionResolution::Finished {
+            result: Box::new(result),
+            finished_at,
+            completion: HostResultCompletion::DeadlineBeforeAttempts,
+        };
+    }
+
+    InitialConnectionResolution::Ready(connection)
+}
+
+/// Verify, observe cleanup, record, and guard the finalized post-retry host result.
+async fn finalize_after_retries(
+    task: &Arc<dyn Task>,
+    results: &mut TaskResults,
+    host_result: HostTaskResult,
+    context: PostRetryFinalization<'_>,
+) -> Result<bool, crate::GenjaError> {
+    let PostRetryFinalization {
+        verification,
+        recording,
+        settings,
+        connection_for_cleanup,
+    } = context;
+    let hostname = verification.hostname;
+    let resolver = verification.connection_resolver;
+    let attempts = verification.attempts;
+    let async_work_state = verification.async_work_state.clone();
+
+    let mut host_result = verify_after_retries(task, host_result, verification).await;
+    let finished_at = SystemTime::now();
+    observe_timeout_cleanup(
+        &mut host_result,
+        task.as_ref(),
+        hostname,
+        resolver,
+        connection_for_cleanup.clone(),
+        async_work_state.as_deref(),
+    )
+    .await;
+
+    record_host_result(
+        results,
+        host_result,
+        finished_at,
+        recording,
+        HostResultCompletion::AfterRetries { attempts, settings },
+    )?;
+
+    if let Some(host_result) = results.host_result_mut(hostname) {
+        observe_timeout_cleanup(
+            host_result,
+            task.as_ref(),
+            hostname,
+            resolver,
+            connection_for_cleanup,
+            async_work_state.as_deref(),
+        )
+        .await;
+    }
+
+    Ok(!results
+        .host_result(hostname)
+        .is_some_and(is_deadline_timeout_result))
 }
 
 impl TaskRunOptions {
@@ -5911,11 +6148,10 @@ impl TaskDefinition {
 
     /// Recursively executes a task and its sub-tasks with depth tracking.
     ///
-    /// This internal helper method performs the actual recursive task execution,
-    /// tracking the current depth to enforce the maximum depth limit. It resolves
-    /// the initial connection before the retry loop, verifies changed tasks through
-    /// a fresh session after retries, records the host result, then recursively
-    /// processes all sub-tasks returned by `sub_tasks()`.
+    /// This internal method checks depth and timeout support, resolves the initial
+    /// connection, runs task attempts, finalizes the host result after retries,
+    /// then applies subtask continuation to that finalized result. Early setup
+    /// results use the same recording and continuation boundary.
     ///
     /// Sub-tasks are executed in iteration order. Results are grouped by task name, so
     /// a sub-task named `"validate"` produces a single `TaskResults` node containing
@@ -5989,56 +6225,14 @@ impl TaskDefinition {
         }
         let max_depth = run_options.max_depth();
         if depth > max_depth {
-            let started_at = SystemTime::now();
-            let finished_at = started_at;
-            let error = crate::GenjaError::Message(format!("max task depth exceeded: {max_depth}"));
-            warn!(
-                "max task depth exceeded for task '{}' at depth {} with max_depth {}",
-                task.name(),
-                depth,
-                max_depth
-            );
-            results.record_execution_timing(started_at, finished_at);
-            let mut host_result = HostTaskResult::failed(
-                TaskFailure::new(error).with_kind(TaskFailureKind::Internal),
-            )
-            .with_execution_timing(started_at, finished_at, 0);
-            *host_result.execution_metadata_mut() = host_result
-                .execution_metadata()
-                .clone()
-                .with_attempts(1)
-                .with_retried(false)
-                .with_retry_exhausted(false)
-                .with_dry_run(run_options.dry_run());
-            results.insert_host_result(hostname, host_result);
+            record_depth_overflow(task.as_ref(), hostname, results, depth, run_options);
             return Ok(());
         }
 
-        let explicit_timeout = task.task_timeout().or(run_options.task_timeout());
-        if explicit_timeout.is_some() && task.execution_mode() == TaskExecutionMode::Blocking {
-            return Err(crate::GenjaError::Message(format!(
-                "task '{}' is blocking and cannot use task_timeout; configure a timeout in its connection plugin instead",
-                task.name()
-            )));
-        }
-        if task.execution_mode() == TaskExecutionMode::Async
-            && explicit_timeout.or(runner_task_timeout).is_some()
-            && !task.supports_async_deadline()
-        {
-            return Err(crate::GenjaError::Message(format!(
-                "task '{}' cannot use task_timeout because its async bridge cannot confirm cancellation",
-                task.name()
-            )));
-        }
-        let deadline = if task.execution_mode() == TaskExecutionMode::Async {
-            explicit_timeout
-                .or(runner_task_timeout)
-                .map(TaskDeadline::new)
-        } else {
-            None
-        };
-        let async_work_state = (deadline.is_some() && task.uses_external_async_work())
-            .then(|| Arc::new(AsyncWorkState::new()));
+        let AsyncTaskControl {
+            deadline,
+            work_state: async_work_state,
+        } = preflight_task_timeout(task.as_ref(), run_options, runner_task_timeout)?;
         let started_at = SystemTime::now();
         if let Some(deadline) = deadline {
             trace!(
@@ -6095,13 +6289,19 @@ impl TaskDefinition {
                 async_work_state.as_deref(),
             )
             .await;
-            record_host_result(
+            Self::finish_early_result(
+                task.as_ref(),
+                host_execution,
                 results,
-                host_result,
-                finished_at,
-                recording,
-                HostResultCompletion::DeadlineBeforeAttempts,
-            )?;
+                EarlyHostResult {
+                    result: host_result,
+                    finished_at,
+                    recording,
+                    completion: HostResultCompletion::DeadlineBeforeAttempts,
+                },
+                sub_task_context.clone(),
+            )
+            .await?;
             return Ok(());
         }
 
@@ -6143,113 +6343,37 @@ impl TaskDefinition {
             return Ok(());
         }
 
-        // Resolve the initial connection once before any task attempt.
-        let connection = if let Some(connection_resolver) = connection_resolver {
-            match within_deadline(
-                deadline,
-                connection_resolver.resolve_task_connection(task.as_ref(), hostname),
-            )
-            .await
-            {
-                Ok(Ok(connection)) => connection,
-                Err(()) => {
-                    let mut host_result = task_deadline_failure(
-                        deadline.expect("expired connection requires a deadline"),
-                        "connection_setup",
-                        0,
-                        false,
-                    );
-                    let finished_at = SystemTime::now();
-                    observe_timeout_cleanup(
-                        &mut host_result,
-                        task.as_ref(),
-                        hostname,
-                        Some(connection_resolver),
-                        None,
-                        async_work_state.as_deref(),
-                    )
-                    .await;
-                    record_host_result(
-                        results,
-                        host_result,
+        let connection = match resolve_initial_connection(
+            task.as_ref(),
+            hostname,
+            connection_resolver,
+            deadline,
+            async_work_state.as_deref(),
+        )
+        .await
+        {
+            InitialConnectionResolution::Ready(connection) => connection,
+            InitialConnectionResolution::Finished {
+                result,
+                finished_at,
+                completion,
+            } => {
+                Self::finish_early_result(
+                    task.as_ref(),
+                    host_execution,
+                    results,
+                    EarlyHostResult {
+                        result: *result,
                         finished_at,
                         recording,
-                        HostResultCompletion::DeadlineBeforeAttempts,
-                    )?;
-                    return Ok(());
-                }
-                Ok(Err(error)) => {
-                    let finished_at = SystemTime::now();
-                    warn!(
-                        "task '{}' failed to open connection for host '{}': {}",
-                        task.name(),
-                        hostname,
-                        error
-                    );
-
-                    let mut host_result =
-                        deadline_failure_if_expired(deadline, "connection_setup", 0, true)
-                            .unwrap_or_else(|| {
-                                HostTaskResult::failed(
-                                    TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
-                                )
-                            });
-                    observe_timeout_cleanup(
-                        &mut host_result,
-                        task.as_ref(),
-                        hostname,
-                        Some(connection_resolver),
-                        None,
-                        async_work_state.as_deref(),
-                    )
-                    .await;
-                    let completion = if is_deadline_timeout_result(&host_result) {
-                        HostResultCompletion::DeadlineBeforeAttempts
-                    } else {
-                        HostResultCompletion::BeforeAttempts
-                    };
-                    Self::finish_early_result(
-                        task.as_ref(),
-                        host_execution,
-                        results,
-                        EarlyHostResult {
-                            result: host_result,
-                            finished_at,
-                            recording,
-                            completion,
-                        },
-                        sub_task_context.clone(),
-                    )
-                    .await?;
-                    return Ok(());
-                }
+                        completion,
+                    },
+                    sub_task_context.clone(),
+                )
+                .await?;
+                return Ok(());
             }
-        } else {
-            None
         };
-
-        if let Some(mut host_result) =
-            deadline_failure_if_expired(deadline, "connection_setup", 0, true)
-        {
-            let finished_at = SystemTime::now();
-            observe_timeout_cleanup(
-                &mut host_result,
-                task.as_ref(),
-                hostname,
-                connection_resolver,
-                connection.clone(),
-                async_work_state.as_deref(),
-            )
-            .await;
-            record_host_result(
-                results,
-                host_result,
-                finished_at,
-                recording,
-                HostResultCompletion::DeadlineBeforeAttempts,
-            )?;
-            return Ok(());
-        }
 
         if run_options.dry_run() && !task.supports_dry_run() {
             let finished_at = SystemTime::now();
@@ -6294,63 +6418,35 @@ impl TaskDefinition {
         .run()
         .await?;
 
-        let mut host_result = verify_after_retries(
+        let may_continue = finalize_after_retries(
             &task,
-            host_result,
-            VerificationContext {
-                hostname,
-                host,
-                connection_resolver,
-                execution: TaskExecutionContext::new(depth, run_options.max_depth()),
-                dry_run: run_options.dry_run(),
-                attempts,
-                deadline,
-                async_work_state: async_work_state.clone(),
-            },
-        )
-        .await;
-        let finished_at = SystemTime::now();
-        observe_timeout_cleanup(
-            &mut host_result,
-            task.as_ref(),
-            hostname,
-            connection_resolver,
-            connection_for_cleanup.clone(),
-            async_work_state.as_deref(),
-        )
-        .await;
-
-        record_host_result(
             results,
             host_result,
-            finished_at,
-            recording,
-            HostResultCompletion::AfterRetries {
-                attempts,
+            PostRetryFinalization {
+                verification: VerificationContext {
+                    hostname,
+                    host,
+                    connection_resolver,
+                    execution: TaskExecutionContext::new(depth, run_options.max_depth()),
+                    dry_run: run_options.dry_run(),
+                    attempts,
+                    deadline,
+                    async_work_state: async_work_state.clone(),
+                },
+                recording,
                 settings: retry_settings,
-            },
-        )?;
-
-        if let Some(host_result) = results.host_result_mut(hostname) {
-            observe_timeout_cleanup(
-                host_result,
-                task.as_ref(),
-                hostname,
-                connection_resolver,
                 connection_for_cleanup,
-                async_work_state.as_deref(),
-            )
-            .await;
-        }
-
-        if results
-            .host_result(hostname)
-            .is_some_and(is_deadline_timeout_result)
-        {
-            return Ok(());
-        }
-
-        Self::run_sub_tasks(task.as_ref(), host_execution, results, sub_task_context).await?;
+            },
+        )
+        .await?;
+        Self::continue_after_host_result(
+            task.as_ref(),
+            host_execution,
+            results,
+            sub_task_context,
+            may_continue,
+        )
+        .await?;
 
         Ok(())
     }
@@ -6371,11 +6467,29 @@ impl TaskDefinition {
         } = early;
         let may_continue = matches!(completion, HostResultCompletion::BeforeAttempts);
         record_host_result(results, result, finished_at, recording, completion)?;
-        if may_continue
+        let may_continue = may_continue
             && !results
                 .host_result(host_execution.hostname)
-                .is_some_and(is_deadline_timeout_result)
-        {
+                .is_some_and(is_deadline_timeout_result);
+        Self::continue_after_host_result(
+            task,
+            host_execution,
+            results,
+            sub_task_context,
+            may_continue,
+        )
+        .await
+    }
+
+    /// Apply subtask continuation after the parent's host result is finalized.
+    async fn continue_after_host_result(
+        task: &dyn Task,
+        host_execution: HostExecution<'_>,
+        results: &mut TaskResults,
+        sub_task_context: SubTaskContext,
+        may_continue: bool,
+    ) -> Result<(), crate::GenjaError> {
+        if may_continue {
             Self::run_sub_tasks(task, host_execution, results, sub_task_context).await?;
         }
         Ok(())
@@ -8145,6 +8259,88 @@ mod tests {
     }
 
     #[test]
+    fn initial_connection_error_records_failure_and_applies_continuation() {
+        struct FailingInitialResolver {
+            calls: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl TaskConnectionResolver for FailingInitialResolver {
+            async fn resolve_task_connection(
+                &self,
+                task: &dyn Task,
+                _hostname: &str,
+            ) -> Result<Option<Arc<tokio::sync::Mutex<dyn Connection>>>, crate::GenjaError>
+            {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                if task.name() == "parent" {
+                    Err(crate::GenjaError::Message(
+                        "initial connection failed".into(),
+                    ))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+
+        for mode in [
+            SubtaskContinuation::OnParentSuccess,
+            SubtaskContinuation::Always,
+        ] {
+            let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+            let child_starts = Arc::clone(&child.starts);
+            let mut parent =
+                ContinuationTask::new("parent", HostTaskResult::passed(TaskSuccess::new()));
+            let parent_starts = Arc::clone(&parent.starts);
+            parent.children.push(Arc::new(child));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let resolver = FailingInitialResolver {
+                calls: Arc::clone(&calls),
+            };
+            let task = TaskDefinition::new(parent);
+            let host = Host::builder().hostname("router1").build();
+            let mut results = TaskResults::new("parent");
+
+            run_async(task.start_with_connection_resolver_and_options(
+                "router1",
+                &host,
+                &mut results,
+                Some(&resolver),
+                TaskRunOptions::new(1).with_subtask_continuation(mode),
+            ))
+            .expect("connection failure should be recorded as a host result");
+
+            let parent_result = results.host_result("router1").expect("parent result");
+            let failure = parent_result.failure().expect("connection failure");
+            assert!(matches!(failure.kind(), TaskFailureKind::Connection));
+            assert!(failure.message().contains("initial connection failed"));
+            assert_eq!(parent_result.execution_metadata().attempts(), 1);
+            assert!(!parent_result.execution_metadata().retried());
+            assert!(!parent_result.execution_metadata().retry_exhausted());
+            assert!(parent_result.execution_metadata().started_at().is_some());
+            assert!(parent_result.execution_metadata().finished_at().is_some());
+            assert_eq!(parent_starts.load(Ordering::SeqCst), 0);
+
+            let child_result = results
+                .sub_task("child")
+                .and_then(|child| child.host_result("router1"))
+                .expect("child result");
+            if mode == SubtaskContinuation::Always {
+                assert!(child_result.is_passed());
+                assert_eq!(child_starts.load(Ordering::SeqCst), 1);
+                assert_eq!(calls.load(Ordering::SeqCst), 2);
+            } else {
+                assert_eq!(
+                    child_result.skipped_detail().and_then(TaskSkip::reason),
+                    Some("parent_not_successful")
+                );
+                assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+                assert_eq!(calls.load(Ordering::SeqCst), 1);
+            }
+        }
+    }
+
+    #[test]
     fn early_failure_deadline_prevents_always_subtask_continuation() {
         let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
         let child_starts = Arc::clone(&child.starts);
@@ -8170,6 +8366,41 @@ mod tests {
                 .is_some_and(is_deadline_timeout_result)
         );
         assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn post_retry_finish_deadline_observes_cleanup_and_stops_subtasks() {
+        let child = ContinuationTask::new("child", HostTaskResult::passed(TaskSuccess::new()));
+        let child_starts = Arc::clone(&child.starts);
+        let mut root = ContinuationTask::new("root", HostTaskResult::passed(TaskSuccess::new()));
+        let root_starts = Arc::clone(&root.starts);
+        root.processors.push("selected".to_string());
+        root.children.push(Arc::new(child));
+        let task =
+            TaskDefinition::new(root).with_processor_resolver(Arc::new(TestProcessorResolver {
+                processor: Arc::new(SlowFinishProcessor),
+            }));
+        let host = Host::builder().hostname("router1").build();
+        let mut results = TaskResults::new("root");
+        let options = TaskRunOptions::new(1)
+            .with_task_timeout(Duration::from_millis(5))
+            .with_subtask_continuation(SubtaskContinuation::Always);
+
+        run_async(task.start_with_options("router1", &host, &mut results, options))
+            .expect("finish-hook deadline should be recorded");
+
+        let result = results.host_result("router1").expect("root result");
+        assert!(is_deadline_timeout_result(result));
+        assert_eq!(root_starts.load(Ordering::SeqCst), 1);
+        assert_eq!(result.execution_metadata().attempts(), 1);
+        let details = result
+            .failure()
+            .and_then(TaskFailure::details)
+            .expect("deadline details");
+        assert_eq!(details["phase"], "instance_finish");
+        assert!(details.get("cleanup_elapsed_seconds").is_some());
+        assert_eq!(child_starts.load(Ordering::SeqCst), 0);
+        assert!(results.sub_task("child").is_none());
     }
 
     #[test]
@@ -8284,6 +8515,18 @@ mod tests {
             host_result.execution_metadata().finished_at()
         );
         assert_eq!(host_result.execution_metadata().duration_ns(), Some(0));
+        assert_eq!(host_result.execution_metadata().attempts(), 1);
+        assert!(!host_result.execution_metadata().retried());
+        assert!(!host_result.execution_metadata().retry_exhausted());
+        assert!(!host_result.execution_metadata().dry_run());
+        assert_eq!(
+            level_five.started_at(),
+            host_result.execution_metadata().started_at()
+        );
+        assert_eq!(
+            level_five.finished_at(),
+            host_result.execution_metadata().finished_at()
+        );
     }
 
     #[test]
