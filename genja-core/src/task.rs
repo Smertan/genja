@@ -4880,6 +4880,111 @@ fn preflight_task_timeout(
     })
 }
 
+/// Outcome of initial connection setup before task attempts begin.
+enum InitialConnectionResolution {
+    Ready(Option<Arc<Mutex<dyn Connection>>>),
+    Finished {
+        result: HostTaskResult,
+        finished_at: SystemTime,
+        completion: HostResultCompletion,
+    },
+}
+
+/// Resolve one initial connection and finish deadline or resolver failures.
+async fn resolve_initial_connection(
+    task: &dyn Task,
+    hostname: &str,
+    resolver: Option<&dyn TaskConnectionResolver>,
+    deadline: Option<TaskDeadline>,
+    async_work_state: Option<&AsyncWorkState>,
+) -> InitialConnectionResolution {
+    let connection = if let Some(resolver) = resolver {
+        match within_deadline(deadline, resolver.resolve_task_connection(task, hostname)).await {
+            Ok(Ok(connection)) => connection,
+            Err(()) => {
+                let mut result = task_deadline_failure(
+                    deadline.expect("expired connection requires a deadline"),
+                    "connection_setup",
+                    0,
+                    false,
+                );
+                let finished_at = SystemTime::now();
+                observe_timeout_cleanup(
+                    &mut result,
+                    task,
+                    hostname,
+                    Some(resolver),
+                    None,
+                    async_work_state,
+                )
+                .await;
+                return InitialConnectionResolution::Finished {
+                    result,
+                    finished_at,
+                    completion: HostResultCompletion::DeadlineBeforeAttempts,
+                };
+            }
+            Ok(Err(error)) => {
+                let finished_at = SystemTime::now();
+                warn!(
+                    "task '{}' failed to open connection for host '{}': {}",
+                    task.name(),
+                    hostname,
+                    error
+                );
+
+                let mut result = deadline_failure_if_expired(deadline, "connection_setup", 0, true)
+                    .unwrap_or_else(|| {
+                        HostTaskResult::failed(
+                            TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
+                        )
+                    });
+                observe_timeout_cleanup(
+                    &mut result,
+                    task,
+                    hostname,
+                    Some(resolver),
+                    None,
+                    async_work_state,
+                )
+                .await;
+                let completion = if is_deadline_timeout_result(&result) {
+                    HostResultCompletion::DeadlineBeforeAttempts
+                } else {
+                    HostResultCompletion::BeforeAttempts
+                };
+                return InitialConnectionResolution::Finished {
+                    result,
+                    finished_at,
+                    completion,
+                };
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(mut result) = deadline_failure_if_expired(deadline, "connection_setup", 0, true) {
+        let finished_at = SystemTime::now();
+        observe_timeout_cleanup(
+            &mut result,
+            task,
+            hostname,
+            resolver,
+            connection.clone(),
+            async_work_state,
+        )
+        .await;
+        return InitialConnectionResolution::Finished {
+            result,
+            finished_at,
+            completion: HostResultCompletion::DeadlineBeforeAttempts,
+        };
+    }
+
+    InitialConnectionResolution::Ready(connection)
+}
+
 impl TaskRunOptions {
     /// Create run options for normal task execution with the provided maximum depth.
     pub fn new(max_depth: usize) -> Self {
@@ -6170,113 +6275,37 @@ impl TaskDefinition {
             return Ok(());
         }
 
-        // Resolve the initial connection once before any task attempt.
-        let connection = if let Some(connection_resolver) = connection_resolver {
-            match within_deadline(
-                deadline,
-                connection_resolver.resolve_task_connection(task.as_ref(), hostname),
-            )
-            .await
-            {
-                Ok(Ok(connection)) => connection,
-                Err(()) => {
-                    let mut host_result = task_deadline_failure(
-                        deadline.expect("expired connection requires a deadline"),
-                        "connection_setup",
-                        0,
-                        false,
-                    );
-                    let finished_at = SystemTime::now();
-                    observe_timeout_cleanup(
-                        &mut host_result,
-                        task.as_ref(),
-                        hostname,
-                        Some(connection_resolver),
-                        None,
-                        async_work_state.as_deref(),
-                    )
-                    .await;
-                    record_host_result(
-                        results,
-                        host_result,
+        let connection = match resolve_initial_connection(
+            task.as_ref(),
+            hostname,
+            connection_resolver,
+            deadline,
+            async_work_state.as_deref(),
+        )
+        .await
+        {
+            InitialConnectionResolution::Ready(connection) => connection,
+            InitialConnectionResolution::Finished {
+                result,
+                finished_at,
+                completion,
+            } => {
+                Self::finish_early_result(
+                    task.as_ref(),
+                    host_execution,
+                    results,
+                    EarlyHostResult {
+                        result,
                         finished_at,
                         recording,
-                        HostResultCompletion::DeadlineBeforeAttempts,
-                    )?;
-                    return Ok(());
-                }
-                Ok(Err(error)) => {
-                    let finished_at = SystemTime::now();
-                    warn!(
-                        "task '{}' failed to open connection for host '{}': {}",
-                        task.name(),
-                        hostname,
-                        error
-                    );
-
-                    let mut host_result =
-                        deadline_failure_if_expired(deadline, "connection_setup", 0, true)
-                            .unwrap_or_else(|| {
-                                HostTaskResult::failed(
-                                    TaskFailure::new(error).with_kind(TaskFailureKind::Connection),
-                                )
-                            });
-                    observe_timeout_cleanup(
-                        &mut host_result,
-                        task.as_ref(),
-                        hostname,
-                        Some(connection_resolver),
-                        None,
-                        async_work_state.as_deref(),
-                    )
-                    .await;
-                    let completion = if is_deadline_timeout_result(&host_result) {
-                        HostResultCompletion::DeadlineBeforeAttempts
-                    } else {
-                        HostResultCompletion::BeforeAttempts
-                    };
-                    Self::finish_early_result(
-                        task.as_ref(),
-                        host_execution,
-                        results,
-                        EarlyHostResult {
-                            result: host_result,
-                            finished_at,
-                            recording,
-                            completion,
-                        },
-                        sub_task_context.clone(),
-                    )
-                    .await?;
-                    return Ok(());
-                }
+                        completion,
+                    },
+                    sub_task_context.clone(),
+                )
+                .await?;
+                return Ok(());
             }
-        } else {
-            None
         };
-
-        if let Some(mut host_result) =
-            deadline_failure_if_expired(deadline, "connection_setup", 0, true)
-        {
-            let finished_at = SystemTime::now();
-            observe_timeout_cleanup(
-                &mut host_result,
-                task.as_ref(),
-                hostname,
-                connection_resolver,
-                connection.clone(),
-                async_work_state.as_deref(),
-            )
-            .await;
-            record_host_result(
-                results,
-                host_result,
-                finished_at,
-                recording,
-                HostResultCompletion::DeadlineBeforeAttempts,
-            )?;
-            return Ok(());
-        }
 
         if run_options.dry_run() && !task.supports_dry_run() {
             let finished_at = SystemTime::now();
