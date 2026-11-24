@@ -6148,11 +6148,10 @@ impl TaskDefinition {
 
     /// Recursively executes a task and its sub-tasks with depth tracking.
     ///
-    /// This internal helper method performs the actual recursive task execution,
-    /// tracking the current depth to enforce the maximum depth limit. It resolves
-    /// the initial connection before the retry loop, verifies changed tasks through
-    /// a fresh session after retries, records the host result, then recursively
-    /// processes all sub-tasks returned by `sub_tasks()`.
+    /// This internal method checks depth and timeout support, resolves the initial
+    /// connection, runs task attempts, finalizes the host result after retries,
+    /// then applies subtask continuation to that finalized result. Early setup
+    /// results use the same recording and continuation boundary.
     ///
     /// Sub-tasks are executed in iteration order. Results are grouped by task name, so
     /// a sub-task named `"validate"` produces a single `TaskResults` node containing
@@ -6290,13 +6289,19 @@ impl TaskDefinition {
                 async_work_state.as_deref(),
             )
             .await;
-            record_host_result(
+            Self::finish_early_result(
+                task.as_ref(),
+                host_execution,
                 results,
-                host_result,
-                finished_at,
-                recording,
-                HostResultCompletion::DeadlineBeforeAttempts,
-            )?;
+                EarlyHostResult {
+                    result: host_result,
+                    finished_at,
+                    recording,
+                    completion: HostResultCompletion::DeadlineBeforeAttempts,
+                },
+                sub_task_context.clone(),
+            )
+            .await?;
             return Ok(());
         }
 
