@@ -1,8 +1,10 @@
 # genja-core-derive Macro Surface
 
-This note records the currently supported public surface for
-`genja-core-derive`. It is the baseline audit for deciding what the crate
-promises before adding broader compile tests or hardening behavior.
+This note records the original public-surface baseline audit for
+`genja-core-derive`, before broader compile tests and later macro features
+were added. The metadata list below is historical. For the current macro
+surface, use the `genja_task` rustdoc in `src/lib.rs` and the task guide in
+`../docs/tasks.md`.
 
 ## Public Macros
 

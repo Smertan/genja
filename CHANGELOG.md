@@ -26,6 +26,7 @@ Changed packages:
 
 ### Changed
 
+- Organized execution-policy design records under `docs/design/` as local-preview draft pages, with a contributor reference to the proposed ordered-root failure policy. Refs: #194
 - Genja now rejects task-declared and invocation `task_timeout` values on blocking Rust and Python tasks before connection setup. Runner timeout defaults are ignored for blocking tasks, allowing mixed task lists; configure timeouts in the connection plugin for blocking work. Refs: #174
 - Moved runner plugin authoring guidance into the Plugins section, with links from the Tasks and Runners guides. Refs: #172
 - **Breaking:** Rust task retry configuration is now `TaskRetryConfig` and `TaskRetryConfigBuilder`, and runner defaults use `runner.task_retry` with `RunnerConfig::task_retry()` and `RunnerConfigBuilder::task_retry(...)`. Rename uses of `RetryConfig`, `RetryConfigBuilder`, `runner.retry`, and the runner `retry()` methods; task macro `retry(...)` and `TaskSpec.overrides.retry` remain unchanged. Refs: #171

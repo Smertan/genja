@@ -1,7 +1,7 @@
 # Execution policy design: baseline, retry, deadline, and verification
 
-This note records the execution baseline and the retry, deadline, verification,
-API, and validation contracts from design phases 2-5. Some proposals have since
+This design record preserves the execution baseline and the retry, deadline,
+verification, API, and validation contracts from design phases 2-5. Some proposals have since
 been implemented. The [#174 async deadline revision](#async-deadline-revision-for-174)
 below supersedes this note's earlier blocking-task deadline and cancellation
 proposal. Explicit blocking-task timeout rejection and the Rust async cleanup
@@ -19,6 +19,64 @@ The relevant paths are `Genja::run_task*_with_options` and
 `genja/src/lib.rs`, `PluginRunner` in
 `genja-plugin-manager/src/plugin_types.rs`, and `TaskDefinition::start_with_depth`
 in `genja-core/src/task.rs`.
+
+## Proposed ordered-root failure and recovery contract for #194
+
+This section records a design decision for [#194](https://github.com/Smertan/genja/issues/194).
+It is **not implemented**. The current user-facing behavior remains documented
+in [Tasks](../tasks.md) and [Runners](../runners.md).
+
+### Public API and defaults
+
+- Add `TaskListFailureControl` with `SkipRemainingForHost` (the default) and
+  `Continue`. Add `TaskListRunOptions::failure_control()` and
+  `with_failure_control(...)`. `TaskListRunOptions::new(...)`, conversion from
+  `TaskRunOptions`, and list calls without explicit options all use the blocking
+  default. Python exposes corresponding constants and a `failure_control`
+  constructor argument, property, and builder method.
+- Mark recovery on a root `TaskDefinition`, not on task-authored metadata or
+  subtasks. Provide `TaskDefinition::with_recovery_root()` and
+  `is_recovery_root()`, plus `Tasks::add_recovery_task(...)`. Python provides
+  `Tasks.add_recovery_task(task_class)` and exposes the marker on returned
+  task definitions. Existing `add_task(...)` entries remain ordinary.
+- Explicit `Continue` retains the previous scheduling behavior after ordinary
+  failures. Recovery designation has no scheduling effect in that mode.
+
+### Host eligibility
+
+After each root's processor-modified results are final, inspect the root and
+all descendant results separately for each host. A `Failed` result anywhere
+in the tree blocks that host from later ordinary roots in the same list
+invocation. An ordinary `Skipped` result alone does not create a block.
+Record a structured `Skipped` result for each later ordinary root omitted on
+that host. Other hosts continue normally.
+
+A designated recovery root runs normally on an eligible host. It may also run
+on a host blocked by an ordinary failure. On that host, it clears the block
+only if its root and every descendant result are `Passed` or
+`PassedWithWarnings`. A `Failed` or `Skipped` result anywhere in its tree
+leaves the host blocked. The recovery task supplies the actual diagnostic or
+repair behavior; the policy only controls eligibility. Ordinary-failure
+blocks end with the list invocation and do not mark a host unavailable on the
+`Genja` runtime.
+
+`TaskListTimeoutControl` remains independent. A host must be eligible under
+both list controls before a root may run. An explicit
+`TaskListTimeoutControl::SkipRemainingForHost` continues to block later roots
+after a deadline expires, including recovery roots. Unconfirmed timeout
+cleanup always prevents recovery execution, even when timeout control is
+`Continue`. The parent-to-subtask policy from #176 remains independent.
+
+### Runner compatibility and migration
+
+The blocking default needs a host eligibility decision between roots. Genja
+therefore calls each runner's required `run_task(...)` once per root. A custom
+`run_tasks(...)` override is used only with explicit `Continue` when timeout
+control also permits list batching. Custom runners relying on list-wide
+batching must select `Continue` or move that behavior into `run_task(...)`.
+Document this scheduling change and the new default as breaking behavior in
+the top-level changelog when implemented. Existing callers that need later
+roots to run after an ordinary failure should select `Continue` explicitly.
 
 ## Async deadline revision for #174
 
@@ -609,7 +667,7 @@ is selected.
 
 The following requirement setting was not implemented. The revised #175
 instead exposes each task's authored verification declarations in its
-descriptor. See [Verification Metadata in Descriptors](task-registration.md#verification-metadata-in-descriptors)
+descriptor. See [Verification Metadata in Descriptors](../task-registration.md#verification-metadata-in-descriptors)
 for the current contract. The paragraphs below preserve the original design
 discussion and are not implementation guidance.
 

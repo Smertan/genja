@@ -122,6 +122,19 @@ Repository-specific instructions for AI coding agents working in this workspace.
 
 ## Documentation
 
+### Design Records
+
+- For substantial changes to core architecture, execution semantics, or contracts shared across crates and Python bindings, read relevant records in `docs/design/` and any affected crate's `DESIGN.md` before editing.
+- Keep crate-specific implementation invariants and contracts in that crate's `DESIGN.md`. Keep cross-crate and runtime-wide decisions in `docs/design/`. Update the existing record where the decision lives, or create a focused record in the appropriate location when none covers it. List new records in `docs/design/index.md`.
+- Keep design records focused on decisions and their rationale. Routine internal refactors do not need a new record. Update user-facing guides when public behavior or APIs change.
+
+### Execution Policy Design Records
+
+- For changes to task execution policy, root-list scheduling, retries, deadlines, or recovery, read `docs/design/index.md` and the relevant execution-policy records before editing the behavior or public API.
+- Treat design records as context: they include historical and proposed contracts. Check their status against the current code, issue requirements, and user-facing guides before relying on them.
+- Update the affected design record when a policy contract changes. Update the task and runner guides in the same branch when the behavior is implemented; do not present an unimplemented proposal as current behavior.
+- The design records are draft documentation. Keep them available for local preview without adding links to draft pages in the published navigation.
+
 ### User-Facing Changes
 
 - Update relevant docs when public behavior, APIs, settings, or result shapes change.
