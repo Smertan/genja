@@ -1560,21 +1560,31 @@ impl Genja {
 }
 
 fn collect_deadline_expired_hosts(results: &TaskResults, blocked: &mut HashSet<String>) {
-    for (host_id, host_result) in results.hosts().iter() {
-        let deadline_expired = host_result.failure().is_some_and(|failure| {
+    collect_matching_hosts_in_tree(results, blocked, &|host_result| {
+        host_result.failure().is_some_and(|failure| {
             matches!(failure.kind(), TaskFailureKind::Timeout)
                 && failure
                     .details()
                     .and_then(|details| details.get("deadline_expired"))
                     .and_then(serde_json::Value::as_bool)
                     == Some(true)
-        });
-        if deadline_expired {
-            blocked.insert(host_id.as_str().to_string());
+        })
+    });
+}
+
+/// Collect hosts whose finalized root or descendant result matches a policy.
+fn collect_matching_hosts_in_tree(
+    results: &TaskResults,
+    matched: &mut HashSet<String>,
+    matches: &impl Fn(&HostTaskResult) -> bool,
+) {
+    for (host_id, host_result) in results.hosts().iter() {
+        if matches(host_result) {
+            matched.insert(host_id.as_str().to_string());
         }
     }
     for (_, subtask) in results.sub_tasks().iter() {
-        collect_deadline_expired_hosts(subtask, blocked);
+        collect_matching_hosts_in_tree(subtask, matched, matches);
     }
 }
 
@@ -1657,7 +1667,7 @@ impl Default for Genja {
 mod tests {
     use super::{
         Genja, GenjaError, RuntimeTaskConnectionResolver, SubtaskContinuation, TaskListRunOptions,
-        TaskListTimeoutControl, TaskRunOptions, genja_task,
+        TaskListTimeoutControl, TaskRunOptions, collect_matching_hosts_in_tree, genja_task,
     };
     use async_trait::async_trait;
     use genja_core::Settings;
@@ -1668,8 +1678,8 @@ mod tests {
     use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig, SSHConfig};
     use genja_core::task::{
         BlockingTaskRuntimeContext, HostTaskResult, Task, TaskConnectionResolver, TaskDefinition,
-        TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskRuntimeContext,
-        TaskSuccess, Tasks,
+        TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskResults,
+        TaskRuntimeContext, TaskSuccess, Tasks,
     };
     use genja_core::task::{
         TaskRetryConfig, TaskRetryContext, TaskRetryDecision, TaskRetryPolicy, TaskRetryPolicyKind,
@@ -1679,7 +1689,7 @@ mod tests {
         AsyncPluginInventory, Plugin, PluginConnection, PluginRunner, Plugins,
     };
     use serde_json::{Value, json};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -5012,6 +5022,54 @@ mod tests {
             );
             assert_eq!(second_calls.load(Ordering::SeqCst), 0);
         }
+    }
+
+    #[test]
+    fn result_tree_matching_uses_finalized_nested_results_per_host() {
+        let mut root = TaskResults::new("root");
+        root.insert_host_result("router1", HostTaskResult::passed(TaskSuccess::new()));
+        root.insert_host_result("router2", HostTaskResult::passed(TaskSuccess::new()));
+        root.insert_host_result(
+            "router3",
+            HostTaskResult::skipped_with_reason("task_skipped"),
+        );
+
+        let mut child = TaskResults::new("child");
+        child.insert_host_result("router1", HostTaskResult::passed(TaskSuccess::new()));
+        child.insert_host_result("router2", HostTaskResult::passed(TaskSuccess::new()));
+        let mut grandchild = TaskResults::new("grandchild");
+        grandchild.insert_host_result(
+            "router1",
+            HostTaskResult::failed(TaskFailure::new(std::io::Error::other("failed"))),
+        );
+        grandchild.insert_host_result(
+            "router2",
+            HostTaskResult::passed_with_warnings(TaskSuccess::new()),
+        );
+        child.insert_sub_task("grandchild", grandchild);
+        root.insert_sub_task("child", child);
+
+        let mut failed = HashSet::new();
+        collect_matching_hosts_in_tree(&root, &mut failed, &HostTaskResult::is_failed);
+        assert_eq!(failed, HashSet::from(["router1".to_string()]));
+
+        root.sub_task_mut("child")
+            .expect("child should exist")
+            .sub_task_mut("grandchild")
+            .expect("grandchild should exist")
+            .insert_host_result("router1", HostTaskResult::passed(TaskSuccess::new()));
+        root.insert_host_result(
+            "router2",
+            HostTaskResult::failed(TaskFailure::new(std::io::Error::other("processor failure"))),
+        );
+
+        let mut failed_after_changes = HashSet::new();
+        collect_matching_hosts_in_tree(
+            &root,
+            &mut failed_after_changes,
+            &HostTaskResult::is_failed,
+        );
+        assert_eq!(failed_after_changes, HashSet::from(["router2".to_string()]));
     }
 
     #[test]
