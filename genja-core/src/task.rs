@@ -4481,14 +4481,29 @@ pub enum TaskListTimeoutControl {
     SkipRemainingForHost,
 }
 
+/// Whether an ordered task list continues ordinary roots after a host fails.
+///
+/// This policy applies between root task trees. It is independent of
+/// [`SubtaskContinuation`] and [`TaskListTimeoutControl`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TaskListFailureControl {
+    /// Skip later ordinary roots on a host after any result in a root tree fails.
+    #[default]
+    SkipRemainingForHost,
+    /// Continue later roots after ordinary failures, retaining the previous behavior.
+    Continue,
+}
+
 /// Options for an ordered task list.
 ///
 /// Wraps the options applied to each task and adds list-level control flow.
-/// Use [`Self::with_timeout_control`] to opt into skipping later roots on a
-/// host after a deadline expires. The default is to continue.
+/// Ordinary failures block later roots on the affected host by default. Use
+/// [`Self::with_failure_control`] with [`TaskListFailureControl::Continue`] to
+/// retain the previous scheduling behavior. Timeout control remains separate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TaskListRunOptions {
     task_options: TaskRunOptions,
+    failure_control: TaskListFailureControl,
     timeout_control: TaskListTimeoutControl,
 }
 
@@ -4497,6 +4512,7 @@ impl TaskListRunOptions {
     pub fn new(task_options: TaskRunOptions) -> Self {
         Self {
             task_options,
+            failure_control: TaskListFailureControl::SkipRemainingForHost,
             timeout_control: TaskListTimeoutControl::Continue,
         }
     }
@@ -4509,6 +4525,17 @@ impl TaskListRunOptions {
     /// Return a copy with different options applied to each task in the list.
     pub fn with_task_options(mut self, task_options: TaskRunOptions) -> Self {
         self.task_options = task_options;
+        self
+    }
+
+    /// Return how ordinary failures affect later roots on the same host.
+    pub fn failure_control(&self) -> TaskListFailureControl {
+        self.failure_control
+    }
+
+    /// Set how ordinary failures affect later roots on the same host.
+    pub fn with_failure_control(mut self, failure_control: TaskListFailureControl) -> Self {
+        self.failure_control = failure_control;
         self
     }
 
@@ -5756,6 +5783,7 @@ impl fmt::Debug for dyn TaskConnectionResolver {
 #[derive(Clone)]
 pub struct TaskDefinition {
     inner: Arc<dyn Task>,
+    recovery_root: bool,
     processor_resolver: Option<Arc<dyn TaskProcessorResolver>>,
     processor_names: Arc<Vec<String>>,
     retry_config_override: Option<TaskRetryConfig>,
@@ -5768,6 +5796,7 @@ impl fmt::Debug for TaskDefinition {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TaskDefinition")
             .field("name", &self.name())
+            .field("recovery_root", &self.recovery_root)
             .field("execution_mode", &self.inner.execution_mode())
             .field("connection_plugin_name", &self.connection_plugin_name())
             .field("processor_names", &self.processor_names())
@@ -5794,6 +5823,7 @@ impl TaskDefinition {
     pub fn new<T: Task + 'static>(task: T) -> Self {
         Self {
             inner: Arc::new(task),
+            recovery_root: false,
             processor_resolver: None,
             processor_names: Arc::new(Vec::new()),
             retry_config_override: None,
@@ -5806,6 +5836,21 @@ impl TaskDefinition {
     /// Borrow the inner task as a trait object.
     pub fn as_task(&self) -> &dyn Task {
         self.inner.as_ref()
+    }
+
+    /// Designate this definition as a recovery root in an ordered task list.
+    ///
+    /// A recovery root may run on a host blocked by an earlier ordinary task
+    /// tree failure. Its full tree must pass to restore that host's eligibility.
+    /// This marker has no effect on single-task execution or subtasks.
+    pub fn with_recovery_root(mut self) -> Self {
+        self.recovery_root = true;
+        self
+    }
+
+    /// Return whether this definition is designated as a recovery root.
+    pub fn is_recovery_root(&self) -> bool {
+        self.recovery_root
     }
 
     /// Select a processor for the root task definition.
@@ -6776,6 +6821,14 @@ impl Tasks {
 
     pub fn add_task<T: Task + 'static>(&mut self, task: T) {
         self.0.push(TaskDefinition::new(task));
+    }
+
+    /// Add an explicitly designated recovery root to this ordered list.
+    ///
+    /// Recovery may restore a host blocked by an earlier ordinary failure only
+    /// when the root and every descendant pass on that host.
+    pub fn add_recovery_task<T: Task + 'static>(&mut self, task: T) {
+        self.0.push(TaskDefinition::new(task).with_recovery_root());
     }
 
     /// Add a task tree with a retry policy for this root and its subtasks.

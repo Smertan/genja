@@ -901,13 +901,22 @@ It is separate from the task-authored `options` payload described in
 - `subtask_continuation`: choose `OnParentSuccess` / `ON_PARENT_SUCCESS`
   (the default) or `Always` / `ALWAYS`. See [Subtask Continuation](#subtask-continuation).
 
-For ordered root-task lists, `TaskListRunOptions` wraps `TaskRunOptions` and
-adds `timeout_control`. Its default, `Continue` / `CONTINUE`, allows later
-roots to proceed with independent deadlines when timeout cleanup is confirmed;
-`SkipRemainingForHost` /
-`SKIP_REMAINING_FOR_HOST` skips later roots on a host after a task deadline
-expires there. This control applies to root tasks, not parent-subtask
-continuation.
+For ordered root-task lists, `TaskListRunOptions` wraps `TaskRunOptions`.
+Rust `failure_control` defaults to `SkipRemainingForHost`: a failed root or
+descendant blocks later ordinary roots on that host for this list invocation.
+Use `TaskListFailureControl::Continue` to retain the previous scheduling
+behavior. Mark a recovery root with `Tasks::add_recovery_task(...)` or
+`TaskDefinition::with_recovery_root()`. It can run on a failure-blocked host
+and clears the block only when its entire result tree passes. Other hosts
+continue independently. The Python failure-control API is planned for the
+next implementation phase; Python list calls currently retain their previous
+continue-after-failure behavior.
+
+The separate `timeout_control` defaults to `Continue` / `CONTINUE`, allowing
+later roots to use independent deadlines when timeout cleanup is confirmed.
+`SkipRemainingForHost` / `SKIP_REMAINING_FOR_HOST` skips later roots, including
+recovery roots, on a host after a task deadline expires there. Neither list
+control changes parent-subtask continuation.
 
 ## Idempotency Checks
 

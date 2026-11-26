@@ -67,8 +67,9 @@ For async task bodies, the selected limit starts when that task begins on a
 host and covers connection setup, checks, attempts, retry waits, and
 verification. Retry attempts share the same deadline. An expired task reports
 a host-scoped timeout failure and starts no further attempt or subtask.
-In an ordered task list, each later root gets a fresh deadline unless cleanup
-from a timed-out task remains unconfirmed on that host.
+In an ordered task list, each eligible later root gets a fresh deadline.
+Unconfirmed cleanup prevents later work on that host; the list's failure and
+timeout controls can also make a root ineligible.
 
 Cleanup has a maximum **five-second observation period** per affected task-host,
 separate from the task deadline. Timeout details in the failed host result's
@@ -380,10 +381,12 @@ remote work. Inspect timeout results before starting another task on that host.
 
 ### List timeout control
 
-By default, a timed-out root or subtask does not prevent later roots from
-running on that host. Each later task starts its own deadline. To skip later
-roots on a host after a task deadline expires there, use list options. Other
-hosts continue, and ordinary task failures do not trigger this rule.
+Timeout control defaults to `Continue`, so each later task starts its own
+deadline when timeout cleanup is confirmed. To skip later roots on a host
+after a task deadline expires there, use list options. This also prevents
+recovery roots from running on that host. Rust failure control is separate:
+its default skips ordinary later roots after any failure in a root tree.
+Python failure control will be added in the next implementation phase.
 
 Deadline timeout details report the configured limit and elapsed seconds, the
 phase, and the number of attempts that actually started. An expiry before the
@@ -406,9 +409,9 @@ from async task deadlines.
     let results = genja.run_tasks_with_options(tasks, options)?;
     ```
 
-    Existing calls that pass `TaskRunOptions` continue with the default
-    `Continue` control. The async and custom-retry-policy list methods accept
-    `TaskListRunOptions` too.
+    Existing calls that pass `TaskRunOptions` use the default `Continue`
+    timeout control and the new Rust failure-blocking default. The async and
+    custom-retry-policy list methods accept `TaskListRunOptions` too.
 
 === ":fontawesome-brands-python: Python"
 
@@ -425,8 +428,10 @@ from async task deadlines.
     `run_tasks_async(...)` accepts the same options. Omitting `task_options`
     uses the runner's default depth and timeout settings.
 
-The opt-in skip mode calls the runner's single-task method for each root, so
-custom runners' `run_tasks` batching overrides are not used in that mode.
+Rust's default failure-blocking mode calls the runner's `run_task` method for
+each root to make host eligibility decisions between roots. A custom runner's
+`run_tasks` override is used only when both failure and timeout controls are
+explicitly `Continue`.
 
 ## Empty Host Selections
 

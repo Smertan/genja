@@ -3,10 +3,10 @@ use ::genja_core::inventory::{ConnectionKey, Host, Hosts};
 use ::genja_core::task::{
     HostTaskResult, IdempotencyCheck, IdempotencyMode, MessageLevel, SessionVerificationConfig,
     SubtaskContinuation, Task, TaskConnectionResolver, TaskDefinition, TaskError,
-    TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskListRunOptions,
-    TaskListTimeoutControl, TaskMessage, TaskResults, TaskResultsSummary, TaskRetryConfig,
-    TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks, validate_explicit_task_id,
-    validate_task_version,
+    TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskListFailureControl,
+    TaskListRunOptions, TaskListTimeoutControl, TaskMessage, TaskResults, TaskResultsSummary,
+    TaskRetryConfig, TaskRunOptions, TaskRuntimeContext, TaskSkip, TaskSuccess, Tasks,
+    validate_explicit_task_id, validate_task_version,
 };
 use async_trait::async_trait;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -1817,10 +1817,13 @@ fn resolve_task_list_run_options(
                 .map(|options| task_run_options_from_python(options, default_max_depth))
                 .unwrap_or_else(|| TaskRunOptions::new(default_max_depth));
             return Ok(TaskListRunOptions::new(task_options)
+                .with_failure_control(TaskListFailureControl::Continue)
                 .with_timeout_control(list_options.timeout_control));
         }
     }
-    resolve_task_run_options(run_options, default_max_depth).map(TaskListRunOptions::new)
+    resolve_task_run_options(run_options, default_max_depth).map(|task_options| {
+        TaskListRunOptions::new(task_options).with_failure_control(TaskListFailureControl::Continue)
+    })
 }
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
