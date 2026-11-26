@@ -556,7 +556,7 @@ class TaskListFailureControl:
         ...
 
 class TaskListTimeoutControl:
-    """Action for later list tasks after a host deadline expires."""
+    """Action for later ordinary roots after a host deadline expires."""
 
     CONTINUE: ClassVar[TaskListTimeoutControl]
     SKIP_REMAINING_FOR_HOST: ClassVar[TaskListTimeoutControl]
@@ -579,7 +579,7 @@ class TaskListTimeoutControl:
         ...
 
 class TaskListRunOptions:
-    """List execution controls with independent failure and timeout handling."""
+    """List controls that skip ordinary roots after failure or timeout by default."""
 
     def __init__(
         self,
@@ -587,7 +587,7 @@ class TaskListRunOptions:
         timeout_control: TaskListTimeoutControl | None = None,
         failure_control: TaskListFailureControl | None = None,
     ) -> None:
-        """Create list options; failures block later ordinary roots by default."""
+        """Create list options; failures and deadlines block ordinary roots by default."""
         ...
 
     @property
@@ -602,7 +602,7 @@ class TaskListRunOptions:
 
     @property
     def timeout_control(self) -> TaskListTimeoutControl:
-        """Action for later tasks after a host deadline expires."""
+        """Action for later ordinary roots after a host deadline expires."""
         ...
 
     def with_task_options(self, task_options: TaskRunOptions) -> TaskListRunOptions:

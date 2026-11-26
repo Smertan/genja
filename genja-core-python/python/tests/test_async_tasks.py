@@ -589,7 +589,7 @@ def test_python_async_deadline_rejects_unobservable_connection_setup():
     assert calls == []
 
 
-def test_runtime_task_list_skips_later_python_async_work_after_timeout():
+def test_runtime_task_list_recovers_after_confirmed_python_async_timeout():
     calls = []
 
     @task(name="list_deadline_slow")
@@ -611,23 +611,23 @@ def test_runtime_task_list_skips_later_python_async_work_after_timeout():
         tasks = genja.Tasks()
         tasks.add_task(SlowTask)
         tasks.add_task(NextTask)
+        tasks.add_recovery_task(NextTask)
+        tasks.add_task(NextTask)
         defaults = genja.TaskListRunOptions(
             task_options=genja.TaskRunOptions(task_timeout=0.02),
         )
-        assert defaults.timeout_control == genja.TaskListTimeoutControl.CONTINUE
-        options = defaults.with_timeout_control(
-            genja.TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST
-        )
         assert (
-            options.timeout_control
+            defaults.timeout_control
             == genja.TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST
         )
-        return await runtime.run_tasks_async(tasks, run_options=options)
+        return await runtime.run_tasks_async(tasks, run_options=defaults)
 
     results = asyncio.run(run_case())
     assert results[0].failed_hosts == ["router1"]
     assert results[1].skipped_hosts == ["router1"]
-    assert calls == []
+    assert results[2].passed_hosts == ["router1"]
+    assert results[3].passed_hosts == ["router1"]
+    assert calls == ["10.0.0.1", "10.0.0.1"]
 
 
 def test_python_coroutine_still_running_after_grace_blocks_later_host_work():

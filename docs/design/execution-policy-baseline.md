@@ -40,8 +40,9 @@ and [Runners](../runners.md).
   `is_recovery_root()`, plus `Tasks::add_recovery_task(...)`. Python provides
   `Tasks.add_recovery_task(task_class)` and exposes the marker on returned
   task definitions. Existing `add_task(...)` entries remain ordinary.
-- Explicit `Continue` retains the previous scheduling behavior after ordinary
-  failures. Recovery designation has no scheduling effect in that mode.
+- Explicit `Continue` for both list controls retains the previous scheduling
+  behavior after failures and deadlines. Recovery designation has no scheduling
+  effect when neither control blocks the host.
 
 ### Host eligibility
 
@@ -61,12 +62,14 @@ repair behavior; the policy only controls eligibility. Ordinary-failure
 blocks end with the list invocation and do not mark a host unavailable on the
 `Genja` runtime.
 
-`TaskListTimeoutControl` remains independent. A host must be eligible under
-both list controls before a root may run. An explicit
-`TaskListTimeoutControl::SkipRemainingForHost` continues to block later roots
-after a deadline expires, including recovery roots. Unconfirmed timeout
-cleanup always prevents recovery execution, even when timeout control is
-`Continue`. The parent-to-subtask policy from #176 remains independent.
+`TaskListTimeoutControl` remains independent and defaults to
+`SkipRemainingForHost`. After a deadline expires, it blocks later ordinary
+roots on that host. A designated recovery root may still run after cleanup is
+confirmed; if its entire tree passes, it clears both the timeout and failure
+blocks. A failed or skipped recovery tree leaves both blocks in place.
+Unconfirmed timeout cleanup always prevents recovery execution, regardless of
+the selected list controls. The parent-to-subtask policy from #176 remains
+independent.
 
 ### Runner compatibility and migration
 

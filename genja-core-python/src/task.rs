@@ -1092,8 +1092,9 @@ pub struct PyTaskRunOptions {
 
 /// Python options for an ordered task list.
 ///
-/// `task_options` apply to each task. Failure control skips later ordinary
-/// roots on a failed host by default; timeout control remains independent.
+/// `task_options` apply to each task. Failure and timeout controls independently
+/// skip later ordinary roots on an affected host by default. Recovery roots
+/// may run after confirmed timeout cleanup.
 #[pyclass(name = "TaskListRunOptions", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyTaskListRunOptions {
@@ -1358,7 +1359,7 @@ impl PyTaskRunOptions {
 
 #[pymethods]
 impl PyTaskListRunOptions {
-    /// Create list options. Failed hosts skip later ordinary roots by default.
+    /// Create list options. Failures and deadlines skip later ordinary roots by default.
     #[new]
     #[pyo3(signature = (task_options=None, timeout_control=None, failure_control=None))]
     fn new(
@@ -1389,7 +1390,7 @@ impl PyTaskListRunOptions {
         self.failure_control.into()
     }
 
-    /// Return the action for later roots after a host deadline expires.
+    /// Return the action for later ordinary roots after a host deadline expires.
     #[getter]
     fn timeout_control(&self) -> PyTaskListTimeoutControl {
         self.timeout_control.into()
@@ -1411,7 +1412,7 @@ impl PyTaskListRunOptions {
         }
     }
 
-    /// Return a copy with a different action after a host deadline expires.
+    /// Return a copy with a different action for ordinary roots after a deadline.
     fn with_timeout_control(&self, timeout_control: PyRef<'_, PyTaskListTimeoutControl>) -> Self {
         Self {
             timeout_control: (*timeout_control).into(),

@@ -4470,14 +4470,15 @@ impl SubtaskContinuation {
 
 /// How an ordered task list treats a host after one of its task deadlines expires.
 ///
-/// This controls later root tasks only. Each task and host retains its own
-/// timeout, attempt count, and result.
+/// This controls later ordinary roots only. Recovery roots may run after
+/// confirmed timeout cleanup. Each task and host retains its own timeout,
+/// attempt count, and result.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TaskListTimeoutControl {
-    /// Continue with later roots on every host, using fresh task deadlines.
-    #[default]
+    /// Do not add a timeout-specific block after a deadline expires.
     Continue,
-    /// Skip later roots on a host after a root or subtask deadline expires there.
+    /// Skip later ordinary roots after a deadline expires until recovery passes.
+    #[default]
     SkipRemainingForHost,
 }
 
@@ -4499,7 +4500,8 @@ pub enum TaskListFailureControl {
 /// Wraps the options applied to each task and adds list-level control flow.
 /// Ordinary failures block later roots on the affected host by default. Use
 /// [`Self::with_failure_control`] with [`TaskListFailureControl::Continue`] to
-/// retain the previous scheduling behavior. Timeout control remains separate.
+/// retain the previous scheduling behavior. Timeout control independently
+/// blocks ordinary roots after a deadline expires by default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TaskListRunOptions {
     task_options: TaskRunOptions,
@@ -4513,7 +4515,7 @@ impl TaskListRunOptions {
         Self {
             task_options,
             failure_control: TaskListFailureControl::SkipRemainingForHost,
-            timeout_control: TaskListTimeoutControl::Continue,
+            timeout_control: TaskListTimeoutControl::SkipRemainingForHost,
         }
     }
 
@@ -4539,12 +4541,12 @@ impl TaskListRunOptions {
         self
     }
 
-    /// Return the action taken for later roots after a host deadline expires.
+    /// Return the action taken for later ordinary roots after a host deadline expires.
     pub fn timeout_control(&self) -> TaskListTimeoutControl {
         self.timeout_control
     }
 
-    /// Set the action taken for later roots after a host deadline expires.
+    /// Set the action taken for later ordinary roots after a host deadline expires.
     pub fn with_timeout_control(mut self, timeout_control: TaskListTimeoutControl) -> Self {
         self.timeout_control = timeout_control;
         self

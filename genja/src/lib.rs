@@ -1531,7 +1531,7 @@ impl Genja {
                             .host_unavailable_after_timeout(hostname)
                         {
                             Some("timeout_cleanup_unconfirmed")
-                        } else if timed_out_hosts.contains(hostname) {
+                        } else if !task.is_recovery_root() && timed_out_hosts.contains(hostname) {
                             Some("a previous task's deadline expired on this host")
                         } else if !task.is_recovery_root() && failed_hosts.contains(hostname) {
                             Some("previous_task_tree_failed")
@@ -1566,11 +1566,12 @@ impl Genja {
                             &mut failed_hosts,
                             &HostTaskResult::is_failed,
                         );
-                        if task.is_recovery_root() {
-                            for (host_id, _) in available.iter() {
-                                if task_tree_passed_on_host(&task_results, host_id.as_str()) {
-                                    failed_hosts.remove(host_id.as_str());
-                                }
+                    }
+                    if task.is_recovery_root() {
+                        for (host_id, _) in available.iter() {
+                            if task_tree_passed_on_host(&task_results, host_id.as_str()) {
+                                failed_hosts.remove(host_id.as_str());
+                                timed_out_hosts.remove(host_id.as_str());
                             }
                         }
                     }
@@ -4839,7 +4840,8 @@ mod tests {
                     TaskListRunOptions::new(
                         TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20)),
                     )
-                    .with_failure_control(TaskListFailureControl::Continue),
+                    .with_failure_control(TaskListFailureControl::Continue)
+                    .with_timeout_control(TaskListTimeoutControl::Continue),
                 )
                 .expect("expiry should be recorded");
             assert!(matches!(
@@ -4884,6 +4886,17 @@ mod tests {
             let second = genja.run_task(task(), 0).expect("run should finish");
             assert!(second.host_result("router1").unwrap().is_skipped());
             assert!(second.host_result("router2").unwrap().is_passed());
+            let mut recovery = Tasks::new();
+            recovery.add_recovery_task(task());
+            let recovery_results = filtered
+                .run_tasks(recovery, 0)
+                .expect("recovery list should finish");
+            assert!(
+                recovery_results[0]
+                    .host_result("router1")
+                    .unwrap()
+                    .is_skipped()
+            );
             resolver.clear_host_unavailable_after_timeout("router1");
             let third = filtered.run_task(task(), 0).expect("run should finish");
             assert!(third.host_result("router1").unwrap().is_passed());
@@ -5004,7 +5017,8 @@ mod tests {
                     TaskListRunOptions::new(
                         TaskRunOptions::new(1).with_task_timeout(Duration::from_millis(20)),
                     )
-                    .with_failure_control(TaskListFailureControl::Continue),
+                    .with_failure_control(TaskListFailureControl::Continue)
+                    .with_timeout_control(TaskListTimeoutControl::Continue),
                 )
                 .expect("nested expiry should be recorded");
             assert!(
@@ -5207,7 +5221,7 @@ mod tests {
     }
 
     #[test]
-    fn list_timeout_control_skips_recovery_root_on_timed_out_host() {
+    fn timed_out_host_skips_ordinary_roots_until_recovery_passes() {
         for runner in ["serial", "threaded"] {
             let settings = Settings::builder()
                 .runner(RunnerConfig::builder().plugin(runner).build())
@@ -5216,26 +5230,37 @@ mod tests {
                 .with_settings(settings)
                 .build()
                 .expect("runner should build");
-            let second_calls = Arc::new(AtomicUsize::new(0));
+            let skipped_calls = Arc::new(AtomicUsize::new(0));
+            let recovery_calls = Arc::new(AtomicUsize::new(0));
+            let resumed_calls = Arc::new(AtomicUsize::new(0));
             let mut tasks = Tasks::new();
             tasks.add_task(DeadlineListTask {
                 name: "first",
                 delay: Duration::from_millis(80),
                 calls: Arc::new(AtomicUsize::new(0)),
             });
-            tasks.add_recovery_task(DeadlineListTask {
-                name: "second",
+            tasks.add_task(DeadlineListTask {
+                name: "skipped",
                 delay: Duration::ZERO,
-                calls: Arc::clone(&second_calls),
+                calls: Arc::clone(&skipped_calls),
+            });
+            tasks.add_recovery_task(DeadlineListTask {
+                name: "recovery",
+                delay: Duration::ZERO,
+                calls: Arc::clone(&recovery_calls),
+            });
+            tasks.add_task(DeadlineListTask {
+                name: "resumed",
+                delay: Duration::ZERO,
+                calls: Arc::clone(&resumed_calls),
             });
             let options = TaskListRunOptions::new(
                 TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20)),
-            )
-            .with_timeout_control(TaskListTimeoutControl::SkipRemainingForHost);
+            );
 
             let results = genja
                 .run_tasks_with_options(tasks, options)
-                .expect("list should return timeout and skip results");
+                .expect("list should return timeout, skip, and recovery results");
             assert_eq!(
                 options.timeout_control(),
                 TaskListTimeoutControl::SkipRemainingForHost
@@ -5252,7 +5277,11 @@ mod tests {
                     .host_result("router1")
                     .is_some_and(HostTaskResult::is_skipped)
             );
-            assert_eq!(second_calls.load(Ordering::SeqCst), 0);
+            assert!(results[2].host_result("router1").unwrap().is_passed());
+            assert!(results[3].host_result("router1").unwrap().is_passed());
+            assert_eq!(skipped_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(recovery_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(resumed_calls.load(Ordering::SeqCst), 1);
         }
     }
 
