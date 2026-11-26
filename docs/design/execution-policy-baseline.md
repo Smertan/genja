@@ -23,9 +23,8 @@ in `genja-core/src/task.rs`.
 ## Proposed ordered-root failure and recovery contract for #194
 
 This section records a design decision for [#194](https://github.com/Smertan/genja/issues/194).
-The Rust list scheduler and recovery marker are implemented. The Python API
-remains pending and currently retains its previous continue-after-failure
-behavior. Current user-facing behavior is documented in [Tasks](../tasks.md)
+The Rust list scheduler and recovery marker and the corresponding Python API
+are implemented. Current user-facing behavior is documented in [Tasks](../tasks.md)
 and [Runners](../runners.md).
 
 ### Public API and defaults

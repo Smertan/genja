@@ -532,6 +532,29 @@ class TaskRunOptions:
         """Return the runtime options as a dictionary."""
         ...
 
+class TaskListFailureControl:
+    """Action for later ordinary roots after a host fails in a task list."""
+
+    SKIP_REMAINING_FOR_HOST: ClassVar[TaskListFailureControl]
+    CONTINUE: ClassVar[TaskListFailureControl]
+
+    @property
+    def value(self) -> str:
+        """Return the stable string value of this control."""
+        ...
+    def __str__(self) -> str:
+        """Return the stable string value for display."""
+        ...
+    def __repr__(self) -> str:
+        """Return the qualified enum constant name."""
+        ...
+    def __copy__(self) -> TaskListFailureControl:
+        """Return this immutable value for shallow copies."""
+        ...
+    def __deepcopy__(self, memo: dict[int, Any]) -> TaskListFailureControl:
+        """Return this immutable value for deep copies."""
+        ...
+
 class TaskListTimeoutControl:
     """Action for later list tasks after a host deadline expires."""
 
@@ -556,19 +579,25 @@ class TaskListTimeoutControl:
         ...
 
 class TaskListRunOptions:
-    """List execution controls with per-task options and timeout handling."""
+    """List execution controls with independent failure and timeout handling."""
 
     def __init__(
         self,
         task_options: TaskRunOptions | None = None,
         timeout_control: TaskListTimeoutControl | None = None,
+        failure_control: TaskListFailureControl | None = None,
     ) -> None:
-        """Create list options; later tasks continue by default."""
+        """Create list options; failures block later ordinary roots by default."""
         ...
 
     @property
     def task_options(self) -> TaskRunOptions | None:
         """Options applied to each task, or None for runner depth defaults."""
+        ...
+
+    @property
+    def failure_control(self) -> TaskListFailureControl:
+        """Action for later ordinary roots after a host fails."""
         ...
 
     @property
@@ -578,6 +607,12 @@ class TaskListRunOptions:
 
     def with_task_options(self, task_options: TaskRunOptions) -> TaskListRunOptions:
         """Return a copy with different per-task options."""
+        ...
+
+    def with_failure_control(
+        self, failure_control: TaskListFailureControl
+    ) -> TaskListRunOptions:
+        """Return a copy with different failure handling."""
         ...
 
     def with_timeout_control(
@@ -596,6 +631,10 @@ class TaskDefinition:
     @property
     def name(self) -> str:
         """Task name."""
+        ...
+    @property
+    def is_recovery_root(self) -> bool:
+        """Whether this definition can recover a failed host in a task list."""
         ...
     @property
     def connection_plugin_name(self) -> str | None:
@@ -653,6 +692,9 @@ class Tasks:
         ...
     def add_task(self, task_class: type[GenjaTaskProtocol]) -> None:
         """Append a decorated task class to the collection."""
+        ...
+    def add_recovery_task(self, task_class: type[GenjaTaskProtocol]) -> None:
+        """Append a recovery root to the ordered task list."""
         ...
     def task_definitions(self) -> list[TaskDefinition]:
         """Return task definitions for all tasks in the collection."""

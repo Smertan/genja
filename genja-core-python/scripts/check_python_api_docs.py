@@ -56,6 +56,7 @@ DUPLICATED_TOP_LEVEL_CLASSES = [
     "TaskMessageLevel",
     "TaskConnectionResolver",
     "TaskDefinition",
+    "TaskListFailureControl",
     "TaskListRunOptions",
     "TaskListTimeoutControl",
     "TaskRunOptions",
@@ -68,10 +69,12 @@ DUPLICATED_TOP_LEVEL_CLASSES = [
 
 SETTINGS_RUST = ROOT / "src" / "settings.rs"
 PLUGIN_MANAGER_RUST = ROOT / "src" / "plugin_manager.rs"
+TASK_RUST = ROOT / "src" / "task.rs"
 
 RUST_PYO3_DOC_CHECKS = [
     (SETTINGS_RUST, None),
     (PLUGIN_MANAGER_RUST, "impl PyPluginManager"),
+    (TASK_RUST, "impl PyTaskListRunOptions"),
 ]
 
 
@@ -199,7 +202,7 @@ def check_rust_pyo3_docs(path: Path, impl_scope: str | None) -> list[str]:
                 scope_depth = None
                 continue
 
-        if stripped.startswith("#[pyclass("):
+        if stripped.startswith("#[pyclass(") and (impl_scope is None or path != TASK_RUST):
             previous = previous_non_attribute_line(lines, index)
             if previous is None or not previous.startswith("///"):
                 errors.append(f"{path}:{index + 1}: pyclass missing Rust doc comment")

@@ -384,9 +384,9 @@ remote work. Inspect timeout results before starting another task on that host.
 Timeout control defaults to `Continue`, so each later task starts its own
 deadline when timeout cleanup is confirmed. To skip later roots on a host
 after a task deadline expires there, use list options. This also prevents
-recovery roots from running on that host. Rust failure control is separate:
-its default skips ordinary later roots after any failure in a root tree.
-Python failure control will be added in the next implementation phase.
+recovery roots from running on that host. Failure control is separate: its
+default skips ordinary later roots after any failure in a root tree in both
+Rust and Python.
 
 Deadline timeout details report the configured limit and elapsed seconds, the
 phase, and the number of attempts that actually started. An expiry before the
@@ -410,7 +410,7 @@ from async task deadlines.
     ```
 
     Existing calls that pass `TaskRunOptions` use the default `Continue`
-    timeout control and the new Rust failure-blocking default. The async and
+    timeout control and the failure-blocking default. The async and
     custom-retry-policy list methods accept `TaskListRunOptions` too.
 
 === ":fontawesome-brands-python: Python"
@@ -427,6 +427,9 @@ from async task deadlines.
 
     `run_tasks_async(...)` accepts the same options. Omitting `task_options`
     uses the runner's default depth and timeout settings.
+
+    To retain the previous continue-after-failure behavior, set
+    `failure_control=genja.TaskListFailureControl.CONTINUE` in the list options.
 
 Rust's default failure-blocking mode calls the runner's `run_task` method for
 each root to make host eligibility decisions between roots. A custom runner's

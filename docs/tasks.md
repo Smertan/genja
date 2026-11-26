@@ -902,21 +902,94 @@ It is separate from the task-authored `options` payload described in
   (the default) or `Always` / `ALWAYS`. See [Subtask Continuation](#subtask-continuation).
 
 For ordered root-task lists, `TaskListRunOptions` wraps `TaskRunOptions`.
-Rust `failure_control` defaults to `SkipRemainingForHost`: a failed root or
+`failure_control` defaults to `SkipRemainingForHost` /
+`SKIP_REMAINING_FOR_HOST`: a failed root or
 descendant blocks later ordinary roots on that host for this list invocation.
-Use `TaskListFailureControl::Continue` to retain the previous scheduling
-behavior. Mark a recovery root with `Tasks::add_recovery_task(...)` or
-`TaskDefinition::with_recovery_root()`. It can run on a failure-blocked host
+Use `TaskListFailureControl::Continue` in Rust or
+`genja.TaskListFailureControl.CONTINUE` in Python to retain the previous
+scheduling behavior. Mark a recovery root with `Tasks::add_recovery_task(...)`
+or `TaskDefinition::with_recovery_root()` in Rust, or
+`Tasks.add_recovery_task(...)` in Python. It can run on a failure-blocked host
 and clears the block only when its entire result tree passes. Other hosts
-continue independently. The Python failure-control API is planned for the
-next implementation phase; Python list calls currently retain their previous
-continue-after-failure behavior.
+continue independently. Multiple recovery roots may appear in one list; a
+later one can retry after an earlier recovery fails. A recovery root also runs
+on hosts that were never blocked, so it should handle an already healthy host.
 
 The separate `timeout_control` defaults to `Continue` / `CONTINUE`, allowing
 later roots to use independent deadlines when timeout cleanup is confirmed.
 `SkipRemainingForHost` / `SKIP_REMAINING_FOR_HOST` skips later roots, including
 recovery roots, on a host after a task deadline expires there. Neither list
 control changes parent-subtask continuation.
+
+### Ordered check and recovery
+
+The check runs first. If it fails on a host, Genja skips ordinary roots there
+until a recovery root passes. A recovery task should return success only after
+verifying the repair. The Rust snippet assumes task types that implement those
+operations. The Python snippet uses in-memory state to show the result flow;
+replace its repair and verification with device operations.
+
+=== ":fontawesome-brands-rust: Rust"
+
+    ```rust
+    use genja::genja_core::task::Tasks;
+
+    let mut tasks = Tasks::new();
+    tasks.add_task(CheckConnection);
+    tasks.add_recovery_task(RepairAndVerifyConnection);
+    tasks.add_task(DeployConfig);
+
+    let results = genja.run_tasks(tasks, 0)?;
+    // results[2] is skipped on a host if repair did not pass there.
+    ```
+
+=== ":fontawesome-brands-python: Python"
+
+    ```python
+    import asyncio
+    import genja
+    from genja.task import Host, TaskFailureResult, TaskSuccessResult, task
+
+    # Example state for one host. Replace these checks with real device work.
+    connection_healthy = False
+    repair_succeeds = True
+
+    @task(name="check_connection")
+    class CheckConnection:
+        async def start_async(self, task, host, context):
+            if connection_healthy:
+                return TaskSuccessResult(summary="connection healthy")
+            return TaskFailureResult(message="connection check failed")
+
+    @task(name="repair_connection")
+    class RepairAndVerifyConnection:
+        async def start_async(self, task, host, context):
+            global connection_healthy
+            connection_healthy = repair_succeeds  # Perform the repair here.
+            if connection_healthy:  # Verify the repair here.
+                return TaskSuccessResult(summary="connection verified")
+            return TaskFailureResult(message="repair did not verify")
+
+    @task(name="deploy_config")
+    class DeployConfig:
+        async def start_async(self, task, host, context):
+            return TaskSuccessResult(summary="deployed")
+
+    tasks = genja.Tasks()
+    tasks.add_task(CheckConnection)
+    tasks.add_recovery_task(RepairAndVerifyConnection)
+    tasks.add_task(DeployConfig)
+
+    runtime = genja.Genja.from_hosts({
+        "router1": Host(hostname="10.0.0.1", platform="ios"),
+    }).with_runner("serial")
+    results = asyncio.run(runtime.run_tasks_async(tasks))
+    # results[2].skipped_hosts includes hosts where repair did not pass.
+    ```
+
+Both APIs accept more than one recovery root. An explicit `Continue` option
+lets ordinary roots run after failures; recovery designation has no scheduling
+effect in that mode.
 
 ## Idempotency Checks
 

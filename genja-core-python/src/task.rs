@@ -170,6 +170,16 @@ py_string_enum! {
 }
 
 py_string_enum! {
+    py: PyTaskListFailureControl,
+    rust: TaskListFailureControl,
+    python_name: "TaskListFailureControl",
+    variants: {
+        SkipRemainingForHost => SKIP_REMAINING_FOR_HOST => "skip_remaining_for_host",
+        Continue => CONTINUE => "continue",
+    }
+}
+
+py_string_enum! {
     py: PyTaskListTimeoutControl,
     rust: TaskListTimeoutControl,
     python_name: "TaskListTimeoutControl",
@@ -1056,7 +1066,7 @@ pub struct PyTaskDefinition {
 #[pyclass(name = "Tasks", skip_from_py_object)]
 #[derive(Clone, Default)]
 pub struct PyTasks {
-    specs: Vec<PythonTaskSpec>,
+    specs: Vec<(PythonTaskSpec, bool)>,
 }
 
 #[pyclass(name = "TaskConnectionResolver", skip_from_py_object)]
@@ -1082,12 +1092,13 @@ pub struct PyTaskRunOptions {
 
 /// Python options for an ordered task list.
 ///
-/// `task_options` apply to each task. `timeout_control` chooses whether later
-/// roots continue or skip a host after one task deadline expires there.
+/// `task_options` apply to each task. Failure control skips later ordinary
+/// roots on a failed host by default; timeout control remains independent.
 #[pyclass(name = "TaskListRunOptions", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyTaskListRunOptions {
     task_options: Option<PyTaskRunOptions>,
+    failure_control: TaskListFailureControl,
     timeout_control: TaskListTimeoutControl,
 }
 
@@ -1105,6 +1116,12 @@ impl PyTaskDefinition {
     #[getter]
     fn name(&self) -> String {
         self.inner.name().to_string()
+    }
+
+    /// Whether this definition can recover a failed host in an ordered list.
+    #[getter]
+    fn is_recovery_root(&self) -> bool {
+        self.inner.is_recovery_root()
     }
 
     #[getter]
@@ -1341,15 +1358,19 @@ impl PyTaskRunOptions {
 
 #[pymethods]
 impl PyTaskListRunOptions {
-    /// Create list options. The default continues later tasks on every host.
+    /// Create list options. Failed hosts skip later ordinary roots by default.
     #[new]
-    #[pyo3(signature = (task_options=None, timeout_control=None))]
+    #[pyo3(signature = (task_options=None, timeout_control=None, failure_control=None))]
     fn new(
         task_options: Option<PyRef<'_, PyTaskRunOptions>>,
         timeout_control: Option<PyRef<'_, PyTaskListTimeoutControl>>,
+        failure_control: Option<PyRef<'_, PyTaskListFailureControl>>,
     ) -> Self {
         Self {
             task_options: task_options.map(|options| options.clone()),
+            failure_control: failure_control
+                .map(|control| (*control).into())
+                .unwrap_or_default(),
             timeout_control: timeout_control
                 .map(|control| (*control).into())
                 .unwrap_or_default(),
@@ -1360,6 +1381,12 @@ impl PyTaskListRunOptions {
     #[getter]
     fn task_options(&self) -> Option<PyTaskRunOptions> {
         self.task_options.clone()
+    }
+
+    /// Return how failures affect later ordinary roots on the same host.
+    #[getter]
+    fn failure_control(&self) -> PyTaskListFailureControl {
+        self.failure_control.into()
     }
 
     /// Return the action for later roots after a host deadline expires.
@@ -1376,6 +1403,14 @@ impl PyTaskListRunOptions {
         }
     }
 
+    /// Return a copy with different host-scoped failure handling.
+    fn with_failure_control(&self, failure_control: PyRef<'_, PyTaskListFailureControl>) -> Self {
+        Self {
+            failure_control: (*failure_control).into(),
+            ..self.clone()
+        }
+    }
+
     /// Return a copy with a different action after a host deadline expires.
     fn with_timeout_control(&self, timeout_control: PyRef<'_, PyTaskListTimeoutControl>) -> Self {
         Self {
@@ -1386,8 +1421,8 @@ impl PyTaskListRunOptions {
 
     fn __repr__(&self) -> String {
         format!(
-            "TaskListRunOptions(timeout_control={:?})",
-            self.timeout_control
+            "TaskListRunOptions(failure_control={:?}, timeout_control={:?})",
+            self.failure_control, self.timeout_control
         )
     }
 }
@@ -1407,7 +1442,16 @@ impl PyTasks {
 
     #[pyo3(signature = (task_class))]
     fn add_task(&mut self, task_class: Bound<'_, PyAny>) -> PyResult<()> {
-        self.specs.push(extract_python_task_spec(task_class)?);
+        self.specs
+            .push((extract_python_task_spec(task_class)?, false));
+        Ok(())
+    }
+
+    /// Append a root that may restore a host after an earlier task tree fails.
+    #[pyo3(signature = (task_class))]
+    fn add_recovery_task(&mut self, task_class: Bound<'_, PyAny>) -> PyResult<()> {
+        self.specs
+            .push((extract_python_task_spec(task_class)?, true));
         Ok(())
     }
 
@@ -1415,8 +1459,8 @@ impl PyTasks {
         self.specs
             .iter()
             .cloned()
-            .map(|spec| PyTaskDefinition {
-                inner: task_definition_from_spec(&spec),
+            .map(|(spec, recovery_root)| PyTaskDefinition {
+                inner: task_definition_from_root_spec(&spec, recovery_root),
                 spec: Some(spec),
             })
             .collect()
@@ -1438,9 +1482,9 @@ impl PyTasks {
                 "task index out of range",
             ));
         }
-        let spec = self.specs[index as usize].clone();
+        let (spec, recovery_root) = self.specs[index as usize].clone();
         Ok(PyTaskDefinition {
-            inner: task_definition_from_spec(&spec),
+            inner: task_definition_from_root_spec(&spec, recovery_root),
             spec: Some(spec),
         })
     }
@@ -1449,7 +1493,7 @@ impl PyTasks {
         let names = self
             .specs
             .iter()
-            .map(|spec| spec.name.as_str())
+            .map(|(spec, _)| spec.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
         format!("Tasks([{names}])")
@@ -1463,11 +1507,14 @@ impl PyTasks {
 
     fn to_runtime_tasks_with_loop(&self, event_loop: Option<Arc<Py<PyAny>>>) -> Tasks {
         let mut tasks = Tasks::new();
-        for spec in &self.specs {
-            tasks.push(TaskDefinition::new(task_from_spec_with_loop(
-                spec,
-                event_loop.clone(),
-            )));
+        for (spec, recovery_root) in &self.specs {
+            let definition =
+                TaskDefinition::new(task_from_spec_with_loop(spec, event_loop.clone()));
+            tasks.push(if *recovery_root {
+                definition.with_recovery_root()
+            } else {
+                definition
+            });
         }
         tasks
     }
@@ -1817,13 +1864,11 @@ fn resolve_task_list_run_options(
                 .map(|options| task_run_options_from_python(options, default_max_depth))
                 .unwrap_or_else(|| TaskRunOptions::new(default_max_depth));
             return Ok(TaskListRunOptions::new(task_options)
-                .with_failure_control(TaskListFailureControl::Continue)
+                .with_failure_control(list_options.failure_control)
                 .with_timeout_control(list_options.timeout_control));
         }
     }
-    resolve_task_run_options(run_options, default_max_depth).map(|task_options| {
-        TaskListRunOptions::new(task_options).with_failure_control(TaskListFailureControl::Continue)
-    })
+    resolve_task_run_options(run_options, default_max_depth).map(TaskListRunOptions::new)
 }
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1839,6 +1884,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTaskConnectionResolver>()?;
     module.add_class::<PyTaskRunOptions>()?;
     module.add_class::<PySubtaskContinuation>()?;
+    module.add_class::<PyTaskListFailureControl>()?;
     module.add_class::<PyTaskListTimeoutControl>()?;
     module.add_class::<PyTaskListRunOptions>()?;
     module.add_class::<PyTaskResults>()?;
@@ -2410,6 +2456,15 @@ fn task_from_spec_with_loop(
 
 fn task_definition_from_spec(spec: &PythonTaskSpec) -> TaskDefinition {
     TaskDefinition::new(task_from_spec(spec))
+}
+
+fn task_definition_from_root_spec(spec: &PythonTaskSpec, recovery_root: bool) -> TaskDefinition {
+    let definition = task_definition_from_spec(spec);
+    if recovery_root {
+        definition.with_recovery_root()
+    } else {
+        definition
+    }
 }
 
 fn python_task_spec_to_json(spec: &PythonTaskSpec) -> Value {
