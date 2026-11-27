@@ -1725,15 +1725,15 @@ mod tests {
     use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig, SSHConfig};
     use genja_core::task::{
         BlockingTaskRuntimeContext, HostTaskResult, Task, TaskConnectionResolver, TaskDefinition,
-        TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskResults,
-        TaskRuntimeContext, TaskSuccess, Tasks,
+        TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskProcessor,
+        TaskProcessorContext, TaskResults, TaskRuntimeContext, TaskSuccess, Tasks,
     };
     use genja_core::task::{
         TaskRetryConfig, TaskRetryContext, TaskRetryDecision, TaskRetryPolicy, TaskRetryPolicyKind,
     };
     use genja_plugin_manager::PluginManager;
     use genja_plugin_manager::plugin_types::{
-        AsyncPluginInventory, Plugin, PluginConnection, PluginRunner, Plugins,
+        AsyncPluginInventory, Plugin, PluginConnection, PluginProcessor, PluginRunner, Plugins,
     };
     use serde_json::{Value, json};
     use std::collections::{HashMap, HashSet};
@@ -1765,6 +1765,98 @@ mod tests {
             _run_options: TaskRunOptions,
         ) -> Result<genja_core::task::TaskResults, GenjaError> {
             panic!("unsupported runner must be rejected before execution")
+        }
+    }
+
+    struct FinalOutcomeFailureProcessor;
+
+    impl Plugin for FinalOutcomeFailureProcessor {
+        fn name(&self) -> String {
+            "final-outcome-failure".to_string()
+        }
+    }
+
+    impl PluginProcessor for FinalOutcomeFailureProcessor {
+        fn processor(&self) -> Arc<dyn TaskProcessor> {
+            Arc::new(Self)
+        }
+    }
+
+    impl TaskProcessor for FinalOutcomeFailureProcessor {
+        fn on_task_finish(
+            &self,
+            _context: &TaskProcessorContext,
+            results: &mut TaskResults,
+        ) -> Result<(), GenjaError> {
+            results.insert_host_result(
+                "router1",
+                HostTaskResult::failed(TaskFailure::new(std::io::Error::other(
+                    "processor rejected final result",
+                ))),
+            );
+            Ok(())
+        }
+    }
+
+    struct BatchTrackingRunner {
+        task_calls: Arc<AtomicUsize>,
+        batch_calls: Arc<AtomicUsize>,
+    }
+
+    impl Plugin for BatchTrackingRunner {
+        fn name(&self) -> String {
+            "batch-tracking".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl PluginRunner for BatchTrackingRunner {
+        async fn run_task(
+            &self,
+            task: &TaskDefinition,
+            hosts: &Hosts,
+            _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+            _runner_config: &RunnerConfig,
+            _run_options: TaskRunOptions,
+        ) -> Result<TaskResults, GenjaError> {
+            self.task_calls.fetch_add(1, Ordering::SeqCst);
+            let mut results = TaskResults::new(task.name());
+            for (host_id, _) in hosts.iter() {
+                let result = if task.name() == "first" && host_id.as_str() == "router1" {
+                    HostTaskResult::failed(TaskFailure::new(std::io::Error::other(
+                        "first root failed",
+                    )))
+                } else {
+                    HostTaskResult::passed(TaskSuccess::new())
+                };
+                results.insert_host_result(host_id.as_str(), result);
+            }
+            Ok(results)
+        }
+
+        async fn run_tasks(
+            &self,
+            tasks: &Tasks,
+            hosts: &Hosts,
+            connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+            runner_config: &RunnerConfig,
+            run_options: TaskRunOptions,
+        ) -> Result<Vec<TaskResults>, GenjaError> {
+            self.batch_calls.fetch_add(1, Ordering::SeqCst);
+            let mut results = Vec::with_capacity(tasks.len());
+            for task in tasks.iter() {
+                results.push(
+                    self.run_task(
+                        task,
+                        hosts,
+                        connection_resolver.clone(),
+                        runner_config,
+                        run_options,
+                    )
+                    .await?,
+                );
+            }
+            Ok(results)
         }
     }
 
@@ -5102,6 +5194,129 @@ mod tests {
                 "skipped host should be included in the returned summary"
             );
         }
+    }
+
+    #[test]
+    fn processor_modified_final_result_blocks_only_the_affected_host() {
+        for runner in ["serial", "threaded"] {
+            let mut plugins = PluginManager::new();
+            plugins.register_plugin(Plugins::Processor(Box::new(FinalOutcomeFailureProcessor)));
+            let settings = Settings::builder()
+                .runner(RunnerConfig::builder().plugin(runner).build())
+                .build();
+            let genja = Genja::builder(test_inventory())
+                .with_settings(settings)
+                .with_plugin_manager(plugins)
+                .build()
+                .expect("runner should build");
+            let mut tasks = Tasks::new();
+            tasks.push(
+                TaskDefinition::new(TestTask {
+                    name: "first".to_string(),
+                })
+                .with_processor("final-outcome-failure"),
+            );
+            tasks.add_task(TestTask {
+                name: "second".to_string(),
+            });
+
+            let results = genja.run_tasks(tasks, 0).expect("list should complete");
+            assert!(results[0].host_result("router1").unwrap().is_failed());
+            assert!(results[0].host_result("router2").unwrap().is_passed());
+            assert!(results[1].host_result("router1").unwrap().is_skipped());
+            assert!(results[1].host_result("router2").unwrap().is_passed());
+        }
+    }
+
+    #[test]
+    fn ordinary_skipped_result_does_not_block_later_root() {
+        for runner in ["serial", "threaded"] {
+            let genja = Genja::from_inventory(single_host_inventory())
+                .with_runner(runner)
+                .expect("runner should be available");
+            let mut tasks = Tasks::new();
+            tasks.add_task(SkippedTask);
+            tasks.add_task(TestTask {
+                name: "after-skip".to_string(),
+            });
+
+            let results = genja.run_tasks(tasks, 0).expect("list should complete");
+            assert!(results[0].host_result("router1").unwrap().is_skipped());
+            assert!(results[1].host_result("router1").unwrap().is_passed());
+        }
+    }
+
+    #[test]
+    fn custom_runner_batch_override_requires_both_continue_controls() {
+        let task_calls = Arc::new(AtomicUsize::new(0));
+        let batch_calls = Arc::new(AtomicUsize::new(0));
+        let mut plugins = PluginManager::new();
+        plugins.register_plugin(Plugins::Runner(Box::new(BatchTrackingRunner {
+            task_calls: Arc::clone(&task_calls),
+            batch_calls: Arc::clone(&batch_calls),
+        })));
+        let settings = Settings::builder()
+            .runner(RunnerConfig::builder().plugin("batch-tracking").build())
+            .build();
+        let genja = Genja::builder(test_inventory())
+            .with_settings(settings)
+            .with_plugin_manager(plugins)
+            .build()
+            .expect("custom runner should build");
+        let tasks = || {
+            let mut tasks = Tasks::new();
+            for name in ["first", "second"] {
+                tasks.add_task(TestTask {
+                    name: name.to_string(),
+                });
+            }
+            tasks
+        };
+
+        let default_results = genja
+            .run_tasks(tasks(), 0)
+            .expect("default list should run");
+        assert!(
+            default_results[1]
+                .host_result("router1")
+                .unwrap()
+                .is_skipped()
+        );
+        assert!(
+            default_results[1]
+                .host_result("router2")
+                .unwrap()
+                .is_passed()
+        );
+        assert_eq!(batch_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(task_calls.load(Ordering::SeqCst), 2);
+
+        let failure_continue = TaskListRunOptions::new(TaskRunOptions::new(0))
+            .with_failure_control(TaskListFailureControl::Continue);
+        let partial_results = genja
+            .run_tasks_with_options(tasks(), failure_continue)
+            .expect("single-control continuation should run per root");
+        assert!(
+            partial_results[1]
+                .host_result("router1")
+                .unwrap()
+                .is_passed()
+        );
+        assert_eq!(batch_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(task_calls.load(Ordering::SeqCst), 4);
+
+        let both_continue = failure_continue.with_timeout_control(TaskListTimeoutControl::Continue);
+        let continued_results = genja
+            .run_tasks_with_options(tasks(), both_continue)
+            .expect("batch override should run");
+        assert!(
+            continued_results[1]
+                .host_result("router1")
+                .unwrap()
+                .is_passed()
+        );
+        assert_eq!(batch_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(task_calls.load(Ordering::SeqCst), 6);
     }
 
     #[test]

@@ -8,7 +8,7 @@ For current runtime behavior, use the [Tasks](../tasks.md) and
 
 - [Execution policy baseline](execution-policy-baseline.md): original retry,
   deadline, verification, and validation design, with later revisions and the
-  proposed ordered-root failure and recovery contract for #194.
+  implemented ordered-root failure and recovery contract for #194.
 - [Task retry policy contract](task-retry-policy-contract.md): retry policy
   selection, precedence, and safety rules.
 

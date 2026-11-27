@@ -914,6 +914,13 @@ adds two independent host controls:
 | `timeout_control` | `SkipRemainingForHost` / `SKIP_REMAINING_FOR_HOST` (default) | Skip after a root or descendant deadline expires. |
 | `timeout_control` | `Continue` / `CONTINUE` | A deadline adds no timeout block; failure control still applies because a timeout is also a failed result. |
 
+Genja calls a runner's `run_tasks(...)` list override only when both controls
+are `Continue`. With either default blocking control, Genja calls `run_task(...)`
+once per root so it can update host eligibility between roots. This means a
+custom runner's batch override will not be used by default. See
+[Task List Execution](plugins/runners.md#task-list-execution) for runner
+implementation details.
+
 Blocks apply only to the affected host and this list invocation. Mark a
 recovery root with `Tasks::add_recovery_task(...)` or
 `TaskDefinition::with_recovery_root()` in Rust, or
@@ -1075,7 +1082,10 @@ result flow; replace the repair and verification with device operations.
         "router1": Host(hostname="10.0.0.1", platform="ios"),
     }).with_runner("serial")
     results = asyncio.run(runtime.run_tasks_async(tasks))
-    # results[2].skipped_hosts includes hosts where repair did not pass.
+    assert results[0].failed_hosts == ["router1"]
+    assert results[1].passed_hosts == ["router1"]
+    assert results[2].passed_hosts == ["router1"]
+    # If repair_succeeds were False, results[2].skipped_hosts would include router1.
     ```
 
 Both APIs accept more than one recovery root. An explicit `Continue` option

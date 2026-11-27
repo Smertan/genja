@@ -594,6 +594,10 @@ pub trait PluginRunner: Plugin {
     /// The default implementation preserves the order of `tasks`, executing each
     /// root task tree by delegating to [`Self::run_task`]. Runners can override this
     /// when they need custom batching behavior.
+    ///
+    /// Genja calls this method only when both the task-list failure and timeout
+    /// controls are `Continue`. Otherwise, Genja calls [`Self::run_task`] once per
+    /// root so it can update host eligibility between roots.
     async fn run_tasks(
         &self,
         tasks: &Tasks,

@@ -20,7 +20,7 @@ The relevant paths are `Genja::run_task*_with_options` and
 `genja-plugin-manager/src/plugin_types.rs`, and `TaskDefinition::start_with_depth`
 in `genja-core/src/task.rs`.
 
-## Proposed ordered-root failure and recovery contract for #194
+## Ordered-root failure and recovery contract for #194
 
 This section records a design decision for [#194](https://github.com/Smertan/genja/issues/194).
 The Rust list scheduler and recovery marker and the corresponding Python API
@@ -29,14 +29,14 @@ and [Runners](../runners.md).
 
 ### Public API and defaults
 
-- Add `TaskListFailureControl` with `SkipRemainingForHost` (the default) and
-  `Continue`. Add `TaskListRunOptions::failure_control()` and
+- `TaskListFailureControl` has `SkipRemainingForHost` (the default) and
+  `Continue`. `TaskListRunOptions` provides `failure_control()` and
   `with_failure_control(...)`. `TaskListRunOptions::new(...)`, conversion from
   `TaskRunOptions`, and list calls without explicit options all use the blocking
   default. Python exposes corresponding constants and a `failure_control`
   constructor argument, property, and builder method.
-- Mark recovery on a root `TaskDefinition`, not on task-authored metadata or
-  subtasks. Provide `TaskDefinition::with_recovery_root()` and
+- Recovery is marked on a root `TaskDefinition`, not on task-authored metadata or
+  subtasks. Rust provides `TaskDefinition::with_recovery_root()` and
   `is_recovery_root()`, plus `Tasks::add_recovery_task(...)`. Python provides
   `Tasks.add_recovery_task(task_class)` and exposes the marker on returned
   task definitions. Existing `add_task(...)` entries remain ordinary.

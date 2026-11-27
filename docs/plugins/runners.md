@@ -133,8 +133,20 @@ so tasks can use their declared connections.
 ## Task List Execution
 
 Custom runners may provide `run_tasks(...)` for custom ordered task-list
-execution. If `run_tasks(...)` is omitted, Genja delegates each root task to
-`run_task(...)` in order.
+execution. Genja calls this override only when both the task-list failure
+control and timeout control are `Continue`. This lets Genja pass the whole
+list to the runner without checking host eligibility between root tasks.
+
+With either control set to `SkipRemainingForHost` (the default), Genja instead
+calls `run_task(...)` separately for each root, updating host eligibility
+between roots so failed or timed-out hosts can be skipped. If `run_tasks(...)`
+is omitted, its default implementation delegates each root to `run_task(...)`
+in order.
+
+To rely on list-wide batching, callers must explicitly set both controls to
+`Continue`. This also means later roots are not blocked by earlier failures or
+deadlines on a host; unconfirmed timeout cleanup still prevents that host from
+running.
 
 Python runners that provide `run_tasks(...)` should inherit from
 `BatchRunnerPluginBase` when using the typed public API.
