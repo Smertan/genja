@@ -11,10 +11,11 @@ Changed packages:
 
 ### Added
 
+- **Breaking:** Rust and Python ordered task lists now skip later ordinary roots on a host after any root or descendant fails or reaches its deadline there. To retain the previous behavior, select `Continue` for both failure and timeout controls in list options. Designate recovery roots with `Tasks::add_recovery_task(...)` or, in Rust, `TaskDefinition::with_recovery_root()`; after confirmed timeout cleanup, a passing recovery tree restores the host for later ordinary roots. Custom Rust runners that need their `run_tasks` override must also select `Continue` for both controls. Refs: #194
 - **Breaking:** Subtasks now run on a host only when their parent's final result is `Passed` or `PassedWithWarnings`. Failed or skipped parents produce structured skipped results for omitted descendants without running their execution or start hooks. To retain the previous continuation behavior, select `SubtaskContinuation::Always` in Rust or `genja.SubtaskContinuation.ALWAYS` in Python invocation options. Refs: #176
 - **Breaking:** Rust and Python task descriptors now include task-authored `idempotency` and `session_verification` fields. Add these fields to Rust `TaskDescriptor` and `TaskDescriptorMetadata` struct literals; consumers with strict serialized schemas should accept the new fields. Older serialized descriptors default to disabled idempotency and no session verification when read. Refs: #175
 - Detailed `genja task describe` table and Markdown output now shows task-authored idempotency and session verification configuration; human-readable task lists remain compact. Refs: #175
-- Added `TaskListRunOptions` for ordered task lists, with an opt-in timeout control that skips later roots on a host after a task deadline expires there; the default continues with independent deadlines. Available in Rust and Python. Refs: #173
+- Added `TaskListRunOptions` for ordered task lists, with a timeout control for choosing whether a deadline expiry blocks later ordinary roots on that host. Available in Rust and Python. Refs: #173
 - Added task-declared timeout values for Rust and Python tasks, including subtasks with different limits from their parents; task values take precedence over invocation and runner defaults. Refs: #173
 - Added optional per-task, per-host timeout configuration in positive seconds to Rust and Python runner settings and invocation options, including fractional values; invocation values take precedence over runner defaults. Refs: #173
 - Enforced one monotonic timeout across each async task and host's connection setup, task attempts, retry waits, and verification. Expiry produces a non-retryable host timeout with the limit, elapsed time, execution phase, and number of attempts actually started; later tasks in an ordered list get independent deadlines when cleanup is confirmed. Refs: #173
@@ -26,6 +27,7 @@ Changed packages:
 
 ### Changed
 
+- Organized execution-policy design records under `docs/design/` as local-preview draft pages, with a contributor reference to the proposed ordered-root failure policy. Refs: #194
 - Genja now rejects task-declared and invocation `task_timeout` values on blocking Rust and Python tasks before connection setup. Runner timeout defaults are ignored for blocking tasks, allowing mixed task lists; configure timeouts in the connection plugin for blocking work. Refs: #174
 - Moved runner plugin authoring guidance into the Plugins section, with links from the Tasks and Runners guides. Refs: #172
 - **Breaking:** Rust task retry configuration is now `TaskRetryConfig` and `TaskRetryConfigBuilder`, and runner defaults use `runner.task_retry` with `RunnerConfig::task_retry()` and `RunnerConfigBuilder::task_retry(...)`. Rename uses of `RetryConfig`, `RetryConfigBuilder`, `runner.retry`, and the runner `retry()` methods; task macro `retry(...)` and `TaskSpec.overrides.retry` remain unchanged. Refs: #171

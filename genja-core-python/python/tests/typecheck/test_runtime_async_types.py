@@ -4,6 +4,7 @@ from collections.abc import Awaitable
 
 from genja import (
     Genja,
+    TaskListFailureControl,
     TaskListRunOptions,
     TaskListTimeoutControl,
     TaskResults,
@@ -26,6 +27,8 @@ def check_runtime_async_types() -> None:
     })
     tasks = Tasks()
     tasks.add_task(RuntimeAsyncTypecheckTask)
+    tasks.add_recovery_task(RuntimeAsyncTypecheckTask)
+    recovery_root: bool = tasks[1].is_recovery_root
 
     one: Awaitable[TaskResults] = runtime.run_task_async(RuntimeAsyncTypecheckTask)
     many: Awaitable[list[TaskResults]] = runtime.run_tasks_async(tasks)
@@ -35,7 +38,9 @@ def check_runtime_async_types() -> None:
             subtask_continuation=SubtaskContinuation.ON_PARENT_SUCCESS,
         ),
         TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST,
+        TaskListFailureControl.SKIP_REMAINING_FOR_HOST,
     )
+    list_options = list_options.with_failure_control(TaskListFailureControl.CONTINUE)
     controlled: Awaitable[list[TaskResults]] = runtime.run_tasks_async(
         tasks, run_options=list_options
     )
@@ -43,3 +48,4 @@ def check_runtime_async_types() -> None:
     _ = one
     _ = many
     _ = controlled
+    _ = recovery_root

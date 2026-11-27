@@ -1,6 +1,6 @@
 # Task retry policy contract
 
-This document fixes the public contract for the retry-policy implementation.
+This design record fixes the public contract for the retry-policy implementation.
 It builds on the retry safety and result semantics in the
 [execution policy baseline](execution-policy-baseline.md#proposed-retry-contract-phase-2).
 The baseline's original one-algorithm-per-invocation proposal is extended here

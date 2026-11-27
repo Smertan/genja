@@ -67,8 +67,9 @@ For async task bodies, the selected limit starts when that task begins on a
 host and covers connection setup, checks, attempts, retry waits, and
 verification. Retry attempts share the same deadline. An expired task reports
 a host-scoped timeout failure and starts no further attempt or subtask.
-In an ordered task list, each later root gets a fresh deadline unless cleanup
-from a timed-out task remains unconfirmed on that host.
+In an ordered task list, each eligible later root gets a fresh deadline.
+Unconfirmed cleanup prevents later work on that host; the list's failure and
+timeout controls can also make a root ineligible.
 
 Cleanup has a maximum **five-second observation period** per affected task-host,
 separate from the task deadline. Timeout details in the failed host result's
@@ -378,12 +379,17 @@ not stop another invocation's work that had already started. Sequential calls
 order the invocations, but a timeout result does not establish the outcome of
 remote work. Inspect timeout results before starting another task on that host.
 
-### List timeout control
+### List failure and timeout controls
 
-By default, a timed-out root or subtask does not prevent later roots from
-running on that host. Each later task starts its own deadline. To skip later
-roots on a host after a task deadline expires there, use list options. Other
-hosts continue, and ordinary task failures do not trigger this rule.
+The [Tasks guide control table](tasks.md#runtime-invocation-options) lists both
+options for each control and their combined effect on ordinary roots.
+
+Timeout control defaults to `SkipRemainingForHost`: a deadline expiry skips
+later ordinary roots on that host. A recovery root can still run after timeout
+cleanup is confirmed. If its full tree passes, later ordinary roots become
+eligible again. Unconfirmed cleanup prevents recovery. Failure control
+separately blocks ordinary roots after any failed result in the tree, so a
+timeout can set both blocks.
 
 Deadline timeout details report the configured limit and elapsed seconds, the
 phase, and the number of attempts that actually started. An expiry before the
@@ -396,19 +402,37 @@ from async task deadlines.
 === ":fontawesome-brands-rust: Rust"
 
     ```rust
-    use genja::{TaskListRunOptions, TaskListTimeoutControl, TaskRunOptions};
+    use genja::{TaskListRunOptions, TaskRunOptions};
     use std::time::Duration;
 
     let options = TaskListRunOptions::new(
         TaskRunOptions::new(1).with_task_timeout(Duration::from_secs(30)),
-    )
-    .with_timeout_control(TaskListTimeoutControl::SkipRemainingForHost);
+    );
     let results = genja.run_tasks_with_options(tasks, options)?;
     ```
 
-    Existing calls that pass `TaskRunOptions` continue with the default
-    `Continue` control. The async and custom-retry-policy list methods accept
-    `TaskListRunOptions` too.
+    Existing calls that pass `TaskRunOptions` use both blocking defaults. The
+    async and custom-retry-policy list methods accept `TaskListRunOptions` too.
+
+    To let later ordinary roots run after failures or deadlines, set both
+    controls to `Continue`:
+
+    ```rust
+    use genja::{
+        TaskListFailureControl, TaskListRunOptions, TaskListTimeoutControl,
+        TaskRunOptions,
+    };
+
+    let options = TaskListRunOptions::new(TaskRunOptions::new(1))
+        .with_failure_control(TaskListFailureControl::Continue)
+        .with_timeout_control(TaskListTimeoutControl::Continue);
+    let results = genja.run_tasks_with_options(tasks, options)?;
+    ```
+
+    Unconfirmed timeout cleanup still keeps the host unavailable. With either
+    control set to `SkipRemainingForHost`, a recovery root can restore
+    eligibility after its full tree passes, provided timeout cleanup was
+    confirmed.
 
 === ":fontawesome-brands-python: Python"
 
@@ -417,7 +441,6 @@ from async task deadlines.
 
     options = genja.TaskListRunOptions(
         task_options=genja.TaskRunOptions(task_timeout=30),
-        timeout_control=genja.TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST,
     )
     results = runtime.run_tasks(tasks, run_options=options)
     ```
@@ -425,8 +448,26 @@ from async task deadlines.
     `run_tasks_async(...)` accepts the same options. Omitting `task_options`
     uses the runner's default depth and timeout settings.
 
-The opt-in skip mode calls the runner's single-task method for each root, so
-custom runners' `run_tasks` batching overrides are not used in that mode.
+    To let later ordinary roots run after failures or deadlines, set both
+    controls to `CONTINUE`:
+
+    ```python
+    options = genja.TaskListRunOptions(
+        failure_control=genja.TaskListFailureControl.CONTINUE,
+        timeout_control=genja.TaskListTimeoutControl.CONTINUE,
+    )
+    results = runtime.run_tasks(tasks, run_options=options)
+    ```
+
+    Unconfirmed timeout cleanup still keeps the host unavailable. With either
+    control set to `SKIP_REMAINING_FOR_HOST`, a recovery root can restore
+    eligibility after its full tree passes, provided timeout cleanup was
+    confirmed.
+
+Rust's default failure-blocking mode calls the runner's `run_task` method for
+each root to make host eligibility decisions between roots. A custom runner's
+`run_tasks` override is used only when both failure and timeout controls are
+explicitly `Continue`.
 
 ## Empty Host Selections
 

@@ -4,6 +4,12 @@ This page is for contributors working on Genja itself. If you only need to add
 Genja to an application, start with [Installation](installation.md) and
 [Quickstart](quickstart.md).
 
+Historical policy decisions and proposed contracts are collected in
+`docs/design/`. These draft pages are excluded from the published site. For a
+local preview, run `pdm run zensical serve` from the repository root and open
+`http://localhost:8000/design/`. Use the task and runner guides for current
+runtime behavior.
+
 ## Development Setup
 
 Genja is a Rust workspace with Python bindings for the core runtime. A full

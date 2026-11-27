@@ -199,6 +199,108 @@ def test_runtime_run_tasks_async_executes_multiple_tasks():
         assert result.passed_hosts == ["router1", "router2"]
 
 
+def test_list_failure_control_and_multiple_recovery_roots():
+    calls = []
+
+    @task(name="initial_check")
+    class InitialCheck:
+        async def start_async(self, task, host, context):
+            calls.append(("check", host.hostname))
+            if host.hostname == "10.0.0.1":
+                return TaskFailureResult(message="unhealthy")
+            return TaskSuccessResult(summary="healthy")
+
+    @task(name="ordinary")
+    class Ordinary:
+        async def start_async(self, task, host, context):
+            calls.append(("ordinary", host.hostname))
+            return TaskSuccessResult(summary="done")
+
+    @task(name="first_recovery")
+    class FirstRecovery:
+        async def start_async(self, task, host, context):
+            calls.append(("first recovery", host.hostname))
+            if host.hostname == "10.0.0.1":
+                return TaskFailureResult(message="still unhealthy")
+            return TaskSuccessResult(summary="healthy")
+
+    @task(name="second_recovery")
+    class SecondRecovery:
+        async def start_async(self, task, host, context):
+            calls.append(("second recovery", host.hostname))
+            return TaskSuccessResult(summary="repaired and verified")
+
+    async def run_case():
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+            "router2": Host(hostname="10.0.0.2", platform="ios"),
+        }).with_runner("serial")
+        tasks = genja.Tasks()
+        tasks.add_task(InitialCheck)
+        tasks.add_task(Ordinary)
+        tasks.add_recovery_task(FirstRecovery)
+        tasks.add_task(Ordinary)
+        tasks.add_recovery_task(SecondRecovery)
+        tasks.add_task(Ordinary)
+        assert [definition.is_recovery_root for definition in tasks.to_list()] == [
+            False,
+            False,
+            True,
+            False,
+            True,
+            False,
+        ]
+        assert tasks[2].is_recovery_root
+        return await runtime.run_tasks_async(tasks)
+
+    results = asyncio.run(run_case())
+    assert [result.failed_hosts for result in results] == [
+        ["router1"],
+        [],
+        ["router1"],
+        [],
+        [],
+        [],
+    ]
+    assert results[1].skipped_hosts == ["router1"]
+    assert results[3].skipped_hosts == ["router1"]
+    assert results[4].passed_hosts == ["router1", "router2"]
+    assert results[5].passed_hosts == ["router1", "router2"]
+    assert calls.count(("ordinary", "10.0.0.1")) == 1
+
+
+def test_list_failure_control_continue_keeps_later_root_eligible():
+    @task(name="fails")
+    class Fails:
+        async def start_async(self, task, host, context):
+            return TaskFailureResult(message="failed")
+
+    @task(name="continues")
+    class Continues:
+        async def start_async(self, task, host, context):
+            return TaskSuccessResult(summary="ran")
+
+    async def run_case():
+        runtime = Genja.from_hosts({
+            "router1": Host(hostname="10.0.0.1", platform="ios"),
+        }).with_runner("serial")
+        tasks = genja.Tasks()
+        tasks.add_task(Fails)
+        tasks.add_task(Continues)
+        defaults = genja.TaskListRunOptions()
+        assert (
+            defaults.failure_control
+            == genja.TaskListFailureControl.SKIP_REMAINING_FOR_HOST
+        )
+        options = defaults.with_failure_control(genja.TaskListFailureControl.CONTINUE)
+        assert options.failure_control == genja.TaskListFailureControl.CONTINUE
+        return await runtime.run_tasks_async(tasks, run_options=options)
+
+    results = asyncio.run(run_case())
+    assert results[0].failed_hosts == ["router1"]
+    assert results[1].passed_hosts == ["router1"]
+
+
 def test_runtime_run_task_async_preserves_order_with_multiple_hosts():
     async def run_case():
         runtime = Genja.from_hosts({
@@ -487,7 +589,7 @@ def test_python_async_deadline_rejects_unobservable_connection_setup():
     assert calls == []
 
 
-def test_runtime_task_list_skips_later_python_async_work_after_timeout():
+def test_runtime_task_list_recovers_after_confirmed_python_async_timeout():
     calls = []
 
     @task(name="list_deadline_slow")
@@ -509,23 +611,23 @@ def test_runtime_task_list_skips_later_python_async_work_after_timeout():
         tasks = genja.Tasks()
         tasks.add_task(SlowTask)
         tasks.add_task(NextTask)
+        tasks.add_recovery_task(NextTask)
+        tasks.add_task(NextTask)
         defaults = genja.TaskListRunOptions(
             task_options=genja.TaskRunOptions(task_timeout=0.02),
         )
-        assert defaults.timeout_control == genja.TaskListTimeoutControl.CONTINUE
-        options = defaults.with_timeout_control(
-            genja.TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST
-        )
         assert (
-            options.timeout_control
+            defaults.timeout_control
             == genja.TaskListTimeoutControl.SKIP_REMAINING_FOR_HOST
         )
-        return await runtime.run_tasks_async(tasks, run_options=options)
+        return await runtime.run_tasks_async(tasks, run_options=defaults)
 
     results = asyncio.run(run_case())
     assert results[0].failed_hosts == ["router1"]
     assert results[1].skipped_hosts == ["router1"]
-    assert calls == []
+    assert results[2].passed_hosts == ["router1"]
+    assert results[3].passed_hosts == ["router1"]
+    assert calls == ["10.0.0.1", "10.0.0.1"]
 
 
 def test_python_coroutine_still_running_after_grace_blocks_later_host_work():

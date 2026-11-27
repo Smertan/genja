@@ -113,7 +113,7 @@ use genja_core::task::{
     TaskProcessorResolver, TaskResults, TaskResultsSummary, TaskRetryPolicy, Tasks,
 };
 pub use genja_core::task::{SubtaskContinuation, TaskRunOptions};
-pub use genja_core::task::{TaskListRunOptions, TaskListTimeoutControl};
+pub use genja_core::task::{TaskListFailureControl, TaskListRunOptions, TaskListTimeoutControl};
 use genja_core::{ConfigLoadError, NatString, Settings};
 pub use genja_core_derive::genja_task;
 pub use genja_plugin_manager;
@@ -1469,11 +1469,12 @@ impl Genja {
             .as_ref()
             .ok_or(GenjaError::InventoryNotLoaded)?;
         let processor_resolver: Arc<dyn TaskProcessorResolver> = self.plugins.clone();
+        let runtime_connection_resolver = RuntimeTaskConnectionResolver::new(
+            Arc::clone(inventory),
+            Arc::clone(&self.unavailable_hosts),
+        );
         let connection_resolver: Arc<dyn TaskConnectionResolver> =
-            Arc::new(RuntimeTaskConnectionResolver::new(
-                Arc::clone(inventory),
-                Arc::clone(&self.unavailable_hosts),
-            ));
+            Arc::new(runtime_connection_resolver.clone());
         for task_definition in tasks.iter_mut() {
             *task_definition = task_definition
                 .clone()
@@ -1502,8 +1503,11 @@ impl Genja {
                 "runner '{runner_name}' does not support custom task retry policies"
             )));
         }
-        let results = match list_options.timeout_control() {
-            TaskListTimeoutControl::Continue => {
+        let results = match (
+            list_options.failure_control(),
+            list_options.timeout_control(),
+        ) {
+            (TaskListFailureControl::Continue, TaskListTimeoutControl::Continue) => {
                 runner
                     .run_tasks(
                         &tasks,
@@ -1514,14 +1518,30 @@ impl Genja {
                     )
                     .await?
             }
-            TaskListTimeoutControl::SkipRemainingForHost => {
+            _ => {
                 let mut results = Vec::with_capacity(tasks.len());
-                let mut blocked = HashSet::new();
+                let mut failed_hosts = HashSet::new();
+                let mut timed_out_hosts = HashSet::new();
                 for task in tasks.iter() {
                     let mut available = Hosts::new();
+                    let mut skipped = Vec::new();
                     for (host_id, host) in hosts.iter() {
-                        if !blocked.contains(host_id.as_str()) {
-                            available.add_host(host_id.as_str(), host.clone());
+                        let hostname = host_id.as_str();
+                        let skip_reason = if runtime_connection_resolver
+                            .host_unavailable_after_timeout(hostname)
+                        {
+                            Some("timeout_cleanup_unconfirmed")
+                        } else if !task.is_recovery_root() && timed_out_hosts.contains(hostname) {
+                            Some("a previous task's deadline expired on this host")
+                        } else if !task.is_recovery_root() && failed_hosts.contains(hostname) {
+                            Some("previous_task_tree_failed")
+                        } else {
+                            None
+                        };
+                        if let Some(reason) = skip_reason {
+                            skipped.push((hostname, reason));
+                        } else {
+                            available.add_host(hostname, host.clone());
                         }
                     }
                     let mut task_results = runner
@@ -1533,18 +1553,33 @@ impl Genja {
                             run_options,
                         )
                         .await?;
-                    collect_deadline_expired_hosts(&task_results, &mut blocked);
-                    for (host_id, _) in hosts.iter() {
-                        if blocked.contains(host_id.as_str())
-                            && task_results.host_result(host_id.as_str()).is_none()
-                        {
-                            task_results.insert_host_result(
-                                host_id.as_str(),
-                                HostTaskResult::skipped_with_reason(
-                                    "a previous task's deadline expired on this host",
-                                ),
-                            );
+                    if list_options.timeout_control()
+                        == TaskListTimeoutControl::SkipRemainingForHost
+                    {
+                        collect_deadline_expired_hosts(&task_results, &mut timed_out_hosts);
+                    }
+                    if list_options.failure_control()
+                        == TaskListFailureControl::SkipRemainingForHost
+                    {
+                        collect_matching_hosts_in_tree(
+                            &task_results,
+                            &mut failed_hosts,
+                            &HostTaskResult::is_failed,
+                        );
+                    }
+                    if task.is_recovery_root() {
+                        for (host_id, _) in available.iter() {
+                            if task_tree_passed_on_host(&task_results, host_id.as_str()) {
+                                failed_hosts.remove(host_id.as_str());
+                                timed_out_hosts.remove(host_id.as_str());
+                            }
                         }
+                    }
+                    for (hostname, reason) in skipped {
+                        task_results.insert_host_result(
+                            hostname,
+                            HostTaskResult::skipped_with_reason(reason),
+                        );
                     }
                     results.push(task_results);
                 }
@@ -1560,22 +1595,43 @@ impl Genja {
 }
 
 fn collect_deadline_expired_hosts(results: &TaskResults, blocked: &mut HashSet<String>) {
-    for (host_id, host_result) in results.hosts().iter() {
-        let deadline_expired = host_result.failure().is_some_and(|failure| {
+    collect_matching_hosts_in_tree(results, blocked, &|host_result| {
+        host_result.failure().is_some_and(|failure| {
             matches!(failure.kind(), TaskFailureKind::Timeout)
                 && failure
                     .details()
                     .and_then(|details| details.get("deadline_expired"))
                     .and_then(serde_json::Value::as_bool)
                     == Some(true)
-        });
-        if deadline_expired {
-            blocked.insert(host_id.as_str().to_string());
+        })
+    });
+}
+
+/// Collect hosts whose finalized root or descendant result matches a policy.
+fn collect_matching_hosts_in_tree(
+    results: &TaskResults,
+    matched: &mut HashSet<String>,
+    matches: &impl Fn(&HostTaskResult) -> bool,
+) {
+    for (host_id, host_result) in results.hosts().iter() {
+        if matches(host_result) {
+            matched.insert(host_id.as_str().to_string());
         }
     }
     for (_, subtask) in results.sub_tasks().iter() {
-        collect_deadline_expired_hosts(subtask, blocked);
+        collect_matching_hosts_in_tree(subtask, matched, matches);
     }
+}
+
+/// Return whether a host passed at every node of a completed root task tree.
+fn task_tree_passed_on_host(results: &TaskResults, hostname: &str) -> bool {
+    results
+        .host_result(hostname)
+        .is_some_and(HostTaskResult::is_passed)
+        && results
+            .sub_tasks()
+            .iter()
+            .all(|(_, child)| task_tree_passed_on_host(child, hostname))
 }
 
 fn current_plugin_directory() -> Result<PathBuf, std::io::Error> {
@@ -1656,8 +1712,9 @@ impl Default for Genja {
 #[cfg(test)]
 mod tests {
     use super::{
-        Genja, GenjaError, RuntimeTaskConnectionResolver, SubtaskContinuation, TaskListRunOptions,
-        TaskListTimeoutControl, TaskRunOptions, genja_task,
+        Genja, GenjaError, RuntimeTaskConnectionResolver, SubtaskContinuation,
+        TaskListFailureControl, TaskListRunOptions, TaskListTimeoutControl, TaskRunOptions,
+        collect_matching_hosts_in_tree, genja_task,
     };
     use async_trait::async_trait;
     use genja_core::Settings;
@@ -1668,18 +1725,18 @@ mod tests {
     use genja_core::settings::{InventoryConfig, OptionsConfig, RunnerConfig, SSHConfig};
     use genja_core::task::{
         BlockingTaskRuntimeContext, HostTaskResult, Task, TaskConnectionResolver, TaskDefinition,
-        TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskRuntimeContext,
-        TaskSuccess, Tasks,
+        TaskError, TaskExecutionMode, TaskFailure, TaskFailureKind, TaskInfo, TaskProcessor,
+        TaskProcessorContext, TaskResults, TaskRuntimeContext, TaskSuccess, Tasks,
     };
     use genja_core::task::{
         TaskRetryConfig, TaskRetryContext, TaskRetryDecision, TaskRetryPolicy, TaskRetryPolicyKind,
     };
     use genja_plugin_manager::PluginManager;
     use genja_plugin_manager::plugin_types::{
-        AsyncPluginInventory, Plugin, PluginConnection, PluginRunner, Plugins,
+        AsyncPluginInventory, Plugin, PluginConnection, PluginProcessor, PluginRunner, Plugins,
     };
     use serde_json::{Value, json};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1708,6 +1765,98 @@ mod tests {
             _run_options: TaskRunOptions,
         ) -> Result<genja_core::task::TaskResults, GenjaError> {
             panic!("unsupported runner must be rejected before execution")
+        }
+    }
+
+    struct FinalOutcomeFailureProcessor;
+
+    impl Plugin for FinalOutcomeFailureProcessor {
+        fn name(&self) -> String {
+            "final-outcome-failure".to_string()
+        }
+    }
+
+    impl PluginProcessor for FinalOutcomeFailureProcessor {
+        fn processor(&self) -> Arc<dyn TaskProcessor> {
+            Arc::new(Self)
+        }
+    }
+
+    impl TaskProcessor for FinalOutcomeFailureProcessor {
+        fn on_task_finish(
+            &self,
+            _context: &TaskProcessorContext,
+            results: &mut TaskResults,
+        ) -> Result<(), GenjaError> {
+            results.insert_host_result(
+                "router1",
+                HostTaskResult::failed(TaskFailure::new(std::io::Error::other(
+                    "processor rejected final result",
+                ))),
+            );
+            Ok(())
+        }
+    }
+
+    struct BatchTrackingRunner {
+        task_calls: Arc<AtomicUsize>,
+        batch_calls: Arc<AtomicUsize>,
+    }
+
+    impl Plugin for BatchTrackingRunner {
+        fn name(&self) -> String {
+            "batch-tracking".to_string()
+        }
+    }
+
+    #[async_trait]
+    impl PluginRunner for BatchTrackingRunner {
+        async fn run_task(
+            &self,
+            task: &TaskDefinition,
+            hosts: &Hosts,
+            _connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+            _runner_config: &RunnerConfig,
+            _run_options: TaskRunOptions,
+        ) -> Result<TaskResults, GenjaError> {
+            self.task_calls.fetch_add(1, Ordering::SeqCst);
+            let mut results = TaskResults::new(task.name());
+            for (host_id, _) in hosts.iter() {
+                let result = if task.name() == "first" && host_id.as_str() == "router1" {
+                    HostTaskResult::failed(TaskFailure::new(std::io::Error::other(
+                        "first root failed",
+                    )))
+                } else {
+                    HostTaskResult::passed(TaskSuccess::new())
+                };
+                results.insert_host_result(host_id.as_str(), result);
+            }
+            Ok(results)
+        }
+
+        async fn run_tasks(
+            &self,
+            tasks: &Tasks,
+            hosts: &Hosts,
+            connection_resolver: Option<Arc<dyn TaskConnectionResolver>>,
+            runner_config: &RunnerConfig,
+            run_options: TaskRunOptions,
+        ) -> Result<Vec<TaskResults>, GenjaError> {
+            self.batch_calls.fetch_add(1, Ordering::SeqCst);
+            let mut results = Vec::with_capacity(tasks.len());
+            for task in tasks.iter() {
+                results.push(
+                    self.run_task(
+                        task,
+                        hosts,
+                        connection_resolver.clone(),
+                        runner_config,
+                        run_options,
+                    )
+                    .await?,
+                );
+            }
+            Ok(results)
         }
     }
 
@@ -1821,6 +1970,43 @@ mod tests {
             Ok(HostTaskResult::failed(genja_core::task::TaskFailure::new(
                 std::io::Error::other("boom"),
             )))
+        }
+
+        fn execution_mode(&self) -> TaskExecutionMode {
+            TaskExecutionMode::Async
+        }
+    }
+
+    struct FailRouterOneTask;
+
+    impl TaskInfo for FailRouterOneTask {
+        fn name(&self) -> &str {
+            "fail-router-one"
+        }
+
+        fn connection_plugin_name(&self) -> Option<&str> {
+            None
+        }
+
+        fn options(&self) -> Option<&Value> {
+            None
+        }
+    }
+
+    #[async_trait]
+    impl Task for FailRouterOneTask {
+        async fn start_async(
+            &self,
+            host: &Host,
+            _context: &TaskRuntimeContext,
+        ) -> Result<HostTaskResult, TaskError> {
+            if host.hostname() == Some("10.0.0.1") {
+                Ok(HostTaskResult::failed(TaskFailure::new(
+                    std::io::Error::other("router one failed"),
+                )))
+            } else {
+                Ok(HostTaskResult::passed(TaskSuccess::new()))
+            }
         }
 
         fn execution_mode(&self) -> TaskExecutionMode {
@@ -3545,9 +3731,10 @@ mod tests {
         });
 
         let results = genja
-            .run_tasks_with_retry_policy(
+            .run_tasks_with_retry_policy_and_options(
                 tasks,
-                0,
+                TaskListRunOptions::new(TaskRunOptions::new(0))
+                    .with_failure_control(TaskListFailureControl::Continue),
                 TestCustomRetryPolicy {
                     retry: true,
                     calls: Arc::clone(&calls),
@@ -4742,7 +4929,11 @@ mod tests {
             let results = genja
                 .run_tasks_with_options(
                     tasks,
-                    TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20)),
+                    TaskListRunOptions::new(
+                        TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20)),
+                    )
+                    .with_failure_control(TaskListFailureControl::Continue)
+                    .with_timeout_control(TaskListTimeoutControl::Continue),
                 )
                 .expect("expiry should be recorded");
             assert!(matches!(
@@ -4787,6 +4978,17 @@ mod tests {
             let second = genja.run_task(task(), 0).expect("run should finish");
             assert!(second.host_result("router1").unwrap().is_skipped());
             assert!(second.host_result("router2").unwrap().is_passed());
+            let mut recovery = Tasks::new();
+            recovery.add_recovery_task(task());
+            let recovery_results = filtered
+                .run_tasks(recovery, 0)
+                .expect("recovery list should finish");
+            assert!(
+                recovery_results[0]
+                    .host_result("router1")
+                    .unwrap()
+                    .is_skipped()
+            );
             resolver.clear_host_unavailable_after_timeout("router1");
             let third = filtered.run_task(task(), 0).expect("run should finish");
             assert!(third.host_result("router1").unwrap().is_passed());
@@ -4904,7 +5106,11 @@ mod tests {
             let results = genja
                 .run_tasks_with_options(
                     tasks,
-                    TaskRunOptions::new(1).with_task_timeout(Duration::from_millis(20)),
+                    TaskListRunOptions::new(
+                        TaskRunOptions::new(1).with_task_timeout(Duration::from_millis(20)),
+                    )
+                    .with_failure_control(TaskListFailureControl::Continue)
+                    .with_timeout_control(TaskListTimeoutControl::Continue),
                 )
                 .expect("nested expiry should be recorded");
             assert!(
@@ -4924,7 +5130,7 @@ mod tests {
     }
 
     #[test]
-    fn subtask_continuation_does_not_skip_later_root_after_failure() {
+    fn explicit_list_continuation_runs_later_root_after_failure() {
         for runner in ["serial", "threaded"] {
             for mode in [
                 SubtaskContinuation::OnParentSuccess,
@@ -4946,7 +5152,10 @@ mod tests {
                 let results = genja
                     .run_tasks_with_options(
                         tasks,
-                        TaskRunOptions::new(0).with_subtask_continuation(mode),
+                        TaskListRunOptions::new(
+                            TaskRunOptions::new(0).with_subtask_continuation(mode),
+                        )
+                        .with_failure_control(TaskListFailureControl::Continue),
                     )
                     .expect("task list should complete");
 
@@ -4965,7 +5174,269 @@ mod tests {
     }
 
     #[test]
-    fn list_timeout_control_skips_later_root_on_timed_out_host() {
+    fn failed_root_blocks_only_later_ordinary_roots_on_its_host() {
+        for runner in ["serial", "threaded"] {
+            let genja = Genja::from_inventory(single_host_inventory())
+                .with_runner(runner)
+                .expect("runner should be available");
+            let mut tasks = Tasks::new();
+            tasks.add_task(FailedTask);
+            tasks.add_task(TestTask {
+                name: "second".to_string(),
+            });
+
+            let results = genja.run_tasks(tasks, 0).expect("list should complete");
+            assert!(results[0].host_result("router1").unwrap().is_failed());
+            assert!(results[1].host_result("router1").unwrap().is_skipped());
+            assert_eq!(
+                results[1].task_summary().hosts().skipped(),
+                1,
+                "skipped host should be included in the returned summary"
+            );
+        }
+    }
+
+    #[test]
+    fn processor_modified_final_result_blocks_only_the_affected_host() {
+        for runner in ["serial", "threaded"] {
+            let mut plugins = PluginManager::new();
+            plugins.register_plugin(Plugins::Processor(Box::new(FinalOutcomeFailureProcessor)));
+            let settings = Settings::builder()
+                .runner(RunnerConfig::builder().plugin(runner).build())
+                .build();
+            let genja = Genja::builder(test_inventory())
+                .with_settings(settings)
+                .with_plugin_manager(plugins)
+                .build()
+                .expect("runner should build");
+            let mut tasks = Tasks::new();
+            tasks.push(
+                TaskDefinition::new(TestTask {
+                    name: "first".to_string(),
+                })
+                .with_processor("final-outcome-failure"),
+            );
+            tasks.add_task(TestTask {
+                name: "second".to_string(),
+            });
+
+            let results = genja.run_tasks(tasks, 0).expect("list should complete");
+            assert!(results[0].host_result("router1").unwrap().is_failed());
+            assert!(results[0].host_result("router2").unwrap().is_passed());
+            assert!(results[1].host_result("router1").unwrap().is_skipped());
+            assert!(results[1].host_result("router2").unwrap().is_passed());
+        }
+    }
+
+    #[test]
+    fn ordinary_skipped_result_does_not_block_later_root() {
+        for runner in ["serial", "threaded"] {
+            let genja = Genja::from_inventory(single_host_inventory())
+                .with_runner(runner)
+                .expect("runner should be available");
+            let mut tasks = Tasks::new();
+            tasks.add_task(SkippedTask);
+            tasks.add_task(TestTask {
+                name: "after-skip".to_string(),
+            });
+
+            let results = genja.run_tasks(tasks, 0).expect("list should complete");
+            assert!(results[0].host_result("router1").unwrap().is_skipped());
+            assert!(results[1].host_result("router1").unwrap().is_passed());
+        }
+    }
+
+    #[test]
+    fn custom_runner_batch_override_requires_both_continue_controls() {
+        let task_calls = Arc::new(AtomicUsize::new(0));
+        let batch_calls = Arc::new(AtomicUsize::new(0));
+        let mut plugins = PluginManager::new();
+        plugins.register_plugin(Plugins::Runner(Box::new(BatchTrackingRunner {
+            task_calls: Arc::clone(&task_calls),
+            batch_calls: Arc::clone(&batch_calls),
+        })));
+        let settings = Settings::builder()
+            .runner(RunnerConfig::builder().plugin("batch-tracking").build())
+            .build();
+        let genja = Genja::builder(test_inventory())
+            .with_settings(settings)
+            .with_plugin_manager(plugins)
+            .build()
+            .expect("custom runner should build");
+        let tasks = || {
+            let mut tasks = Tasks::new();
+            for name in ["first", "second"] {
+                tasks.add_task(TestTask {
+                    name: name.to_string(),
+                });
+            }
+            tasks
+        };
+
+        let default_results = genja
+            .run_tasks(tasks(), 0)
+            .expect("default list should run");
+        assert!(
+            default_results[1]
+                .host_result("router1")
+                .unwrap()
+                .is_skipped()
+        );
+        assert!(
+            default_results[1]
+                .host_result("router2")
+                .unwrap()
+                .is_passed()
+        );
+        assert_eq!(batch_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(task_calls.load(Ordering::SeqCst), 2);
+
+        let failure_continue = TaskListRunOptions::new(TaskRunOptions::new(0))
+            .with_failure_control(TaskListFailureControl::Continue);
+        let partial_results = genja
+            .run_tasks_with_options(tasks(), failure_continue)
+            .expect("single-control continuation should run per root");
+        assert!(
+            partial_results[1]
+                .host_result("router1")
+                .unwrap()
+                .is_passed()
+        );
+        assert_eq!(batch_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(task_calls.load(Ordering::SeqCst), 4);
+
+        let both_continue = failure_continue.with_timeout_control(TaskListTimeoutControl::Continue);
+        let continued_results = genja
+            .run_tasks_with_options(tasks(), both_continue)
+            .expect("batch override should run");
+        assert!(
+            continued_results[1]
+                .host_result("router1")
+                .unwrap()
+                .is_passed()
+        );
+        assert_eq!(batch_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(task_calls.load(Ordering::SeqCst), 6);
+    }
+
+    #[test]
+    fn failure_block_is_host_scoped_and_ends_with_the_list_invocation() {
+        for runner in ["serial", "threaded"] {
+            let genja = Genja::from_inventory(test_inventory())
+                .with_runner(runner)
+                .expect("runner should be available");
+            let mut tasks = Tasks::new();
+            tasks.add_task(FailRouterOneTask);
+            tasks.add_task(TestTask {
+                name: "next".to_string(),
+            });
+
+            let results = genja.run_tasks(tasks, 0).expect("list should complete");
+            assert!(results[1].host_result("router1").unwrap().is_skipped());
+            assert!(results[1].host_result("router2").unwrap().is_passed());
+
+            let later = genja
+                .run_task(
+                    TestTask {
+                        name: "separate invocation".to_string(),
+                    },
+                    0,
+                )
+                .expect("separate invocation should complete");
+            assert!(later.host_result("router1").unwrap().is_passed());
+        }
+    }
+
+    #[test]
+    fn nested_failure_blocks_ordinary_root_and_passing_recovery_clears_block() {
+        for runner in ["serial", "threaded"] {
+            let genja = Genja::from_inventory(single_host_inventory())
+                .with_runner(runner)
+                .expect("runner should be available");
+            let mut tasks = Tasks::new();
+            tasks.add_task(RecordingTask::parent(
+                "parent",
+                vec![Arc::new(FailedTask)],
+                Arc::new(Mutex::new(Vec::new())),
+            ));
+            tasks.add_task(TestTask {
+                name: "blocked".to_string(),
+            });
+            tasks.add_recovery_task(TestTask {
+                name: "recovery".to_string(),
+            });
+            tasks.add_task(TestTask {
+                name: "resumed".to_string(),
+            });
+
+            let results = genja.run_tasks(tasks, 1).expect("list should complete");
+            assert!(results[0].host_result("router1").unwrap().is_passed());
+            assert!(
+                results[0]
+                    .sub_task("failed-task")
+                    .unwrap()
+                    .host_result("router1")
+                    .unwrap()
+                    .is_failed()
+            );
+            assert!(results[1].host_result("router1").unwrap().is_skipped());
+            assert!(results[2].host_result("router1").unwrap().is_passed());
+            assert!(results[3].host_result("router1").unwrap().is_passed());
+        }
+    }
+
+    #[test]
+    fn failed_recovery_leaves_host_blocked() {
+        for runner in ["serial", "threaded"] {
+            let genja = Genja::from_inventory(single_host_inventory())
+                .with_runner(runner)
+                .expect("runner should be available");
+            let mut tasks = Tasks::new();
+            tasks.add_task(FailedTask);
+            tasks.add_recovery_task(FailedTask);
+            tasks.add_task(TestTask {
+                name: "still-blocked".to_string(),
+            });
+
+            let results = genja.run_tasks(tasks, 0).expect("list should complete");
+            assert!(results[1].host_result("router1").unwrap().is_failed());
+            assert!(results[2].host_result("router1").unwrap().is_skipped());
+        }
+    }
+
+    #[test]
+    fn skipped_recovery_descendant_does_not_clear_failure_block() {
+        for runner in ["serial", "threaded"] {
+            let genja = Genja::from_inventory(single_host_inventory())
+                .with_runner(runner)
+                .expect("runner should be available");
+            let mut tasks = Tasks::new();
+            tasks.add_task(FailedTask);
+            tasks.add_recovery_task(RecordingTask::parent(
+                "recovery",
+                vec![Arc::new(SkippedTask)],
+                Arc::new(Mutex::new(Vec::new())),
+            ));
+            tasks.add_task(TestTask {
+                name: "still-blocked".to_string(),
+            });
+
+            let results = genja.run_tasks(tasks, 1).expect("list should complete");
+            assert!(results[1].host_result("router1").unwrap().is_passed());
+            assert!(
+                results[1]
+                    .sub_task("skipped-task")
+                    .unwrap()
+                    .host_result("router1")
+                    .unwrap()
+                    .is_skipped()
+            );
+            assert!(results[2].host_result("router1").unwrap().is_skipped());
+        }
+    }
+
+    #[test]
+    fn timed_out_host_skips_ordinary_roots_until_recovery_passes() {
         for runner in ["serial", "threaded"] {
             let settings = Settings::builder()
                 .runner(RunnerConfig::builder().plugin(runner).build())
@@ -4974,7 +5445,9 @@ mod tests {
                 .with_settings(settings)
                 .build()
                 .expect("runner should build");
-            let second_calls = Arc::new(AtomicUsize::new(0));
+            let skipped_calls = Arc::new(AtomicUsize::new(0));
+            let recovery_calls = Arc::new(AtomicUsize::new(0));
+            let resumed_calls = Arc::new(AtomicUsize::new(0));
             let mut tasks = Tasks::new();
             tasks.add_task(DeadlineListTask {
                 name: "first",
@@ -4982,18 +5455,27 @@ mod tests {
                 calls: Arc::new(AtomicUsize::new(0)),
             });
             tasks.add_task(DeadlineListTask {
-                name: "second",
+                name: "skipped",
                 delay: Duration::ZERO,
-                calls: Arc::clone(&second_calls),
+                calls: Arc::clone(&skipped_calls),
+            });
+            tasks.add_recovery_task(DeadlineListTask {
+                name: "recovery",
+                delay: Duration::ZERO,
+                calls: Arc::clone(&recovery_calls),
+            });
+            tasks.add_task(DeadlineListTask {
+                name: "resumed",
+                delay: Duration::ZERO,
+                calls: Arc::clone(&resumed_calls),
             });
             let options = TaskListRunOptions::new(
                 TaskRunOptions::new(0).with_task_timeout(Duration::from_millis(20)),
-            )
-            .with_timeout_control(TaskListTimeoutControl::SkipRemainingForHost);
+            );
 
             let results = genja
                 .run_tasks_with_options(tasks, options)
-                .expect("list should return timeout and skip results");
+                .expect("list should return timeout, skip, and recovery results");
             assert_eq!(
                 options.timeout_control(),
                 TaskListTimeoutControl::SkipRemainingForHost
@@ -5010,8 +5492,60 @@ mod tests {
                     .host_result("router1")
                     .is_some_and(HostTaskResult::is_skipped)
             );
-            assert_eq!(second_calls.load(Ordering::SeqCst), 0);
+            assert!(results[2].host_result("router1").unwrap().is_passed());
+            assert!(results[3].host_result("router1").unwrap().is_passed());
+            assert_eq!(skipped_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(recovery_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(resumed_calls.load(Ordering::SeqCst), 1);
         }
+    }
+
+    #[test]
+    fn result_tree_matching_uses_finalized_nested_results_per_host() {
+        let mut root = TaskResults::new("root");
+        root.insert_host_result("router1", HostTaskResult::passed(TaskSuccess::new()));
+        root.insert_host_result("router2", HostTaskResult::passed(TaskSuccess::new()));
+        root.insert_host_result(
+            "router3",
+            HostTaskResult::skipped_with_reason("task_skipped"),
+        );
+
+        let mut child = TaskResults::new("child");
+        child.insert_host_result("router1", HostTaskResult::passed(TaskSuccess::new()));
+        child.insert_host_result("router2", HostTaskResult::passed(TaskSuccess::new()));
+        let mut grandchild = TaskResults::new("grandchild");
+        grandchild.insert_host_result(
+            "router1",
+            HostTaskResult::failed(TaskFailure::new(std::io::Error::other("failed"))),
+        );
+        grandchild.insert_host_result(
+            "router2",
+            HostTaskResult::passed_with_warnings(TaskSuccess::new()),
+        );
+        child.insert_sub_task("grandchild", grandchild);
+        root.insert_sub_task("child", child);
+
+        let mut failed = HashSet::new();
+        collect_matching_hosts_in_tree(&root, &mut failed, &HostTaskResult::is_failed);
+        assert_eq!(failed, HashSet::from(["router1".to_string()]));
+
+        root.sub_task_mut("child")
+            .expect("child should exist")
+            .sub_task_mut("grandchild")
+            .expect("grandchild should exist")
+            .insert_host_result("router1", HostTaskResult::passed(TaskSuccess::new()));
+        root.insert_host_result(
+            "router2",
+            HostTaskResult::failed(TaskFailure::new(std::io::Error::other("processor failure"))),
+        );
+
+        let mut failed_after_changes = HashSet::new();
+        collect_matching_hosts_in_tree(
+            &root,
+            &mut failed_after_changes,
+            &HostTaskResult::is_failed,
+        );
+        assert_eq!(failed_after_changes, HashSet::from(["router2".to_string()]));
     }
 
     #[test]
